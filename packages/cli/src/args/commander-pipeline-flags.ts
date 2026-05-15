@@ -1,0 +1,95 @@
+import { PipelineArgsSchema, SearchSortSchema, type PipelineArgs } from "./pipeline.js";
+import { LlmProviderSchema } from "./llm.js";
+import { defaultCliLlmProvider } from "../config/env.js";
+
+export type CommanderPipelineFlags = {
+  urls?: string[];
+  urlFile?: string;
+  search?: string;
+  searchSort?: string;
+  acquire?: string;
+  notes?: string;
+  article?: string;
+  publish?: string;
+  outDir?: string;
+  keyframes?: string;
+  platform?: string;
+  maxChars?: string;
+  rewriteMode?: string;
+  jobs?: string;
+  subLangs?: string;
+  sceneThreshold?: string;
+  sceneMinGap?: string;
+  maxWords?: string;
+  cookiesFromBrowser?: string;
+  proxy?: string;
+  continueFrom?: boolean;
+  errorStrategy?: string;
+  force?: boolean;
+  publishDryRun?: boolean;
+  thread?: boolean;
+  publishMaxChars?: string;
+  maxTweets?: string;
+  llmProvider?: string;
+  llmModel?: string;
+  llmBaseUrl?: string;
+  verbose?: boolean;
+};
+
+export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): PipelineArgs => {
+  const provider = flags.llmProvider ? LlmProviderSchema.parse(flags.llmProvider) : defaultCliLlmProvider();
+  return PipelineArgsSchema.parse({
+    sources: {
+      urls: flags.urls ?? [],
+      urlFile: flags.urlFile,
+      search: flags.search,
+      ...(flags.searchSort !== undefined
+        ? { searchSort: SearchSortSchema.parse(flags.searchSort) }
+        : {}),
+    },
+    stages: {
+      acquire: flags.acquire ?? "auto",
+      notes: flags.notes ?? "review",
+      article: flags.article ?? "review",
+      publish: flags.publish ?? "review",
+    },
+    acquire: {
+      keyframes: flags.keyframes ?? "0",
+      jobs: flags.jobs ?? "3",
+      subLangs: flags.subLangs,
+      sceneThreshold: flags.sceneThreshold ?? "0.35",
+      sceneMinGap: flags.sceneMinGap ?? "12",
+      maxWords: flags.maxWords ?? "900",
+      cookiesFromBrowser: flags.cookiesFromBrowser,
+      proxy: flags.proxy,
+    },
+    article: {
+      platform: flags.platform ?? "x",
+      maxChars: flags.maxChars ?? "280",
+      rewriteMode: flags.rewriteMode ?? "rules",
+    },
+    publish: {
+      publishDryRun: flags.publishDryRun ?? false,
+      format: flags.thread === true ? "thread" : "long",
+      maxChars:
+        flags.thread === true
+          ? (flags.publishMaxChars ?? flags.maxChars ?? "280")
+          : (flags.publishMaxChars ?? "25000"),
+      maxTweets: flags.maxTweets ?? "25",
+    },
+    control: {
+      outDir: flags.outDir,
+      continueFlag: flags.continueFrom ?? false,
+      errorStrategy: flags.errorStrategy ?? "stop",
+      force: flags.force ?? false,
+    },
+    llm: {
+      provider,
+      model: flags.llmModel,
+      baseUrl: flags.llmBaseUrl,
+    },
+    flags: {
+      verbose: flags.verbose ?? false,
+    },
+  });
+};

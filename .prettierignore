@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+src/
+packages/adapters-node/scripts/
+pnpm-lock.yaml
+NOTICE

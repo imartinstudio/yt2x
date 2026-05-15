@@ -1,0 +1,43 @@
+{
+  "name": "@yt2x/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Domain logic and port interfaces for yt2x — zero Node dependencies, runnable in browser/extension.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yt2x/yt2x.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/yt2x/yt2x#readme",
+  "bugs": {
+    "url": "https://github.com/yt2x/yt2x/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "prepack": "pnpm run build",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
+}

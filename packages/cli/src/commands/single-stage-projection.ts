@@ -1,0 +1,83 @@
+import { LlmProviderSchema } from "../args/llm.js";
+import { PipelineArgsSchema, SearchSortSchema, type PipelineArgs } from "../args/pipeline.js";
+import type { StageMode } from "../args/common.js";
+import { defaultCliLlmProvider } from "../config/env.js";
+import type { SingleStageFlags, SingleStageTarget } from "./command-flags.js";
+
+const VALID_MODES: readonly StageMode[] = ["auto", "review", "skip"] as const;
+
+export const toStageMode = (raw: string | undefined, fallback: StageMode): StageMode => {
+  if (raw === undefined) return fallback;
+  if ((VALID_MODES as readonly string[]).includes(raw)) {
+    return raw as StageMode;
+  }
+  throw new Error(`Invalid --mode "${raw}". Expected one of: ${VALID_MODES.join(", ")}`);
+};
+
+/**
+ * 把单阶段命令的扁平 flags 投影成完整 PipelineArgs：
+ * 目标阶段使用 `--mode`（默认 auto），其他阶段强制 skip。
+ */
+export const projectSingleStage = (target: SingleStageTarget, flags: SingleStageFlags): PipelineArgs => {
+  const mode = toStageMode(flags.mode, "auto");
+  const allStages: Record<SingleStageTarget, StageMode> = {
+    acquire: "skip",
+    notes: "skip",
+    article: "skip",
+    publish: "skip",
+  };
+  allStages[target] = mode;
+
+  const provider = flags.llmProvider
+    ? LlmProviderSchema.parse(flags.llmProvider)
+    : defaultCliLlmProvider();
+
+  return PipelineArgsSchema.parse({
+    sources: {
+      urls: flags.urls ?? [],
+      urlFile: flags.urlFile,
+      search: flags.search,
+      ...(flags.searchSort !== undefined
+        ? { searchSort: SearchSortSchema.parse(flags.searchSort) }
+        : {}),
+    },
+    stages: allStages,
+    acquire: {
+      keyframes: flags.keyframes ?? "0",
+      jobs: flags.jobs ?? "3",
+      subLangs: flags.subLangs,
+      sceneThreshold: flags.sceneThreshold ?? "0.35",
+      sceneMinGap: flags.sceneMinGap ?? "12",
+      maxWords: flags.maxWords ?? "900",
+      cookiesFromBrowser: flags.cookiesFromBrowser,
+      proxy: flags.proxy,
+    },
+    article: {
+      platform: flags.platform ?? "x",
+      maxChars: flags.maxChars ?? "280",
+      rewriteMode: flags.rewriteMode ?? "rules",
+    },
+    publish: {
+      publishDryRun: flags.publishDryRun === true || flags.dryRun === true,
+      format: flags.thread === true ? "thread" : "long",
+      maxChars:
+        flags.thread === true
+          ? (flags.publishMaxChars ?? flags.maxChars ?? "280")
+          : (flags.publishMaxChars ?? "25000"),
+      maxTweets: flags.maxTweets ?? "25",
+    },
+    control: {
+      outDir: flags.outDir,
+      continueFlag: flags.continueFrom ?? false,
+      errorStrategy: flags.errorStrategy ?? "stop",
+    },
+    llm: {
+      provider,
+      model: flags.llmModel,
+      baseUrl: flags.llmBaseUrl,
+    },
+    flags: {
+      verbose: flags.verbose ?? false,
+    },
+  });
+};

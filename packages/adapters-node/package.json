@@ -1,0 +1,47 @@
+{
+  "name": "@yt2x/adapters-node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Node.js adapters for yt2x — yt-dlp, FFmpeg, fs, LLM clients, X API.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yt2x/yt2x.git",
+    "directory": "packages/adapters-node"
+  },
+  "homepage": "https://github.com/yt2x/yt2x#readme",
+  "bugs": {
+    "url": "https://github.com/yt2x/yt2x/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "prepack": "pnpm run build",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "dependencies": {
+    "@yt2x/core": "workspace:*",
+    "execa": "^9.5.2",
+    "pino": "^9.6.0",
+    "open": "^10.1.0",
+    "zod": "^3.24.1"
+  }
+}

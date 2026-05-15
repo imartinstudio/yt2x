@@ -1,0 +1,65 @@
+# ── Node / pnpm ──────────────────────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+.pnpm-debug.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Build artifacts ──────────────────────────────────────────────────────────
+dist/
+build/
+*.tsbuildinfo
+.turbo/
+
+# ── Test artifacts ───────────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+.vitest-cache/
+
+# ── Editor / OS ──────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*~
+
+# ── Agent / IDE local config (user-specific, not part of repo) ───────────────
+.codex/
+.cursor/
+.claude/settings.local.json
+
+# ── Env / Secrets ────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.envrc
+
+# Token storage — never commit
+**/x-token.json
+**/x-credentials.json
+**/llm-credentials.json
+**/*cookies.txt
+x.com_cookies.txt
+twitter_cookies.txt
+
+# ── Project outputs ──────────────────────────────────────────────────────────
+# 采集/笔记/长文等默认均在 files/ 下（见 DEFAULT_OUT_DIR）
+# Local scratch / downloads / generated blobs (keep empty dir via .gitkeep only)
+files/**
+!files/.gitkeep
+# 本地 acquire 性能对比目录（勿提交；可 `rm -rf files/_bench-*` 清理）
+files/_bench-*/
+
+# ── Python (skills / scripts) ───────────────────────────────────────────────
+**/__pycache__/
+*.py[cod]
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+*.log
+*.tgz
+
+.cache/
+**/.process-status.lock

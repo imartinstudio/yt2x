@@ -1,0 +1,54 @@
+{
+  "name": "yt2x",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "YouTube to X — unified pipeline: YouTube acquisition → AI structured notes → X longform article → publish",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yt2x/yt2x.git"
+  },
+  "homepage": "https://github.com/yt2x/yt2x#readme",
+  "bugs": {
+    "url": "https://github.com/yt2x/yt2x/issues"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b --pretty",
+    "clean": "pnpm -r run clean && rm -f .tsbuildinfo packages/*/.tsbuildinfo",
+    "rebuild": "pnpm run clean && pnpm run build",
+    "typecheck": "tsc -b --pretty",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "ci": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
+    "ci:full": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage && pnpm audit --audit-level=high",
+    "pack:cli": "pnpm run build && pnpm pack --dir packages/cli",
+    "yt2x": "tsx packages/cli/src/index.ts"
+  },
+  "dependencies": {
+    "@yt2x/core": "workspace:*",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.10.5",
+    "@vitest/coverage-v8": "2.1.9",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^2.1.8"
+  }
+}

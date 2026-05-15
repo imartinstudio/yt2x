@@ -1,0 +1,33 @@
+export type SingleStageFlags = {
+  urls?: string[];
+  urlFile?: string;
+  search?: string;
+  searchSort?: string;
+  outDir?: string;
+  keyframes?: string;
+  jobs?: string;
+  subLangs?: string;
+  sceneThreshold?: string;
+  sceneMinGap?: string;
+  maxWords?: string;
+  cookiesFromBrowser?: string;
+  proxy?: string;
+  platform?: string;
+  maxChars?: string;
+  rewriteMode?: string;
+  publishDryRun?: boolean;
+  dryRun?: boolean;
+  thread?: boolean;
+  publishMaxChars?: string;
+  maxTweets?: string;
+  numbering?: boolean;
+  continueFrom?: boolean;
+  errorStrategy?: string;
+  mode?: string;
+  llmProvider?: string;
+  llmModel?: string;
+  llmBaseUrl?: string;
+  verbose?: boolean;
+};
+
+export type SingleStageTarget = "acquire" | "notes" | "article" | "publish";

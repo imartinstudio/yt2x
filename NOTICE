@@ -1,0 +1,47 @@
+yt2x
+Copyright 2026 The yt2x Contributors
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file in this distribution for the full license text.
+
+Project description
+-------------------
+yt2x is a TypeScript / pnpm monorepo for transforming YouTube videos into
+structured notes, X-oriented long-form articles, and publish previews or X
+posts through a local CLI workflow.
+
+Attribution
+-----------
+This NOTICE file applies to the yt2x source code, documentation, examples,
+tests, and project-maintained configuration files distributed in this
+repository, unless a file or directory states otherwise.
+
+Third-party dependencies
+------------------------
+yt2x depends on third-party packages and external command-line tools,
+including npm packages declared in package.json files and system tools such
+as yt-dlp and ffmpeg. Those third-party components are not relicensed by
+yt2x. They remain subject to their own licenses, notices, and terms.
+
+The package manager lockfile and package metadata identify npm dependencies.
+System tools should be obtained from their upstream projects or trusted
+package managers, and their license terms should be reviewed separately.
+
+No third-party source code is intentionally vendored into this repository
+unless it is explicitly accompanied by its own license or notice file.
+
+Trademarks
+----------
+YouTube is a trademark of Google LLC. X and Twitter are trademarks of X Corp.
+OpenAI, Anthropic, DeepSeek, Moonshot, Claude, and related product names are
+trademarks or registered trademarks of their respective owners.
+
+Use of those names in this project is for descriptive interoperability and
+documentation purposes only. This project is not affiliated with, endorsed by,
+or sponsored by those trademark owners.
+
+Contributor notice
+------------------
+Unless explicitly stated otherwise, contributions intentionally submitted to
+this project are provided under the Apache License, Version 2.0, as described
+in the LICENSE file and CONTRIBUTING.md.

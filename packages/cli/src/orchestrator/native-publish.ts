@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   DEFAULT_ARTICLE_OUT_DIR,
   DEFAULT_OUT_DIR,
@@ -26,6 +27,8 @@ import {
 } from "@yt2x/core";
 import { logger } from "../logger.js";
 import type { SingleStageFlags } from "../commands/command-flags.js";
+import { printCliErrorBlock } from "../diagnostics/error-format.js";
+import { createCommandProgress } from "../progress/pipeline-progress.js";
 import { NATIVE_EXIT, resolveArticleOutRoot } from "./native-stage-common.js";
 
 export type PublishFlags = SingleStageFlags & {
@@ -42,6 +45,7 @@ export type PublishFlags = SingleStageFlags & {
   numbering?: boolean;
   continueOnFailure?: boolean;
   dryRun?: boolean;
+  showProgress?: boolean;
 };
 
 const EXIT_CONFIG_MISSING = NATIVE_EXIT.CONFIG_MISSING;
@@ -98,16 +102,22 @@ const previewPublishTexts = (texts: string[], threadMode: boolean): void => {
 /** 供 `pipeline` 编排器与 `yt2x publish` 调用；返回进程退出码。 */
 export const executeNativePublish = async (flags: PublishFlags): Promise<number> => {
   if (flags.videoId === undefined || flags.videoId.length === 0) {
-    logger.error(
-      "Publish (native) requires --video-id <id>. Example: yt2x publish --video-id dQw4w9WgXcQ",
-    );
+    printCliErrorBlock({
+      command: "publish",
+      reason: "Missing required option: --video-id <id>.",
+      hints: ["Publish needs an article target under files/articles/<videoId>/."],
+      retryCommand: "pnpm yt2x publish --video-id <videoId> --dry-run",
+    });
     return EXIT_CONFIG_MISSING;
   }
   if (!isValidVideoId(flags.videoId)) {
-    logger.error(
-      { videoId: flags.videoId },
-      "Invalid --video-id. Expected alphanumeric, hyphens, and underscores only.",
-    );
+    printCliErrorBlock({
+      command: "publish",
+      subject: flags.videoId,
+      reason: "Invalid --video-id. Expected alphanumeric, hyphens, and underscores only.",
+      hints: ["Use a video directory name, not a path."],
+      retryCommand: "pnpm yt2x publish --video-id <videoId> --dry-run",
+    });
     return EXIT_CONFIG_MISSING;
   }
 
@@ -133,7 +143,14 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
     artifacts = await findArticleArtifacts(findInput);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.error({ videoId: flags.videoId, articleRootDir }, message);
+    printCliErrorBlock({
+      command: "publish",
+      subject: flags.videoId,
+      reason: message,
+      details: articleRootDir,
+      hints: ["Generate the article first, or pass --article-dir if the article lives elsewhere."],
+      retryCommand: `pnpm yt2x article --video-id ${flags.videoId}`,
+    });
     return EXIT_CONFIG_MISSING;
   }
 
@@ -145,7 +162,14 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
   });
 
   if (texts.length === 0) {
-    logger.error({ articlePath: artifacts.articlePath }, "Article produced empty publish body; check input.");
+    printCliErrorBlock({
+      command: "publish",
+      subject: flags.videoId,
+      reason: "Article produced an empty publish body.",
+      details: artifacts.articlePath,
+      hints: ["Check article.md and regenerate it if needed."],
+      retryCommand: `pnpm yt2x article --video-id ${flags.videoId} --force`,
+    });
     return EXIT_CONFIG_MISSING;
   }
 
@@ -213,17 +237,27 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
     scopes = await tokenSource.getScopes();
   } catch (err: unknown) {
     if (err instanceof NoCredentialsError) {
-      logger.error({ profile }, err.message);
+      printCliErrorBlock({
+        command: "publish",
+        subject: flags.videoId,
+        reason: err.message,
+        hints: ["Log in to X before publishing."],
+        retryCommand: "pnpm yt2x auth login",
+      });
       return EXIT_CONFIG_MISSING;
     }
     throw err;
   }
 
   if (!scopes.includes("tweet.write")) {
-    logger.error(
-      { scopes, credentialsFile: defaultCredentialsPath() },
-      'Stored token lacks "tweet.write" scope. Re-login: yt2x auth login',
-    );
+    printCliErrorBlock({
+      command: "publish",
+      subject: flags.videoId,
+      reason: 'Stored token lacks "tweet.write" scope.',
+      details: defaultCredentialsPath(),
+      hints: ["Re-login to grant tweet.write before publishing."],
+      retryCommand: "pnpm yt2x auth login",
+    });
     return EXIT_AUTH;
   }
   if (artifacts.coverPath !== null && !scopes.includes("media.write")) {
@@ -232,6 +266,10 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       'Cover image found, but token lacks "media.write" scope. Re-login with `yt2x auth login --scope media.write` to attach the cover image.',
     );
   }
+
+  const progress = flags.showProgress === false ? undefined : createCommandProgress("publish");
+  const progressT0 = performance.now();
+  progress?.setActive(`publish · ${flags.videoId}`);
 
   const adapter = createXPublishAdapter({ tokenSource });
 
@@ -333,6 +371,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
     }
 
     if (result.partialFailure !== undefined) {
+      progress?.clear();
       logger.warn(
         {
           ok: result.tweets.length,
@@ -354,8 +393,11 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       },
       "yt2x publish (native): done",
     );
+    progress?.record("publish", Math.round(performance.now() - progressT0));
+    progress?.printSummary();
     return 0;
   } catch (err: unknown) {
+    progress?.clear();
     if (pageUrl.length > 0) {
       try {
         const message = err instanceof Error ? err.message : String(err);
@@ -380,22 +422,43 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       }
     }
     if (isXPublishError(err)) {
-      logger.error(
-        { kind: err.kind, status: err.context.status, detail: err.context.detail },
-        err.message,
-      );
+      const errorBlock: Parameters<typeof printCliErrorBlock>[0] = {
+        command: "publish",
+        subject: flags.videoId,
+        reason: err.message,
+        hints: ["Check the X API response and retry after resolving the publishing error."],
+      };
+      if (err.context.detail !== undefined) errorBlock.details = err.context.detail;
+      printCliErrorBlock(errorBlock);
       return exitFromPublishKind(err.kind);
     }
     if (err instanceof NoRefreshTokenError) {
-      logger.error(err.message);
+      printCliErrorBlock({
+        command: "publish",
+        subject: flags.videoId,
+        reason: err.message,
+        hints: ["Re-login to refresh local X credentials."],
+        retryCommand: "pnpm yt2x auth login",
+      });
       return EXIT_AUTH;
     }
     if (err instanceof XAuthError) {
-      logger.error({ code: err.code }, err.message);
+      printCliErrorBlock({
+        command: "publish",
+        subject: flags.videoId,
+        reason: err.message,
+        hints: ["Re-login to refresh local X credentials."],
+        retryCommand: "pnpm yt2x auth login",
+      });
       return EXIT_AUTH;
     }
     const message = err instanceof Error ? err.message : String(err);
-    logger.error({ err: message }, "yt2x publish (native): unexpected error");
+    printCliErrorBlock({
+      command: "publish",
+      subject: flags.videoId,
+      reason: message,
+      hints: ["Rerun with --verbose if the failure is not clear."],
+    });
     return 1;
   }
 };

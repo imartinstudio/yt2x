@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
@@ -6,6 +6,7 @@ import {
   DEFAULT_ARTICLE_OUT_DIR,
   DEFAULT_OUT_DIR,
   executeNativeAcquire,
+  extractVideoId,
   listBatchVideosFromOutRoot,
   readProcessStatusMerged,
   readYoutubePageUrl,
@@ -53,6 +54,26 @@ const logAcquireFailuresUnderOutRoot = async (outRoot: string): Promise<void> =>
   }
 };
 
+const hasMetadata = async (outRoot: string, id: string): Promise<boolean> =>
+  access(path.join(outRoot, id, "metadata.json"))
+    .then(() => true)
+    .catch(() => false);
+
+const filterMaterializedVideoIds = async (outRoot: string, ids: string[]): Promise<string[]> => {
+  const materialized: string[] = [];
+  for (const id of ids) {
+    if (await hasMetadata(outRoot, id)) {
+      materialized.push(id);
+    }
+  }
+  return materialized;
+};
+
+const sourceVideoIdsFromUrls = (urls: readonly string[]): string[] => {
+  const ids = urls.map((url) => extractVideoId(url));
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+};
+
 /**
  * 默认 `yt2x pipeline` 编排：**native acquire**（`@yt2x/adapters-node` `prepareYoutubeVideo` + yt-dlp 搜索），
  * 再按 **`collectNativePipelineVideoIds`**（扫描 `--out-dir` 下含 `metadata.json` 或 `process-status.json` 的子目录，字典序）进程内调用 native `notes` → `article` → `publish`。
@@ -75,6 +96,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
   }
 
   let videoIds = await collectNativePipelineVideoIds(outRoot);
+  const initialVideoIds = new Set(videoIds);
 
   const videoCountForProgress =
     args.control.continueFlag || args.stages.acquire === "skip"
@@ -82,6 +104,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       : estimatePipelineVideoCount(args, videoIds.length);
 
   const progress = createPipelineProgress(args, videoCountForProgress);
+  let finalExitCode = 1;
 
   const stageTimingKey = (stage: string, videoId: string): string =>
     videoIds.length > 1 ? `${stage}.${videoId}` : stage;
@@ -93,7 +116,8 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
           { outRoot },
           "No videos under --out-dir (no subdirs with metadata.json or process-status.json). Run acquire first.",
         );
-        return 1;
+        finalExitCode = 1;
+        return finalExitCode;
       }
     } else if (args.stages.acquire !== "skip") {
       logger.info({ outRoot, acquire: args.stages.acquire }, "yt2x pipeline: native acquire");
@@ -110,15 +134,24 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       if (acquireCode !== 0) {
         await logAcquireFailuresUnderOutRoot(outRoot);
         logger.error({ outRoot, exitCode: acquireCode }, "yt2x pipeline: acquire stage failed");
-        return acquireCode;
+        finalExitCode = acquireCode;
+        return finalExitCode;
       }
-      videoIds = await collectNativePipelineVideoIds(outRoot);
+      const allVideoIdsAfterAcquire = await collectNativePipelineVideoIds(outRoot);
+      const newlyDiscoveredVideoIds = allVideoIdsAfterAcquire.filter((id) => !initialVideoIds.has(id));
+      const sourceVideoIds = sourceVideoIdsFromUrls(args.sources.urls);
+      videoIds =
+        newlyDiscoveredVideoIds.length > 0
+          ? newlyDiscoveredVideoIds
+          : allVideoIdsAfterAcquire.filter((id) => sourceVideoIds.includes(id));
+      videoIds = await filterMaterializedVideoIds(outRoot, videoIds);
       if (videoIds.length === 0) {
         logger.error(
           { outRoot },
-          "No videos found after acquire (no subdirs with metadata.json or process-status.json).",
+          "No videos with metadata.json found after acquire.",
         );
-        return 1;
+        finalExitCode = 1;
+        return finalExitCode;
       }
     } else {
       if (videoIds.length === 0) {
@@ -126,11 +159,16 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
           { outRoot },
           'pipeline with --acquire skip needs video subdirs under --out-dir (each with metadata.json or process-status.json).',
         );
-        return 1;
+        finalExitCode = 1;
+        return finalExitCode;
       }
     }
 
     let pipelineExit = 0;
+
+    if (args.stages.acquire === "skip" || args.control.continueFlag) {
+      videoIds = await filterMaterializedVideoIds(outRoot, videoIds);
+    }
 
     const notesForId = (id: string) =>
     ({
@@ -141,6 +179,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       errorStrategy: args.control.errorStrategy,
       verbose: args.flags.verbose,
       force: args.control.force,
+      showProgress: false,
       videoId: [id],
     }) as Parameters<typeof executeNativeNotes>[0];
 
@@ -163,6 +202,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       publishDryRun: args.publish.publishDryRun || args.stages.publish === "review",
       dryRun: args.publish.publishDryRun || args.stages.publish === "review",
       verbose: args.flags.verbose,
+      showProgress: false,
       videoId: id,
     }) as Parameters<typeof executeNativePublish>[0];
 
@@ -175,7 +215,10 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         progress.record(stageTimingKey("notes", id), Math.round(performance.now() - t0));
         if (code !== 0) {
           pipelineExit = mergePipelineExitCode(pipelineExit, code);
-          if (args.control.errorStrategy === "stop") return code;
+          if (args.control.errorStrategy === "stop") {
+            finalExitCode = code;
+            return finalExitCode;
+          }
         }
       }
     }
@@ -189,7 +232,10 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         progress.record(stageTimingKey("article", id), Math.round(performance.now() - t0));
         if (code !== 0) {
           pipelineExit = mergePipelineExitCode(pipelineExit, code);
-          if (args.control.errorStrategy === "stop") return code;
+          if (args.control.errorStrategy === "stop") {
+            finalExitCode = code;
+            return finalExitCode;
+          }
         }
       }
     }
@@ -209,7 +255,10 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         progress.record(stageTimingKey("publish", id), Math.round(performance.now() - t0));
         if (code !== 0) {
           pipelineExit = mergePipelineExitCode(pipelineExit, code);
-          if (args.control.errorStrategy === "stop") return code;
+          if (args.control.errorStrategy === "stop") {
+            finalExitCode = code;
+            return finalExitCode;
+          }
         }
       }
     }
@@ -218,8 +267,13 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       { videos: videoIds.length, outRoot, exitCode: pipelineExit },
       "yt2x pipeline: native orchestrator completed",
     );
-    return pipelineExit;
+    finalExitCode = pipelineExit;
+    return finalExitCode;
   } finally {
-    progress.printSummary();
+    if (finalExitCode === 0) {
+      progress.printSummary();
+    } else {
+      progress.clear();
+    }
   }
 };

@@ -102,6 +102,30 @@ describe("runNativePipeline", () => {
     expect(executeNativeNotesMock).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores status-only directories when building the pipeline work queue", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-status-only-"));
+    await mkdir(path.join(outRoot, "__missing__"), { recursive: true });
+    await writeFile(
+      path.join(outRoot, "__missing__", "process-status.json"),
+      JSON.stringify({ version: 1, videoId: "__missing__", steps: {} }),
+    );
+    const vid = "realVideo1";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "real" }));
+
+    const args = buildArgs({
+      control: { outDir: outRoot },
+      stages: { acquire: "skip", notes: "auto", article: "skip", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(executeNativeNotesMock).toHaveBeenCalledTimes(1);
+    expect(executeNativeNotesMock.mock.calls[0]![0]).toMatchObject({
+      videoId: [vid],
+    });
+  });
+
   it("returns partial exit code when error-strategy is skip and notes fail", async () => {
     const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-skip-"));
     const vid = "aaa";

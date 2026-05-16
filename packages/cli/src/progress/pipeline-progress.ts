@@ -53,8 +53,10 @@ export const countPipelineProgressUnits = (args: PipelineArgs, videoCount: numbe
   return total;
 };
 
+export type ProgressCommand = "pipeline" | "acquire" | "notes" | "article" | "publish";
+
 export type PipelineTimingsPayload = {
-  command: "pipeline" | "acquire";
+  command: ProgressCommand;
   timingsMs: Record<string, number>;
   timingsSec: Record<string, number>;
   totalMs: number;
@@ -63,7 +65,7 @@ export type PipelineTimingsPayload = {
 };
 
 export const buildPipelineTimingsPayload = (
-  command: PipelineTimingsPayload["command"],
+  command: ProgressCommand,
   timings: Map<string, number>,
   wallStartMs: number,
 ): PipelineTimingsPayload => {
@@ -88,12 +90,13 @@ export type PipelineProgressHandle = {
   setActive: (label: string) => void;
   record: (timingKey: string, durationMs: number, activeLabel?: string) => void;
   getTimingsPayload: () => PipelineTimingsPayload;
+  clear: () => void;
   printSummary: () => void;
 };
 
 type ProgressHandleOptions = {
   totalUnits: number;
-  command: PipelineTimingsPayload["command"];
+  command: ProgressCommand;
 };
 
 const clearProgressLine = (useTty: boolean): void => {
@@ -200,13 +203,18 @@ const createProgressHandle = (opts: ProgressHandleOptions): PipelineProgressHand
       return buildPipelineTimingsPayload(command, timings, wallStart);
     },
 
+    clear() {
+      stopTicker();
+      activeSinceMs = 0;
+      clearProgressLine(useTty);
+    },
+
     printSummary() {
       stopTicker();
       activeSinceMs = 0;
       const payload = buildPipelineTimingsPayload(command, timings, wallStart);
       clearProgressLine(useTty);
-      const logMessage =
-        command === "pipeline" ? "yt2x pipeline: stage timings" : "yt2x acquire: stage timings";
+      const logMessage = `yt2x ${command}: stage timings`;
       logger.info(payload, logMessage);
       printHumanSummary(payload);
     },
@@ -247,4 +255,13 @@ export const createAcquireOnlyProgress = (
   createProgressHandle({
     totalUnits: countAcquireSubSteps(keyframes) * Math.max(1, videoCount),
     command: "acquire",
+  });
+
+export const createCommandProgress = (
+  command: Exclude<ProgressCommand, "pipeline" | "acquire">,
+  totalUnits = 1,
+): PipelineProgressHandle =>
+  createProgressHandle({
+    totalUnits: Math.max(1, totalUnits),
+    command,
   });

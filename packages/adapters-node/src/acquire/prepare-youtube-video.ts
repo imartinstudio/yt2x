@@ -59,14 +59,24 @@ const timedStep = async <T>(
   logStep(opts, `${label}…`);
   opts.progress?.onStepStart?.(label);
   const t0 = performance.now();
-  const value = await fn();
-  const ms = Math.round(performance.now() - t0);
-  timings[label] = ms;
-  opts.progress?.onStepEnd?.(label, ms);
-  if (opts.verbose === true) {
-    console.log(`     ${label} done (${(ms / 1000).toFixed(1)}s)`);
+  try {
+    const value = await fn();
+    const ms = Math.round(performance.now() - t0);
+    timings[label] = ms;
+    opts.progress?.onStepEnd?.(label, ms);
+    if (opts.verbose === true) {
+      console.log(`     ${label} done (${(ms / 1000).toFixed(1)}s)`);
+    }
+    return value;
+  } catch (err) {
+    const ms = Math.round(performance.now() - t0);
+    timings[label] = ms;
+    opts.progress?.onStepEnd?.(label, ms);
+    if (opts.verbose === true) {
+      console.error(`     ${label} failed (${(ms / 1000).toFixed(1)}s)`);
+    }
+    throw err;
   }
-  return value;
 };
 
 const writeTranscriptArtifacts = async (

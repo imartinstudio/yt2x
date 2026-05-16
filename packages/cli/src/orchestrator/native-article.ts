@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   DEFAULT_ARTICLE_OUT_DIR,
   DEFAULT_OUT_DIR,
@@ -14,6 +15,8 @@ import {
 import { isLlmError } from "@yt2x/core";
 import { logger } from "../logger.js";
 import type { SingleStageFlags } from "../commands/command-flags.js";
+import { printCliErrorBlock } from "../diagnostics/error-format.js";
+import { createCommandProgress } from "../progress/pipeline-progress.js";
 import {
   NATIVE_EXIT,
   exitFromLlmKind,
@@ -27,6 +30,7 @@ export type ArticleFlags = SingleStageFlags & {
   all?: boolean;
   force?: boolean;
   articleOutDir?: string;
+  showProgress?: boolean;
 };
 
 /** 供 `pipeline` 编排器与 `yt2x article` 调用；返回进程退出码。 */
@@ -37,13 +41,23 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
   await mkdir(articleOutDir, { recursive: true });
   const platform = flags.platform ?? "x";
   if (platform !== "x") {
-    logger.error({ platform }, "Native article currently supports only --platform x");
+    printCliErrorBlock({
+      command: "article",
+      reason: `Unsupported platform: ${platform}`,
+      hints: ["Native article generation currently supports only --platform x."],
+      retryCommand: "pnpm yt2x article --video-id <videoId> --platform x",
+    });
     return NATIVE_EXIT.CONFIG_MISSING;
   }
 
   const llm = resolveNativeLlm(flags);
   if (!llm.ok) {
-    logger.error({ reason: llm.reason }, "yt2x article: LLM config invalid");
+    printCliErrorBlock({
+      command: "article",
+      reason: llm.reason,
+      hints: ["Configure an LLM provider and API key before generating articles."],
+      retryCommand: "pnpm yt2x llm ping",
+    });
     return llm.exitCode;
   }
 
@@ -55,18 +69,26 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
   });
   if (!batch.ok) {
     if (batch.reason === "empty_pending") {
-      logger.warn(
-        { notesOutDir, articleOutDir },
-        "No pending videos (need structured-notes.md and missing native article.md).",
-      );
+      printCliErrorBlock({
+        command: "article",
+        reason: "No pending videos found.",
+        details: notesOutDir,
+        hints: ["Pending articles require structured-notes.md and no existing article.md."],
+        retryCommand: "pnpm yt2x article --video-id <videoId>",
+      });
     } else {
-      logger.error(
-        "Article (native) requires --video-id <id...> or --all. Example: yt2x article --video-id dQw4w9WgXcQ.",
-      );
+      printCliErrorBlock({
+        command: "article",
+        reason: "Missing target. Article requires --video-id <id...> or --all.",
+        hints: ["Run notes first, then pass the generated video directory name."],
+        retryCommand: "pnpm yt2x article --video-id <videoId>",
+      });
     }
     return batch.exitCode;
   }
   const targets = batch.targets;
+  const progress = flags.showProgress === false ? undefined : createCommandProgress("article", targets.length);
+  let exitCode = 1;
 
   logger.info(
     {
@@ -85,8 +107,12 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
   const errors: Array<{ videoDir: string; message: string }> = [];
 
   for (const videoDir of targets) {
+    const stageT0 = performance.now();
+    let progressKey = `article.${path.basename(videoDir)}`;
     try {
       const artifacts = await readStructuredNotesArtifacts(videoDir);
+      progressKey = `article.${artifacts.videoId}`;
+      progress?.setActive(`article · ${artifacts.videoId}`);
       const url = await readYoutubePageUrl(videoDir, artifacts.videoId);
       const identity = { videoId: artifacts.videoId, url };
       await patchStepRunning(videoDir, identity, "article").catch(() => {});
@@ -145,20 +171,33 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
         },
         "article generated (native x)",
       );
+      progress?.record(progressKey, Math.round(performance.now() - stageT0));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       errors.push({ videoDir, message });
-      logger.error({ videoDir, err: message }, "article failed");
+      printCliErrorBlock({
+        command: "article",
+        subject: path.basename(videoDir),
+        reason: message,
+        details: path.join(videoDir, "process-status.json"),
+        hints: ["Ensure notes completed successfully before generating an article."],
+        retryCommand: `pnpm yt2x article --video-id ${path.basename(videoDir)}`,
+      });
       try {
         await patchLlmStepFailed(videoDir, "article", err);
       } catch {
         // ignore
       }
       if (isLlmError(err)) {
-        if (flags.errorStrategy !== "skip") return exitFromLlmKind(err.kind);
+        if (flags.errorStrategy !== "skip") {
+          progress?.clear();
+          return exitFromLlmKind(err.kind);
+        }
       } else if (flags.errorStrategy !== "skip") {
+        progress?.clear();
         return 1;
       }
+      progress?.record(progressKey, Math.round(performance.now() - stageT0));
     }
   }
 
@@ -171,6 +210,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
     },
     "yt2x article (native x): done",
   );
-  if (errors.length > 0) return NATIVE_EXIT.PARTIAL_FAILURE;
-  return 0;
+  exitCode = errors.length > 0 ? NATIVE_EXIT.PARTIAL_FAILURE : 0;
+  if (exitCode === 0) {
+    progress?.printSummary();
+  } else {
+    progress?.clear();
+  }
+  return exitCode;
 };

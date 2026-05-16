@@ -54,14 +54,20 @@ export const runAcquireStage = async (flags: SingleStageFlags): Promise<void> =>
     estimatePipelineVideoCount(args),
     args.acquire.keyframes,
   );
+  let exitCode = 1;
   try {
     const code = await executeNativeAcquire({
       ...base,
       progress: acquireSubStepProgressFromHandle(progress, "acquire"),
       ...(args.stages.acquire === "review" ? { reviewPrompt: createAcquireReviewPrompt() } : {}),
     });
+    exitCode = code;
     process.exitCode = code;
   } finally {
-    progress.printSummary();
+    if (exitCode === 0) {
+      progress.printSummary();
+    } else {
+      progress.clear();
+    }
   }
 };

@@ -122,4 +122,63 @@ describe("executeNativeAcquire", () => {
     });
     expect(code).toBe(1);
   });
+
+  it("prints acquire failure details without requiring verbose mode", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-acq-fail-"));
+    const { prepareYoutubeVideo } = await import("./prepare-youtube-video.js");
+    vi.mocked(prepareYoutubeVideo).mockImplementationOnce(async (opts) => {
+      const { mkdir } = await import("node:fs/promises");
+      const videoDir = path.join(opts.outDir, "failVideo");
+      await mkdir(videoDir, { recursive: true });
+      return {
+        url: opts.url,
+        dir: videoDir,
+        ok: false,
+        warnings: [
+          "metadata failed: yt-dlp exited 1: Sign in to confirm you are not a bot",
+          "missing required artifacts: metadata.json, chunks.md, timestamped-cues.md",
+        ],
+        video_id: "failVideo",
+      };
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const code = await executeNativeAcquire({
+        monorepoRoot: "/tmp",
+        outDir,
+        sources: { urls: ["https://youtu.be/failVideo"] },
+        acquire: {
+          keyframes: 0,
+          sceneThreshold: 0.35,
+          sceneMinGap: 12,
+          maxWords: 900,
+          jobs: 3,
+        },
+        stages: baseStages,
+        control: { continueFlag: false, errorStrategy: "stop" },
+        flags: { verbose: false },
+      });
+
+      expect(code).toBe(1);
+      const output = errorSpy.mock.calls.flat().join("\n");
+      expect(output).toContain("ERROR yt2x acquire failed for failVideo");
+      expect(output).toContain("Reason:");
+      expect(output).toContain("Sign in to confirm you are not a bot");
+      expect(output).toContain("Details:");
+      expect(output).toContain("process-status.json");
+      expect(output).toContain("Hint:");
+      expect(output).toContain("YouTube requires sign-in or bot verification");
+      expect(output).toContain("--cookies-from-browser chrome");
+      expect(output).toContain(
+        "pnpm yt2x acquire --urls 'https://youtu.be/failVideo' --cookies-from-browser chrome",
+      );
+      expect(output.indexOf("Hint:")).toBeGreaterThan(output.indexOf("Details:"));
+      expect(output.indexOf("pnpm yt2x acquire")).toBeGreaterThan(
+        output.indexOf("Retry with --cookies-from-browser chrome"),
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });

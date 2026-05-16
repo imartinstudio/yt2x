@@ -52,6 +52,70 @@ export type NativeAcquireOptions = {
 
 const doneArtifacts = ["metadata.json", "chunks.md", "timestamped-cues.md"];
 
+const firstNonEmptyLines = (input: string, maxLines: number): string[] =>
+  input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(0, maxLines);
+
+const canUseColor = (): boolean => process.stderr.isTTY === true && process.env.NO_COLOR === undefined;
+
+const style = (code: string, text: string): string =>
+  canUseColor() ? `\u001b[${code}m${text}\u001b[0m` : text;
+
+const bold = (text: string): string => style("1", text);
+const red = (text: string): string => style("31;1", text);
+const yellow = (text: string): string => style("33;1", text);
+const cyan = (text: string): string => style("36;1", text);
+
+const looksLikeYoutubeAuthFailure = (detail: string): boolean =>
+  /sign in|not a bot|confirm.*bot|cookies-from-browser|cookies|login|age[- ]?restricted|private video/i.test(
+    detail,
+  );
+
+const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+
+const retryAcquireCommand = (videoUrl: string): string =>
+  `pnpm yt2x acquire --urls ${shellQuote(videoUrl)} --cookies-from-browser chrome`;
+
+const printAcquireFailure = (
+  videoId: string,
+  videoDir: string,
+  videoUrl: string,
+  detail: string,
+): void => {
+  const summary = firstNonEmptyLines(detail, 5);
+  const statusPath = path.join(videoDir, "process-status.json");
+  const authFailure = looksLikeYoutubeAuthFailure(detail);
+
+  if (process.stderr.isTTY === true) {
+    process.stderr.write("\n");
+  }
+  console.error(red(`ERROR yt2x acquire failed for ${videoId}`));
+  console.error("");
+  console.error(bold("Reason:"));
+  for (const line of summary) {
+    console.error(`  ${line}`);
+  }
+  console.error("");
+  console.error(`${bold("Details:")} ${statusPath}`);
+  console.error("");
+  console.error(bold("Hint:"));
+  if (authFailure) {
+    console.error(
+      `  ${yellow(
+        "YouTube requires sign-in or bot verification. This usually means yt-dlp needs browser cookies, not that yt2x crashed.",
+      )}`,
+    );
+    console.error(`  Retry with ${cyan("--cookies-from-browser chrome")} after signing in to YouTube in Chrome.`);
+    console.error("");
+    console.error(cyan(retryAcquireCommand(videoUrl)));
+  } else {
+    console.error(`  Check the details file, or rerun with ${cyan("--verbose")} for fuller logs.`);
+  }
+};
+
 const shouldSkipAcquireForVideo = async (outDir: string, rawVideoId: string): Promise<boolean> => {
   const videoId = sanitizeVideoId(rawVideoId);
   const videoDir = path.join(outDir, videoId);
@@ -153,9 +217,7 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
             ? result.warnings.join("\n")
             : "prepare finished without required artifacts (metadata.json, chunks.md, timestamped-cues.md)";
         await markStepFailed(videoDir, "acquire", detail);
-        if (flags.verbose) {
-          console.error(`     acquire failed: ${detail}`);
-        }
+        printAcquireFailure(videoId, videoDir, video.url, detail);
         if (control.errorStrategy === "stop") {
           return 1;
         }
@@ -166,9 +228,7 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
       if (!artifactsValid) {
         const detail = `acquire reported ok but artifacts are missing under ${videoDir}`;
         await markStepFailed(videoDir, "acquire", detail);
-        if (flags.verbose) {
-          console.error(`     ${detail}`);
-        }
+        printAcquireFailure(videoId, videoDir, video.url, detail);
         if (control.errorStrategy === "stop") {
           return 1;
         }
@@ -192,9 +252,7 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
       const stderr = isProcessError(err) ? (err.context.stderrExcerpt ?? "") : "";
       const detail = stderr.length > 0 ? `${message}\n${stderr}` : message;
       await markStepFailed(plannedVideoDir, "acquire", detail);
-      if (flags.verbose) {
-        console.error(`     acquire error: ${detail}`);
-      }
+      printAcquireFailure(videoId, plannedVideoDir, video.url, detail);
       if (control.errorStrategy === "stop") {
         return 1;
       }

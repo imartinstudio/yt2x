@@ -38,6 +38,7 @@ yt2x 处于 v0.1 开源前打磨期：
 - 更好的多账号 X profile 管理。
 - 发布失败后的重试、回滚或断点续发策略。
 - 更丰富的平台模板，例如 WeChat / newsletter。
+- 按发布目标生成内容：支持 `article --targets` / `pipeline --targets`，允许自由组合生成 `x-longform`、`x-thread`、`x-short`。详细任务说明见 [X-TARGET-OUTPUT-TASK.md](./X-TARGET-OUTPUT-TASK.md)。
 
 ## 不在 v0.1 范围
 

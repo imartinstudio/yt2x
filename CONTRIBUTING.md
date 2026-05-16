@@ -255,6 +255,17 @@ pnpm run ci:full
 建议：
 
 - 从最新 `main` 创建短分支。
+- 分支名使用标准语义前缀和小写 kebab-case，格式为 `<type>/<short-topic>`。
+- 常用类型：
+  - `feature/`：新功能、实验性能力、用户可见增强。
+  - `fix/`：普通缺陷修复。
+  - `hotfix/`：需要快速处理的生产或发布阻断修复。
+  - `docs/`：仅文档改动。
+  - `chore/`：维护性工作，例如依赖、配置、脚本、仓库 housekeeping。
+  - `refactor/`：不改变行为的结构调整。
+  - `test/`：测试补充或测试基础设施改动。
+- 分支主题必须描述问题或目标，例如 `feature/x-target-output-test`、`fix/publish-review-dry-run`。
+- 不使用带有个人、Agent、模型、工具或供应商色彩的分支前缀，例如 `codex/`、`agent/`。
 - 一个 PR 解决一个清晰问题。
 - 提交信息使用简洁祈使句，例如 `Fix publish review dry-run semantics`。
 - 不把大规模格式化、重命名、行为变更混在同一个提交里。

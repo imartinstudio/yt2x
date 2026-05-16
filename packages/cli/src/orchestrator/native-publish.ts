@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
@@ -17,6 +17,7 @@ import {
   patchStepRunning,
   readYoutubePageUrl,
 } from "@yt2x/adapters-node";
+import type { ThreadVisualItem, ShortVisualItem } from "@yt2x/core";
 import {
   XAuthError,
   articleToLongPost,
@@ -137,6 +138,90 @@ const loadGeneratedShortText = async (
     throw new Error(`${shortPath} did not contain a publishable short post.`);
   }
   return { texts: [text], source: "x-short.md" };
+};
+
+const loadThreadVisualPlans = async (
+  articleDir: string,
+): Promise<ThreadVisualItem[]> => {
+  const visualsPath = path.join(articleDir, "x-thread-visuals.json");
+  try {
+    const raw = await readFile(visualsPath, "utf8");
+    const parsed = JSON.parse(raw) as { visuals?: ThreadVisualItem[] };
+    return parsed.visuals ?? [];
+  } catch {
+    return [];
+  }
+};
+
+const loadShortVisualPlan = async (
+  articleDir: string,
+): Promise<ShortVisualItem | null> => {
+  const visualPath = path.join(articleDir, "x-short-visual.json");
+  try {
+    const raw = await readFile(visualPath, "utf8");
+    const parsed = JSON.parse(raw) as { visual?: ShortVisualItem };
+    return parsed.visual ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const loadVisualMediaIds = async (
+  articleDir: string,
+  notesVideoDir: string,
+  adapter: ReturnType<typeof createXPublishAdapter>,
+  scopes: string[],
+): Promise<Map<string, string>> => {
+  const mediaMap = new Map<string, string>();
+  if (!scopes.includes("media.write")) return mediaMap;
+
+  // 加载所有视觉计划文件
+  const threadVisuals = await loadThreadVisualPlans(articleDir);
+  const shortVisual = await loadShortVisualPlan(articleDir);
+
+  const allVisualIds = new Set<string>();
+  for (const v of threadVisuals) allVisualIds.add(v.visual_id);
+  if (shortVisual !== null) allVisualIds.add(shortVisual.visual_id);
+
+  for (const visualId of allVisualIds) {
+    // 尝试找到对应的截图文件
+    const screenshotsDir = path.join(notesVideoDir, "screenshots");
+    try {
+      const files = await readdir(screenshotsDir);
+      const match = files.find((f) => f.startsWith(visualId.replace("scene_", "scene_")));
+      if (match !== undefined) {
+        const imagePath = path.join(screenshotsDir, match);
+        const image = await loadTweetImageFromPath(imagePath);
+        const mediaId = await adapter.uploadTweetImage(image);
+        mediaMap.set(visualId, mediaId);
+        logger.info({ visualId, mediaId, imagePath }, "Visual image uploaded");
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ visualId, err: message }, "Visual image upload failed; continuing text-only");
+    }
+  }
+  return mediaMap;
+};
+
+const previewVisualPlans = (
+  articleDir: string,
+  threadVisuals: ThreadVisualItem[],
+  shortVisual: ShortVisualItem | null,
+  threadMode: boolean,
+): void => {
+  if (threadMode && threadVisuals.length > 0) {
+    process.stdout.write(`\n── 配图计划（${threadVisuals.length} 张）──\n`);
+    for (const v of threadVisuals) {
+      process.stdout.write(`  Tweet #${v.tweet_index + 1}: ${v.visual_id} — ${v.caption}\n`);
+    }
+    process.stdout.write("\n");
+  }
+  if (!threadMode && shortVisual !== null) {
+    process.stdout.write(
+      `\n── 配图计划：${shortVisual.visual_id} — ${shortVisual.caption}\n\n`,
+    );
+  }
 };
 
 const previewPublishTexts = (texts: string[], threadMode: boolean): void => {
@@ -288,6 +373,10 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
   const youtubeVideoDir = path.join(path.resolve(flags.outDir ?? DEFAULT_OUT_DIR), flags.videoId);
 
   if (isDryRun) {
+    // 加载视觉计划用于预览
+    const threadVisuals = threadMode ? await loadThreadVisualPlans(articleDirForStatus) : [];
+    const shortVisual = publishTarget === "x-short" ? await loadShortVisualPlan(articleDirForStatus) : null;
+
     logger.info(
       {
         articleDir: articleDirForStatus,
@@ -296,6 +385,8 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
         parts: texts.length,
         coverPath,
         maxChars,
+        ...(threadVisuals.length > 0 ? { threadVisuals: threadVisuals.length } : {}),
+        ...(shortVisual !== null ? { shortVisual: shortVisual.visual_id } : {}),
       },
       publishTarget === "x-short"
         ? "yt2x publish (native) --dry-run: short preview below"
@@ -304,6 +395,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
           : "yt2x publish (native) --dry-run: long post preview below",
     );
     previewPublishTexts(texts, threadMode);
+    previewVisualPlans(articleDirForStatus, threadVisuals, shortVisual, threadMode);
     if (coverPath !== null) {
       logger.info(
         { coverPath },
@@ -420,6 +512,14 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
   ).catch(() => {});
 
   try {
+    // 上传视觉配图（x-thread-visuals.json / x-short-visual.json）
+    const visualMediaMap = await loadVisualMediaIds(
+      articleDirForStatus,
+      youtubeVideoDir,
+      adapter,
+      scopes,
+    );
+
     let firstMediaId: string | null = null;
     if (coverPath !== null && scopes.includes("media.write")) {
       try {
@@ -435,17 +535,26 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       }
     }
 
+    // 收集所有视觉配图的 media_ids 加入首推
+    const allVisualMediaIds = [...visualMediaMap.values()];
+    const firstTweetMediaIds: string[] = [];
+    if (firstMediaId !== null) firstTweetMediaIds.push(firstMediaId);
+    for (const id of allVisualMediaIds) {
+      if (firstTweetMediaIds.length < 4) firstTweetMediaIds.push(id);
+    }
+
     let result: PostThreadResult;
     if (threadMode) {
       result = await adapter.postThread({
         tweets: texts,
-        ...(firstMediaId !== null ? { firstTweetMediaIds: [firstMediaId] } : {}),
+        ...(firstTweetMediaIds.length > 0 ? { firstTweetMediaIds } : {}),
         ...(flags.continueOnFailure === true ? { continueOnFailure: true } : {}),
       });
     } else {
+      const mediaIds: string[] = [...firstTweetMediaIds];
       const tweet = await adapter.postTweet({
         text: texts[0]!,
-        ...(firstMediaId !== null ? { mediaIds: [firstMediaId] } : {}),
+        ...(mediaIds.length > 0 ? { mediaIds } : {}),
       });
       result = {
         tweets: [tweet],

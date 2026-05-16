@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   buildShortUserPrompt,
   SHORT_X_SYSTEM_PROMPT,
+  type AvailableVisual,
   type GeneratedShortPost,
   type LlmPort,
 } from "@yt2x/core";
@@ -13,6 +14,7 @@ export type GenerateXShortInput = {
   temperature?: number;
   maxTokens?: number;
   artifacts: StructuredNotesArtifacts;
+  availableVisuals?: AvailableVisual[] | null;
   signal?: AbortSignal;
 };
 
@@ -25,10 +27,16 @@ export type GenerateXShortResult = {
   durationMs: number;
 };
 
+const ShortVisualSchema = z.object({
+  visual_id: z.string().min(1),
+  caption: z.string().min(1),
+});
+
 const GeneratedShortPostSchema = z.object({
   text: z.string().min(1),
   angle: z.enum(["contrarian", "practical", "trend", "technical", "discussion"]),
   risk: z.enum(["low", "medium", "high"]),
+  visual: ShortVisualSchema.optional(),
 });
 
 const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -37,10 +45,10 @@ const stripJsonFenceWrapper = (s: string): string => {
   return m !== null && m[1] !== undefined ? m[1].trim() : s;
 };
 
-export const parseGeneratedShortPostJson = (raw: string): GeneratedShortPost => {
+export const parseGeneratedShortPostJson = (jsonText: string): GeneratedShortPost => {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(stripJsonFenceWrapper(raw.trim()));
+    parsed = JSON.parse(stripJsonFenceWrapper(jsonText.trim()));
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Short post LLM response is not valid JSON: ${message}`);
@@ -50,7 +58,14 @@ export const parseGeneratedShortPostJson = (raw: string): GeneratedShortPost => 
   if (!result.success) {
     throw new Error(`Short post LLM response does not match expected schema: ${result.error.message}`);
   }
-  return result.data;
+  const raw = result.data;
+  const data: GeneratedShortPost = {
+    text: raw.text,
+    angle: raw.angle,
+    risk: raw.risk,
+  };
+  if (raw.visual !== undefined) data.visual = raw.visual;
+  return data;
 };
 
 export const generateXShortContent = async (
@@ -60,6 +75,7 @@ export const generateXShortContent = async (
     {
       metadata: input.artifacts.metadata,
       structuredNotesMd: input.artifacts.structuredNotesMd,
+      availableVisuals: input.availableVisuals ?? null,
     },
     { platform: "x" },
   );
@@ -77,6 +93,17 @@ export const generateXShortContent = async (
   });
 
   const shortPost = parseGeneratedShortPostJson(resp.content);
+
+  // 验证 visual 只引用 available_visuals 中存在的截图
+  if (shortPost.visual !== undefined) {
+    const availVisuals = input.availableVisuals ?? [];
+    const validIds = new Set(availVisuals.map((v) => v.visual_id));
+    if (!validIds.has(shortPost.visual.visual_id)) {
+      // 静默去除无效 visual 引用（LLM 幻觉常见，不中断流程）
+      delete shortPost.visual;
+    }
+  }
+
   const result: GenerateXShortResult = {
     shortPost,
     model: resp.model,

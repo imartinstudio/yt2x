@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   buildThreadUserPrompt,
   THREAD_X_SYSTEM_PROMPT,
+  type AvailableVisual,
   type GeneratedThread,
   type LlmPort,
 } from "@yt2x/core";
@@ -13,6 +14,7 @@ export type GenerateXThreadInput = {
   temperature?: number;
   maxTokens?: number;
   artifacts: StructuredNotesArtifacts;
+  availableVisuals?: AvailableVisual[] | null;
   signal?: AbortSignal;
 };
 
@@ -41,11 +43,18 @@ const ThreadPlanningSchema = z.object({
 
 const TweetSchema = z.string().min(1);
 
+const ThreadVisualSchema = z.object({
+  tweet_index: z.number().int().min(0).max(14),
+  visual_id: z.string().min(1),
+  caption: z.string().min(1),
+});
+
 const GeneratedThreadSchema = z.object({
   title: z.string().min(1),
   planning: ThreadPlanningSchema,
   tweets: z.array(TweetSchema).min(6).max(15),
   hooks: z.array(ThreadHookSchema).min(3).max(8),
+  visuals: z.array(ThreadVisualSchema).max(3).optional(),
 });
 
 const TWEET_LABEL_RE = /^[^：:\n]{2,24}[：:]\s*\S/u;
@@ -74,10 +83,20 @@ const ensureTweetLabel = (tweet: string, index: number): string => {
   return `${label}：${text}`;
 };
 
-const normalizeThread = (thread: GeneratedThread): GeneratedThread => ({
-  ...thread,
-  tweets: thread.tweets.map((tweet, index) => ensureTweetLabel(tweet, index)),
-});
+const normalizeThread = (
+  raw: z.infer<typeof GeneratedThreadSchema>,
+): GeneratedThread => {
+  const thread: GeneratedThread = {
+    title: raw.title,
+    planning: raw.planning,
+    tweets: raw.tweets.map((tweet, index) => ensureTweetLabel(tweet, index)),
+    hooks: raw.hooks,
+  };
+  if (raw.visuals !== undefined && raw.visuals.length > 0) {
+    thread.visuals = raw.visuals;
+  }
+  return thread;
+};
 
 const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
 const stripJsonFenceWrapper = (s: string): string => {
@@ -108,6 +127,7 @@ export const generateXThreadContent = async (
     {
       metadata: input.artifacts.metadata,
       structuredNotesMd: input.artifacts.structuredNotesMd,
+      availableVisuals: input.availableVisuals ?? null,
     },
     { platform: "x" },
   );
@@ -125,6 +145,24 @@ export const generateXThreadContent = async (
   });
 
   const thread = parseGeneratedThreadJson(resp.content);
+
+  // 验证 visuals 只引用 available_visuals 中存在的截图
+  if (thread.visuals !== undefined && thread.visuals.length > 0) {
+    const availVisuals = input.availableVisuals ?? [];
+    const validIds = new Set(availVisuals.map((v) => v.visual_id));
+    // 过滤掉无效引用（LLM 幻觉常见），保留有效配图
+    const validVisuals = thread.visuals.filter((v) => {
+      if (!validIds.has(v.visual_id)) return false;
+      if (v.tweet_index < 0 || v.tweet_index >= thread.tweets.length) return false;
+      return true;
+    });
+    if (validVisuals.length > 0) {
+      thread.visuals = validVisuals;
+    } else {
+      delete thread.visuals;
+    }
+  }
+
   const result: GenerateXThreadResult = {
     thread,
     model: resp.model,

@@ -12,6 +12,12 @@ describe("THREAD_X_SYSTEM_PROMPT", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/从第二条 tweet 开始/);
   });
 
+  it("defines emoji policy: max 0-1 per tweet, semantic only", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/Emoji 策略/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/最多 0–1 个/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/禁止纯装饰 emoji/);
+  });
+
   it("forbids hallucination, clickbait, and mechanical recap", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要编造/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要廉价标题党/);

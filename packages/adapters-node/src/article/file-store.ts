@@ -1,7 +1,7 @@
 import type { Dirent } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { YouTubeMetadata } from "@yt2x/core";
+import type { ArticleVisualPlanItem, AvailableVisual, YouTubeMetadata } from "@yt2x/core";
 
 /**
  * Native article 输出根目录（扁平）：articleOutDir/videoId/article.md
@@ -178,6 +178,78 @@ export const copyBestCoverFromNotesDir = async (
   await copyFile(path.join(shotDir, pick), dest);
   return dest;
 };
+
+/**
+ * 将长文中的 screenshots/ 图片引用替换为 images/ 并复制实际文件。
+ *
+ * @param articleMd 原始长文内容
+ * @param notesVideoDir 视频采集目录（含 screenshots/）
+ * @param articleDir 文章输出目录（含 images/）
+ * @param visualPlan LLM 生成的配图计划
+ * @param availableVisuals 可用截图清单
+ * @returns 替换后的长文内容
+ */
+export const renderArticleImages = async (
+  articleMd: string,
+  notesVideoDir: string,
+  articleDir: string,
+  visualPlan: ArticleVisualPlanItem[],
+  availableVisuals: AvailableVisual[] | null | undefined,
+): Promise<string> => {
+  if (visualPlan.length === 0) return articleMd;
+
+  const visuals = availableVisuals ?? [];
+  const visualByPath = new Map<string, AvailableVisual>();
+  for (const v of visuals) {
+    const file = v.path.replace(/^screenshots\//, "");
+    visualByPath.set(file, v);
+  }
+
+  let rendered = articleMd;
+  const imagesDir = path.join(articleDir, "images");
+  await mkdir(imagesDir, { recursive: true });
+
+  for (const item of visualPlan) {
+    // 找到对应的 available_visual
+    const visual = visuals.find((v) => v.visual_id === item.visual_id);
+    if (visual === undefined) continue;
+
+    // 质量检查
+    if (visual.quality.blur === "high" || visual.quality.blur === "unknown") continue;
+    if (visual.quality.center_presenter === true) continue;
+
+    const srcFile = visual.path.replace(/^screenshots\//, "");
+    const srcPath = path.join(notesVideoDir, "screenshots", srcFile);
+
+    // 验证源文件存在
+    try {
+      await stat(srcPath);
+    } catch {
+      // 源文件不存在 → 不写这个引用
+      continue;
+    }
+
+    // 复制到文章 images 目录
+    const ext = path.extname(srcFile);
+    const destName = `${item.visual_id}${ext}`;
+    const destPath = path.join(imagesDir, destName);
+    await copyFile(srcPath, destPath);
+
+    // 替换 Markdown 中的图片路径：screenshots/<file> → images/<destName>
+    const oldRef = new RegExp(
+      `!\\[([^\\]]*)\\]\\(screenshots/${escapeRegExp(srcFile)}\\)`,
+      "g",
+    );
+    const newRef = `![${item.caption}](images/${destName})`;
+    if (oldRef.test(rendered)) {
+      rendered = rendered.replace(oldRef, newRef);
+    }
+  }
+
+  return rendered;
+};
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const safeReadText = async (filePath: string): Promise<string | null> => {
   try {

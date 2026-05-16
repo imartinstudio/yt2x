@@ -6,6 +6,7 @@ import { isValidVideoId } from "../article/file-store.js";
 export type WriteNativeShortResult = {
   articleDir: string;
   shortPath: string;
+  visualPath: string | null;
 };
 
 export const renderXShortMarkdown = (shortPost: GeneratedShortPost): string =>
@@ -31,7 +32,16 @@ export const writeNativeShortBundle = async (
   await mkdir(articleDir, { recursive: true });
   await atomicWriteUtf8(shortPath, renderXShortMarkdown(shortPost));
 
-  return { articleDir, shortPath };
+  let visualPath: string | null = null;
+  if (shortPost.visual !== undefined) {
+    visualPath = path.join(articleDir, "x-short-visual.json");
+    await atomicWriteUtf8(
+      visualPath,
+      JSON.stringify({ visual: shortPost.visual }, null, 2) + "\n",
+    );
+  }
+
+  return { articleDir, shortPath, visualPath };
 };
 
 const assertMissing = async (targetPath: string): Promise<void> => {

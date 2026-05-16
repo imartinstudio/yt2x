@@ -160,7 +160,9 @@ export const prepareYoutubeVideo = async (
   const subLangBase = youtubeSubLangBase(videoLanguage);
   let manualSubLangs = (opts.subLangs ?? "").trim();
   if (manualSubLangs.length === 0) {
-    manualSubLangs = `${subLangBase}-orig,${subLangBase}`;
+    // 当 language 缺失时（YouTube 常见），多试几种常见语言提高命中率
+    const langs = [...new Set([`${subLangBase}-orig`, subLangBase, "zh-Hans", "zh", "en"])];
+    manualSubLangs = langs.join(",");
   }
 
   try {
@@ -207,11 +209,14 @@ export const prepareYoutubeVideo = async (
     } catch {
       cuesFile = undefined;
     }
+    const videoDuration =
+      typeof metadata.duration === "number" ? metadata.duration : undefined;
     const sceneWarnings = await timedStep(opts, "scene-keyframes", timingsMs, () =>
       extractSceneKeyframes({
         source: pageUrl,
         outputDir: path.join(videoDir, "screenshots"),
         ...(cuesFile !== undefined ? { cuesPath: cuesFile } : {}),
+        ...(videoDuration !== undefined ? { duration: videoDuration } : {}),
         threshold: opts.sceneThreshold,
         minGap: opts.sceneMinGap,
         maxFrames: opts.keyframes,

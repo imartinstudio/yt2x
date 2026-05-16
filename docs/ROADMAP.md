@@ -39,6 +39,7 @@ yt2x 处于 v0.1 开源前打磨期：
 - 发布失败后的重试、回滚或断点续发策略。
 - 更丰富的平台模板，例如 WeChat / newsletter。
 - 按发布目标生成内容：支持 `article --targets` / `pipeline --targets`，允许自由组合生成 `x-longform`、`x-thread`、`x-short`；发布阶段支持单目标 `--target`。详细任务说明见 [X-TARGET-OUTPUT-TASK.md](./X-TARGET-OUTPUT-TASK.md)。
+- 可控视觉素材链路：从关键帧截图池生成 `available_visuals`，让长文/串推/短文只选择真实截图，并过滤屏幕中间为主播人像的候选帧。详细任务说明见 [VISUAL-CONTENT-TASK.md](./VISUAL-CONTENT-TASK.md)。
 
 ## 不在 v0.1 范围
 

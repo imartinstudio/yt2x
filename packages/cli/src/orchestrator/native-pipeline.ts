@@ -1,4 +1,4 @@
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
@@ -67,6 +67,157 @@ const filterMaterializedVideoIds = async (outRoot: string, ids: string[]): Promi
     }
   }
   return materialized;
+};
+
+/** 格式化秒数为 HH:MM:SS */
+const formatDuration = (seconds: number | undefined): string => {
+  if (seconds === undefined || !Number.isFinite(seconds)) return "-";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
+};
+
+/** 截断标题（正确处理 CJK 字符边界） */
+const truncate = (text: string, max: number): string => {
+  if (text.length <= max) return text;
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+  return `${chars.slice(0, max - 1).join("")}…`;
+};
+
+/** 步骤状态标签 */
+const stepLabel = (status: string | undefined): string => {
+  if (status === "done") return "done";
+  if (status === "failed") return "FAIL";
+  if (status === "running") return "run";
+  return "-";
+};
+
+type VideoSummaryRow = {
+  videoId: string;
+  title: string;
+  duration: number | undefined;
+  acquire: string | undefined;
+  notes: string | undefined;
+  articleLongform: string | undefined;
+  articleThread: string | undefined;
+  articleShort: string | undefined;
+  publish: string | undefined;
+};
+
+const collectVideoSummary = async (
+  outRoot: string,
+  articleOutRoot: string,
+  videoId: string,
+): Promise<VideoSummaryRow> => {
+  const videoDir = path.join(outRoot, videoId);
+  let title = videoId;
+  let duration: number | undefined;
+
+  try {
+    const metaRaw = await readFile(path.join(videoDir, "metadata.json"), "utf8");
+    const meta = JSON.parse(metaRaw) as Record<string, unknown>;
+    title = String(meta.title ?? videoId);
+    duration = typeof meta.duration === "number" ? meta.duration : undefined;
+  } catch {
+    // metadata.json not found
+  }
+
+  const url = await readYoutubePageUrl(videoDir, videoId);
+  const status = await readProcessStatusMerged(videoDir, { videoId, url }).catch(() => null);
+
+  const articleDir = status?.articleOutDir ?? path.join(articleOutRoot, videoId);
+  let articleLongform: string | undefined;
+  let articleThread: string | undefined;
+  let articleShort: string | undefined;
+
+  if (status?.steps.article?.status === "done") {
+    try {
+      await access(path.join(articleDir, "article.md"));
+      articleLongform = "done";
+    } catch { /* */ }
+    try {
+      await access(path.join(articleDir, "x-thread.md"));
+      articleThread = "done";
+    } catch { /* */ }
+    try {
+      await access(path.join(articleDir, "x-short.md"));
+      articleShort = "done";
+    } catch { /* */ }
+  } else if (status?.steps.article?.status === "failed") {
+    articleLongform = "failed";
+  }
+
+  return {
+    videoId,
+    title,
+    duration,
+    acquire: status?.steps.acquire?.status,
+    notes: status?.steps.notes?.status,
+    articleLongform,
+    articleThread,
+    articleShort,
+    publish: status?.steps.publish?.status,
+  };
+};
+
+const printPipelineSummaryTable = async (
+  outRoot: string,
+  articleOutRoot: string,
+  videoIds: string[],
+): Promise<void> => {
+  const rows = await Promise.all(
+    videoIds.map((id) => collectVideoSummary(outRoot, articleOutRoot, id)),
+  );
+
+  const cols = [
+    { key: "videoId" as const, header: "VIDEO ID", width: 12 },
+    { key: "title" as const, header: "TITLE", width: 35, format: (r: VideoSummaryRow) => truncate(r.title, 35) },
+    { key: "duration" as const, header: "DURATION", width: 9, format: (r: VideoSummaryRow) => formatDuration(r.duration) },
+    { key: "acquire" as const, header: "ACQUIRE", width: 8, label: true },
+    { key: "notes" as const, header: "NOTES", width: 6, label: true },
+    { key: "articleLongform" as const, header: "A-LONG", width: 6, label: true },
+    { key: "articleThread" as const, header: "A-THREAD", width: 8, label: true },
+    { key: "articleShort" as const, header: "A-SHORT", width: 8, label: true },
+    { key: "publish" as const, header: "PUBLISH", width: 8, label: true },
+  ];
+
+  // 顶部分隔线
+  const sep = "─".repeat(cols.reduce((s, c) => s + c.width + 3, 1));
+  const lines: string[] = ["", `┌${sep}┐`];
+
+  // 表头
+  const header =
+    "│ " + cols.map((c) => c.header.padEnd(c.width)).join(" │ ") + " │";
+  lines.push(header);
+  lines.push(`├${sep}┤`);
+
+  // 数据行
+  for (const row of rows) {
+    const cells = cols.map((c) => {
+      let val: string;
+      if (c.format !== undefined) {
+        val = c.format(row);
+      } else if (c.label) {
+        const status = (row as Record<string, unknown>)[c.key] as string | undefined;
+        val = stepLabel(status);
+      } else {
+        val = String((row as Record<string, unknown>)[c.key] ?? "-");
+      }
+      return val.padEnd(c.width);
+    });
+    lines.push("│ " + cells.join(" │ ") + " │");
+  }
+
+  lines.push(`└${sep}┘`);
+  lines.push("");
+
+  for (const line of lines) {
+    console.log(line);
+  }
 };
 
 const sourceVideoIdsFromUrls = (urls: readonly string[]): string[] => {
@@ -268,6 +419,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       { videos: videoIds.length, outRoot, exitCode: pipelineExit },
       "yt2x pipeline: native orchestrator completed",
     );
+    await printPipelineSummaryTable(outRoot, articleOutRoot, videoIds);
     finalExitCode = pipelineExit;
     return finalExitCode;
   } finally {

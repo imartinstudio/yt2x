@@ -24,6 +24,11 @@ export const SHORT_X_SYSTEM_PROMPT = `你是中文科技内容编辑，擅长把
 - 不要廉价标题党，不要夸大原材料没有支持的结论。
 - 不要出现「视频作者」字样。
 - 全文使用中文，技术专有名词、命令、API 名可保留英文。
+
+Emoji 策略：
+- 短文默认纯文本，不使用 emoji。
+- 仅在需要标记读者收益💰、验证结果✅、风险提醒⚠️时允许 0–1 个语义 emoji。
+- 禁止装饰性 emoji，禁止 emoji 列表，禁止 emoji 开头或结尾。
 - 推荐结构：第一段一句话判断；第二段引出内容核心；中间 4–6 条总结 list；最后一句说明看完能获得什么。
 
 输出要求：
@@ -32,11 +37,22 @@ export const SHORT_X_SYSTEM_PROMPT = `你是中文科技内容编辑，擅长把
 {
   "text": "<单条 X 短帖正文>",
   "angle": "discussion",
-  "risk": "low"
+  "risk": "low",
+  "visual": {
+    "visual_id": "scene_001",
+    "caption": "<图片说明>"
+  }
 }
 - text 必须是一条可直接发布的短帖。
 - angle 只能是 "contrarian"、"practical"、"trend"、"technical"、"discussion"。
-- risk 只能是 "low"、"medium"、"high"。`;
+- risk 只能是 "low"、"medium"、"high"。
+
+截图配图规则（可选）：
+- 如上方提供了 available_visuals，你可以选择 0–1 张截图作为配图，仅当截图能显著增强可信度或展示关键结果时才选择。
+- 仅选择能增强信息表达的截图：配置界面、命令输出、验证结果优先。
+- caption 必须描述图片中实际包含的信息，不得编造图片外的内容。
+- 如果没有 available_visuals 或没有合适的截图，不要输出 visual 字段。
+- visual 字段是可选的；最多 1 张图。`;
 
 export const buildShortUserPrompt = (
   input: ShortPromptInput,
@@ -53,6 +69,17 @@ export const buildShortUserPrompt = (
   sections.push("```json");
   sections.push(JSON.stringify(meta, null, 2));
   sections.push("```");
+
+  const visuals = input.availableVisuals ?? null;
+  if (visuals !== null && visuals.length > 0) {
+    sections.push("");
+    sections.push("## Available screenshots (available_visuals)");
+    sections.push("");
+    sections.push("```json");
+    sections.push(JSON.stringify(visuals, null, 2));
+    sections.push("```");
+  }
+
   sections.push("");
   sections.push("## Structured notes (Markdown source)");
   sections.push("");

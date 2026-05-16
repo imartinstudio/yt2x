@@ -7,6 +7,7 @@ export type WriteNativeThreadResult = {
   articleDir: string;
   threadPath: string;
   hooksPath: string;
+  visualsPath: string | null;
 };
 
 export const renderXThreadMarkdown = (thread: GeneratedThread): string => {
@@ -41,7 +42,16 @@ export const writeNativeThreadBundle = async (
   await atomicWriteUtf8(threadPath, renderXThreadMarkdown(thread));
   await atomicWriteUtf8(hooksPath, JSON.stringify({ hooks: thread.hooks }, null, 2) + "\n");
 
-  return { articleDir, threadPath, hooksPath };
+  let visualsPath: string | null = null;
+  if (thread.visuals !== undefined && thread.visuals.length > 0) {
+    visualsPath = path.join(articleDir, "x-thread-visuals.json");
+    await atomicWriteUtf8(
+      visualsPath,
+      JSON.stringify({ visuals: thread.visuals }, null, 2) + "\n",
+    );
+  }
+
+  return { articleDir, threadPath, hooksPath, visualsPath };
 };
 
 const assertMissing = async (targetPath: string): Promise<void> => {

@@ -4,6 +4,7 @@ export {
   findPendingNativeArticleDirs,
   isValidVideoId,
   readStructuredNotesArtifacts,
+  renderArticleImages,
   writeNativeArticleBundle,
   type NativeArticleRunRecord,
   type ReadStructuredNotesError,

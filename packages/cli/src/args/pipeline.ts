@@ -58,7 +58,7 @@ export const ArticleOptionsSchema = z.object({
   platform: PlatformSchema.default("x"),
   maxChars: z.coerce.number().int().min(1).default(280),
   rewriteMode: RewriteModeSchema.default("rules"),
-  targets: ArticleOutputTargetsSchema,
+  targets: ArticleOutputTargetsSchema.default("all"),
 });
 export type ArticleOptions = z.infer<typeof ArticleOptionsSchema>;
 

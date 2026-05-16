@@ -43,16 +43,45 @@
 
 ## 3. Native article 产物（`files/articles/<videoId>/`）
 
-| 文件             | 说明                                   |
-| ---------------- | -------------------------------------- |
-| `article.md`     | X 长文 Markdown                        |
-| `run.json`       | 长文生成元数据（模型、耗时、usage 等） |
-| `x-thread.md`    | 专门生成的 X 串推 Markdown             |
-| `x-hooks.json`   | 串推首推候选                           |
-| `x-short.md`     | 单条 X 短帖                            |
-| `images/cover.*` | 可选；从笔记目录 `screenshots/` 复制   |
+| 文件                    | 说明                                   |
+| ----------------------- | -------------------------------------- |
+| `article.md`            | X 长文 Markdown                        |
+| `run.json`              | 长文生成元数据（模型、耗时、usage 等） |
+| `x-thread.md`           | 专门生成的 X 串推 Markdown             |
+| `x-hooks.json`          | 串推首推候选                           |
+| `x-short.md`            | 单条 X 短帖                            |
+| `images/cover.*`        | 可选；从笔记目录 `screenshots/` 复制   |
+| `x-thread-visuals.json` | 可选；串推配图计划（v0.2）             |
+| `x-short-visual.json`   | 可选；短文配图计划（v0.2）             |
 
-## 4. Native publish 产物（article 目录内）
+## 4. 视觉内容链路（v0.2）
+
+采集阶段通过 `--keyframes` 生成 `screenshots/scene_manifest.json`，经质量筛选后转换为 `available_visuals` 传入 LLM prompt。LLM 只能引用已存在的 `visual_id`，禁止虚构图片。
+
+数据流：
+
+```text
+scene_manifest.json → available_visuals → LLM visual_plan → 图片渲染 → 发布
+```
+
+关键字段（`scene_manifest.json` 中每个 frame）：
+
+| 字段                                | 说明                                  |
+| ----------------------------------- | ------------------------------------- |
+| `id`                                | 稳定唯一标识（如 `scene_003`）        |
+| `visual_quality.blur`               | `low` / `medium` / `high` / `unknown` |
+| `visual_quality.has_text`           | 帧中是否检测到文字                    |
+| `visual_quality.has_ui`             | 帧中是否检测到 UI 界面                |
+| `visual_quality.center_presenter`   | 画面中心区域是否有主播人像            |
+| `visual_quality.usable_for_content` | 综合判断是否可用于配图                |
+
+`available_visuals` 过滤规则：
+
+- `blur: "high"` / `blur: "unknown"` → 不可用
+- `center_presenter: true` → 不可用
+- `usable_for_content: false` → 不可用
+
+## 5. Native publish 产物（article 目录内）
 
 | 文件                   | 说明                                                             |
 | ---------------------- | ---------------------------------------------------------------- |
@@ -61,7 +90,7 @@
 
 `publish-preview.json` 也会把 `<outDir>/<videoId>/process-status.json` 的 `publish` step 标记为 `done`，`resultFile` 指向 `publish-preview.json`；真实发帖成功时仍写 `publish-result.json`。预览 JSON 会包含 `mode` 与 `source`，例如 `source: "article.md"`、`source: "x-thread.md"` 或 `source: "x-short.md"`；串推预览额外包含 `tweets`，短帖预览额外包含 `text`。
 
-## 5. 批次队列与 `process-status.json`（无根级 `pipeline-state.json`）
+## 6. 批次队列与 `process-status.json`（无根级 `pipeline-state.json`）
 
 **不再**在输出根目录写入 **`pipeline-state.json`**。批次内有哪些视频、以何顺序处理，由 **`listBatchVideosFromOutRoot`** 扫描 `<outDir>` 下子目录决定：凡目录名不含前导 `.`，且该子目录内存在 **`metadata.json`** 或 **`process-status.json`**，即视为一条视频；**`video_id` = 目录名**，整体按 **`video_id` 字典序**（与 `collectNativePipelineVideoIds` 一致）。
 
@@ -73,6 +102,6 @@
 
 **历史**：若磁盘上仍有旧版 **`pipeline-state.json`**，运行时**不会**再读取或更新它；请以子目录产物与 **`process-status`** 为准。
 
-## 6. 子进程结果 JSON
+## 7. 子进程结果 JSON
 
 采集阶段会写入 `prepare-result.json`，记录本次 `prepareYoutubeVideo` 的输入 URL、输出目录、是否成功、告警和各子步骤耗时。发布 dry-run / review 写入 `publish-preview.json`，真实发布写入 `publish-result.json`。新增阶段产物时，应同步更新本文件和对应测试。

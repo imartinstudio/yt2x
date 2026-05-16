@@ -53,9 +53,9 @@ describe("PipelineArgsSchema", () => {
     expect(parsed.acquire.maxWords).toBe(1200);
   });
 
-  it("defaults article targets to x-longform", () => {
+  it("defaults article targets to all three formats", () => {
     const parsed = PipelineArgsSchema.parse(baseInput);
-    expect(parsed.article.targets).toEqual(["x-longform"]);
+    expect(parsed.article.targets).toEqual(["x-longform", "x-thread", "x-short"]);
   });
 
   it("parses article target combinations", () => {

@@ -100,7 +100,7 @@ export const downloadSubtitlesTwoPhase = async (
   opts: YtDlpOptions & { videoLanguage: string; manualSubLangs: string },
 ): Promise<{ manualOk: boolean; autoOk: boolean }> => {
   const lang = (opts.videoLanguage || "en").trim() || "en";
-  const autoSubLangs = `${youtubeSubLangBase(lang)}-orig`;
+  const primaryAutoLang = `${youtubeSubLangBase(lang)}-orig`;
 
   const before = await subtitleFingerprint(videoDir);
 
@@ -115,22 +115,29 @@ export const downloadSubtitlesTwoPhase = async (
     return { manualOk: true, autoOk: false };
   }
 
-  await runYtDlpSubtitles(url, videoDir, {
-    ...opts,
-    writeManual: false,
-    subLangs: autoSubLangs,
-  });
-  const afterAuto = await subtitleFingerprint(videoDir);
-  const autoOk =
-    fingerprintChanged(before, afterAuto) || fingerprintChanged(afterManual, afterAuto);
-  return { manualOk: false, autoOk };
+  // 自动字幕：先试 metadata 语言，失败时依次回退常见语言
+  const autoFallbacks = [...new Set([primaryAutoLang, "zh-Hans-orig", "zh-orig", "en-orig"])];
+
+  for (const subLang of autoFallbacks) {
+    await runYtDlpSubtitles(url, videoDir, {
+      ...opts,
+      writeManual: false,
+      subLangs: subLang,
+    });
+    const after = await subtitleFingerprint(videoDir);
+    if (fingerprintChanged(before, after) || fingerprintChanged(afterManual, after)) {
+      return { manualOk: false, autoOk: true };
+    }
+  }
+
+  return { manualOk: false, autoOk: false };
 };
 
 /** 解析直链供 ffmpeg 流式读取，避免为 scene 检测下载整段视频。 */
 export const resolveDirectVideoUrl = async (url: string, opts: YtDlpOptions): Promise<string> => {
   const { stdout } = await runYtDlp(opts, [
     "-f",
-    "best[ext=mp4][height<=720]/best[height<=720]/best",
+    "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]/best[height<=720][ext=mp4]/best[height<=720]",
     "-g",
     url,
   ]);

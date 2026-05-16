@@ -10,6 +10,12 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/至少 4 条具体 list item/);
   });
 
+  it("defines emoji policy: default plain text, max 0-1 semantic", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/Emoji 策略/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/默认纯文本/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/0–1 个/);
+  });
+
   it("forbids hallucination, clickbait, and mechanical recap", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要编造/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要廉价标题党/);

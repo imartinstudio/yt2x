@@ -12,11 +12,18 @@ import {
   patchStepRunning,
   readStructuredNotesArtifacts,
   readYoutubePageUrl,
+  renderArticleImages,
   writeNativeArticleBundle,
   writeNativeShortBundle,
   writeNativeThreadBundle,
 } from "@yt2x/adapters-node";
-import { isLlmError, parseArticleOutputTargets, type ArticleOutputTarget } from "@yt2x/core";
+import {
+  isLlmError,
+  manifestToAvailableVisuals,
+  parseArticleOutputTargets,
+  type ArticleOutputTarget,
+  type SceneManifest,
+} from "@yt2x/core";
 import { logger } from "../logger.js";
 import type { SingleStageFlags } from "../commands/command-flags.js";
 import { printCliErrorBlock } from "../diagnostics/error-format.js";
@@ -153,16 +160,40 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       let articleDirForStatus: string | undefined;
       let resultFile: string | undefined;
 
-      if (outputTargets.includes("x-longform")) {
+      // 读取 scene_manifest.json → available_visuals（所有格式共享）
+        const { readFile, access } = await import("node:fs/promises");
+        const sceneManifestPath = path.join(videoDir, "screenshots", "scene_manifest.json");
+        let availableVisuals = null;
+        try {
+          await access(sceneManifestPath);
+          const raw = await readFile(sceneManifestPath, "utf8");
+          const manifest = JSON.parse(raw) as SceneManifest;
+          availableVisuals = manifestToAvailableVisuals(manifest);
+        } catch {
+          // 无截图清单时保持纯文本
+        }
+
+    if (outputTargets.includes("x-longform")) {
         const result = await generateXArticleContent({
           llm: llm.adapter,
           model: llm.model,
           artifacts,
+          availableVisuals,
         });
+
+        // 渲染图片：复制截图到文章 images/ 并替换路径
+        const renderedContent = await renderArticleImages(
+          result.content,
+          videoDir,
+          path.join(articleOutDir, artifacts.videoId),
+          result.visualPlan,
+          availableVisuals,
+        );
+
         const written = await writeNativeArticleBundle(
           articleOutDir,
           artifacts.videoId,
-          result.content,
+          renderedContent,
           {
             v: 1,
             platform: "x",
@@ -198,6 +229,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           llm: llm.adapter,
           model: llm.model,
           artifacts,
+          availableVisuals,
         });
         const written = await writeNativeThreadBundle(
           articleOutDir,
@@ -227,6 +259,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           llm: llm.adapter,
           model: llm.model,
           artifacts,
+          availableVisuals,
         });
         const written = await writeNativeShortBundle(
           articleOutDir,

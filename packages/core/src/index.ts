@@ -4,6 +4,8 @@ export * from "./domain/article/index.js";
 export * from "./domain/notes/index.js";
 export * from "./domain/pipeline/index.js";
 export * from "./domain/publish/index.js";
+export * from "./domain/short/index.js";
+export * from "./domain/thread/index.js";
 export * from "./ports/x-publish.js";
 
 export { LlmError, isLlmError } from "./ports/llm.js";

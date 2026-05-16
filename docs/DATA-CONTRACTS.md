@@ -23,7 +23,7 @@
 - **updatedAt**：ISO 8601 字符串（可选，读取时会回填）。
 - **steps**：四个键固定存在：`acquire` | `notes` | `article` | `publish`。
 - **threadUrl**（可选）：publish 成功后 X thread 链接。
-- **articleOutDir**（可选）：当前选中的长文目录绝对路径（native 扁平：`.../files/articles/<videoId>/`）。
+- **articleOutDir**（可选）：当前选中的内容目录绝对路径（native 扁平：`.../files/articles/<videoId>/`）。
 
 ### `StepInfo`（每个 step）
 
@@ -43,11 +43,14 @@
 
 ## 3. Native article 产物（`files/articles/<videoId>/`）
 
-| 文件             | 说明                                     |
-| ---------------- | ---------------------------------------- |
-| `article.md`     | 长文 Markdown                            |
-| `run.json`       | 一次生成的元数据（模型、耗时、usage 等） |
-| `images/cover.*` | 可选；从笔记目录 `screenshots/` 复制     |
+| 文件             | 说明                                   |
+| ---------------- | -------------------------------------- |
+| `article.md`     | X 长文 Markdown                        |
+| `run.json`       | 长文生成元数据（模型、耗时、usage 等） |
+| `x-thread.md`    | 专门生成的 X 串推 Markdown             |
+| `x-hooks.json`   | 串推首推候选                           |
+| `x-short.md`     | 单条 X 短帖                            |
+| `images/cover.*` | 可选；从笔记目录 `screenshots/` 复制   |
 
 ## 4. Native publish 产物（article 目录内）
 
@@ -56,7 +59,7 @@
 | `publish-result.json`  | thread URL、各推 id、部分失败信息等                              |
 | `publish-preview.json` | dry-run / pipeline `--publish review` 的预览内容、长度与封面信息 |
 
-`publish-preview.json` 也会把 `<outDir>/<videoId>/process-status.json` 的 `publish` step 标记为 `done`，`resultFile` 指向 `publish-preview.json`；真实发帖成功时仍写 `publish-result.json`。
+`publish-preview.json` 也会把 `<outDir>/<videoId>/process-status.json` 的 `publish` step 标记为 `done`，`resultFile` 指向 `publish-preview.json`；真实发帖成功时仍写 `publish-result.json`。预览 JSON 会包含 `mode` 与 `source`，例如 `source: "article.md"`、`source: "x-thread.md"` 或 `source: "x-short.md"`；串推预览额外包含 `tweets`，短帖预览额外包含 `text`。
 
 ## 5. 批次队列与 `process-status.json`（无根级 `pipeline-state.json`）
 

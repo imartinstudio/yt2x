@@ -25,6 +25,8 @@ export const registerPublishCommand = (program: Command): void => {
     .option("--profile <name>", "Credentials profile", "default")
     .option("--publish-max-chars <n>", "Long-post char limit (default 25000) or per-tweet with --thread")
     .option("--max-chars <n>", "Alias of --publish-max-chars")
+    .option("--target <target>", "Publish target: x-longform|x-thread|x-short")
+    .option("--thread-source <source>", "Thread source: generated|article|auto", "article")
     .option("--thread", "Split into reply thread (280 chars/tweet) instead of one long post", false)
     .option("--max-tweets <n>", "Max tweets when using --thread", "25")
     .option("--numbering", "Prefix tweets with ①②③ (thread mode only)", false)

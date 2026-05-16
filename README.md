@@ -6,7 +6,7 @@
 YouTube URL
   -> metadata / subtitles / transcript chunks
   -> structured notes
-  -> X long-form article
+  -> X long-form article / thread / short post
   -> publish preview or real X post
 ```
 
@@ -22,7 +22,7 @@ YouTube URL
 
 - **采集**：通过 `yt-dlp` / `ffmpeg` 获取视频元数据、字幕、时间轴文本，可选关键帧截图。
 - **笔记**：用 LLM 生成 `structured-notes.md`。
-- **长文**：从结构化笔记生成 X 长文 `article.md`。
+- **内容生成**：从结构化笔记生成 X 长文 `article.md`、串推 `x-thread.md` / `x-hooks.json`、短帖 `x-short.md`。
 - **发布**：通过 X OAuth 2.0 / API v2 发布长文或串推。
 - **安全预览**：`pipeline --publish review` 只生成发布预览，不会真实发帖。
 - **可续跑**：每个视频目录都有 `process-status.json`，流水线可从已有产物恢复。
@@ -139,6 +139,9 @@ pnpm yt2x notes --video-id <videoId> --llm-provider openai
 # 从结构化笔记生成 X 长文
 pnpm yt2x article --video-id <videoId>
 
+# 自由组合生成长文、串推和短帖
+pnpm yt2x article --video-id <videoId> --targets x-longform,x-thread,x-short
+
 # 预览发布内容，不调用 X API
 pnpm yt2x publish --video-id <videoId> --dry-run
 
@@ -174,6 +177,8 @@ pnpm yt2x auth whoami
 
 ```bash
 pnpm yt2x publish --video-id <videoId> --dry-run
+pnpm yt2x publish --video-id <videoId> --target x-thread --thread-source generated --dry-run
+pnpm yt2x publish --video-id <videoId> --target x-short --dry-run
 ```
 
 真实发布：
@@ -198,15 +203,26 @@ pnpm yt2x pipeline \
 
 `--video-id` 只接受字母、数字、连字符、下划线，避免把路径误当作视频 ID。需要指定非默认文章目录时使用 `--article-dir`。
 
+生成阶段可用 `--targets` 自由组合输出目标：
+
+| Target       | 产物                          | 说明                         |
+| ------------ | ----------------------------- | ---------------------------- |
+| `x-longform` | `article.md`、`run.json`      | X 长文，默认行为             |
+| `x-thread`   | `x-thread.md`、`x-hooks.json` | 专门生成的 X 串推和首推候选  |
+| `x-short`    | `x-short.md`                  | 单条 X 短帖                  |
+| `all`        | 以上全部                      | 等价于三个 target 的自由组合 |
+
+发布阶段使用单数 `--target`，一次只发布一种目标；旧的 `--thread` 仍表示把 `article.md` 拆成串推。
+
 ## 目录与产物
 
 默认目录：
 
-| 路径                         | 含义                                 |
-| ---------------------------- | ------------------------------------ |
-| `files/downloads/<videoId>/` | 采集、笔记和每视频状态文件           |
-| `files/articles/<videoId>/`  | 长文、发布预览、发布结果和封面图     |
-| `files/`                     | 本地产物根目录，除 `.gitkeep` 外忽略 |
+| 路径                         | 含义                                         |
+| ---------------------------- | -------------------------------------------- |
+| `files/downloads/<videoId>/` | 采集、笔记和每视频状态文件                   |
+| `files/articles/<videoId>/`  | 长文、串推、短帖、发布预览、发布结果和封面图 |
+| `files/`                     | 本地产物根目录，除 `.gitkeep` 外忽略         |
 
 关键产物：
 
@@ -217,6 +233,9 @@ pnpm yt2x pipeline \
 | `timestamped-cues.md`           | acquire | 带时间轴的字幕文本                       |
 | `structured-notes.md`           | notes   | LLM 结构化笔记                           |
 | `article.md`                    | article | 面向 X 的长文 Markdown                   |
+| `x-thread.md`                   | article | 面向 X 的生成式串推 Markdown             |
+| `x-hooks.json`                  | article | 串推首推候选                             |
+| `x-short.md`                    | article | 面向 X 的单条短帖                        |
 | `publish-preview.json`          | publish | dry-run / review 的发布预览              |
 | `publish-result.json`           | publish | 真实发布后的 tweet/thread 信息           |
 | `process-status.json`           | all     | acquire / notes / article / publish 状态 |

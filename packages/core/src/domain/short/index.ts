@@ -1,3 +1,2 @@
 export * from "./prompts.js";
-export * from "./targets.js";
 export * from "./types.js";

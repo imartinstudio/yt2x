@@ -117,18 +117,18 @@ N/ <开放问题或明确判断，引导回复>
 
 任务总览：
 
-- [ ] Task 1: Core target types and parsing
-- [ ] Task 2: X thread generation domain
-- [ ] Task 3: X short generation domain
-- [ ] Task 4: Node target generators
-- [ ] Task 5: Article command targets
-- [ ] Task 6: Pipeline targets
-- [ ] Task 7: Publish generated targets
-- [ ] Task 8: Documentation updates
+- [x] Task 1: Core target types and parsing
+- [x] Task 2: X thread generation domain
+- [x] Task 3: X short generation domain
+- [x] Task 4: Node target generators
+- [x] Task 5: Article command targets
+- [x] Task 6: Pipeline targets
+- [x] Task 7: Publish generated targets
+- [x] Task 8: Documentation updates
 
 ### Task 1: Core target types and parsing
 
-状态：未完成
+状态：已完成
 
 范围：
 
@@ -145,11 +145,11 @@ N/ <开放问题或明确判断，引导回复>
 
 完成后标记：
 
-- [ ] Task 1 complete
+- [x] Task 1 complete
 
 ### Task 2: X thread generation domain
 
-状态：未完成
+状态：已完成
 
 新增文件：
 
@@ -189,11 +189,11 @@ type GeneratedThread = {
 
 完成后标记：
 
-- [ ] Task 2 complete
+- [x] Task 2 complete
 
 ### Task 3: X short generation domain
 
-状态：未完成
+状态：已完成
 
 新增文件：
 
@@ -230,11 +230,11 @@ type GeneratedShortPost = {
 
 完成后标记：
 
-- [ ] Task 3 complete
+- [x] Task 3 complete
 
 ### Task 4: Node target generators
 
-状态：未完成
+状态：已完成
 
 新增文件：
 
@@ -269,11 +269,11 @@ packages/adapters-node/src/short/
 
 完成后标记：
 
-- [ ] Task 4 complete
+- [x] Task 4 complete
 
 ### Task 5: Article command targets
 
-状态：未完成
+状态：已完成
 
 新增或修改：
 
@@ -314,11 +314,11 @@ pnpm yt2x article --video-id <videoId> --targets all
 
 完成后标记：
 
-- [ ] Task 5 complete
+- [x] Task 5 complete
 
 ### Task 6: Pipeline targets
 
-状态：未完成
+状态：已完成
 
 新增目标输出参数：
 
@@ -351,11 +351,11 @@ pnpm yt2x pipeline \
 
 完成后标记：
 
-- [ ] Task 6 complete
+- [x] Task 6 complete
 
 ### Task 7: Publish generated targets
 
-状态：未完成
+状态：已完成
 
 第二阶段再做，不放进首个 PR。
 
@@ -391,11 +391,11 @@ pnpm yt2x pipeline \
 
 完成后标记：
 
-- [ ] Task 7 complete
+- [x] Task 7 complete
 
 ### Task 8: Documentation updates
 
-状态：未完成
+状态：已完成
 
 范围：
 
@@ -412,7 +412,7 @@ pnpm yt2x pipeline \
 
 完成后标记：
 
-- [ ] Task 8 complete
+- [x] Task 8 complete
 
 ## 测试要求
 

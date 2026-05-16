@@ -42,4 +42,12 @@ describe("projectSingleStage", () => {
     });
     expect(args.control.continueFlag).toBe(true);
   });
+
+  it("maps article targets for single-stage commands", () => {
+    const args = projectSingleStage("article", {
+      urls: ["https://example.com/video"],
+      targets: "x-thread,x-short",
+    });
+    expect(args.article.targets).toEqual(["x-thread", "x-short"]);
+  });
 });

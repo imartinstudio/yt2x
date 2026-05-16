@@ -55,6 +55,15 @@ describe("readStructuredNotesArtifacts", () => {
       missing: ["metadata.json"],
     });
   });
+
+  it("reports missing structured notes clearly", async () => {
+    const dir = path.join(notesRoot, "missing-notes");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "metadata.json"), JSON.stringify({ id: "missing-notes" }));
+    await expect(readStructuredNotesArtifacts(dir)).rejects.toMatchObject({
+      missing: ["structured-notes.md"],
+    });
+  });
 });
 
 describe("writeNativeArticleBundle", () => {

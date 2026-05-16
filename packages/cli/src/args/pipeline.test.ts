@@ -53,6 +53,28 @@ describe("PipelineArgsSchema", () => {
     expect(parsed.acquire.maxWords).toBe(1200);
   });
 
+  it("defaults article targets to x-longform", () => {
+    const parsed = PipelineArgsSchema.parse(baseInput);
+    expect(parsed.article.targets).toEqual(["x-longform"]);
+  });
+
+  it("parses article target combinations", () => {
+    const parsed = PipelineArgsSchema.parse({
+      ...baseInput,
+      article: { targets: "x-thread,x-short" },
+    });
+    expect(parsed.article.targets).toEqual(["x-thread", "x-short"]);
+  });
+
+  it("rejects invalid article targets", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        article: { targets: "x-post" },
+      }),
+    ).toThrow(/Invalid --targets value/);
+  });
+
   it("rejects unknown llm provider", () => {
     expect(() =>
       PipelineArgsSchema.parse({ ...baseInput, llm: { provider: "bard" } }),

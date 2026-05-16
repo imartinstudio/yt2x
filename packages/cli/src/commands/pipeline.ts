@@ -23,6 +23,7 @@ export const registerPipelineCommand = (program: Command): void => {
     .option("--out-dir <path>", "Output root directory")
     .option("--keyframes <n>", "Scene-detection keyframes (0 to skip; default 0)", "0")
     .option("--platform <name>", "Target platform (x|wechat|newsletter|...)", "x")
+    .option("--targets <targets>", "Article output targets: x-longform,x-thread,x-short,all")
     .option("--max-chars <n>", "Article stage: hint max chars (legacy)", "280")
     .option("--publish-max-chars <n>", "Publish: long-post limit (default 25000) or per-tweet with --thread")
     .option("--max-tweets <n>", "Publish: max tweets when using --thread", "25")

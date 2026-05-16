@@ -16,6 +16,7 @@ export type CommanderPipelineFlags = {
   platform?: string;
   maxChars?: string;
   rewriteMode?: string;
+  targets?: string;
   jobs?: string;
   subLangs?: string;
   sceneThreshold?: string;
@@ -67,6 +68,7 @@ export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): Pipe
       platform: flags.platform ?? "x",
       maxChars: flags.maxChars ?? "280",
       rewriteMode: flags.rewriteMode ?? "rules",
+      targets: flags.targets,
     },
     publish: {
       publishDryRun: flags.publishDryRun ?? false,

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
@@ -40,6 +40,10 @@ export type PublishFlags = SingleStageFlags & {
   maxChars?: string;
   publishMaxChars?: string;
   maxTweets?: string;
+  /** 发布目标；默认兼容旧行为：long 或 --thread */
+  target?: string;
+  /** x-thread 来源；generated=x-thread.md，article=article.md 机械切分，auto=优先 generated */
+  threadSource?: string;
   /** 串推模式；默认 false = 单条长文 */
   thread?: boolean;
   numbering?: boolean;
@@ -70,6 +74,21 @@ const parsePositiveInt = (raw: string | undefined, fallback: number, label: stri
   return n;
 };
 
+type PublishTarget = "x-longform" | "x-thread" | "x-short";
+type ThreadSource = "generated" | "article" | "auto";
+
+const parsePublishTarget = (raw: string | undefined, legacyThreadMode: boolean): PublishTarget => {
+  if (raw === undefined) return legacyThreadMode ? "x-thread" : "x-longform";
+  if (raw === "x-longform" || raw === "x-thread" || raw === "x-short") return raw;
+  throw new Error(`Invalid --target: "${raw}" (expected x-longform, x-thread, or x-short)`);
+};
+
+const parseThreadSource = (raw: string | undefined): ThreadSource => {
+  if (raw === undefined) return "article";
+  if (raw === "generated" || raw === "article" || raw === "auto") return raw;
+  throw new Error(`Invalid --thread-source: "${raw}" (expected generated, article, or auto)`);
+};
+
 const buildPublishTexts = (
   articleContent: string,
   opts: { threadMode: boolean; maxChars: number; maxTweets: number; numbering: boolean },
@@ -83,6 +102,41 @@ const buildPublishTexts = (
   }
   const longPost = articleToLongPost(articleContent, { maxChars: opts.maxChars });
   return longPost.length > 0 ? [longPost] : [];
+};
+
+const resolveArticleDirForTarget = (flags: PublishFlags, articleRootDir: string): string =>
+  flags.articleDir !== undefined ? path.resolve(flags.articleDir) : path.resolve(articleRootDir, flags.videoId!);
+
+const loadGeneratedThreadTexts = async (
+  articleDir: string,
+  maxTweets: number,
+): Promise<{ texts: string[]; source: "x-thread.md" }> => {
+  const threadPath = path.join(articleDir, "x-thread.md");
+  const raw = await readFile(threadPath, "utf8");
+  const texts = raw
+    .split(/\n{2,}/u)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0 && !block.startsWith("# "))
+    .map((block) => block.replace(/^\d+\/\s*/u, "").trim())
+    .filter((block) => block.length > 0)
+    .slice(0, maxTweets);
+  if (texts.length === 0) {
+    throw new Error(`${threadPath} did not contain any publishable tweets.`);
+  }
+  return { texts, source: "x-thread.md" };
+};
+
+const loadGeneratedShortText = async (
+  articleDir: string,
+  maxChars: number,
+): Promise<{ texts: string[]; source: "x-short.md" }> => {
+  const shortPath = path.join(articleDir, "x-short.md");
+  const raw = await readFile(shortPath, "utf8");
+  const text = articleToLongPost(raw, { maxChars });
+  if (text.length === 0) {
+    throw new Error(`${shortPath} did not contain a publishable short post.`);
+  }
+  return { texts: [text], source: "x-short.md" };
 };
 
 const previewPublishTexts = (texts: string[], threadMode: boolean): void => {
@@ -124,7 +178,22 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
   const articleRootDir = resolveArticleOutRoot(flags, DEFAULT_ARTICLE_OUT_DIR);
   await mkdir(articleRootDir, { recursive: true });
   const profile = flags.profile ?? "default";
-  const threadMode = flags.thread === true;
+  let publishTarget: PublishTarget;
+  let threadSource: ThreadSource;
+  try {
+    publishTarget = parsePublishTarget(flags.target, flags.thread === true);
+    threadSource = parseThreadSource(flags.threadSource);
+  } catch (err: unknown) {
+    printCliErrorBlock({
+      command: "publish",
+      subject: flags.videoId,
+      reason: err instanceof Error ? err.message : String(err),
+      hints: ["Use --target x-longform, --target x-thread, or --target x-short."],
+      retryCommand: `pnpm yt2x publish --video-id ${flags.videoId} --target x-longform --dry-run`,
+    });
+    return EXIT_CONFIG_MISSING;
+  }
+  const threadMode = publishTarget === "x-thread";
   const maxChars = parsePositiveInt(
     flags.publishMaxChars ?? flags.maxChars,
     threadMode ? 280 : 25_000,
@@ -133,14 +202,64 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
   const maxTweets = threadMode ? parsePositiveInt(flags.maxTweets, 25, "max-tweets") : 1;
   const isDryRun = flags.dryRun === true || flags.publishDryRun === true;
 
-  let artifacts;
+  let articleDirForStatus = resolveArticleDirForTarget(flags, articleRootDir);
+  let coverPath: string | null = null;
+  let source = "article.md";
+  let texts: string[];
   try {
     const findInput: Parameters<typeof findArticleArtifacts>[0] = {
       videoId: flags.videoId,
       articleRootDir,
     };
     if (flags.articleDir !== undefined) findInput.articleDir = flags.articleDir;
-    artifacts = await findArticleArtifacts(findInput);
+    if (publishTarget === "x-longform") {
+      const artifacts = await findArticleArtifacts(findInput);
+      articleDirForStatus = artifacts.articleDir;
+      coverPath = artifacts.coverPath;
+      texts = buildPublishTexts(artifacts.articleContent, {
+        threadMode: false,
+        maxChars,
+        maxTweets,
+        numbering: false,
+      });
+    } else if (publishTarget === "x-short") {
+      const loaded = await loadGeneratedShortText(articleDirForStatus, maxChars);
+      source = loaded.source;
+      texts = loaded.texts;
+    } else if (threadSource === "generated") {
+      const loaded = await loadGeneratedThreadTexts(articleDirForStatus, maxTweets);
+      source = loaded.source;
+      texts = loaded.texts;
+    } else if (threadSource === "auto") {
+      try {
+        const loaded = await loadGeneratedThreadTexts(articleDirForStatus, maxTweets);
+        source = loaded.source;
+        texts = loaded.texts;
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+        const artifacts = await findArticleArtifacts(findInput);
+        articleDirForStatus = artifacts.articleDir;
+        coverPath = artifacts.coverPath;
+        source = "article.md";
+        texts = buildPublishTexts(artifacts.articleContent, {
+          threadMode: true,
+          maxChars,
+          maxTweets,
+          numbering: flags.numbering === true,
+        });
+      }
+    } else {
+      const artifacts = await findArticleArtifacts(findInput);
+      articleDirForStatus = artifacts.articleDir;
+      coverPath = artifacts.coverPath;
+      source = "article.md";
+      texts = buildPublishTexts(artifacts.articleContent, {
+        threadMode: true,
+        maxChars,
+        maxTweets,
+        numbering: flags.numbering === true,
+      });
+    }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     printCliErrorBlock({
@@ -148,27 +267,20 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       subject: flags.videoId,
       reason: message,
       details: articleRootDir,
-      hints: ["Generate the article first, or pass --article-dir if the article lives elsewhere."],
-      retryCommand: `pnpm yt2x article --video-id ${flags.videoId}`,
+      hints: ["Generate the requested target first, or pass --article-dir if it lives elsewhere."],
+      retryCommand: `pnpm yt2x article --video-id ${flags.videoId} --targets ${publishTarget}`,
     });
     return EXIT_CONFIG_MISSING;
   }
-
-  const texts = buildPublishTexts(artifacts.articleContent, {
-    threadMode,
-    maxChars,
-    maxTweets,
-    numbering: flags.numbering === true,
-  });
 
   if (texts.length === 0) {
     printCliErrorBlock({
       command: "publish",
       subject: flags.videoId,
-      reason: "Article produced an empty publish body.",
-      details: artifacts.articlePath,
-      hints: ["Check article.md and regenerate it if needed."],
-      retryCommand: `pnpm yt2x article --video-id ${flags.videoId} --force`,
+      reason: "Selected target produced an empty publish body.",
+      details: articleDirForStatus,
+      hints: ["Check the generated target file and regenerate it if needed."],
+      retryCommand: `pnpm yt2x article --video-id ${flags.videoId} --targets ${publishTarget} --force`,
     });
     return EXIT_CONFIG_MISSING;
   }
@@ -178,31 +290,38 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
   if (isDryRun) {
     logger.info(
       {
-        articleDir: artifacts.articleDir,
-        format: threadMode ? "thread" : "long",
+        articleDir: articleDirForStatus,
+        format: publishTarget === "x-short" ? "short" : threadMode ? "thread" : "long",
+        source,
         parts: texts.length,
-        coverPath: artifacts.coverPath,
+        coverPath,
         maxChars,
       },
-      threadMode
-        ? "yt2x publish (native) --dry-run: thread preview below"
-        : "yt2x publish (native) --dry-run: long post preview below",
+      publishTarget === "x-short"
+        ? "yt2x publish (native) --dry-run: short preview below"
+        : threadMode
+          ? "yt2x publish (native) --dry-run: thread preview below"
+          : "yt2x publish (native) --dry-run: long post preview below",
     );
     previewPublishTexts(texts, threadMode);
-    if (artifacts.coverPath !== null) {
+    if (coverPath !== null) {
       logger.info(
-        { coverPath: artifacts.coverPath },
+        { coverPath },
         "Dry-run: cover would be uploaded on real publish (requires media.write).",
       );
     }
     const pageUrl = await readYoutubePageUrl(youtubeVideoDir, flags.videoId);
-    const previewFile = path.join(artifacts.articleDir, "publish-preview.json");
+    const previewFile = path.join(articleDirForStatus, "publish-preview.json");
     const payload = {
       profile,
-      format: threadMode ? "thread" : "long",
+      format: publishTarget === "x-short" ? "short" : threadMode ? "thread" : "long",
+      mode: publishTarget === "x-short" ? "short" : threadMode ? "thread" : "long",
+      source,
       maxChars,
       maxTweets,
-      coverPath: artifacts.coverPath,
+      coverPath,
+      ...(threadMode ? { tweets: texts } : {}),
+      ...(publishTarget === "x-short" ? { text: texts[0] ?? "" } : {}),
       parts: texts.map((text, index) => ({
         index,
         text,
@@ -223,7 +342,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
           artifacts: ["publish-preview.json"],
           resultFile: path.basename(previewFile),
         },
-        articleOutDir: artifacts.articleDir,
+        articleOutDir: articleDirForStatus,
       },
     ).catch(() => {});
     return 0;
@@ -260,9 +379,9 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
     });
     return EXIT_AUTH;
   }
-  if (artifacts.coverPath !== null && !scopes.includes("media.write")) {
+  if (coverPath !== null && !scopes.includes("media.write")) {
     logger.warn(
-      { coverPath: artifacts.coverPath, scopes },
+      { coverPath, scopes },
       'Cover image found, but token lacks "media.write" scope. Re-login with `yt2x auth login --scope media.write` to attach the cover image.',
     );
   }
@@ -286,7 +405,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       handle: user?.user?.username,
       format: threadMode ? "thread" : "long",
       parts: texts.length,
-      articleDir: artifacts.articleDir,
+      articleDir: articleDirForStatus,
     },
     threadMode ? "yt2x publish (native): posting thread" : "yt2x publish (native): posting long post",
   );
@@ -297,20 +416,20 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
     youtubeVideoDir,
     { videoId: flags.videoId, url: pageUrl },
     "publish",
-    { articleOutDir: artifacts.articleDir },
+    { articleOutDir: articleDirForStatus },
   ).catch(() => {});
 
   try {
     let firstMediaId: string | null = null;
-    if (artifacts.coverPath !== null && scopes.includes("media.write")) {
+    if (coverPath !== null && scopes.includes("media.write")) {
       try {
-        const image = await loadTweetImageFromPath(artifacts.coverPath);
+        const image = await loadTweetImageFromPath(coverPath);
         firstMediaId = await adapter.uploadTweetImage(image);
-        logger.info({ mediaId: firstMediaId, coverPath: artifacts.coverPath }, "Cover uploaded");
+        logger.info({ mediaId: firstMediaId, coverPath }, "Cover uploaded");
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         logger.warn(
-          { coverPath: artifacts.coverPath, err: message },
+          { coverPath, err: message },
           threadMode ? "Cover upload failed; posting text-only thread" : "Cover upload failed; posting text-only",
         );
       }
@@ -334,7 +453,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       };
     }
 
-    const resultFile = path.join(artifacts.articleDir, "publish-result.json");
+    const resultFile = path.join(articleDirForStatus, "publish-result.json");
     const payload = {
       profile,
       handle: user?.user?.username ?? null,
@@ -363,7 +482,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
             resultFile: path.basename(resultFile),
           },
           ...(result.threadUrl !== undefined ? { threadUrl: result.threadUrl } : {}),
-          articleOutDir: artifacts.articleDir,
+          articleOutDir: articleDirForStatus,
         },
       );
     } catch {
@@ -414,7 +533,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
               artifacts: [],
               error: { code, message },
             },
-            articleOutDir: artifacts.articleDir,
+            articleOutDir: articleDirForStatus,
           },
         );
       } catch {

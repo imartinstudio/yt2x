@@ -6,13 +6,17 @@ import {
   DEFAULT_OUT_DIR,
   findPendingNativeArticleDirs,
   generateXArticleContent,
+  generateXShortContent,
+  generateXThreadContent,
   patchProcessStatus,
   patchStepRunning,
   readStructuredNotesArtifacts,
   readYoutubePageUrl,
   writeNativeArticleBundle,
+  writeNativeShortBundle,
+  writeNativeThreadBundle,
 } from "@yt2x/adapters-node";
-import { isLlmError } from "@yt2x/core";
+import { isLlmError, parseArticleOutputTargets, type ArticleOutputTarget } from "@yt2x/core";
 import { logger } from "../logger.js";
 import type { SingleStageFlags } from "../commands/command-flags.js";
 import { printCliErrorBlock } from "../diagnostics/error-format.js";
@@ -33,6 +37,17 @@ export type ArticleFlags = SingleStageFlags & {
   showProgress?: boolean;
 };
 
+const addUsage = (
+  totals: { promptTokens: number; completionTokens: number },
+  usage: { promptTokens: number; completionTokens: number; totalTokens?: number } | undefined,
+): void => {
+  if (usage === undefined) return;
+  totals.promptTokens += usage.promptTokens;
+  totals.completionTokens += usage.completionTokens;
+};
+
+const formatTargets = (targets: readonly ArticleOutputTarget[]): string => targets.join(",");
+
 /** 供 `pipeline` 编排器与 `yt2x article` 调用；返回进程退出码。 */
 export const executeNativeArticle = async (flags: ArticleFlags): Promise<number> => {
   const notesOutDir = path.resolve(flags.outDir ?? DEFAULT_OUT_DIR);
@@ -46,6 +61,19 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       reason: `Unsupported platform: ${platform}`,
       hints: ["Native article generation currently supports only --platform x."],
       retryCommand: "pnpm yt2x article --video-id <videoId> --platform x",
+    });
+    return NATIVE_EXIT.CONFIG_MISSING;
+  }
+
+  let outputTargets: ArticleOutputTarget[];
+  try {
+    outputTargets = parseArticleOutputTargets(flags.targets);
+  } catch (err: unknown) {
+    printCliErrorBlock({
+      command: "article",
+      reason: err instanceof Error ? err.message : String(err),
+      hints: ["Use --targets x-longform,x-thread,x-short or --targets all."],
+      retryCommand: "pnpm yt2x article --video-id <videoId> --targets x-longform",
     });
     return NATIVE_EXIT.CONFIG_MISSING;
   }
@@ -98,12 +126,12 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       notesOutDir,
       articleOutDir,
       platform,
+      outputTargets,
     },
     "yt2x article (native x): starting",
   );
 
-  let promptTokens = 0;
-  let completionTokens = 0;
+  const tokenTotals = { promptTokens: 0, completionTokens: 0 };
   const errors: Array<{ videoDir: string; message: string }> = [];
 
   for (const videoDir of targets) {
@@ -117,60 +145,125 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       const identity = { videoId: artifacts.videoId, url };
       await patchStepRunning(videoDir, identity, "article").catch(() => {});
       logger.info(
-        { videoId: artifacts.videoId, model: llm.model },
+        { videoId: artifacts.videoId, model: llm.model, outputTargets },
         "yt2x article: calling LLM (may take several minutes)…",
       );
       const t0 = Date.now();
-      const result = await generateXArticleContent({
-        llm: llm.adapter,
-        model: llm.model,
-        artifacts,
-      });
+      const writtenArtifacts: string[] = [];
+      let articleDirForStatus: string | undefined;
+      let resultFile: string | undefined;
+
+      if (outputTargets.includes("x-longform")) {
+        const result = await generateXArticleContent({
+          llm: llm.adapter,
+          model: llm.model,
+          artifacts,
+        });
+        const written = await writeNativeArticleBundle(
+          articleOutDir,
+          artifacts.videoId,
+          result.content,
+          {
+            v: 1,
+            platform: "x",
+            videoId: artifacts.videoId,
+            model: result.model,
+            finishReason: result.finishReason,
+            generatedAt: new Date().toISOString(),
+            durationMs: result.durationMs,
+            ...(result.usage !== undefined ? { usage: result.usage } : {}),
+          },
+          { force: flags.force === true, notesVideoDir: videoDir },
+        );
+        writtenArtifacts.push("article.md", "run.json");
+        articleDirForStatus = written.articleDir;
+        resultFile ??= path.basename(written.articlePath);
+        addUsage(tokenTotals, result.usage);
+        logger.info(
+          {
+            videoId: result.videoId,
+            articleDir: written.articleDir,
+            coverPath: written.coverPath,
+            model: result.model,
+            finishReason: result.finishReason,
+            durationMs: result.durationMs,
+            usage: result.usage,
+          },
+          "article generated (native x longform)",
+        );
+      }
+
+      if (outputTargets.includes("x-thread")) {
+        const result = await generateXThreadContent({
+          llm: llm.adapter,
+          model: llm.model,
+          artifacts,
+        });
+        const written = await writeNativeThreadBundle(
+          articleOutDir,
+          artifacts.videoId,
+          result.thread,
+          { force: flags.force === true },
+        );
+        writtenArtifacts.push("x-thread.md", "x-hooks.json");
+        articleDirForStatus = written.articleDir;
+        resultFile ??= path.basename(written.threadPath);
+        addUsage(tokenTotals, result.usage);
+        logger.info(
+          {
+            videoId: result.videoId,
+            articleDir: written.articleDir,
+            model: result.model,
+            finishReason: result.finishReason,
+            durationMs: result.durationMs,
+            usage: result.usage,
+          },
+          "article generated (native x thread)",
+        );
+      }
+
+      if (outputTargets.includes("x-short")) {
+        const result = await generateXShortContent({
+          llm: llm.adapter,
+          model: llm.model,
+          artifacts,
+        });
+        const written = await writeNativeShortBundle(
+          articleOutDir,
+          artifacts.videoId,
+          result.shortPost,
+          { force: flags.force === true },
+        );
+        writtenArtifacts.push("x-short.md");
+        articleDirForStatus = written.articleDir;
+        resultFile ??= path.basename(written.shortPath);
+        addUsage(tokenTotals, result.usage);
+        logger.info(
+          {
+            videoId: result.videoId,
+            articleDir: written.articleDir,
+            model: result.model,
+            finishReason: result.finishReason,
+            durationMs: result.durationMs,
+            usage: result.usage,
+          },
+          "article generated (native x short)",
+        );
+      }
+
       const finishedAt = new Date().toISOString();
       const durationMs = Date.now() - t0;
-      const written = await writeNativeArticleBundle(
-        articleOutDir,
-        artifacts.videoId,
-        result.content,
-        {
-          v: 1,
-          platform: "x",
-          videoId: artifacts.videoId,
-          model: result.model,
-          finishReason: result.finishReason,
-          generatedAt: finishedAt,
-          durationMs,
-          ...(result.usage !== undefined ? { usage: result.usage } : {}),
-        },
-        { force: flags.force === true, notesVideoDir: videoDir },
-      );
       await patchProcessStatus(videoDir, identity, {
         step: "article",
         stepInfo: {
           status: "done",
           finishedAt,
           durationMs,
-          artifacts: ["article.md", "run.json"],
-          resultFile: path.basename(written.articlePath),
+          artifacts: writtenArtifacts,
+          resultFile: resultFile ?? formatTargets(outputTargets),
         },
-        articleOutDir: written.articleDir,
+        articleOutDir: articleDirForStatus ?? path.join(articleOutDir, artifacts.videoId),
       });
-      if (result.usage !== undefined) {
-        promptTokens += result.usage.promptTokens;
-        completionTokens += result.usage.completionTokens;
-      }
-      logger.info(
-        {
-          videoId: result.videoId,
-          articleDir: written.articleDir,
-          coverPath: written.coverPath,
-          model: result.model,
-          finishReason: result.finishReason,
-          durationMs,
-          usage: result.usage,
-        },
-        "article generated (native x)",
-      );
       progress?.record(progressKey, Math.round(performance.now() - stageT0));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -205,8 +298,8 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
     {
       ok: targets.length - errors.length,
       failed: errors.length,
-      totalPromptTokens: promptTokens,
-      totalCompletionTokens: completionTokens,
+      totalPromptTokens: tokenTotals.promptTokens,
+      totalCompletionTokens: tokenTotals.completionTokens,
     },
     "yt2x article (native x): done",
   );

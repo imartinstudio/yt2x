@@ -163,4 +163,25 @@ describe("runNativePipeline", () => {
       publishDryRun: true,
     });
   });
+
+  it("passes article targets to native article stage", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-targets-"));
+    const vid = "targetVid1";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+
+    const args = buildArgs({
+      control: { outDir: outRoot },
+      stages: { acquire: "skip", notes: "skip", article: "auto", publish: "skip" },
+      article: { targets: "x-thread,x-short" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(executeNativeArticleMock).toHaveBeenCalledOnce();
+    expect(executeNativeArticleMock.mock.calls[0]![0]).toMatchObject({
+      videoId: [vid],
+      targets: "x-thread,x-short",
+    });
+  });
 });

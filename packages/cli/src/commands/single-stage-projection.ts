@@ -56,6 +56,7 @@ export const projectSingleStage = (target: SingleStageTarget, flags: SingleStage
       platform: flags.platform ?? "x",
       maxChars: flags.maxChars ?? "280",
       rewriteMode: flags.rewriteMode ?? "rules",
+      targets: flags.targets,
     },
     publish: {
       publishDryRun: flags.publishDryRun === true || flags.dryRun === true,

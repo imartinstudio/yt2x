@@ -24,14 +24,14 @@ pnpm install
 | `pnpm yt2x --help`     | 列出所有子命令                                                                                        |
 | `pnpm yt2x acquire …`  | 下载元数据、字幕、可选关键帧；`--search "词:2"` 搜前 2 条；`--search-sort views` 按播放量降序后再取 N |
 | `pnpm yt2x notes …`    | 生成结构化笔记（native LLM；`--video-id` 或 `--all`）                                                 |
-| `pnpm yt2x article …`  | 生成长文（`files/articles/<videoId>/`）                                                               |
+| `pnpm yt2x article …`  | 生成长文、串推或短帖（`files/articles/<videoId>/`）                                                   |
 | `pnpm yt2x publish …`  | 发布到 X（OAuth 2.0 + v2）                                                                            |
 | `pnpm yt2x auth …`     | OAuth 2.0 PKCE 登录 / 登出 / 状态                                                                     |
 | `pnpm yt2x pipeline …` | **native acquire** + orchestrator 内 `notes`→`article`→`publish`                                      |
 | `pnpm yt2x llm …`      | LLM 连通性诊断                                                                                        |
 | `pnpm run ci`          | typecheck + lint + format:check + test                                                                |
 
-`pipeline` 安全默认：`--publish review` 只预览发布内容并写 `publish-preview.json` / `process-status.json`，不会真实调用 X API；真实发帖必须显式传 **`--publish auto`**。只想跑到长文产物时继续使用 **`--publish skip`**。
+`pipeline` 安全默认：`--publish review` 只预览发布内容并写 `publish-preview.json` / `process-status.json`，不会真实调用 X API；真实发帖必须显式传 **`--publish auto`**。只想跑到内容生成产物时继续使用 **`--publish skip`**。
 
 ## CLI 参数说明
 
@@ -112,7 +112,7 @@ pnpm yt2x acquire \
 | ------------------------------ | -------- | ---------------------------------------------------------------- |
 | `--acquire auto\|review\|skip` | `auto`   | 采集阶段：自动执行、执行前确认、跳过。                           |
 | `--notes auto\|review\|skip`   | `review` | 结构化笔记阶段。                                                 |
-| `--article auto\|review\|skip` | `review` | 长文生成阶段。                                                   |
+| `--article auto\|review\|skip` | `review` | 内容生成阶段；默认生成 `article.md`，可用 `--targets` 调整。     |
 | `--publish auto\|review\|skip` | `review` | 发布阶段；`review` 只生成预览，`auto` 才会真实发帖。             |
 | `--continue-from`              | 关闭     | 从 `--out-dir` 下已有视频目录和 `process-status.json` 恢复队列。 |
 | `--force`                      | 关闭     | 覆盖已有 `structured-notes.md` 等阶段产物。                      |
@@ -137,28 +137,31 @@ pnpm yt2x llm ping --provider openai
 
 ### 文章与发布参数
 
-| 参数                        | 适用命令              | 说明                                                                       |
-| --------------------------- | --------------------- | -------------------------------------------------------------------------- |
-| `--platform <name>`         | `article`、`pipeline` | 目标平台；当前主要支持 `x`。                                               |
-| `--rewrite-mode rules\|llm` | `pipeline`            | 长文标题 / 内容改写策略；默认 `rules`。                                    |
-| `--article-out-dir <path>`  | `article`、`publish`  | 文章输出根目录，默认 `files/articles`。                                    |
-| `--article-dir <path>`      | `publish`             | 显式指定文章目录，跳过按 `--video-id` 自动发现。                           |
-| `--profile <name>`          | `publish`             | X OAuth 凭证 profile，默认 `default`。                                     |
-| `--dry-run`                 | `publish`             | 只生成 / 打印发布预览，不调用 X API。                                      |
-| `--publish-dry-run`         | `pipeline`            | pipeline 发布阶段 dry-run。                                                |
-| `--thread`                  | `publish`、`pipeline` | 按串推发布，而不是 X long post。                                           |
-| `--publish-max-chars <n>`   | `publish`、`pipeline` | long post 字符上限；thread 模式下作为单条推文字数上限。                    |
-| `--max-chars <n>`           | `publish`、`pipeline` | `publish` 中是 `--publish-max-chars` 别名；`pipeline` 中也是文章阶段提示。 |
-| `--max-tweets <n>`          | `publish`、`pipeline` | thread 模式最大推文数。                                                    |
-| `--numbering`               | `publish`             | thread 模式下给每条推文加编号。                                            |
-| `--continue-on-failure`     | `publish`             | thread 发布时某条失败后继续尝试后续推文。                                  |
+| 参数                        | 适用命令              | 说明                                                                                              |
+| --------------------------- | --------------------- | ------------------------------------------------------------------------------------------------- |
+| `--platform <name>`         | `article`、`pipeline` | 目标平台；当前主要支持 `x`。                                                                      |
+| `--rewrite-mode rules\|llm` | `pipeline`            | 长文标题 / 内容改写策略；默认 `rules`。                                                           |
+| `--targets <targets>`       | `article`、`pipeline` | 生成目标，支持 `x-longform`、`x-thread`、`x-short`、`all` 和逗号分隔组合。                        |
+| `--article-out-dir <path>`  | `article`、`publish`  | 文章输出根目录，默认 `files/articles`。                                                           |
+| `--article-dir <path>`      | `publish`             | 显式指定文章目录，跳过按 `--video-id` 自动发现。                                                  |
+| `--profile <name>`          | `publish`             | X OAuth 凭证 profile，默认 `default`。                                                            |
+| `--dry-run`                 | `publish`             | 只生成 / 打印发布预览，不调用 X API。                                                             |
+| `--publish-dry-run`         | `pipeline`            | pipeline 发布阶段 dry-run。                                                                       |
+| `--target <target>`         | `publish`             | 发布目标，支持 `x-longform`、`x-thread`、`x-short`；一次只发布一种。                              |
+| `--thread-source <source>`  | `publish`             | `x-thread` 来源：`generated` 使用 `x-thread.md`，`article` 拆 `article.md`，`auto` 优先生成串推。 |
+| `--thread`                  | `publish`、`pipeline` | 按串推发布，而不是 X long post。                                                                  |
+| `--publish-max-chars <n>`   | `publish`、`pipeline` | long post 字符上限；thread 模式下作为单条推文字数上限。                                           |
+| `--max-chars <n>`           | `publish`、`pipeline` | `publish` 中是 `--publish-max-chars` 别名；`pipeline` 中也是文章阶段提示。                        |
+| `--max-tweets <n>`          | `publish`、`pipeline` | thread 模式最大推文数。                                                                           |
+| `--numbering`               | `publish`             | thread 模式下给每条推文加编号。                                                                   |
+| `--continue-on-failure`     | `publish`             | thread 发布时某条失败后继续尝试后续推文。                                                         |
 
 ## 目录约定
 
 | 路径                         | 含义                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
 | `files/downloads/<videoId>/` | 默认采集 + 笔记根目录（`--out-dir` 可改）                           |
-| `files/articles/<videoId>/`  | **默认 article（native）** 长文输出（`--article-out-dir` 可改）     |
+| `files/articles/<videoId>/`  | **默认 article（native）** 内容输出（`--article-out-dir` 可改）     |
 | `files/`                     | 本地大文件 / 临时产出（根 `.gitignore` 已忽略除 `.gitkeep` 外内容） |
 
 ## LLM 环境变量（native 路径）
@@ -179,7 +182,24 @@ pnpm yt2x llm ping --provider openai
 
 采集在 **`packages/adapters-node/src/acquire/`**（Node + yt-dlp/ffmpeg）。**`yt2x publish` 使用 OAuth 2.0 API**，不依赖浏览器自动化。
 
-发布命令只接受安全的视频目录名作为 **`--video-id`**（字母、数字、连字符、下划线），避免把路径误当成视频 ID。需要指定非默认长文目录时使用 **`--article-dir`**。
+发布命令只接受安全的视频目录名作为 **`--video-id`**（字母、数字、连字符、下划线），避免把路径误当成视频 ID。需要指定非默认内容目录时使用 **`--article-dir`**。
+
+生成阶段可自由组合目标：
+
+```bash
+pnpm yt2x article --video-id <videoId> --targets x-longform,x-thread,x-short
+pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --targets all --publish review
+```
+
+发布阶段一次只发布一种目标：
+
+```bash
+pnpm yt2x publish --video-id <videoId> --target x-longform --dry-run
+pnpm yt2x publish --video-id <videoId> --target x-thread --thread-source generated --dry-run
+pnpm yt2x publish --video-id <videoId> --target x-short --dry-run
+```
+
+旧参数 **`--thread`** 保持兼容，仍表示把 `article.md` 拆成串推。若要使用专门生成的串推，请使用 **`--target x-thread --thread-source generated`**。
 
 ## 续跑与批次队列
 

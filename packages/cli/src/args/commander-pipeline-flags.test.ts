@@ -28,4 +28,12 @@ describe("parseCommanderPipelineFlags", () => {
     expect(args.stages.publish).toBe("review");
     expect(args.acquire.keyframes).toBe(0);
   });
+
+  it("maps article targets", () => {
+    const args = parseCommanderPipelineFlags({
+      urls: ["https://example.com/video"],
+      targets: "all",
+    });
+    expect(args.article.targets).toEqual(["x-longform", "x-thread", "x-short"]);
+  });
 });

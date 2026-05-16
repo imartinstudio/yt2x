@@ -33,6 +33,126 @@ pnpm install
 
 `pipeline` 安全默认：`--publish review` 只预览发布内容并写 `publish-preview.json` / `process-status.json`，不会真实调用 X API；真实发帖必须显式传 **`--publish auto`**。只想跑到长文产物时继续使用 **`--publish skip`**。
 
+## CLI 参数说明
+
+所有命令都可以先用 `--help` 查看当前实现支持的参数，例如：
+
+```bash
+pnpm yt2x acquire --help
+pnpm yt2x pipeline --help
+pnpm yt2x publish --help
+```
+
+### 视频来源参数
+
+`acquire` 和 `pipeline` 至少需要一种视频来源；`notes` / `article` / `publish` 通常使用 `--video-id`、`--all` 或已有目录。
+
+| 参数                  | 适用命令                                     | 说明                                                             |
+| --------------------- | -------------------------------------------- | ---------------------------------------------------------------- |
+| `--urls <url...>`     | `acquire`、`pipeline`、通用来源参数          | 一个或多个 YouTube URL，空格分隔。                               |
+| `--url-file <path>`   | `acquire`、`pipeline`、通用来源参数          | 文本文件，每行一个 URL。                                         |
+| `--search <query>`    | `acquire`、`pipeline`、通用来源参数          | 用 `yt-dlp ytsearch` 搜索；支持 `"关键词:N"` 取前 N 条。         |
+| `--search-sort views` | `acquire`、`pipeline`、通用来源参数          | 配合 `--search` 使用，按播放量降序后再取 N；当前仅支持 `views`。 |
+| `--video-id <id...>`  | `notes`、`article`                           | 处理一个或多个视频 ID；也可传绝对路径到视频目录。                |
+| `--video-id <id>`     | `publish`                                    | 在 `--article-out-dir` 下查找对应文章目录。                      |
+| `--all`               | `notes`、`article`                           | 批量处理所有符合条件的视频目录。                                 |
+| `--out-dir <path>`    | `acquire`、`notes`、`article`、`pipeline` 等 | 采集和笔记根目录，默认 `files/downloads`。                       |
+
+### 采集参数
+
+这些参数适用于 `yt2x acquire`，也适用于 `yt2x pipeline` 的采集阶段。
+
+| 参数                            | 默认值 | 说明                                                                                       |
+| ------------------------------- | ------ | ------------------------------------------------------------------------------------------ |
+| `--keyframes <n>`               | `0`    | 提取场景关键帧数量；`0` 表示跳过关键帧。需要 `ffmpeg`。                                    |
+| `--jobs <n>`                    | `3`    | 并发采集任务数。                                                                           |
+| `--sub-langs <lang>`            | 自动   | 手动字幕语言覆盖值，会传给 `yt-dlp --sub-langs`，例如 `en`、`zh-Hans`、`en,zh.*`。         |
+| `--scene-threshold <n>`         | `0.35` | 场景检测阈值；值越低通常越容易切出更多关键帧。                                             |
+| `--scene-min-gap <n>`           | `12`   | 关键帧最小间隔秒数。                                                                       |
+| `--max-words <n>`               | `900`  | `chunks.md` 每个转写分块的最大词数。                                                       |
+| `--cookies-from-browser <name>` | 无     | 把浏览器登录态 cookies 传给 `yt-dlp --cookies-from-browser`。详见下方“人机验证 / 登录态”。 |
+| `--proxy <url>`                 | 无     | 把代理传给 `yt-dlp --proxy`，例如 `http://127.0.0.1:1082`。                                |
+| `--error-strategy stop\|skip`   | `stop` | 批量采集时遇到失败是立刻停止，还是跳过失败项继续处理后续视频。                             |
+
+#### YouTube 人机验证 / 登录态
+
+如果采集失败并出现 YouTube 要求登录、确认不是机器人、人机验证、年龄限制、区域限制，或 `yt-dlp did not write .info.json (check cookies / network)` 之类错误，优先使用浏览器 cookies：
+
+```bash
+pnpm yt2x acquire \
+  --urls "<YOUTUBE_URL>" \
+  --cookies-from-browser chrome
+```
+
+完整流水线同理：
+
+```bash
+pnpm yt2x pipeline \
+  --urls "<YOUTUBE_URL>" \
+  --cookies-from-browser chrome \
+  --acquire auto --notes auto --article auto --publish skip
+```
+
+`--cookies-from-browser` 的值会原样传给 `yt-dlp`。常见值包括 `chrome`、`firefox`、`edge`、`brave`、`chromium`、`safari` 等；如果你使用浏览器 profile，也可以使用 `yt-dlp` 支持的扩展格式。建议先在目标浏览器里登录 YouTube，并确认可以正常打开该视频，再运行 yt2x。macOS 上读取浏览器 cookies 时可能会弹出钥匙串授权。
+
+如果网络环境还需要代理，可以同时传：
+
+```bash
+pnpm yt2x acquire \
+  --urls "<YOUTUBE_URL>" \
+  --cookies-from-browser chrome \
+  --proxy "http://127.0.0.1:1082"
+```
+
+注意：这些 cookies 只从本机浏览器读取并传给本机 `yt-dlp` 进程；不要把浏览器 cookies、导出的 cookie 文件、API key 或 OAuth token 提交到仓库。
+
+### Pipeline 阶段控制参数
+
+| 参数                           | 默认值   | 说明                                                             |
+| ------------------------------ | -------- | ---------------------------------------------------------------- |
+| `--acquire auto\|review\|skip` | `auto`   | 采集阶段：自动执行、执行前确认、跳过。                           |
+| `--notes auto\|review\|skip`   | `review` | 结构化笔记阶段。                                                 |
+| `--article auto\|review\|skip` | `review` | 长文生成阶段。                                                   |
+| `--publish auto\|review\|skip` | `review` | 发布阶段；`review` 只生成预览，`auto` 才会真实发帖。             |
+| `--continue-from`              | 关闭     | 从 `--out-dir` 下已有视频目录和 `process-status.json` 恢复队列。 |
+| `--force`                      | 关闭     | 覆盖已有 `structured-notes.md` 等阶段产物。                      |
+| `--error-strategy stop\|skip`  | `stop`   | 阶段失败时停止或跳过继续。                                       |
+| `--verbose`                    | 关闭     | 输出更详细日志。                                                 |
+
+### LLM 参数
+
+`notes`、`article` 和 `pipeline` 会使用 LLM。
+
+| 参数                   | 说明                                                            |
+| ---------------------- | --------------------------------------------------------------- |
+| `--llm-provider <id>`  | `openai`、`anthropic`、`deepseek`、`moonshot`；默认读环境变量。 |
+| `--llm-model <name>`   | 覆盖 provider 默认模型。                                        |
+| `--llm-base-url <url>` | 覆盖 provider 默认 Base URL，适合 OpenAI 兼容网关或代理。       |
+
+可先用下面命令验证 LLM 配置：
+
+```bash
+pnpm yt2x llm ping --provider openai
+```
+
+### 文章与发布参数
+
+| 参数                        | 适用命令              | 说明                                                                       |
+| --------------------------- | --------------------- | -------------------------------------------------------------------------- |
+| `--platform <name>`         | `article`、`pipeline` | 目标平台；当前主要支持 `x`。                                               |
+| `--rewrite-mode rules\|llm` | `pipeline`            | 长文标题 / 内容改写策略；默认 `rules`。                                    |
+| `--article-out-dir <path>`  | `article`、`publish`  | 文章输出根目录，默认 `files/articles`。                                    |
+| `--article-dir <path>`      | `publish`             | 显式指定文章目录，跳过按 `--video-id` 自动发现。                           |
+| `--profile <name>`          | `publish`             | X OAuth 凭证 profile，默认 `default`。                                     |
+| `--dry-run`                 | `publish`             | 只生成 / 打印发布预览，不调用 X API。                                      |
+| `--publish-dry-run`         | `pipeline`            | pipeline 发布阶段 dry-run。                                                |
+| `--thread`                  | `publish`、`pipeline` | 按串推发布，而不是 X long post。                                           |
+| `--publish-max-chars <n>`   | `publish`、`pipeline` | long post 字符上限；thread 模式下作为单条推文字数上限。                    |
+| `--max-chars <n>`           | `publish`、`pipeline` | `publish` 中是 `--publish-max-chars` 别名；`pipeline` 中也是文章阶段提示。 |
+| `--max-tweets <n>`          | `publish`、`pipeline` | thread 模式最大推文数。                                                    |
+| `--numbering`               | `publish`             | thread 模式下给每条推文加编号。                                            |
+| `--continue-on-failure`     | `publish`             | thread 发布时某条失败后继续尝试后续推文。                                  |
+
 ## 目录约定
 
 | 路径                         | 含义                                                                |

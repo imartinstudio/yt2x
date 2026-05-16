@@ -101,7 +101,7 @@ OPENAI_API_KEY=sk-...
 
 ```bash
 pnpm yt2x pipeline \
-  --urls "https://youtu.be/jNQXAC9IVRw" \
+  --urls "<YOUTUBE_URL>" \
   --acquire auto --notes auto --article skip --publish skip \
   --out-dir ./files/downloads
 ```
@@ -120,7 +120,7 @@ process-status.json
 
 ```bash
 pnpm yt2x acquire \
-  --urls "https://youtu.be/jNQXAC9IVRw" \
+  --urls "<YOUTUBE_URL>" \
   --out-dir ./files/downloads
 ```
 
@@ -131,21 +131,29 @@ pnpm yt2x acquire \
 pnpm yt2x --help
 
 # 采集视频元数据、字幕、分块文本
-pnpm yt2x acquire --urls "https://youtu.be/jNQXAC9IVRw"
+pnpm yt2x acquire --urls "<YOUTUBE_URL>"
 
 # 对已采集视频生成结构化笔记
-pnpm yt2x notes --video-id jNQXAC9IVRw --llm-provider openai
+pnpm yt2x notes --video-id <videoId> --llm-provider openai
 
 # 从结构化笔记生成 X 长文
-pnpm yt2x article --video-id jNQXAC9IVRw
+pnpm yt2x article --video-id <videoId>
 
 # 预览发布内容，不调用 X API
-pnpm yt2x publish --video-id jNQXAC9IVRw --dry-run
+pnpm yt2x publish --video-id <videoId> --dry-run
 
 # 全流水线：采集、笔记、文章，跳过发布
 pnpm yt2x pipeline \
-  --urls "https://youtu.be/jNQXAC9IVRw" \
+  --urls "<YOUTUBE_URL>" \
   --acquire auto --notes auto --article auto --publish skip
+```
+
+更完整的 CLI 参数说明见 [docs/USAGE.md](./docs/USAGE.md#cli-参数说明)。如果 YouTube 采集遇到登录、人机验证或区域 / 年龄限制，通常需要先在本机浏览器登录 YouTube，再传 `--cookies-from-browser`：
+
+```bash
+pnpm yt2x acquire \
+  --urls "<YOUTUBE_URL>" \
+  --cookies-from-browser chrome
 ```
 
 ## 发布到 X
@@ -165,13 +173,13 @@ pnpm yt2x auth whoami
 发布预览：
 
 ```bash
-pnpm yt2x publish --video-id jNQXAC9IVRw --dry-run
+pnpm yt2x publish --video-id <videoId> --dry-run
 ```
 
 真实发布：
 
 ```bash
-pnpm yt2x publish --video-id jNQXAC9IVRw
+pnpm yt2x publish --video-id <videoId>
 ```
 
 流水线发布的安全规则：
@@ -184,7 +192,7 @@ pnpm yt2x publish --video-id jNQXAC9IVRw
 
 ```bash
 pnpm yt2x pipeline \
-  --urls "https://youtu.be/jNQXAC9IVRw" \
+  --urls "<YOUTUBE_URL>" \
   --acquire auto --notes auto --article auto --publish auto
 ```
 
@@ -235,7 +243,7 @@ pnpm yt2x pipeline \
 
 ```bash
 pnpm yt2x acquire \
-  --urls "https://youtu.be/VIDEO_ID_1" "https://youtu.be/VIDEO_ID_2"
+  --urls "<YOUTUBE_URL_1>" "<YOUTUBE_URL_2>"
 ```
 
 从文本文件读取 URL：

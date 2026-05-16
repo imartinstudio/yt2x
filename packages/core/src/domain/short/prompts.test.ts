@@ -5,17 +5,22 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
   it("defines a dedicated X short post task", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/X（Twitter）/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/只生成 1 条短帖正文/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/只表达一个核心判断/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/一句话核心总结/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/内容总结 list/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/至少 4 条具体 list item/);
   });
 
   it("forbids hallucination, clickbait, and mechanical recap", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要编造/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要廉价标题党/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要逐段复述/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要只做概括/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要写成空泛目录/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/没有编号 list 的 text 视为不合格/);
   });
 
-  it("forbids thread formatting", () => {
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要编号/);
+  it("allows an in-post list but forbids thread formatting", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/可以在单条短帖内部使用 1\. 2\. 3\./);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要写成 1\/、2\//);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要输出多个备选版本/);
   });

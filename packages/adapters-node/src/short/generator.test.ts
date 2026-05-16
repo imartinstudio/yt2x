@@ -25,6 +25,7 @@ describe("generateXShortContent", () => {
     const llm = makeLlm((req) => {
       expect(req.messages[0]!.content).toMatch(/X（Twitter）/);
       expect(req.messages[0]!.content).toMatch(/只生成 1 条短帖正文/);
+      expect(req.messages[0]!.content).toMatch(/内容总结 list/);
       expect(req.messages[1]!.content).toMatch(/Structured notes/);
       expect(req.temperature).toBeCloseTo(0.55);
       return { content: shortJson, model: "m", finishReason: "stop" };

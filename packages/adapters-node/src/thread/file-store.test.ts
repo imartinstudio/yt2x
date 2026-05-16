@@ -8,7 +8,14 @@ let articleRoot: string;
 
 const thread = {
   title: "Thread title",
-  tweets: ["first", "second"],
+  planning: {
+    core_thesis: "core",
+    conflict: "conflict",
+    key_points: ["p1", "p2", "p3", "p4"],
+    reader_gain: "gain",
+    final_post: "final",
+  },
+  tweets: ["判断：first", "收益：second"],
   hooks: [
     { text: "h1", angle: "反直觉", risk: "low" as const },
     { text: "h2", angle: "实用收益", risk: "medium" as const },
@@ -26,14 +33,16 @@ afterEach(async () => {
 
 describe("renderXThreadMarkdown", () => {
   it("renders numbered thread markdown", () => {
-    expect(renderXThreadMarkdown(thread)).toBe("# Thread title\n\n1/ first\n\n2/ second\n");
+    expect(renderXThreadMarkdown(thread)).toBe("1/ 判断：first\n\n2/ 收益：second\n");
   });
 });
 
 describe("writeNativeThreadBundle", () => {
   it("writes x-thread.md and x-hooks.json", async () => {
     const written = await writeNativeThreadBundle(articleRoot, "v1", thread);
-    expect(await readFile(written.threadPath, "utf8")).toBe("# Thread title\n\n1/ first\n\n2/ second\n");
+    expect(await readFile(written.threadPath, "utf8")).toBe(
+      "1/ 判断：first\n\n2/ 收益：second\n",
+    );
     const hooks = JSON.parse(await readFile(written.hooksPath, "utf8")) as { hooks: unknown[] };
     expect(hooks.hooks).toHaveLength(3);
   });

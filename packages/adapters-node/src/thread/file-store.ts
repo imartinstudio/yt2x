@@ -10,7 +10,7 @@ export type WriteNativeThreadResult = {
 };
 
 export const renderXThreadMarkdown = (thread: GeneratedThread): string => {
-  const lines: string[] = [`# ${thread.title.trim()}`, ""];
+  const lines: string[] = [];
   thread.tweets.forEach((tweet, index) => {
     lines.push(`${index + 1}/ ${tweet.trim()}`);
     lines.push("");

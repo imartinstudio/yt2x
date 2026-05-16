@@ -20,8 +20,17 @@ export type ThreadHook = {
   risk: ThreadHookRisk;
 };
 
+export type ThreadPlanning = {
+  core_thesis: string;
+  conflict: string;
+  key_points: string[];
+  reader_gain: string;
+  final_post: string;
+};
+
 export type GeneratedThread = {
   title: string;
+  planning: ThreadPlanning;
   tweets: string[];
   hooks: ThreadHook[];
 };

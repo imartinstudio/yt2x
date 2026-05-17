@@ -39,6 +39,15 @@ const GeneratedShortPostSchema = z.object({
   visual: ShortVisualSchema.optional(),
 });
 
+const MARKDOWN_TABLE_DIVIDER_RE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+const MARKDOWN_TABLE_ROW_RE = /^\s*\|.+\|\s*$/;
+
+const hasMarkdownTable = (text: string): boolean =>
+  text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .some((line) => MARKDOWN_TABLE_DIVIDER_RE.test(line) || MARKDOWN_TABLE_ROW_RE.test(line));
+
 const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
 const stripJsonFenceWrapper = (s: string): string => {
   const m = s.match(JSON_FENCE_RE);
@@ -59,6 +68,11 @@ export const parseGeneratedShortPostJson = (jsonText: string): GeneratedShortPos
     throw new Error(`Short post LLM response does not match expected schema: ${result.error.message}`);
   }
   const raw = result.data;
+  if (hasMarkdownTable(raw.text)) {
+    throw new Error(
+      "Short post LLM response contains a markdown table. Regenerate x-short content as a numbered list, bullet list, or field/value lines instead of tables.",
+    );
+  }
   const data: GeneratedShortPost = {
     text: raw.text,
     angle: raw.angle,

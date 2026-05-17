@@ -75,4 +75,12 @@ describe("buildArticleUserPrompt", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/X（Twitter）/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不要用/);
   });
+
+  it("requires bold headings and colon labels", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/# \*\*标题\*\*/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/## \*\*小节标题\*\*/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/\*\*xxxx：\*\*/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/有序列表会保留编号/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/无序列表会转成/);
+  });
 });

@@ -1,14 +1,15 @@
 import { z } from "zod";
 
-export const ARTICLE_OUTPUT_TARGETS = ["x-longform", "x-thread", "x-short"] as const;
+export const ARTICLE_OUTPUT_TARGETS = ["article", "x-thread", "x-short"] as const;
 export const ARTICLE_OUTPUT_TARGET_ALL = "all";
+export const LEGACY_ARTICLE_OUTPUT_TARGET_LONGFORM = "x-longform";
 
 export type ArticleOutputTarget = (typeof ARTICLE_OUTPUT_TARGETS)[number];
 export type ArticleOutputTargetInput = ArticleOutputTarget | typeof ARTICLE_OUTPUT_TARGET_ALL;
 
 const ARTICLE_OUTPUT_TARGET_SET = new Set<string>(ARTICLE_OUTPUT_TARGETS);
 
-export const DEFAULT_ARTICLE_OUTPUT_TARGETS: readonly ArticleOutputTarget[] = ["x-longform"];
+export const DEFAULT_ARTICLE_OUTPUT_TARGETS: readonly ArticleOutputTarget[] = ["article"];
 
 const splitTargets = (raw: string): string[] =>
   raw
@@ -25,18 +26,22 @@ export const parseArticleOutputTargets = (
   if (parts.length === 0) return [...DEFAULT_ARTICLE_OUTPUT_TARGETS];
 
   const expanded = parts.includes(ARTICLE_OUTPUT_TARGET_ALL) ? [...ARTICLE_OUTPUT_TARGETS] : parts;
-  const invalid = expanded.filter((target) => !ARTICLE_OUTPUT_TARGET_SET.has(target));
+  const normalized = expanded.map((target) =>
+    target === LEGACY_ARTICLE_OUTPUT_TARGET_LONGFORM ? "article" : target,
+  );
+  const invalid = normalized.filter((target) => !ARTICLE_OUTPUT_TARGET_SET.has(target));
   if (invalid.length > 0) {
     throw new Error(
       `Invalid --targets value "${invalid[0]}". Expected one of: ${[
         ...ARTICLE_OUTPUT_TARGETS,
+        LEGACY_ARTICLE_OUTPUT_TARGET_LONGFORM,
         ARTICLE_OUTPUT_TARGET_ALL,
       ].join(", ")}`,
     );
   }
 
   const deduped: ArticleOutputTarget[] = [];
-  for (const target of expanded) {
+  for (const target of normalized) {
     if (!deduped.includes(target as ArticleOutputTarget)) {
       deduped.push(target as ArticleOutputTarget);
     }

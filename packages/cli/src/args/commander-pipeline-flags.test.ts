@@ -27,6 +27,18 @@ describe("parseCommanderPipelineFlags", () => {
     expect(args.stages.article).toBe("review");
     expect(args.stages.publish).toBe("review");
     expect(args.acquire.keyframes).toBe(0);
+    expect(args.publish.format).toBe("article");
+    expect(args.publish.maxChars).toBe(500);
+    expect(args.publish.maxTweets).toBe(8);
+    expect(args.publish.threadDelay).toBe("20-30");
+  });
+
+  it("maps threadDelay to publish options", () => {
+    const args = parseCommanderPipelineFlags({
+      urls: ["https://www.youtube.com/watch?v=dQw4w9WgXcQ"],
+      threadDelay: "3-5",
+    });
+    expect(args.publish.threadDelay).toBe("3-5");
   });
 
   it("maps article targets", () => {
@@ -34,6 +46,6 @@ describe("parseCommanderPipelineFlags", () => {
       urls: ["https://example.com/video"],
       targets: "all",
     });
-    expect(args.article.targets).toEqual(["x-longform", "x-thread", "x-short"]);
+    expect(args.article.targets).toEqual(["article", "x-thread", "x-short"]);
   });
 });

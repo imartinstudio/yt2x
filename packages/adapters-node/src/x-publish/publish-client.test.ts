@@ -206,6 +206,39 @@ describe("createXPublishAdapter.postThread", () => {
     expect(bodies[1].media).toBeUndefined();
   });
 
+  it("waits between thread replies when replyDelayMs is provided", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const ids = ["a", "b", "c"];
+    try {
+      const fetcher = vi.fn(async (_url, init) => {
+        const body = JSON.parse((init as RequestInit).body as string);
+        return okTweet(ids.shift()!, body.text);
+      });
+      const adapter = createXPublishAdapter({
+        tokenSource: makeTokenSource(),
+        fetcher,
+      });
+
+      const pending = adapter.postThread({
+        tweets: ["one", "two", "three"],
+        replyDelayMs: { min: 20_000, max: 20_000 },
+      });
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+      await vi.runOnlyPendingTimersAsync();
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+      await vi.runOnlyPendingTimersAsync();
+      const result = await pending;
+      expect(result.tweets.map((t) => t.id)).toEqual(["a", "b", "c"]);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      const threadDelayCalls = setTimeoutSpy.mock.calls.filter((call) => call[1] === 20_000);
+      expect(threadDelayCalls).toHaveLength(2);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("throws when the very first tweet fails (no partial)", async () => {
     const fetcher = vi.fn(async () => errResp(400, { detail: "bad" }));
     const adapter = createXPublishAdapter({

@@ -55,4 +55,16 @@ describe("parseGeneratedShortPostJson", () => {
       /expected schema/,
     );
   });
+
+  it("rejects markdown tables in generated short posts", () => {
+    expect(() =>
+      parseGeneratedShortPostJson(
+        JSON.stringify({
+          text: "**核心：**\n| A | B |\n| --- | --- |\n| ok | yes |",
+          angle: "practical",
+          risk: "low",
+        }),
+      ),
+    ).toThrow(/contains a markdown table/);
+  });
 });

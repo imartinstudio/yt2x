@@ -35,6 +35,15 @@ describe("renderXThreadMarkdown", () => {
   it("renders numbered thread markdown", () => {
     expect(renderXThreadMarkdown(thread)).toBe("1/ 判断：first\n\n2/ 收益：second\n");
   });
+
+  it("preserves markdown formatting inside generated thread tweets", () => {
+    expect(
+      renderXThreadMarkdown({
+        ...thread,
+        tweets: ["**标题：**保留 `code`\n- item", "```bash\npnpm test\n```"],
+      }),
+    ).toBe("1/ **标题：**保留 `code`\n- item\n\n2/ ```bash\npnpm test\n```\n");
+  });
 });
 
 describe("writeNativeThreadBundle", () => {

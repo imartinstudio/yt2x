@@ -81,7 +81,7 @@ const resolveFlatArticleDir = async (videoRoot: string, videoId: string): Promis
   }
 };
 
-const findCoverImage = async (articleDir: string): Promise<string | null> => {
+export const findCoverImage = async (articleDir: string): Promise<string | null> => {
   const imagesDir = path.join(articleDir, "images");
   for (const name of COVER_CANDIDATES) {
     const p = path.join(imagesDir, name);

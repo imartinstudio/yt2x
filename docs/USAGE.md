@@ -137,24 +137,25 @@ pnpm yt2x llm ping --provider openai
 
 ### 文章与发布参数
 
-| 参数                        | 适用命令              | 说明                                                                                              |
-| --------------------------- | --------------------- | ------------------------------------------------------------------------------------------------- |
-| `--platform <name>`         | `article`、`pipeline` | 目标平台；当前主要支持 `x`。                                                                      |
-| `--rewrite-mode rules\|llm` | `pipeline`            | 长文标题 / 内容改写策略；默认 `rules`。                                                           |
-| `--targets <targets>`       | `article`、`pipeline` | 生成目标，支持 `x-longform`、`x-thread`、`x-short`、`all` 和逗号分隔组合。                        |
-| `--article-out-dir <path>`  | `article`、`publish`  | 文章输出根目录，默认 `files/articles`。                                                           |
-| `--article-dir <path>`      | `publish`             | 显式指定文章目录，跳过按 `--video-id` 自动发现。                                                  |
-| `--profile <name>`          | `publish`             | X OAuth 凭证 profile，默认 `default`。                                                            |
-| `--dry-run`                 | `publish`             | 只生成 / 打印发布预览，不调用 X API。                                                             |
-| `--publish-dry-run`         | `pipeline`            | pipeline 发布阶段 dry-run。                                                                       |
-| `--target <target>`         | `publish`             | 发布目标，支持 `x-longform`、`x-thread`、`x-short`；一次只发布一种。                              |
-| `--thread-source <source>`  | `publish`             | `x-thread` 来源：`generated` 使用 `x-thread.md`，`article` 拆 `article.md`，`auto` 优先生成串推。 |
-| `--thread`                  | `publish`、`pipeline` | 按串推发布，而不是 X long post。                                                                  |
-| `--publish-max-chars <n>`   | `publish`、`pipeline` | long post 字符上限；thread 模式下作为单条推文字数上限。                                           |
-| `--max-chars <n>`           | `publish`、`pipeline` | `publish` 中是 `--publish-max-chars` 别名；`pipeline` 中也是文章阶段提示。                        |
-| `--max-tweets <n>`          | `publish`、`pipeline` | thread 模式最大推文数。                                                                           |
-| `--numbering`               | `publish`             | thread 模式下给每条推文加编号。                                                                   |
-| `--continue-on-failure`     | `publish`             | thread 发布时某条失败后继续尝试后续推文。                                                         |
+| 参数                        | 适用命令              | 说明                                                                                                |
+| --------------------------- | --------------------- | --------------------------------------------------------------------------------------------------- |
+| `--platform <name>`         | `article`、`pipeline` | 目标平台；当前主要支持 `x`。                                                                        |
+| `--rewrite-mode rules\|llm` | `pipeline`            | 长文标题 / 内容改写策略；默认 `rules`。                                                             |
+| `--targets <targets>`       | `article`、`pipeline` | 生成目标，支持 `article`、`x-thread`、`x-short`、`all` 和逗号分隔组合；`x-longform` 仅作旧别名。    |
+| `--article-out-dir <path>`  | `article`、`publish`  | 文章输出根目录，默认 `files/articles`。                                                             |
+| `--article-dir <path>`      | `publish`             | 显式指定文章目录，跳过按 `--video-id` 自动发现。                                                    |
+| `--profile <name>`          | `publish`             | X OAuth 凭证 profile，默认 `default`。                                                              |
+| `--dry-run`                 | `publish`             | 只生成 / 打印发布预览，不调用 X API。                                                               |
+| `--publish-dry-run`         | `pipeline`            | pipeline 发布阶段 dry-run。                                                                         |
+| `--target <target>`         | `publish`             | 发布目标，支持 `article`、`x-thread`、`x-short`、`x-thread-short`；`article` 只预览，不调用 X API。 |
+| `--thread-source <source>`  | `publish`             | `x-thread` 来源：`generated` 使用 `x-thread.md`，`article` 拆 `article.md`，`auto` 优先生成串推。   |
+| `--thread`                  | `publish`、`pipeline` | 兼容开关，等价于 `--target x-thread`。                                                              |
+| `--publish-max-chars <n>`   | `publish`、`pipeline` | `x-thread` 单条字数上限，默认 500；`x-short` 不设置固定字数上限。                                   |
+| `--max-chars <n>`           | `publish`、`pipeline` | `publish` 中是 `--publish-max-chars` 别名；`pipeline` 中也是文章阶段提示。                          |
+| `--max-tweets <n>`          | `publish`、`pipeline` | thread 模式最大推文数，`x-thread` 默认 8，`x-thread-short` 默认 10，最大 10。                       |
+| `--thread-delay <range>`    | `publish`、`pipeline` | thread 每两条之间的等待秒数，默认 `20-30`；固定值如 `10`，`0` 表示不等待。                          |
+| `--numbering`               | `publish`             | thread 模式下给每条推文加编号。                                                                     |
+| `--continue-on-failure`     | `publish`             | thread 发布时某条失败后继续尝试后续推文。                                                           |
 
 ## 目录约定
 
@@ -187,19 +188,22 @@ pnpm yt2x llm ping --provider openai
 生成阶段可自由组合目标：
 
 ```bash
-pnpm yt2x article --video-id <videoId> --targets x-longform,x-thread,x-short
+pnpm yt2x article --video-id <videoId> --targets article,x-thread,x-short
 pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --targets all --publish review
 ```
 
 发布阶段一次只发布一种目标：
 
 ```bash
-pnpm yt2x publish --video-id <videoId> --target x-longform --dry-run
+pnpm yt2x publish --video-id <videoId> --target article --dry-run
 pnpm yt2x publish --video-id <videoId> --target x-thread --thread-source generated --dry-run
 pnpm yt2x publish --video-id <videoId> --target x-short --dry-run
+pnpm yt2x publish --video-id <videoId> --target x-thread-short --dry-run
 ```
 
-旧参数 **`--thread`** 保持兼容，仍表示把 `article.md` 拆成串推。若要使用专门生成的串推，请使用 **`--target x-thread --thread-source generated`**。
+`article` 目标只做草稿预览；X 当前没有公开 Article 发布 API，因此真实 API 发布覆盖 `x-thread`、`x-short` 和 `x-thread-short`。`x-thread-short` 会把 `x-short.md` 作为首推，再把 `x-thread.md` 中的内容按顺序作为回复发布；`x-short` / `x-thread-short` 发布首推时会尽量附带 `images/cover.*` 封面图。真实发布 `x-thread` / `x-thread-short` 时，每两条推文之间默认随机等待 20-30 秒，可用 `--thread-delay` 配置。旧参数 **`--thread`** 保持兼容，等价于 **`--target x-thread`**。
+
+`x-thread.md` 发布时用行首 `1/`、`2/`、`3/` 作为 tweet 边界，单条 tweet 内部的空行、列表和代码块会保留到同一条回复中。发布前会把 Markdown 转成 X 兼容文本：加粗中的英文 / 数字转为 Unicode bold，中文保持原字形；列表、代码块、链接、引用等会按 X 可读形式转换。
 
 ## 续跑与批次队列
 

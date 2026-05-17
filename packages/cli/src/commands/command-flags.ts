@@ -23,6 +23,7 @@ export type SingleStageFlags = {
   thread?: boolean;
   publishMaxChars?: string;
   maxTweets?: string;
+  threadDelay?: string;
   numbering?: boolean;
   continueFrom?: boolean;
   errorStrategy?: string;

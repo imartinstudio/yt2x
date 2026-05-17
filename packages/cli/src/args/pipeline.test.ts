@@ -55,7 +55,19 @@ describe("PipelineArgsSchema", () => {
 
   it("defaults article targets to all three formats", () => {
     const parsed = PipelineArgsSchema.parse(baseInput);
-    expect(parsed.article.targets).toEqual(["x-longform", "x-thread", "x-short"]);
+    expect(parsed.article.targets).toEqual(["article", "x-thread", "x-short"]);
+    expect(parsed.publish.format).toBe("article");
+    expect(parsed.publish.maxChars).toBe(500);
+    expect(parsed.publish.maxTweets).toBe(8);
+    expect(parsed.publish.threadDelay).toBe("20-30");
+  });
+
+  it("preserves publish thread delay config", () => {
+    const parsed = PipelineArgsSchema.parse({
+      ...baseInput,
+      publish: { threadDelay: "5-9" },
+    });
+    expect(parsed.publish.threadDelay).toBe("5-9");
   });
 
   it("parses article target combinations", () => {
@@ -73,6 +85,15 @@ describe("PipelineArgsSchema", () => {
         article: { targets: "x-post" },
       }),
     ).toThrow(/Invalid --targets value/);
+  });
+
+  it("rejects thread maxTweets above ten", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        publish: { maxTweets: 11 },
+      }),
+    ).toThrow();
   });
 
   it("rejects unknown llm provider", () => {

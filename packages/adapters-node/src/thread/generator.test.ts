@@ -42,9 +42,12 @@ describe("generateXThreadContent", () => {
   it("sends thread system prompt and parses JSON", async () => {
     const llm = makeLlm((req) => {
       expect(req.messages[0]!.content).toMatch(/X（Twitter）/);
-      expect(req.messages[0]!.content).toMatch(/6–15/);
+      expect(req.messages[0]!.content).toMatch(/6–8/);
+      expect(req.messages[0]!.content).toMatch(/500 字符/);
+      expect(req.messages[0]!.content).toMatch(/压缩表达或与相邻观点合并/);
       expect(req.messages[0]!.content).toMatch(/core_thesis/);
-      expect(req.messages[0]!.content).toMatch(/标新立异的短总结/);
+      expect(req.messages[0]!.content).toMatch(/内容本身提炼出的短标题/);
+      expect(req.messages[0]!.content).toMatch(/除表格外的 Markdown/);
       expect(req.messages[1]!.content).toMatch(/Structured notes/);
       expect(req.temperature).toBeCloseTo(0.55);
       return { content: threadJson, model: "m", finishReason: "stop" };
@@ -75,7 +78,7 @@ describe("parseGeneratedThreadJson", () => {
     );
   });
 
-  it("normalizes tweets without short labels", () => {
+  it("does not add fallback labels to tweets without short labels", () => {
     const raw = JSON.stringify({
       title: "Thread title",
       planning: {
@@ -92,6 +95,67 @@ describe("parseGeneratedThreadJson", () => {
         { text: "h3", angle: "技术洞察", risk: "medium" },
       ],
     });
-    expect(parseGeneratedThreadJson(raw).tweets[0]).toBe("核心判断：plain t1");
+    expect(parseGeneratedThreadJson(raw).tweets[0]).toBe("plain t1");
+  });
+
+  it("strips template labels while preserving content-derived labels and markdown", () => {
+    const raw = JSON.stringify({
+      title: "Thread title",
+      planning: {
+        core_thesis: "core",
+        conflict: "conflict",
+        key_points: ["p1", "p2", "p3", "p4"],
+        reader_gain: "gain",
+        final_post: "final",
+      },
+      tweets: [
+        "**核心公式：**Harness = Agent - Model",
+        "**Codex 验证闭环：**用 `linter` 和截图自测",
+        "关键方法：保留内容",
+        "验证：t4",
+        "工具：t5",
+        "读者收益：知道怎么落地",
+      ],
+      hooks: [
+        { text: "h1", angle: "反直觉", risk: "low" },
+        { text: "h2", angle: "实用收益", risk: "low" },
+        { text: "h3", angle: "技术洞察", risk: "medium" },
+      ],
+    });
+    expect(parseGeneratedThreadJson(raw).tweets).toEqual([
+      "Harness = Agent - Model",
+      "**Codex 验证闭环：**用 `linter` 和截图自测",
+      "保留内容",
+      "验证：t4",
+      "工具：t5",
+      "知道怎么落地",
+    ]);
+  });
+
+  it("rejects markdown tables in generated tweets", () => {
+    const raw = JSON.stringify({
+      title: "Thread title",
+      planning: {
+        core_thesis: "core",
+        conflict: "conflict",
+        key_points: ["p1", "p2", "p3", "p4"],
+        reader_gain: "gain",
+        final_post: "final",
+      },
+      tweets: [
+        "判断：t1",
+        "误区：t2",
+        "方法：| A | B |\n| --- | --- |\n| ok | yes |",
+        "验证：t4",
+        "工具：t5",
+        "收益：t6",
+      ],
+      hooks: [
+        { text: "h1", angle: "反直觉", risk: "low" },
+        { text: "h2", angle: "实用收益", risk: "low" },
+        { text: "h3", angle: "技术洞察", risk: "medium" },
+      ],
+    });
+    expect(() => parseGeneratedThreadJson(raw)).toThrow(/markdown table in tweets\[2\]/);
   });
 });

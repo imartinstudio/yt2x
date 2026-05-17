@@ -62,14 +62,15 @@ export const ArticleOptionsSchema = z.object({
 });
 export type ArticleOptions = z.infer<typeof ArticleOptionsSchema>;
 
-export const PublishFormatSchema = z.enum(["long", "thread"]);
+export const PublishFormatSchema = z.enum(["article", "thread"]);
 
 export const PublishOptionsSchema = z.object({
   publishDryRun: z.boolean().default(false),
-  /** `long`：单条长文（默认）；`thread`：按条数拆成串推 */
-  format: PublishFormatSchema.default("long"),
-  maxChars: z.coerce.number().int().min(1).default(25_000),
-  maxTweets: z.coerce.number().int().min(1).default(25),
+  /** `article`：长文章草稿 / 预览（默认）；`thread`：按生成串推发布 */
+  format: PublishFormatSchema.default("article"),
+  maxChars: z.coerce.number().int().min(1).default(500),
+  maxTweets: z.coerce.number().int().min(1).max(10).default(8),
+  threadDelay: z.string().default("20-30"),
 });
 export type PublishOptions = z.infer<typeof PublishOptionsSchema>;
 

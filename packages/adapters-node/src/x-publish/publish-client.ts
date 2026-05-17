@@ -16,6 +16,14 @@ export const X_API_BASE = "https://api.x.com";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const randomDelayMs = (range: { min: number; max: number }): number => {
+  const min = Math.max(0, Math.floor(range.min));
+  const max = Math.max(min, Math.floor(range.max));
+  return min + Math.floor(Math.random() * (max - min + 1));
+};
+
 export type CreateXPublishAdapterOptions = {
   tokenSource: TokenSource;
   /** 注入 fetch（测试用）。 */
@@ -248,6 +256,9 @@ export const createXPublishAdapter = (
     let replyTo: string | undefined;
     let partial: PostThreadResult["partialFailure"];
     for (let i = 0; i < input.tweets.length; i += 1) {
+      if (i > 0 && input.replyDelayMs !== undefined) {
+        await sleep(randomDelayMs(input.replyDelayMs));
+      }
       const text = input.tweets[i]!;
       const tweetInput: PostTweetInput = { text };
       if (replyTo !== undefined) tweetInput.replyToTweetId = replyTo;

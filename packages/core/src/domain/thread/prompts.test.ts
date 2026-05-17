@@ -4,7 +4,9 @@ import { buildThreadUserPrompt, THREAD_X_SYSTEM_PROMPT } from "./prompts.js";
 describe("THREAD_X_SYSTEM_PROMPT", () => {
   it("defines a dedicated X thread task", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/X（Twitter）/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/6–15/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/6–8/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/最多 500 字符/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/压缩表达或与相邻观点合并/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/每条 tweet 只讲一个信息点/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/core_thesis/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/final_post/);
@@ -27,13 +29,30 @@ describe("THREAD_X_SYSTEM_PROMPT", () => {
 
   it("requires labeled tweet structure and content-derived length", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/后续 tweet 数量取决于视频内容中的真实观点密度/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/标新立异的短总结：正文/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/内容本身提炼出的短标题/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要套用固定模板标签/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/key_points 必须有 4–6 项/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要展开具体步骤、配置项或教程细节/);
   });
 
+  it("requires bold colon labels in tweets", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/\*\*xxxx：\*\*/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/\*\*关键判断：\*\*正文/);
+  });
+
+  it("forbids markdown tables in generated tweets", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/禁止在 tweets 中使用 Markdown 表格/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/编号列表、要点列表或「字段：值」短行/);
+  });
+
+  it("preserves useful markdown except tables inside tweet text", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/tweets 字段内部可以包含除表格外的 Markdown/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/加粗、行内代码、代码块、有序列表、无序列表、链接、引用/);
+  });
+
   it("requires strict JSON for thread and hooks", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/严格 JSON/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要用 Markdown 代码围栏包裹 JSON/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/仅作为内部元数据/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/"planning"/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/"tweets"/);

@@ -12,7 +12,7 @@ const runNativePublish = async (flags: PublishFlags): Promise<void> => {
 export const registerPublishCommand = (program: Command): void => {
   const cmd = program
     .command("publish")
-    .description("Publish article to X as one long post (default) or a reply thread.");
+    .description("Preview article or publish generated X short/thread content.");
 
   addCommonSourceOptions(cmd)
     .option("--video-id <id>", "Video id under --article-out-dir")
@@ -23,12 +23,13 @@ export const registerPublishCommand = (program: Command): void => {
     )
     .option("--article-dir <path>", "Explicit article dir (skips auto-discovery)")
     .option("--profile <name>", "Credentials profile", "default")
-    .option("--publish-max-chars <n>", "Long-post char limit (default 25000) or per-tweet with --thread")
+    .option("--publish-max-chars <n>", "Per-tweet character limit for x-thread (default 500)")
     .option("--max-chars <n>", "Alias of --publish-max-chars")
-    .option("--target <target>", "Publish target: x-longform|x-thread|x-short")
-    .option("--thread-source <source>", "Thread source: generated|article|auto", "article")
-    .option("--thread", "Split into reply thread (280 chars/tweet) instead of one long post", false)
-    .option("--max-tweets <n>", "Max tweets when using --thread", "25")
+    .option("--target <target>", "Publish target: article|x-thread|x-short|x-thread-short")
+    .option("--thread-source <source>", "Thread source: generated|article|auto", "generated")
+    .option("--thread", "Compatibility alias for --target x-thread", false)
+    .option("--max-tweets <n>", "Max tweets when publishing x-thread (default 8; x-thread-short default 10)")
+    .option("--thread-delay <seconds|range>", "Delay between thread tweets in seconds (default 20-30; 0 disables)")
     .option("--numbering", "Prefix tweets with ①②③ (thread mode only)", false)
     .option("--continue-on-failure", "Keep posting remaining tweets if one fails (thread mode)", false)
     .option("--dry-run", "Preview without calling X API", false)

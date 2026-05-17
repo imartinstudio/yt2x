@@ -9,9 +9,9 @@
  */
 
 export type ArticleToThreadOptions = {
-  /** 每条推最大字符数。X 默认 280；Premium 用户可到 25000，但默认走 280 最稳。 */
+  /** 每条推最大加权字符数；yt2x 默认按当前发布策略使用 500。 */
   maxChars?: number;
-  /** 整个 thread 最多多少条；默认 25。 */
+  /** 整个 thread 最多多少条；默认 8。 */
   maxTweets?: number;
   /** 是否给每条推加 ①②③ 编号。默认 false（让用户自由控制）。 */
   numbering?: boolean;
@@ -22,8 +22,8 @@ export type ArticleToLongPostOptions = {
   maxChars?: number;
 };
 
-const DEFAULT_MAX_CHARS = 280;
-const DEFAULT_MAX_TWEETS = 25;
+const DEFAULT_MAX_CHARS = 500;
+const DEFAULT_MAX_TWEETS = 8;
 /** X Premium 长文单条上限（非 Premium 账号请用串推 `--thread` + `--max-chars 280`） */
 export const DEFAULT_LONG_POST_MAX_CHARS = 25_000;
 
@@ -106,21 +106,68 @@ export const truncateToWeightedLength = (text: string, maxWeighted: number): str
   return piece;
 };
 
-/** 去掉 markdown 标记，保留人能阅读的纯文本。 */
-export const stripMarkdown = (md: string): string => {
-  return md
+const toMathematicalBold = (text: string): string => {
+  let out = "";
+  for (const cp of text) {
+    const code = cp.codePointAt(0)!;
+    if (code >= 0x41 && code <= 0x5a) {
+      out += String.fromCodePoint(0x1d400 + (code - 0x41));
+    } else if (code >= 0x61 && code <= 0x7a) {
+      out += String.fromCodePoint(0x1d41a + (code - 0x61));
+    } else if (code >= 0x30 && code <= 0x39) {
+      out += String.fromCodePoint(0x1d7ce + (code - 0x30));
+    } else {
+      out += cp;
+    }
+  }
+  return out;
+};
+
+/**
+ * X 发布前文本准备 hook。
+ *
+ * 目标是保留信息内容，移除或转换 X post 不适合直接展示的 Markdown 壳：
+ * - 图片移除，链接保留可读文本
+ * - Markdown 加粗转成 X 可见的 Unicode bold（中文等无对应字形的字符保持原样）
+ * - 有序列表保留编号，无序列表转成 `•`
+ * - 任务列表、表格、引用、脚注转换为可读文本
+ * - 代码块保留代码内容但去掉围栏
+ */
+export const prepareTextForXPublish = (input: string): string => {
+  return input
+    .replace(/`{3}[^\n`]*\n?([\s\S]*?)`{3}/g, (_m, code: string) => code.trim())
     .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\*\*([^*\n](?:[^*]|\*(?!\*))*)\*\*/g, (_m, text: string) => toMathematicalBold(text))
+    .replace(/__([^_\n](?:[^_]|_(?!_))*)__/g, (_m, text: string) => toMathematicalBold(text))
+    .replace(/^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$/gm, "")
+    .replace(/^[ \t]*((?:\d+\/\s*)?)\|(.+)\|[ \t]*$/gm, (_m, prefix: string, row: string) =>
+      prefix +
+      String(row)
+        .split("|")
+        .map((cell) => cell.trim())
+        .filter((cell) => cell.length > 0)
+        .join(" ｜ "),
+    )
+    .replace(/([^\n]*｜[^\n]*)\n{2,}(?=[^\n]*｜)/g, "$1\n")
+    .replace(/^[ \t]*[-*+][ \t]+\[[ xX]\][ \t]+/gm, (marker) =>
+      /x/i.test(marker) ? "☑ " : "☐ ",
+    )
     .replace(/~~([^~]+)~~/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/`{3}[\s\S]*?`{3}/g, "")
+    .replace(/^#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]*[-*+][ \t]+/gm, "• ")
+    .replace(/^[ \t]*(\d+)[.)][ \t]+/gm, "$1. ")
+    .replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, "")
+    .replace(/\[\^([^\]]+)\]/g, "($1)")
+    .replace(/^[ \t]{0,3}>[ \t]?/gm, "引用：")
     .replace(/[*_`>]/g, "")
-    .replace(/^\s*[-*]\s+/gm, "• ")
-    .replace(/^\s*\d+\.\s+/gm, "")
     .replace(/\|\|/g, "｜")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 };
+
+/** 兼容旧命名：去掉 / 转换 markdown 标记，保留人能阅读的纯文本。 */
+export const stripMarkdown = prepareTextForXPublish;
 
 /**
  * 把一段超长文本按句末标点切成 ≤ maxChars 的 chunk。

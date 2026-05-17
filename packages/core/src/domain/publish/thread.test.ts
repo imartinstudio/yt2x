@@ -2,12 +2,56 @@ import { describe, expect, it } from "vitest";
 import {
   articleToLongPost,
   articleToThread,
+  prepareTextForXPublish,
   splitToChunks,
   stripMarkdown,
   threadNumber,
   truncateToWeightedLength,
   tweetLength,
 } from "./thread.js";
+
+describe("prepareTextForXPublish", () => {
+  it("normalizes markdown constructs before X publish", () => {
+    const input = [
+      "# **标题**",
+      "",
+      "- [x] 完成",
+      "- 待办",
+      "1. 第一步",
+      "",
+      "| Key | Value |",
+      "| --- | --- |",
+      "| API | ok |",
+      "",
+      "> quoted",
+      "",
+      "```bash",
+      "pnpm test",
+      "```",
+      "",
+      "参考[^1]",
+    ].join("\n");
+
+    expect(prepareTextForXPublish(input)).toBe(
+      [
+        "标题",
+        "",
+        "☑ 完成",
+        "• 待办",
+        "1. 第一步",
+        "",
+        "Key ｜ Value",
+        "API ｜ ok",
+        "",
+        "引用：quoted",
+        "",
+        "pnpm test",
+        "",
+        "参考(1)",
+      ].join("\n"),
+    );
+  });
+});
 
 describe("tweetLength", () => {
   it("counts ASCII as 1 each", () => {
@@ -57,11 +101,35 @@ describe("stripMarkdown", () => {
   it("removes inline emphasis chars", () => {
     expect(stripMarkdown("*bold* _ital_ `code` >quote")).toBe("bold ital code quote");
   });
-  it("converts bullets to •", () => {
-    expect(stripMarkdown("- a\n- b")).toBe("• a\n• b");
+  it("converts markdown bold to visible X unicode bold where possible", () => {
+    expect(stripMarkdown("**API v2：**中文 __Bold 123__")).toBe("𝐀𝐏𝐈 𝐯𝟐：中文 𝐁𝐨𝐥𝐝 𝟏𝟐𝟑");
   });
-  it("drops fenced code blocks entirely", () => {
-    expect(stripMarkdown("before\n```\nx=1\ny=2\n```\nafter")).toBe("before\n\nafter");
+  it("preserves blank lines before lists", () => {
+    expect(stripMarkdown("第一段。\n\n1. 第一项\n2. 第二项\n\n结尾。")).toBe(
+      "第一段。\n\n1. 第一项\n2. 第二项\n\n结尾。",
+    );
+  });
+  it("converts unordered bullets to •", () => {
+    expect(stripMarkdown("- a\n* b\n+ c")).toBe("• a\n• b\n• c");
+  });
+  it("preserves ordered list numbering", () => {
+    expect(stripMarkdown("1. a\n2) b\n10. c")).toBe("1. a\n2. b\n10. c");
+  });
+  it("preserves fenced code content without fence markers", () => {
+    expect(stripMarkdown("before\n```ts\nconst x = 1;\n```\nafter")).toBe("before\nconst x = 1;\nafter");
+  });
+  it("converts task list markers to checkbox glyphs", () => {
+    expect(stripMarkdown("- [ ] todo\n- [x] done\n* [X] shipped")).toBe("☐ todo\n☑ done\n☑ shipped");
+  });
+  it("converts markdown tables to pipe-separated text and removes divider rows", () => {
+    const md = "| Name | Value |\n| --- | --- |\n| API | ok |";
+    expect(stripMarkdown(md)).toBe("Name ｜ Value\nAPI ｜ ok");
+  });
+  it("converts blockquotes and removes horizontal rules", () => {
+    expect(stripMarkdown("> quoted\n\n---\n\nbody")).toBe("引用：quoted\n\nbody");
+  });
+  it("keeps footnote ids as readable references", () => {
+    expect(stripMarkdown("claim[^1]\n\n[^1]: source")).toBe("claim(1)\n\n(1): source");
   });
   it("collapses 3+ newlines to 2", () => {
     expect(stripMarkdown("a\n\n\n\nb")).toBe("a\n\nb");
@@ -106,7 +174,7 @@ describe("truncateToWeightedLength", () => {
 describe("articleToLongPost", () => {
   it("returns stripped markdown as one body", () => {
     const post = articleToLongPost("# Title\n\nHello **world**.");
-    expect(post).toContain("Hello world");
+    expect(post).toContain("Hello 𝐰𝐨𝐫𝐥𝐝");
     expect(post).not.toContain("**");
   });
 

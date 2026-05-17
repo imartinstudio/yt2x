@@ -79,8 +79,8 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
     printCliErrorBlock({
       command: "article",
       reason: err instanceof Error ? err.message : String(err),
-      hints: ["Use --targets x-longform,x-thread,x-short or --targets all."],
-      retryCommand: "pnpm yt2x article --video-id <videoId> --targets x-longform",
+      hints: ["Use --targets article,x-thread,x-short or --targets all."],
+      retryCommand: "pnpm yt2x article --video-id <videoId> --targets article",
     });
     return NATIVE_EXIT.CONFIG_MISSING;
   }
@@ -173,7 +173,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           // 无截图清单时保持纯文本
         }
 
-    if (outputTargets.includes("x-longform")) {
+    if (outputTargets.includes("article")) {
         const result = await generateXArticleContent({
           llm: llm.adapter,
           model: llm.model,
@@ -220,7 +220,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             durationMs: result.durationMs,
             usage: result.usage,
           },
-          "article generated (native x longform)",
+          "article generated (native article)",
         );
       }
 

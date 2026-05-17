@@ -8,6 +8,8 @@ yt2x 处于 v0.1 开源前打磨期：
 
 - CLI first。
 - 全阶段 native：`acquire`、`notes`、`article`、`publish`、`pipeline`。
+- 已支持多目标内容生成与发布预览：`article`、`x-thread`、`x-short`、`x-thread-short`。
+- 已支持可控视觉素材链路：`acquire --keyframes` 生成截图 manifest，内容生成阶段使用 `available_visuals`，长文、串推和短文只引用真实可用截图，发布阶段可消费配图计划。
 - npm 包仍保持 `private: true`，公开发布放在最后。
 - 默认使用本地 clone + `pnpm yt2x`。
 
@@ -38,8 +40,6 @@ yt2x 处于 v0.1 开源前打磨期：
 - 更好的多账号 X profile 管理。
 - 发布失败后的重试、回滚或断点续发策略。
 - 更丰富的平台模板，例如 WeChat / newsletter。
-- 按发布目标生成内容：支持 `article --targets` / `pipeline --targets`，允许自由组合生成 `article`、`x-thread`、`x-short`；发布阶段支持 `article | x-thread | x-short | x-thread-short` 单目标，其中 `article` 暂不通过 X API 自动发布，`x-thread-short` 会用 short 做首推、thread 做连续回复。详细任务说明见 [X-TARGET-OUTPUT-TASK.md](./X-TARGET-OUTPUT-TASK.md)。
-- 可控视觉素材链路：从关键帧截图池生成 `available_visuals`，让长文/串推/短文只选择真实截图，并过滤屏幕中间为主播人像的候选帧。详细任务说明见 [VISUAL-CONTENT-TASK.md](./VISUAL-CONTENT-TASK.md)。
 
 ## 不在 v0.1 范围
 

@@ -262,8 +262,12 @@ export const createXPublishAdapter = (
       const text = input.tweets[i]!;
       const tweetInput: PostTweetInput = { text };
       if (replyTo !== undefined) tweetInput.replyToTweetId = replyTo;
-      if (i === 0 && input.firstTweetMediaIds !== undefined) {
-        tweetInput.mediaIds = input.firstTweetMediaIds;
+      const mediaIds = [
+        ...(i === 0 && input.firstTweetMediaIds !== undefined ? input.firstTweetMediaIds : []),
+        ...(input.tweetMediaIds?.[i] ?? []),
+      ];
+      if (mediaIds.length > 0) {
+        tweetInput.mediaIds = mediaIds;
       }
       if (input.signal !== undefined) tweetInput.signal = input.signal;
       try {

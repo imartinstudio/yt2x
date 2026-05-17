@@ -206,6 +206,28 @@ describe("createXPublishAdapter.postThread", () => {
     expect(bodies[1].media).toBeUndefined();
   });
 
+  it("attaches tweetMediaIds to their matching thread replies", async () => {
+    let i = 0;
+    const fetcher = vi.fn(async (_u, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      i += 1;
+      return okTweet(String(i), body.text);
+    });
+    const adapter = createXPublishAdapter({
+      tokenSource: makeTokenSource(),
+      fetcher,
+    });
+    await adapter.postThread({
+      tweets: ["one", "two", "three"],
+      firstTweetMediaIds: ["cover"],
+      tweetMediaIds: { 1: ["reply-image"], 2: ["last-image"] },
+    });
+    const bodies = fetcher.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string));
+    expect(bodies[0].media).toEqual({ media_ids: ["cover"] });
+    expect(bodies[1].media).toEqual({ media_ids: ["reply-image"] });
+    expect(bodies[2].media).toEqual({ media_ids: ["last-image"] });
+  });
+
   it("waits between thread replies when replyDelayMs is provided", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");

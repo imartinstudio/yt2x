@@ -275,6 +275,27 @@ const loadVisualMediaIds = async (
   return mediaMap;
 };
 
+const pushMediaId = (target: Record<number, string[]>, index: number, mediaId: string): void => {
+  const existing = target[index] ?? [];
+  if (existing.length >= 4) return;
+  target[index] = [...existing, mediaId];
+};
+
+export const buildThreadTweetMediaIds = (
+  threadVisuals: ThreadVisualItem[],
+  visualMediaMap: Map<string, string>,
+  opts: { offset: number; tweetCount: number },
+): Record<number, string[]> => {
+  const tweetMediaIds: Record<number, string[]> = {};
+  for (const visual of threadVisuals) {
+    const index = visual.tweet_index + opts.offset;
+    if (index < 0 || index >= opts.tweetCount) continue;
+    const mediaId = visualMediaMap.get(visual.visual_id);
+    if (mediaId !== undefined) pushMediaId(tweetMediaIds, index, mediaId);
+  }
+  return tweetMediaIds;
+};
+
 const previewVisualPlans = (
   articleDir: string,
   threadVisuals: ThreadVisualItem[],
@@ -655,6 +676,12 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
   ).catch(() => {});
 
   try {
+    const threadVisuals = threadLikeMode ? await loadThreadVisualPlans(articleDirForStatus) : [];
+    const shortVisual =
+      publishTarget === "x-short" || publishTarget === "x-thread-short"
+        ? await loadShortVisualPlan(articleDirForStatus)
+        : null;
+
     // 上传视觉配图（x-thread-visuals.json / x-short-visual.json）
     const visualMediaMap = await loadVisualMediaIds(
       articleDirForStatus,
@@ -678,19 +705,23 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       }
     }
 
-    // 收集所有视觉配图的 media_ids 加入首推
-    const allVisualMediaIds = [...visualMediaMap.values()];
     const firstTweetMediaIds: string[] = [];
     if (firstMediaId !== null) firstTweetMediaIds.push(firstMediaId);
-    for (const id of allVisualMediaIds) {
-      if (firstTweetMediaIds.length < 4) firstTweetMediaIds.push(id);
+    if (shortVisual !== null) {
+      const mediaId = visualMediaMap.get(shortVisual.visual_id);
+      if (mediaId !== undefined && firstTweetMediaIds.length < 4) firstTweetMediaIds.push(mediaId);
     }
+    const tweetMediaIds = buildThreadTweetMediaIds(threadVisuals, visualMediaMap, {
+      offset: publishMode === "thread-short" ? 1 : 0,
+      tweetCount: texts.length,
+    });
 
     let result: PostThreadResult;
     if (threadLikeMode) {
       result = await adapter.postThread({
         tweets: texts,
         ...(firstTweetMediaIds.length > 0 ? { firstTweetMediaIds } : {}),
+        ...(Object.keys(tweetMediaIds).length > 0 ? { tweetMediaIds } : {}),
         replyDelayMs: threadDelayMs,
         ...(flags.continueOnFailure === true ? { continueOnFailure: true } : {}),
       });

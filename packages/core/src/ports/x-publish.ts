@@ -25,8 +25,10 @@ export type PostTweetInput = {
 
 export type PostThreadInput = {
   tweets: string[];
-  /** 仅首推附图（X 推荐做法） */
+  /** 兼容字段：附到首推的媒体 id。 */
   firstTweetMediaIds?: string[];
+  /** 按 tweet index 附图；每条最多 4 张由调用方控制。 */
+  tweetMediaIds?: Record<number, string[]>;
   /** 每两条串推之间的随机等待区间；不传则不等待 */
   replyDelayMs?: { min: number; max: number };
   /** 中途某条失败时是否继续发剩余条；默认 false：第一次失败立即停止 */

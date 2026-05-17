@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readProcessStatusMerged } from "@yt2x/adapters-node";
-import { executeNativePublish } from "./native-publish.js";
+import { buildThreadTweetMediaIds, executeNativePublish } from "./native-publish.js";
 
 let root: string;
 
@@ -496,5 +496,52 @@ describe("executeNativePublish", () => {
     });
 
     expect(code).toBe(2);
+  });
+});
+
+describe("buildThreadTweetMediaIds", () => {
+  it("maps generated thread visuals to their target tweet indexes", () => {
+    const media = new Map([
+      ["scene_001", "m1"],
+      ["scene_002", "m2"],
+    ]);
+
+    expect(
+      buildThreadTweetMediaIds(
+        [
+          { tweet_index: 0, visual_id: "scene_001", caption: "first" },
+          { tweet_index: 2, visual_id: "scene_002", caption: "third" },
+        ],
+        media,
+        { offset: 0, tweetCount: 3 },
+      ),
+    ).toEqual({ 0: ["m1"], 2: ["m2"] });
+  });
+
+  it("offsets generated thread visuals when x-thread-short prepends a short head", () => {
+    const media = new Map([["scene_001", "m1"]]);
+
+    expect(
+      buildThreadTweetMediaIds(
+        [{ tweet_index: 0, visual_id: "scene_001", caption: "first reply" }],
+        media,
+        { offset: 1, tweetCount: 2 },
+      ),
+    ).toEqual({ 1: ["m1"] });
+  });
+
+  it("drops missing media and out-of-range visual indexes", () => {
+    const media = new Map([["scene_001", "m1"]]);
+
+    expect(
+      buildThreadTweetMediaIds(
+        [
+          { tweet_index: 0, visual_id: "missing", caption: "missing" },
+          { tweet_index: 2, visual_id: "scene_001", caption: "out of range" },
+        ],
+        media,
+        { offset: 0, tweetCount: 2 },
+      ),
+    ).toEqual({});
   });
 });

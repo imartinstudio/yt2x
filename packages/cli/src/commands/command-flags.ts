@@ -27,6 +27,7 @@ export type SingleStageFlags = {
   numbering?: boolean;
   continueFrom?: boolean;
   errorStrategy?: string;
+  force?: boolean;
   mode?: string;
   llmProvider?: string;
   llmModel?: string;

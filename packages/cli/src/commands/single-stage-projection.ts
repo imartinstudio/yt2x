@@ -72,6 +72,7 @@ export const projectSingleStage = (target: SingleStageTarget, flags: SingleStage
       outDir: flags.outDir,
       continueFlag: flags.continueFrom ?? false,
       errorStrategy: flags.errorStrategy ?? "stop",
+      force: flags.force ?? false,
     },
     llm: {
       provider,

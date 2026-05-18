@@ -33,6 +33,7 @@ yt2x 处于 v0.1 开源前打磨期：
 
 以下方向尚未承诺排期：
 
+- 内容质量规则层：提升 Article / Short / Thread 的 X 平台适配、移动端可读性、风险边界、可执行资产与质量检查，见 [CONTENT-QUALITY-TASK.md](./CONTENT-QUALITY-TASK.md)。
 - Chrome 扩展或浏览器侧工作流。
 - LLM streaming 输出。
 - 本地模型 / Ollama provider。

@@ -16,5 +16,6 @@ export const registerAcquireCommand = (program: Command): void => {
     .option("--cookies-from-browser <name>", "yt-dlp browser cookies")
     .option("--proxy <url>", "yt-dlp proxy")
     .option("--error-strategy <mode>", "On failure: stop|skip", "stop")
+    .option("--force", "Re-run acquire even when process-status marks it done")
     .action((flags: SingleStageFlags) => runAcquireStage(flags));
 };

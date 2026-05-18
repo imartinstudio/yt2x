@@ -60,6 +60,48 @@ describe("THREAD_X_SYSTEM_PROMPT", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/"tweets"/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/"hooks"/);
   });
+
+  it("requires the first tweet to stand alone without thread numbering", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/首推决定 90% 的传播效果/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/第一条 tweet 不得以串推编号/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/像一条独立 X 帖子那样成立/);
+  });
+
+  it("requires at least one executable asset tweet", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/可执行资产规则/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/至少有 1 条 tweet 提供「读者可以拿走的资产」/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/可复制 prompt、模板、检查清单、操作步骤表、风险清单或决策步骤/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不得用一句口号式总结代替资产 tweet/);
+  });
+
+  it("requires structured expression for abstract framework content", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/抽象框架表达规则/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/对比、流程或层级结构/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/对比型/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/流程型/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/层级型/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/禁止把抽象概念以连续散文堆叠/);
+  });
+
+  it("requires a risk tweet for high-trust topics", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/高信任主题风险规则/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/至少 1 条 tweet 必须是独立的风险或边界说明/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/账号锁定/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/凭证泄露/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/高信任成本主题至少为 "medium"/);
+  });
+
+  it("requires the final tweet to be a concrete CTA", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/最后一条 CTA 规则/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/具体的互动动作/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/评论区打 1/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/关注我看更多/);
+  });
+
+  it("forbids fabricated images inside tweets", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要在 tweet 文本中写虚构的图片路径或文件名/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/配图必须和对应 tweet 的具体要点绑定/);
+  });
 });
 
 describe("buildThreadUserPrompt", () => {

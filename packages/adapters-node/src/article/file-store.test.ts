@@ -6,7 +6,9 @@ import {
   findPendingNativeArticleDirs,
   readStructuredNotesArtifacts,
   writeNativeArticleBundle,
+  writeVisualSuggestions,
 } from "./file-store.js";
+import type { VisualSuggestion } from "@yt2x/core";
 
 let notesRoot: string;
 let articleRoot: string;
@@ -114,6 +116,107 @@ describe("writeNativeArticleBundle", () => {
       notesVideoDir: path.join(notesRoot, "v1"),
     });
     expect(w.coverPath).toBe(path.join(w.articleDir, "images", "cover.webp"));
+  });
+
+  it("prefers official YouTube cover over contact sheet", async () => {
+    const dir = await seedNotesVideo("v1");
+    const screenshotsDir = path.join(dir, "screenshots");
+    await mkdir(screenshotsDir, { recursive: true });
+    await writeFile(path.join(screenshotsDir, "contact_sheet.jpg"), Buffer.from([0xff, 0xd8]));
+    await writeFile(path.join(screenshotsDir, "youtube_cover.jpg"), Buffer.from([0xff, 0xd8, 0xff]));
+
+    const run = {
+      v: 1 as const,
+      platform: "x" as const,
+      videoId: "v1",
+      model: "m",
+      finishReason: "stop",
+      generatedAt: new Date().toISOString(),
+      durationMs: 1,
+    };
+    const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
+      notesVideoDir: dir,
+    });
+
+    expect(w.coverPath).toBe(path.join(w.articleDir, "images", "cover.jpg"));
+    expect(await readFile(w.coverPath!, "hex")).toBe("ffd8ff");
+  });
+});
+
+describe("writeNativeArticleBundle cover fallback", () => {
+  it("falls back to contact_sheet only when no other screenshots exist", async () => {
+    const dir = await seedNotesVideo("v1");
+    const screenshotsDir = path.join(dir, "screenshots");
+    await mkdir(screenshotsDir, { recursive: true });
+    await writeFile(path.join(screenshotsDir, "contact_sheet.jpg"), Buffer.from([0xff, 0xd8]));
+
+    const run = {
+      v: 1 as const,
+      platform: "x" as const,
+      videoId: "v1",
+      model: "m",
+      finishReason: "stop",
+      generatedAt: new Date().toISOString(),
+      durationMs: 1,
+    };
+    const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
+      notesVideoDir: dir,
+    });
+    expect(w.coverPath).toBe(path.join(w.articleDir, "images", "cover.jpg"));
+  });
+
+  it("prefers any keyframe screenshot over contact_sheet when no youtube cover", async () => {
+    const dir = await seedNotesVideo("v1");
+    const screenshotsDir = path.join(dir, "screenshots");
+    await mkdir(screenshotsDir, { recursive: true });
+    await writeFile(path.join(screenshotsDir, "contact_sheet.jpg"), Buffer.from([0xff, 0xd8]));
+    await writeFile(path.join(screenshotsDir, "scene_03.webp"), Buffer.from([0x52, 0x49]));
+
+    const run = {
+      v: 1 as const,
+      platform: "x" as const,
+      videoId: "v1",
+      model: "m",
+      finishReason: "stop",
+      generatedAt: new Date().toISOString(),
+      durationMs: 1,
+    };
+    const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
+      notesVideoDir: dir,
+    });
+    expect(w.coverPath).toBe(path.join(w.articleDir, "images", "cover.webp"));
+  });
+});
+
+describe("writeVisualSuggestions", () => {
+  it("writes the suggestions JSON and returns its path", async () => {
+    const articleDir = path.join(articleRoot, "v1");
+    await mkdir(articleDir, { recursive: true });
+    const suggestions: VisualSuggestion[] = [
+      {
+        kind: "diagram",
+        target_section: "完整流程",
+        description: "示例说明",
+        priority: "high",
+        trigger: "流程",
+      },
+    ];
+    const written = await writeVisualSuggestions(articleDir, suggestions);
+    expect(written).toBe(path.join(articleDir, "visual-suggestions.json"));
+    const parsed = JSON.parse(await readFile(written!, "utf8")) as {
+      v: number;
+      suggestions: VisualSuggestion[];
+    };
+    expect(parsed.v).toBe(1);
+    expect(parsed.suggestions.length).toBe(1);
+    expect(parsed.suggestions[0]!.kind).toBe("diagram");
+  });
+
+  it("skips writing when suggestions array is empty", async () => {
+    const articleDir = path.join(articleRoot, "v2");
+    await mkdir(articleDir, { recursive: true });
+    const written = await writeVisualSuggestions(articleDir, []);
+    expect(written).toBeNull();
   });
 });
 

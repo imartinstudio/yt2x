@@ -205,6 +205,86 @@ pnpm yt2x publish --video-id <videoId> --target x-thread-short --dry-run
 
 `x-thread.md` 发布时用行首 `1/`、`2/`、`3/` 作为 tweet 边界，单条 tweet 内部的空行、列表和代码块会保留到同一条回复中。发布前会把 Markdown 转成 X 兼容文本：加粗中的英文 / 数字转为 Unicode bold，中文保持原字形；列表、代码块、链接、引用等会按 X 可读形式转换。
 
+## 内容质量 warning
+
+`yt2x article` / `pnpm yt2x pipeline --article auto` 在生成 `article.md` / `x-short.md` / `x-thread.md` 之后会运行一组**纯函数**质量检查，命中任意规则时以 `warn` 级别日志输出，但**不会阻断**产物落盘。warning 来自 `@yt2x/core` 的 `checkArticleQuality` / `checkShortQuality` / `checkThreadQuality`，规则定义在 `docs/CONTENT-QUALITY-TASK.md`。
+
+常见 warning code 与含义：
+
+| Code                                              | 含义                                                          |
+| ------------------------------------------------- | ------------------------------------------------------------- |
+| `article.title-not-bold`                          | H1 未写成 `# **标题**` 格式                                   |
+| `article.lead-too-long`                           | 导语超过 120 字，移动端首屏会被截断                           |
+| `article.no-sections`                             | 缺少 `## **小节标题**`，无法建立扫描节奏                      |
+| `article.long-paragraph`                          | 出现 ≥250 字的超长段落，需要拆分                              |
+| `article.too-many-consecutive-paragraphs`         | 连续 >2 个正文段落未插入列表 / 引用 / 代码块 / 图片等视觉锚点 |
+| `article.missing-risk-section`                    | 主题命中高信任成本场景但缺少 `## **风险与适用边界**` 小节     |
+| `article.missing-executable-asset`                | 文章没有 prompt / 模板 / 清单 / 步骤 / 决策树等可执行资产     |
+| `article.summary-tone-hook`                       | 导语以「本视频介绍」「近年来」等摘要腔开头                    |
+| `article.author-phrase`                           | 出现禁用词「视频作者」                                        |
+| `short.list-out-of-range`                         | Short list item 不在 4–6 之间                                 |
+| `short.no-executable-item`                        | Short 缺少至少 1 条可执行要点（命令、prompt、模板、检查项）   |
+| `short.missing-risk-reminder`                     | 高信任主题 short 缺少独立风险提醒 list item                   |
+| `short.summary-tone-hook` / `short.author-phrase` | 首句摘要腔 / 出现「视频作者」                                 |
+| `thread.tweets-out-of-range`                      | tweet 数不在 6–10 条                                          |
+| `thread.tweet-too-long`                           | 单条 tweet 超过 500 字符                                      |
+| `thread.first-tweet-numbering`                    | 首推以 `1/` / `本视频` 等串推编号或摘要腔开头                 |
+| `thread.first-tweet-summary-tone`                 | 首推首句命中摘要腔禁用词                                      |
+| `thread.no-executable-tweet`                      | 整条 thread 缺少模板 / 清单 / 步骤 / 风险 tweet               |
+| `thread.missing-risk-tweet`                       | 高信任主题缺少独立风险 / 边界 tweet                           |
+| `thread.author-phrase`                            | 出现禁用词「视频作者」                                        |
+
+处理建议：
+
+- warning 仅作为「这条产物不符合 X 信息流内容产品规则」的提示，不会阻断你继续 publish。
+- 如果对该次生成结果不满意，可以删除 `article.md` 等产物后用 `--force` 重跑；warning 命中越多越值得重生成。
+- 高信任成本主题（外区账号、礼品卡、OAuth、cookies、自动发布等）建议处理掉所有 `missing-risk-*` warning 再发布，避免误导读者。
+
+## 视觉建议产物 `visual-suggestions.json`
+
+生成 `article` 目标时，如果文章中存在抽象框架、流程、对比、模板或风险类小节，会同时在 `files/articles/<videoId>/visual-suggestions.json` 写入一份「这篇 article 适合配什么样的图」的建议（仅当至少有 1 条建议时写入，否则跳过）。
+
+文件结构示例：
+
+```json
+{
+  "v": 1,
+  "suggestions": [
+    {
+      "kind": "diagram",
+      "target_section": "完整流程",
+      "description": "建议在小节「完整流程」插入流程图：用节点 + 箭头表达「输入 → 处理 → 验证 → 输出」式步骤。",
+      "priority": "high",
+      "trigger": "流程"
+    }
+  ]
+}
+```
+
+字段含义：
+
+- `kind`：`ui-screenshot` / `diagram` / `comparison` / `template-card` / `none`。
+- `target_section`：建议对应的 `##` 小节标题（去掉加粗符号）。
+- `description`：人类可读的图片需求描述。
+- `priority`：`high` / `medium` / `low`，建议越高越值得优先做图。
+- `trigger`：命中该建议的关键词。
+
+约束：
+
+- 视觉建议只描述「应该生成什么图」，**不会**修改 `article.md` 正文，也不会写入虚构图片路径。
+- 如果当前版本没有图表生成能力，可以把建议作为人工出图或对接图表渲染服务的输入。
+- 没有命中任何视觉建议时不会写文件，目录保持干净。
+
+## 文章封面选择规则
+
+`writeNativeArticleBundle` 在复制封面到 `files/articles/<videoId>/images/cover.*` 时，按以下优先级选择源文件：
+
+1. `youtube_cover.*`（YouTube 官方封面）
+2. 任意非 `contact_sheet.*` 的截图（通常是关键帧）
+3. `contact_sheet.*`（拼图缩略，最低优先级）
+
+实现位于 `@yt2x/core` 的 `pickArticleCoverFromCandidates`，纯函数，单测覆盖。`contact_sheet.*` 仅在没有其他可用图片时才会被选中，避免拼图缩略图当默认封面。
+
 ## 续跑与批次队列
 
 - **`yt2x pipeline --continue-from`**：在 **`--out-dir`** 下扫描已有 **`metadata.json`** 或 **`process-status.json`** 的视频子目录恢复队列（**不再**读写根目录 `pipeline-state.json`）。

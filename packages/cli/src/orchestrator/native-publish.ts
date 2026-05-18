@@ -11,6 +11,7 @@ import {
   createXPublishAdapter,
   defaultCredentialsPath,
   findArticleArtifacts,
+  findCoverImage,
   isValidVideoId,
   loadTweetImageFromPath,
   patchProcessStatus,
@@ -23,6 +24,7 @@ import {
   articleToLongPost,
   articleToThread,
   isXPublishError,
+  prepareTextForXPublish,
   tweetLength,
   type PostThreadResult,
 } from "@yt2x/core";
@@ -41,7 +43,8 @@ export type PublishFlags = SingleStageFlags & {
   maxChars?: string;
   publishMaxChars?: string;
   maxTweets?: string;
-  /** 发布目标；默认兼容旧行为：long 或 --thread */
+  threadDelay?: string;
+  /** 发布目标；默认 article 只预览；--thread 兼容旧串推行为 */
   target?: string;
   /** x-thread 来源；generated=x-thread.md，article=article.md 机械切分，auto=优先 generated */
   threadSource?: string;
@@ -58,6 +61,7 @@ const EXIT_AUTH = NATIVE_EXIT.LLM_AUTH;
 const EXIT_PARTIAL = NATIVE_EXIT.PARTIAL_FAILURE;
 const EXIT_RATE_LIMITED = 7;
 const EXIT_SERVER = 8;
+const DEFAULT_THREAD_REPLY_DELAY_MS = { min: 20_000, max: 30_000 } as const;
 
 const exitFromPublishKind = (kind: string): number => {
   if (kind === "AUTH" || kind === "FORBIDDEN") return EXIT_AUTH;
@@ -75,17 +79,77 @@ const parsePositiveInt = (raw: string | undefined, fallback: number, label: stri
   return n;
 };
 
-type PublishTarget = "x-longform" | "x-thread" | "x-short";
+const parseMaxTweets = (raw: string | undefined, fallback: number): number => {
+  const n = parsePositiveInt(raw, fallback, "max-tweets");
+  if (n > 10) {
+    throw new Error(`Invalid --max-tweets: "${String(raw ?? n)}" (expected integer between 1 and 10)`);
+  }
+  return n;
+};
+
+const parseThreadDelayMs = (raw: string | undefined): { min: number; max: number } => {
+  if (raw === undefined || raw.trim().length === 0) return DEFAULT_THREAD_REPLY_DELAY_MS;
+  const normalized = raw.trim();
+  const match = /^(\d+)(?:-(\d+))?$/u.exec(normalized);
+  if (match === null) {
+    throw new Error(`Invalid --thread-delay: "${raw}" (expected seconds or range like 20-30)`);
+  }
+  const minSeconds = Number.parseInt(match[1]!, 10);
+  const maxSeconds = match[2] === undefined ? minSeconds : Number.parseInt(match[2], 10);
+  if (maxSeconds < minSeconds) {
+    throw new Error(`Invalid --thread-delay: "${raw}" (range end must be greater than or equal to start)`);
+  }
+  return { min: minSeconds * 1000, max: maxSeconds * 1000 };
+};
+
+type PublishTarget = "article" | "x-thread" | "x-short" | "x-thread-short";
 type ThreadSource = "generated" | "article" | "auto";
+type PublishMode = "article" | "thread" | "short" | "thread-short";
+
+const THREAD_ITEM_START_RE = /^[ \t]*(?:\d+\/|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])(?:[ \t]|$)/u;
+
+const parseGeneratedThreadMarkdown = (raw: string): string[] => {
+  const blocks: string[] = [];
+  let current: string[] = [];
+
+  for (const line of raw.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("# ") && current.length === 0) continue;
+
+    if (THREAD_ITEM_START_RE.test(line)) {
+      if (current.length > 0) blocks.push(current.join("\n").trim());
+      current = [line.trimStart()];
+      continue;
+    }
+
+    if (current.length > 0) current.push(line);
+  }
+
+  if (current.length > 0) blocks.push(current.join("\n").trim());
+  if (blocks.length > 0) return blocks;
+
+  return raw
+    .split(/\n{2,}/u)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0 && !block.startsWith("# "));
+};
 
 const parsePublishTarget = (raw: string | undefined, legacyThreadMode: boolean): PublishTarget => {
-  if (raw === undefined) return legacyThreadMode ? "x-thread" : "x-longform";
-  if (raw === "x-longform" || raw === "x-thread" || raw === "x-short") return raw;
-  throw new Error(`Invalid --target: "${raw}" (expected x-longform, x-thread, or x-short)`);
+  if (raw === undefined) return legacyThreadMode ? "x-thread" : "article";
+  if (raw === "article" || raw === "x-thread" || raw === "x-short" || raw === "x-thread-short") return raw;
+  if (raw === "x-longform") return "article";
+  throw new Error(`Invalid --target: "${raw}" (expected article, x-thread, x-short, or x-thread-short)`);
+};
+
+const publishModeForTarget = (target: PublishTarget): PublishMode => {
+  if (target === "article") return "article";
+  if (target === "x-thread") return "thread";
+  if (target === "x-short") return "short";
+  return "thread-short";
 };
 
 const parseThreadSource = (raw: string | undefined): ThreadSource => {
-  if (raw === undefined) return "article";
+  if (raw === undefined) return "generated";
   if (raw === "generated" || raw === "article" || raw === "auto") return raw;
   throw new Error(`Invalid --thread-source: "${raw}" (expected generated, article, or auto)`);
 };
@@ -111,33 +175,40 @@ const resolveArticleDirForTarget = (flags: PublishFlags, articleRootDir: string)
 const loadGeneratedThreadTexts = async (
   articleDir: string,
   maxTweets: number,
+  maxChars: number,
 ): Promise<{ texts: string[]; source: "x-thread.md" }> => {
   const threadPath = path.join(articleDir, "x-thread.md");
   const raw = await readFile(threadPath, "utf8");
-  const texts = raw
-    .split(/\n{2,}/u)
+  const texts = parseGeneratedThreadMarkdown(raw)
     .map((block) => block.trim())
-    .filter((block) => block.length > 0 && !block.startsWith("# "))
-    .map((block) => block.replace(/^\d+\/\s*/u, "").trim())
+    .map((block) => prepareTextForXPublish(block, { orderedListStyle: "circled" }))
     .filter((block) => block.length > 0)
     .slice(0, maxTweets);
   if (texts.length === 0) {
     throw new Error(`${threadPath} did not contain any publishable tweets.`);
   }
+  const tooLongIndex = texts.findIndex((text) => tweetLength(text) > maxChars);
+  if (tooLongIndex >= 0) {
+    throw new Error(
+      `${threadPath} tweet #${tooLongIndex + 1} exceeds ${maxChars} weighted characters. Regenerate x-thread.md so long source paragraphs are compressed or merged instead of truncated.`,
+    );
+  }
   return { texts, source: "x-thread.md" };
 };
 
-const loadGeneratedShortText = async (
-  articleDir: string,
-  maxChars: number,
-): Promise<{ texts: string[]; source: "x-short.md" }> => {
+const loadGeneratedShortText = async (articleDir: string): Promise<{ texts: string[]; source: "x-short.md" }> => {
   const shortPath = path.join(articleDir, "x-short.md");
   const raw = await readFile(shortPath, "utf8");
-  const text = articleToLongPost(raw, { maxChars });
+  const text = prepareTextForXPublish(raw, { orderedListStyle: "decimal" });
   if (text.length === 0) {
     throw new Error(`${shortPath} did not contain a publishable short post.`);
   }
   return { texts: [text], source: "x-short.md" };
+};
+
+const appendDownPointingEmoji = (text: string): string => {
+  const trimmed = text.trimEnd();
+  return trimmed.endsWith("👇") ? trimmed : `${trimmed}👇`;
 };
 
 const loadThreadVisualPlans = async (
@@ -204,6 +275,27 @@ const loadVisualMediaIds = async (
   return mediaMap;
 };
 
+const pushMediaId = (target: Record<number, string[]>, index: number, mediaId: string): void => {
+  const existing = target[index] ?? [];
+  if (existing.length >= 4) return;
+  target[index] = [...existing, mediaId];
+};
+
+export const buildThreadTweetMediaIds = (
+  threadVisuals: ThreadVisualItem[],
+  visualMediaMap: Map<string, string>,
+  opts: { offset: number; tweetCount: number },
+): Record<number, string[]> => {
+  const tweetMediaIds: Record<number, string[]> = {};
+  for (const visual of threadVisuals) {
+    const index = visual.tweet_index + opts.offset;
+    if (index < 0 || index >= opts.tweetCount) continue;
+    const mediaId = visualMediaMap.get(visual.visual_id);
+    if (mediaId !== undefined) pushMediaId(tweetMediaIds, index, mediaId);
+  }
+  return tweetMediaIds;
+};
+
 const previewVisualPlans = (
   articleDir: string,
   threadVisuals: ThreadVisualItem[],
@@ -224,18 +316,52 @@ const previewVisualPlans = (
   }
 };
 
-const previewPublishTexts = (texts: string[], threadMode: boolean): void => {
-  if (threadMode) {
+const buildSourceReplyText = (videoUrl: string): string => `👇完整视频：\n${videoUrl}`;
+
+const previewPublishTexts = (
+  texts: string[],
+  mode: PublishMode,
+  sourceReplyText: string | null,
+): void => {
+  if (mode === "thread-short") {
+    const head = texts[0] ?? "";
+    const replies = texts.slice(1);
+    process.stdout.write(
+      `\n── X thread-short 首推（加权字数 ${tweetLength(head)} / ${head.length} 字符）──\n${head}\n`,
+    );
+    for (let i = 0; i < replies.length; i += 1) {
+      process.stdout.write(`\n── Reply ${i + 1}/${replies.length} ──\n${replies[i]!}\n`);
+    }
+    if (sourceReplyText !== null) {
+      process.stdout.write(`\n── 来源回复 ──\n${sourceReplyText}\n`);
+    }
+    process.stdout.write("\n");
+    return;
+  }
+  if (mode === "thread") {
     for (let i = 0; i < texts.length; i += 1) {
       process.stdout.write(`\n── Tweet ${i + 1}/${texts.length} ──\n${texts[i]!}\n`);
+    }
+    if (sourceReplyText !== null) {
+      process.stdout.write(`\n── 来源回复 ──\n${sourceReplyText}\n`);
     }
     process.stdout.write("\n");
     return;
   }
   const body = texts[0] ?? "";
+  if (mode === "article") {
+    process.stdout.write(
+      `\n── Article 预览（${body.length} 字符）──\n${body}\n\n`,
+    );
+    return;
+  }
   process.stdout.write(
-    `\n── X 长文预览（加权字数 ${tweetLength(body)} / ${body.length} 字符）──\n${body}\n\n`,
+    `\n── X short post 预览（加权字数 ${tweetLength(body)} / ${body.length} 字符）──\n${body}\n`,
   );
+  if (sourceReplyText !== null) {
+    process.stdout.write(`\n── 来源回复 ──\n${sourceReplyText}\n`);
+  }
+  process.stdout.write("\n");
 };
 
 /** 供 `pipeline` 编排器与 `yt2x publish` 调用；返回进程退出码。 */
@@ -273,18 +399,33 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       command: "publish",
       subject: flags.videoId,
       reason: err instanceof Error ? err.message : String(err),
-      hints: ["Use --target x-longform, --target x-thread, or --target x-short."],
-      retryCommand: `pnpm yt2x publish --video-id ${flags.videoId} --target x-longform --dry-run`,
+      hints: ["Use --target article, --target x-thread, --target x-short, or --target x-thread-short."],
+      retryCommand: `pnpm yt2x publish --video-id ${flags.videoId} --target article --dry-run`,
     });
     return EXIT_CONFIG_MISSING;
   }
-  const threadMode = publishTarget === "x-thread";
-  const maxChars = parsePositiveInt(
-    flags.publishMaxChars ?? flags.maxChars,
-    threadMode ? 280 : 25_000,
-    "max-chars",
-  );
-  const maxTweets = threadMode ? parsePositiveInt(flags.maxTweets, 25, "max-tweets") : 1;
+  const publishMode = publishModeForTarget(publishTarget);
+  const threadMode = publishMode === "thread";
+  const threadLikeMode = publishMode === "thread" || publishMode === "thread-short";
+  let maxChars: number;
+  let maxTweets: number;
+  let threadDelayMs: { min: number; max: number } = DEFAULT_THREAD_REPLY_DELAY_MS;
+  try {
+    maxChars = parsePositiveInt(flags.publishMaxChars ?? flags.maxChars, 500, "max-chars");
+    maxTweets = threadLikeMode ? parseMaxTweets(flags.maxTweets, publishMode === "thread-short" ? 10 : 8) : 1;
+    if (threadLikeMode) threadDelayMs = parseThreadDelayMs(flags.threadDelay);
+  } catch (err: unknown) {
+    printCliErrorBlock({
+      command: "publish",
+      subject: flags.videoId,
+      reason: err instanceof Error ? err.message : String(err),
+      hints: [
+        "Use --max-tweets between 1 and 10. Default is 8 for x-thread and 10 for x-thread-short.",
+        "Use --thread-delay seconds or a range like 20-30; use 0 to disable waiting.",
+      ],
+    });
+    return EXIT_CONFIG_MISSING;
+  }
   const isDryRun = flags.dryRun === true || flags.publishDryRun === true;
 
   let articleDirForStatus = resolveArticleDirForTarget(flags, articleRootDir);
@@ -297,27 +438,29 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       articleRootDir,
     };
     if (flags.articleDir !== undefined) findInput.articleDir = flags.articleDir;
-    if (publishTarget === "x-longform") {
+    if (publishTarget === "article") {
       const artifacts = await findArticleArtifacts(findInput);
       articleDirForStatus = artifacts.articleDir;
       coverPath = artifacts.coverPath;
-      texts = buildPublishTexts(artifacts.articleContent, {
-        threadMode: false,
-        maxChars,
-        maxTweets,
-        numbering: false,
-      });
+      texts = [artifacts.articleContent.trim()].filter((text) => text.length > 0);
     } else if (publishTarget === "x-short") {
-      const loaded = await loadGeneratedShortText(articleDirForStatus, maxChars);
+      const loaded = await loadGeneratedShortText(articleDirForStatus);
       source = loaded.source;
       texts = loaded.texts;
+      coverPath = await findCoverImage(articleDirForStatus);
+    } else if (publishTarget === "x-thread-short") {
+      const short = await loadGeneratedShortText(articleDirForStatus);
+      const thread = await loadGeneratedThreadTexts(articleDirForStatus, maxTweets, maxChars);
+      source = `${short.source} + ${thread.source}`;
+      texts = [appendDownPointingEmoji(short.texts[0]!), ...thread.texts];
+      coverPath = await findCoverImage(articleDirForStatus);
     } else if (threadSource === "generated") {
-      const loaded = await loadGeneratedThreadTexts(articleDirForStatus, maxTweets);
+      const loaded = await loadGeneratedThreadTexts(articleDirForStatus, maxTweets, maxChars);
       source = loaded.source;
       texts = loaded.texts;
     } else if (threadSource === "auto") {
       try {
-        const loaded = await loadGeneratedThreadTexts(articleDirForStatus, maxTweets);
+        const loaded = await loadGeneratedThreadTexts(articleDirForStatus, maxTweets, maxChars);
         source = loaded.source;
         texts = loaded.texts;
       } catch (err: unknown) {
@@ -371,49 +514,60 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
   }
 
   const youtubeVideoDir = path.join(path.resolve(flags.outDir ?? DEFAULT_OUT_DIR), flags.videoId);
+  const pageUrl = await readYoutubePageUrl(youtubeVideoDir, flags.videoId);
+  const sourceReplyText =
+    publishMode === "thread" || publishMode === "short" || publishMode === "thread-short"
+      ? buildSourceReplyText(pageUrl)
+      : null;
 
   if (isDryRun) {
     // 加载视觉计划用于预览
-    const threadVisuals = threadMode ? await loadThreadVisualPlans(articleDirForStatus) : [];
-    const shortVisual = publishTarget === "x-short" ? await loadShortVisualPlan(articleDirForStatus) : null;
+    const threadVisuals = threadLikeMode ? await loadThreadVisualPlans(articleDirForStatus) : [];
+    const shortVisual =
+      publishTarget === "x-short" || publishTarget === "x-thread-short"
+        ? await loadShortVisualPlan(articleDirForStatus)
+        : null;
 
     logger.info(
       {
         articleDir: articleDirForStatus,
-        format: publishTarget === "x-short" ? "short" : threadMode ? "thread" : "long",
+        format: publishMode,
         source,
         parts: texts.length,
         coverPath,
         maxChars,
+        ...(threadLikeMode ? { threadDelayMs } : {}),
         ...(threadVisuals.length > 0 ? { threadVisuals: threadVisuals.length } : {}),
         ...(shortVisual !== null ? { shortVisual: shortVisual.visual_id } : {}),
       },
-      publishTarget === "x-short"
+      publishMode === "short"
         ? "yt2x publish (native) --dry-run: short preview below"
-        : threadMode
+        : threadLikeMode
           ? "yt2x publish (native) --dry-run: thread preview below"
-          : "yt2x publish (native) --dry-run: long post preview below",
+          : "yt2x publish (native) --dry-run: article preview below",
     );
-    previewPublishTexts(texts, threadMode);
-    previewVisualPlans(articleDirForStatus, threadVisuals, shortVisual, threadMode);
+    previewPublishTexts(texts, publishMode, sourceReplyText);
+    previewVisualPlans(articleDirForStatus, threadVisuals, shortVisual, threadLikeMode);
     if (coverPath !== null) {
       logger.info(
         { coverPath },
         "Dry-run: cover would be uploaded on real publish (requires media.write).",
       );
     }
-    const pageUrl = await readYoutubePageUrl(youtubeVideoDir, flags.videoId);
     const previewFile = path.join(articleDirForStatus, "publish-preview.json");
     const payload = {
       profile,
-      format: publishTarget === "x-short" ? "short" : threadMode ? "thread" : "long",
-      mode: publishTarget === "x-short" ? "short" : threadMode ? "thread" : "long",
+      format: publishMode,
+      mode: publishMode,
       source,
       maxChars,
       maxTweets,
       coverPath,
+      ...(threadLikeMode ? { threadDelayMs } : {}),
       ...(threadMode ? { tweets: texts } : {}),
-      ...(publishTarget === "x-short" ? { text: texts[0] ?? "" } : {}),
+      ...(publishMode === "thread-short" ? { text: texts[0] ?? "", replies: texts.slice(1), tweets: texts } : {}),
+      ...(publishTarget === "x-short" || publishTarget === "article" ? { text: texts[0] ?? "" } : {}),
+      ...(sourceReplyText !== null ? { sourceReply: sourceReplyText } : {}),
       parts: texts.map((text, index) => ({
         index,
         text,
@@ -438,6 +592,17 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       },
     ).catch(() => {});
     return 0;
+  }
+
+  if (publishTarget === "article") {
+    printCliErrorBlock({
+      command: "publish",
+      subject: flags.videoId,
+      reason: "Article targets are draft/preview only because X does not expose a public Article publishing API.",
+      details: "Use --dry-run to preview article.md, or publish --target x-thread / --target x-short / --target x-thread-short for API-backed posts.",
+      hints: ["Run `pnpm yt2x publish --video-id <videoId> --target article --dry-run` to preview the article."],
+    });
+    return EXIT_CONFIG_MISSING;
   }
 
   const store = createTokenStore();
@@ -495,14 +660,13 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
     {
       profile,
       handle: user?.user?.username,
-      format: threadMode ? "thread" : "long",
+      format: publishMode,
       parts: texts.length,
       articleDir: articleDirForStatus,
     },
-    threadMode ? "yt2x publish (native): posting thread" : "yt2x publish (native): posting long post",
+    threadLikeMode ? "yt2x publish (native): posting thread" : "yt2x publish (native): posting short post",
   );
 
-  const pageUrl = await readYoutubePageUrl(youtubeVideoDir, flags.videoId);
   const publishT0 = Date.now();
   await patchStepRunning(
     youtubeVideoDir,
@@ -512,6 +676,12 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
   ).catch(() => {});
 
   try {
+    const threadVisuals = threadLikeMode ? await loadThreadVisualPlans(articleDirForStatus) : [];
+    const shortVisual =
+      publishTarget === "x-short" || publishTarget === "x-thread-short"
+        ? await loadShortVisualPlan(articleDirForStatus)
+        : null;
+
     // 上传视觉配图（x-thread-visuals.json / x-short-visual.json）
     const visualMediaMap = await loadVisualMediaIds(
       articleDirForStatus,
@@ -528,26 +698,29 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
         logger.info({ mediaId: firstMediaId, coverPath }, "Cover uploaded");
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        logger.warn(
-          { coverPath, err: message },
-          threadMode ? "Cover upload failed; posting text-only thread" : "Cover upload failed; posting text-only",
-        );
+        logger.error({ coverPath, err: message }, "Cover upload failed; aborting publish");
+        throw new Error(`Cover image upload failed for ${coverPath}: ${message}`);
       }
     }
 
-    // 收集所有视觉配图的 media_ids 加入首推
-    const allVisualMediaIds = [...visualMediaMap.values()];
     const firstTweetMediaIds: string[] = [];
     if (firstMediaId !== null) firstTweetMediaIds.push(firstMediaId);
-    for (const id of allVisualMediaIds) {
-      if (firstTweetMediaIds.length < 4) firstTweetMediaIds.push(id);
+    if (shortVisual !== null) {
+      const mediaId = visualMediaMap.get(shortVisual.visual_id);
+      if (mediaId !== undefined && firstTweetMediaIds.length < 4) firstTweetMediaIds.push(mediaId);
     }
+    const tweetMediaIds = buildThreadTweetMediaIds(threadVisuals, visualMediaMap, {
+      offset: publishMode === "thread-short" ? 1 : 0,
+      tweetCount: texts.length,
+    });
 
     let result: PostThreadResult;
-    if (threadMode) {
+    if (threadLikeMode) {
       result = await adapter.postThread({
         tweets: texts,
         ...(firstTweetMediaIds.length > 0 ? { firstTweetMediaIds } : {}),
+        ...(Object.keys(tweetMediaIds).length > 0 ? { tweetMediaIds } : {}),
+        replyDelayMs: threadDelayMs,
         ...(flags.continueOnFailure === true ? { continueOnFailure: true } : {}),
       });
     } else {
@@ -562,14 +735,27 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       };
     }
 
+    const sourceReplyParent = result.tweets.at(-1);
+    const sourceReplyTweet =
+      sourceReplyText !== null && sourceReplyParent !== undefined
+        ? await adapter.postTweet({
+            text: sourceReplyText,
+            replyToTweetId: sourceReplyParent.id,
+          })
+        : null;
+
     const resultFile = path.join(articleDirForStatus, "publish-result.json");
     const payload = {
       profile,
       handle: user?.user?.username ?? null,
-      format: threadMode ? "thread" : "long",
+      format: publishMode,
       ...(result.threadUrl !== undefined ? { threadUrl: result.threadUrl } : {}),
       firstMediaId,
       tweets: result.tweets.map((t) => ({ id: t.id, text: t.text })),
+      sourceReply:
+        sourceReplyTweet !== null
+          ? { id: sourceReplyTweet.id, text: sourceReplyTweet.text, inReplyToTweetId: sourceReplyParent!.id }
+          : null,
       partialFailure: result.partialFailure ?? null,
       publishedAt: new Date().toISOString(),
     };
@@ -608,7 +794,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
           message: result.partialFailure.message,
           resultFile,
         },
-        threadMode ? "Thread partially published" : "Publish partially completed",
+        threadLikeMode ? "Thread partially published" : "Publish partially completed",
       );
       return EXIT_PARTIAL;
     }
@@ -616,7 +802,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       {
         threadUrl: result.threadUrl,
         tweets: result.tweets.length,
-        format: threadMode ? "thread" : "long",
+        format: publishMode,
         resultFile,
       },
       "yt2x publish (native): done",

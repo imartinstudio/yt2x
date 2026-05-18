@@ -36,7 +36,7 @@ const ThreadHookSchema = z.object({
 const ThreadPlanningSchema = z.object({
   core_thesis: z.string().min(1),
   conflict: z.string().min(1),
-  key_points: z.array(z.string().min(1)).min(4).max(6),
+  key_points: z.array(z.string().min(1)).min(4).max(12),
   reader_gain: z.string().min(1),
   final_post: z.string().min(1),
 });
@@ -44,7 +44,7 @@ const ThreadPlanningSchema = z.object({
 const TweetSchema = z.string().min(1);
 
 const ThreadVisualSchema = z.object({
-  tweet_index: z.number().int().min(0).max(14),
+  tweet_index: z.number().int().min(0).max(9),
   visual_id: z.string().min(1),
   caption: z.string().min(1),
 });
@@ -52,13 +52,15 @@ const ThreadVisualSchema = z.object({
 const GeneratedThreadSchema = z.object({
   title: z.string().min(1),
   planning: ThreadPlanningSchema,
-  tweets: z.array(TweetSchema).min(6).max(15),
+  tweets: z.array(TweetSchema).min(6).max(10),
   hooks: z.array(ThreadHookSchema).min(3).max(8),
   visuals: z.array(ThreadVisualSchema).max(3).optional(),
 });
 
-const TWEET_LABEL_RE = /^[^：:\n]{2,24}[：:]\s*\S/u;
-const FALLBACK_LABELS = [
+const MARKDOWN_TABLE_DIVIDER_RE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+const MARKDOWN_TABLE_ROW_RE = /^\s*\|.+\|\s*$/;
+const TEMPLATE_TWEET_LABELS = new Set([
+  "核心公式",
   "核心判断",
   "主要误区",
   "关键方法",
@@ -74,22 +76,44 @@ const FALLBACK_LABELS = [
   "行动建议",
   "系统思维",
   "讨论入口",
-] as const;
+]);
 
-const ensureTweetLabel = (tweet: string, index: number): string => {
+const TEMPLATE_TWEET_LABEL_RE = /^\s*(?:\*\*)?([^：:\n]{2,24})([：:])(?:\*\*)?\s*/u;
+
+const stripTemplateTweetLabel = (tweet: string): string => {
   const text = tweet.trim();
-  if (TWEET_LABEL_RE.test(text)) return text;
-  const label = FALLBACK_LABELS[index] ?? `要点${index + 1}`;
-  return `${label}：${text}`;
+  const match = text.match(TEMPLATE_TWEET_LABEL_RE);
+  const label = match?.[1]?.trim();
+  if (match === null || label === undefined || !TEMPLATE_TWEET_LABELS.has(label)) return text;
+  return text.slice(match[0].length).trim();
+};
+
+const hasMarkdownTable = (text: string): boolean =>
+  text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .some((line) => MARKDOWN_TABLE_DIVIDER_RE.test(line) || MARKDOWN_TABLE_ROW_RE.test(line));
+
+const assertNoMarkdownTables = (tweets: string[]): void => {
+  const index = tweets.findIndex((tweet) => hasMarkdownTable(tweet));
+  if (index >= 0) {
+    throw new Error(
+      `Thread LLM response contains a markdown table in tweets[${index}]. Regenerate x-thread content as numbered lists, bullet lists, or field/value lines instead of tables.`,
+    );
+  }
 };
 
 const normalizeThread = (
   raw: z.infer<typeof GeneratedThreadSchema>,
 ): GeneratedThread => {
+  assertNoMarkdownTables(raw.tweets);
   const thread: GeneratedThread = {
     title: raw.title,
-    planning: raw.planning,
-    tweets: raw.tweets.map((tweet, index) => ensureTweetLabel(tweet, index)),
+    planning: {
+      ...raw.planning,
+      key_points: raw.planning.key_points.slice(0, 6),
+    },
+    tweets: raw.tweets.map((tweet) => stripTemplateTweetLabel(tweet)),
     hooks: raw.hooks,
   };
   if (raw.visuals !== undefined && raw.visuals.length > 0) {

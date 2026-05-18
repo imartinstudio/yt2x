@@ -5,6 +5,8 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
   it("defines a dedicated X short post task", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/X（Twitter）/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/只生成 1 条短帖正文/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不设置固定字数上限/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/精炼表达核心判断/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/一句话核心总结/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/内容总结 list/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/至少 4 条具体 list item/);
@@ -26,8 +28,10 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
   });
 
   it("allows an in-post list but forbids thread formatting", () => {
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/可以在单条短帖内部使用 1\. 2\. 3\./);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要写成 1\/、2\//);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/可以在单条短帖内部使用 `1\. 2\. 3\.`/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/无序列表使用/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要写成 `1\/`、`2\/`/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要使用数字 emoji/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要输出多个备选版本/);
   });
 
@@ -35,6 +39,53 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/严格 JSON/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/"text"/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/"angle"/);
+  });
+
+  it("requires bold headings and colon labels", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/\*\*xxxx：\*\*/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/\*\*核心判断：\*\*正文/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/1\. \*\*关键步骤：\*\*正文/);
+  });
+
+  it("forbids markdown tables in generated short posts", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/禁止在短帖中使用 Markdown 表格/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/编号列表、要点列表或「字段：值」短行/);
+  });
+
+  it("preserves useful markdown except tables inside short text", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/text 字段内部可以包含除表格外的 Markdown/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/加粗、行内代码、代码块、有序列表、无序列表、链接、引用/);
+  });
+
+  it("requires strong judgment hook in the first sentence", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/第一句必须是判断或反差/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不到 3 秒/);
+  });
+
+  it("requires at least one executable list item", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/可执行资产规则/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/至少有 1 条要在「可被复用、可被立刻执行」的层级/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不需要回看视频或文章/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不得编造命令、参数、链接或来源/);
+  });
+
+  it("requires a risk reminder for high-trust topics", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/高信任主题风险规则/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/账号注册/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/凭证泄露/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/list 中必须至少有 1 条独立的风险提醒/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/高信任成本主题至少为 "medium"/);
+  });
+
+  it("forbids mechanical CTA and engagement bait", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/CTA 必须具体到「让读者完成什么动作」/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/评论区打 1/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/点赞收藏/);
+  });
+
+  it("forbids fabricated images inside short text", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要在 text 中写虚构的图片路径或文件名/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/配图必须和短帖里的某个具体要点绑定/);
   });
 });
 

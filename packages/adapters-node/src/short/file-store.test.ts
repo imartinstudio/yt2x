@@ -24,6 +24,15 @@ describe("renderXShortMarkdown", () => {
   it("renders one short post", () => {
     expect(renderXShortMarkdown(shortPost)).toBe("one useful short post\n");
   });
+
+  it("preserves markdown formatting inside generated short posts", () => {
+    expect(
+      renderXShortMarkdown({
+        ...shortPost,
+        text: "**核心：**保留 `code`\n\n1. item\n\n```bash\npnpm test\n```",
+      }),
+    ).toBe("**核心：**保留 `code`\n\n1. item\n\n```bash\npnpm test\n```\n");
+  });
 });
 
 describe("writeNativeShortBundle", () => {

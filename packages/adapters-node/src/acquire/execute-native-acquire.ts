@@ -37,6 +37,7 @@ export type NativeAcquireOptions = {
   control: {
     continueFlag: boolean;
     errorStrategy: "stop" | "skip";
+    force?: boolean;
   };
   flags: { verbose: boolean };
   runner?: ProcessRunner;
@@ -116,7 +117,14 @@ const printAcquireFailure = (
   }
 };
 
-const shouldSkipAcquireForVideo = async (outDir: string, rawVideoId: string): Promise<boolean> => {
+const shouldSkipAcquireForVideo = async (
+  outDir: string,
+  rawVideoId: string,
+  force: boolean,
+): Promise<boolean> => {
+  if (force) {
+    return false;
+  }
   const videoId = sanitizeVideoId(rawVideoId);
   const videoDir = path.join(outDir, videoId);
   if (await isStepDone(videoDir, "acquire")) {
@@ -159,7 +167,7 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
 
   for (const video of queue) {
     const videoId = sanitizeVideoId(video.video_id);
-    if (await shouldSkipAcquireForVideo(outDir, videoId)) {
+    if (await shouldSkipAcquireForVideo(outDir, videoId, control.force === true)) {
       continue;
     }
 

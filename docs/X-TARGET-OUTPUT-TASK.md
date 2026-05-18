@@ -87,7 +87,7 @@ N/ <短观点标签：开放问题、明确判断或读者收益，引导回复>
 - `x-thread.md` 正文不写 Markdown 标题，直接从 `1/` 开始；JSON 里的 `title` 仅作内部元数据。
 - 生成前先提炼 `core_thesis`、`conflict`、`key_points`、`reader_gain`、`final_post`，第一条参考 `x-short` 的判断式开头。
 - 第一条是整条串推的独立总述，不承载原文第一个知识点；从第二条开始才逐条展开原文观点、步骤或验证方法。
-- tweets 数量由视频中的真实观点或知识点决定，通常 6–15 条，不按 Markdown 段落粗暴拆分。
+- tweets 数量由视频中的真实观点或知识点决定，通常 6–8 条，不按 Markdown 段落粗暴拆分，最多 10 条。
 - 每条 tweet 都必须使用「短观点标签：正文」格式，冒号前是 2–12 个字左右的总结，冒号后才展开正文。
 - `key_points` 必须有 4–6 个有信息增量的内容要点，不能只是章节标题。
 
@@ -132,6 +132,8 @@ N/ <短观点标签：开放问题、明确判断或读者收益，引导回复>
 - [x] Task 6: Pipeline targets
 - [x] Task 7: Publish generated targets
 - [x] Task 8: Documentation updates
+- [x] Task 9: Cross-platform article target and X post limits
+- [x] Task 10: X thread-short publish target and cover media
 
 ### Task 1: Core target types and parsing
 
@@ -139,13 +141,13 @@ N/ <短观点标签：开放问题、明确判断或读者收益，引导回复>
 
 范围：
 
-- 定义内容生成目标：`x-longform`、`x-thread`、`x-short`、`all`。
+- 定义内容生成目标：`article`、`x-thread`、`x-short`、`all`。
 - 实现逗号分隔 `--targets` 的解析和去重。
-- 保持默认目标为 `x-longform`，确保不传 `--targets` 时行为不变。
+- 保持默认目标为 `article`，确保不传 `--targets` 时行为不变。
 
 验收：
 
-- `all` 等价于 `x-longform,x-thread,x-short`。
+- `all` 等价于 `article,x-thread,x-short`。
 - 重复目标只执行一次。
 - 非法目标给出清晰错误。
 - 有纯函数单测覆盖默认值、组合值、`all`、非法值。
@@ -192,7 +194,7 @@ type GeneratedThread = {
 
 - 有 prompt 构造单测。
 - prompt 明确禁止编造、标题党、逐段复述。
-- prompt 要求 8-15 条串推，每条只讲一个信息点。
+- prompt 要求通常 6–8 条串推、最多 10 条，每条只讲一个信息点。
 
 完成后标记：
 
@@ -296,7 +298,7 @@ packages/cli/src/args/single-stage.ts
 pnpm yt2x article --video-id <videoId>
 pnpm yt2x article --video-id <videoId> --targets x-thread
 pnpm yt2x article --video-id <videoId> --targets x-short
-pnpm yt2x article --video-id <videoId> --targets x-longform,x-thread,x-short
+pnpm yt2x article --video-id <videoId> --targets article,x-thread,x-short
 pnpm yt2x article --video-id <videoId> --targets all
 ```
 
@@ -314,8 +316,8 @@ pnpm yt2x article --video-id <videoId> --targets all
 验收：
 
 - 不传 `--targets` 时保持当前行为，只生成 `article.md`。
-- `--targets` 支持 `x-longform`、`x-thread`、`x-short`、`all` 和逗号分隔自由组合。
-- `--targets all` 等价于 `x-longform,x-thread,x-short`。
+- `--targets` 支持 `article`、`x-thread`、`x-short`、`all` 和逗号分隔自由组合。
+- `--targets all` 等价于 `article,x-thread,x-short`。
 - `--video-id` 继续使用现有安全校验。
 - 不要求真实 YouTube URL 或真实视频 ID。
 
@@ -340,20 +342,20 @@ pnpm yt2x pipeline \
 
 建议先实现最小兼容：
 
-- `--targets x-longform`：现有 article 行为。
+- `--targets article`：现有 article 行为。
 - `--targets x-thread`：执行 notes 后生成 `x-thread.md` 和 `x-hooks.json`。
 - `--targets x-short`：执行 notes 后生成 `x-short.md`。
-- `--targets x-longform,x-thread,x-short`：执行 notes 后生成全部三类内容。
-- `--targets all`：等价于 `x-longform,x-thread,x-short`。
+- `--targets article,x-thread,x-short`：执行 notes 后生成全部三类内容。
+- `--targets all`：等价于 `article,x-thread,x-short`。
 - 默认值保持当前行为，避免破坏现有用户。
 
 验收：
 
 - 默认 pipeline 行为不变。
 - 生成阶段使用复数 `--targets`，支持一个或多个输出目标。
-- `--targets x-thread` 不生成 `article.md`，除非用户显式要求 `x-longform`。
+- `--targets x-thread` 不生成 `article.md`，除非用户显式要求 `article`。
 - `--targets x-short` 不生成 `article.md` 或 `x-thread.md`，除非用户显式要求。
-- `--targets x-longform` 仍走现有 article 阶段。
+- `--targets article` 仍走现有 article 阶段。
 - publish 阶段后续使用单数 `--target`，一次只发布一种目标。
 
 完成后标记：
@@ -420,6 +422,155 @@ pnpm yt2x pipeline \
 完成后标记：
 
 - [x] Task 8 complete
+
+### Task 9: Cross-platform article target and X post limits
+
+状态：已完成
+
+背景：
+
+当前实现把 `x-longform` 同时用于“生成长文章草稿”和“发布为 X long post”，语义不清。X 上的内容发布应区分为两大类：
+
+- `article`：长文章草稿。当前 X 没有对外开放 Article 发布 API，因此暂不走 API 自动发布。
+- `post`：可通过 X API 发布的 post 内容，其中 `x-thread` 是串推，`x-short` 是单篇 post。
+
+目标语义：
+
+```text
+publish target
+  article
+    -> article.md
+    -> 不调用 X API 自动发布
+
+  x-thread
+    -> x-thread.md
+    -> 通过 X API 发布 reply thread
+
+  x-short
+    -> x-short.md
+    -> 通过 X API 发布单篇 post
+```
+
+范围：
+
+- 将生成目标中的 `x-longform` 改为跨平台命名 `article`。
+- 发布目标改为 `article | x-thread | x-short | x-thread-short`。
+- 保留必要的兼容迁移逻辑：旧的 `x-longform` 可作为输入别名解析为 `article`，但文档不再推荐。
+- `article` 目标只生成 / 预览 `article.md`，真实发布阶段不得调用 X API。
+- `x-short` 不设置固定字数上限，但必须精炼表达核心判断，不能把长文压缩成流水账。
+- `x-thread` 单条默认上限改为 500 字符。
+- `x-thread` 默认生成 / 发布最多 8 条，允许显式配置 1-10 条，超过 10 条报错。
+- `x-thread` prompt 应表达“通常 6-8 条”，不能继续要求 8-15 或 6-15 条。
+- `x-thread` 是主要观点总结，不是按原文段落截取；段落或观点超过 500 字符时必须压缩表达或与相邻观点合并，不能截断尾部或舍弃关键事实。
+- `x-thread.md` 和 `x-short.md` 禁止生成 Markdown 表格；对比、参数、步骤或结构化信息必须在生成阶段改写成编号列表、要点列表或「字段：值」短行。
+- `x-thread.md` 和 `x-short.md` 除表格外应保留有助于阅读的 Markdown，例如加粗、行内代码、代码块、有序列表、无序列表、链接、引用、分隔段落和空行。
+- `x-thread.md` 发布读取时必须以行首 `1/`、`2/`、`3/` 作为 tweet 边界，单条 tweet 内部的空行、列表、代码块不能被误切成多条回复。
+- 发布前 Markdown 转换 hook 会把加粗中的英文 / 数字转为 X 可见的 Unicode bold；中文等没有通用 Unicode 粗体字形的字符保持原字形。
+- `x-thread` 不得由程序补充「核心公式：」「读者收益：」「关键方法：」等模板化标题；如需小标题，只保留 LLM 基于内容提炼出的自然标题。
+- `articleToThread(article.md)` 机械切分路径应降级为兼容路径，不作为默认推荐发布方式。
+- `x-short` 和 `x-thread` 发布成功后，都必须在评论区追加一条来源回复：
+
+```text
+👇完整视频：
+<YOUTUBE_URL>
+```
+
+其中 `<YOUTUBE_URL>` 只是文档占位符；实际发布和 dry-run 预览时必须替换为采集阶段保存的原视频地址。
+
+- `x-thread-short` 发布时，`x-short.md` 作为首推，`x-thread.md` 全部作为回复依次发布，来源回复挂在最后一条成功回复后。
+- `x-short` 和 `x-thread-short` 发布首推时应尽量附带 `images/cover.*` 封面图。
+- 真实发布 `x-thread` / `x-thread-short` 时，每两条推文之间默认随机等待 20-30 秒，可通过发布参数配置。
+
+建议实施顺序：
+
+1. Core target schema
+   - 把 `ARTICLE_OUTPUT_TARGETS` 从 `x-longform,x-thread,x-short` 调整为 `article,x-thread,x-short`。
+   - `all` 展开为 `article,x-thread,x-short`。
+   - `parseArticleOutputTargets` 接受旧值 `x-longform`，内部归一为 `article`，并去重。
+   - 更新相关单测：默认值、`all`、别名、非法值。
+
+2. Article generation orchestration
+   - `executeNativeArticle` 中把长文章生成分支从 `x-longform` 改为 `article`。
+   - `article.md`、`run.json` 文件名保持不变。
+   - CLI 帮助和错误提示使用 `article,x-thread,x-short,all`。
+   - `--targets x-longform` 继续可用，但只作为兼容别名。
+
+3. X post limits
+   - 移除 short post 固定字数上限，prompt 改为强调精炼核心。
+   - 把 generated thread 每条默认发布上限调整为 500。
+   - 把 thread 默认 `maxTweets` 调整为 8。
+   - 对 `--max-tweets` 增加 1-10 校验，超过 10 直接报错。
+   - 同步 core prompt：thread 通常 6-8 条、最多 10 条；short 不设固定上限但必须精炼核心。
+   - 同步 core prompt：thread / short 禁止使用 Markdown 表格，结构化信息改用编号列表、要点列表或「字段：值」短行。
+   - 同步生成解析和落盘测试：除表格外保留加粗、代码块、列表、链接、引用、空行等 Markdown。
+   - 发布读取 `x-thread.md` 时按行首 `N/` 识别 tweet 边界，保留单条 tweet 内部空行。
+   - 记录发布前 Markdown 转换策略：加粗英文 / 数字转 Unicode bold，中文保持原字形。
+   - 移除 thread 程序兜底标题，清理「核心公式：」「读者收益：」等模板化前缀，只保留 LLM 内容提炼标题。
+   - generated thread 发布预览不得静默截断超长 tweet；如果 `x-thread.md` 中单条超过上限，应报错并要求重新生成压缩 / 合并后的串推。
+
+4. Publish target semantics
+   - `publish --target article`：支持 dry-run / review 预览 `article.md`，写入 `publish-preview.json`，但真实 publish 明确报错并说明 X Article 当前无 API 自动发布。
+   - `publish --target x-thread`：使用 `x-thread.md`，默认 `--thread-source generated` 或等价行为。
+   - `publish --target x-short`：使用 `x-short.md`。
+   - `x-thread` 成功发布主 thread 后，在最后一条成功 tweet 下追加包含原视频地址的“👇完整视频：”来源回复。
+   - `x-short` 成功发布主 post 后，在该 post 下追加包含原视频地址的“👇完整视频：”来源回复。
+   - 来源回复使用采集阶段保存的 YouTube 原视频地址；dry-run / review 预览中必须显示替换后的真实来源 URL。
+   - 旧 `--thread` 保留为兼容开关，但文档推荐 `--target x-thread`。
+   - 旧 `--target x-longform` 如需兼容，应归一到 `article`，不能再静默发 long post。
+
+5. Data contracts and docs
+   - 更新 `README.md`、`docs/USAGE.md`、`docs/DATA-CONTRACTS.md`、`docs/ROADMAP.md`。
+   - 文档示例统一使用占位符 `<YOUTUBE_URL>`、`<videoId>`。
+   - 明确说明 `article` 当前是草稿 / 预览目标，不通过 X API 自动发布。
+   - 明确说明 X API 自动发布覆盖 `x-thread`、`x-short` 和 `x-thread-short`。
+
+验收：
+
+- `article --targets article` 生成 `article.md`。
+- `article --targets x-longform` 仍能生成 `article.md`，但内部归一为 `article`。
+- `article --targets all` 等价于 `article,x-thread,x-short`。
+- `publish --target article --dry-run` 写入 `publish-preview.json`，不调用 X API。
+- `publish --target article` 在非 dry-run 下返回清晰错误，不调用 X API。
+- `publish --target x-thread --dry-run` 默认最多 8 条，每条不超过 500 字符。
+- `publish --target x-thread --max-tweets 11` 报错。
+- `publish --target x-thread --dry-run` 遇到超过 500 字符的 generated tweet 时直接报错，不截断尾部、不丢弃内容。
+- `publish --target x-short --dry-run` 不按 `--publish-max-chars` 截断内容，但生成 prompt 必须要求精炼核心。
+- `publish --target x-thread --dry-run` 的预览包含来源回复，格式为 `👇完整视频：\n<原视频地址>`。
+- `publish --target x-short --dry-run` 的预览包含来源回复，格式为 `👇完整视频：\n<原视频地址>`。
+- 真实发布 `x-thread` 时，来源回复挂在最后一条成功 tweet 下。
+- 真实发布 `x-short` 时，来源回复挂在主 post 下。
+- `pnpm run check` 和相关单测通过。
+
+完成后标记：
+
+- [x] Task 9 complete
+
+### Task 10: X thread-short publish target and cover media
+
+状态：已完成
+
+范围：
+
+- 新增 `publish --target x-thread-short`。
+- 读取 `x-short.md` 作为首推，读取 `x-thread.md` 作为后续回复，按顺序发布。
+- `x-thread-short` dry-run 写入 `mode: "thread-short"`、`text`、`replies`、完整 `tweets` 和 `sourceReply`。
+- `x-thread-short` 真实发布时复用 thread 发布链路，来源回复挂在最后一条成功 tweet 下。
+- `x-short` 与 `x-thread-short` 发布首推时查找 `images/cover.*` 或根目录 `cover.*`，有 `media.write` 时上传并附在首推。
+- thread 发布链路支持每两条推文之间随机等待，默认 20-30 秒，可通过 `--thread-delay <seconds|range>` 配置，覆盖 `x-thread` 和 `x-thread-short`。
+- CLI 帮助和文档补充 `x-thread-short` 语义。
+
+验收：
+
+- `publish --target x-thread-short --dry-run` 使用 `x-short.md + x-thread.md`，首推为 short，回复为 thread。
+- `publish --target x-thread-short --dry-run` 的预览包含来源回复，格式为 `👇完整视频：\n<原视频地址>`。
+- `publish --target x-short --dry-run` 能发现 `images/cover.*` 并写入 `coverPath`。
+- 真实发布 `x-short` 时，封面图挂在主 post 上。
+- 真实发布 `x-thread-short` 时，封面图挂在 short 首推上。
+- 真实发布 `x-thread` / `x-thread-short` 时，后续回复发布前会按 `--thread-delay` 配置等待；未配置时使用 20-30 秒。
+
+完成后标记：
+
+- [x] Task 10 complete
 
 ## 测试要求
 

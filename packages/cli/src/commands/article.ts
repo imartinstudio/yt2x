@@ -18,7 +18,7 @@ export const registerArticleCommand = (program: Command): void => {
       .option("--platform <name>", "Target platform (x only for now)", "x")
       .option(
         "--targets <targets>",
-        "Comma-separated output targets: x-longform,x-thread,x-short,all",
+        "Comma-separated output targets: article,x-thread,x-short,all",
       )
       .option("--error-strategy <mode>", "On failure: stop|skip", "stop")
       .option(

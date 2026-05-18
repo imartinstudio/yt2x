@@ -102,7 +102,7 @@ type VideoSummaryRow = {
   duration: number | undefined;
   acquire: string | undefined;
   notes: string | undefined;
-  articleLongform: string | undefined;
+  article: string | undefined;
   articleThread: string | undefined;
   articleShort: string | undefined;
   publish: string | undefined;
@@ -130,14 +130,14 @@ const collectVideoSummary = async (
   const status = await readProcessStatusMerged(videoDir, { videoId, url }).catch(() => null);
 
   const articleDir = status?.articleOutDir ?? path.join(articleOutRoot, videoId);
-  let articleLongform: string | undefined;
+  let article: string | undefined;
   let articleThread: string | undefined;
   let articleShort: string | undefined;
 
   if (status?.steps.article?.status === "done") {
     try {
       await access(path.join(articleDir, "article.md"));
-      articleLongform = "done";
+      article = "done";
     } catch { /* */ }
     try {
       await access(path.join(articleDir, "x-thread.md"));
@@ -148,7 +148,7 @@ const collectVideoSummary = async (
       articleShort = "done";
     } catch { /* */ }
   } else if (status?.steps.article?.status === "failed") {
-    articleLongform = "failed";
+    article = "failed";
   }
 
   return {
@@ -157,7 +157,7 @@ const collectVideoSummary = async (
     duration,
     acquire: status?.steps.acquire?.status,
     notes: status?.steps.notes?.status,
-    articleLongform,
+    article,
     articleThread,
     articleShort,
     publish: status?.steps.publish?.status,
@@ -179,7 +179,7 @@ const printPipelineSummaryTable = async (
     { key: "duration" as const, header: "DURATION", width: 9, format: (r: VideoSummaryRow) => formatDuration(r.duration) },
     { key: "acquire" as const, header: "ACQUIRE", width: 8, label: true },
     { key: "notes" as const, header: "NOTES", width: 6, label: true },
-    { key: "articleLongform" as const, header: "A-LONG", width: 6, label: true },
+    { key: "article" as const, header: "ARTICLE", width: 8, label: true },
     { key: "articleThread" as const, header: "A-THREAD", width: 8, label: true },
     { key: "articleShort" as const, header: "A-SHORT", width: 8, label: true },
     { key: "publish" as const, header: "PUBLISH", width: 8, label: true },
@@ -350,7 +350,9 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       articleOutDir: articleOutRoot,
       maxChars: String(args.publish.maxChars),
       maxTweets: String(args.publish.maxTweets),
+      threadDelay: args.publish.threadDelay,
       thread: args.publish.format === "thread",
+      target: args.publish.format === "thread" ? "x-thread" : "article",
       publishDryRun: args.publish.publishDryRun || args.stages.publish === "review",
       dryRun: args.publish.publishDryRun || args.stages.publish === "review",
       verbose: args.flags.verbose,

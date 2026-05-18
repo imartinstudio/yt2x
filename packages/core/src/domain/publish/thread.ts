@@ -9,9 +9,9 @@
  */
 
 export type ArticleToThreadOptions = {
-  /** 每条推最大字符数。X 默认 280；Premium 用户可到 25000，但默认走 280 最稳。 */
+  /** 每条推最大加权字符数；yt2x 默认按当前发布策略使用 500。 */
   maxChars?: number;
-  /** 整个 thread 最多多少条；默认 25。 */
+  /** 整个 thread 最多多少条；默认 8。 */
   maxTweets?: number;
   /** 是否给每条推加 ①②③ 编号。默认 false（让用户自由控制）。 */
   numbering?: boolean;
@@ -22,8 +22,13 @@ export type ArticleToLongPostOptions = {
   maxChars?: number;
 };
 
-const DEFAULT_MAX_CHARS = 280;
-const DEFAULT_MAX_TWEETS = 25;
+export type PrepareTextForXPublishOptions = {
+  /** 有序步骤列表格式：x-short 用 decimal，x-thread 内部步骤用 circled。 */
+  orderedListStyle?: "decimal" | "circled";
+};
+
+const DEFAULT_MAX_CHARS = 500;
+const DEFAULT_MAX_TWEETS = 8;
 /** X Premium 长文单条上限（非 Premium 账号请用串推 `--thread` + `--max-chars 280`） */
 export const DEFAULT_LONG_POST_MAX_CHARS = 25_000;
 
@@ -106,21 +111,104 @@ export const truncateToWeightedLength = (text: string, maxWeighted: number): str
   return piece;
 };
 
-/** 去掉 markdown 标记，保留人能阅读的纯文本。 */
-export const stripMarkdown = (md: string): string => {
-  return md
+const isListLine = (line: string): boolean => /^[ \t]*(?:\d+\/|\d+\.|- |[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳] )/.test(line);
+
+const formatOrderedListMarker = (raw: string, style: "decimal" | "circled"): string => {
+  if (style === "decimal") return `${raw}.`;
+  const index = Number.parseInt(raw, 10) - 1;
+  return NUMBER_GLYPHS[index] ?? `${raw}.`;
+};
+
+const normalizeReadableXLayout = (text: string): string => {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .split("\n");
+  const out: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      if (out.length > 0 && out[out.length - 1] !== "") out.push("");
+      continue;
+    }
+
+    const prev = out[out.length - 1];
+    if (out.length > 0 && prev !== "" && isListLine(trimmed) && !isListLine(prev!)) {
+      // 保留列表与前一段之间的分隔，但连续步骤之间只换行，不额外空一行。
+      if (out.length >= 2 && out[out.length - 2] === "") {
+        // already separated
+      }
+    }
+    out.push(trimmed);
+  }
+
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+};
+
+/**
+ * X 发布前文本准备 hook。
+ *
+ * 目标是保留信息内容，移除或转换 X post 不适合直接展示的 Markdown 壳：
+ * - 图片移除，链接保留可读文本
+ * - Markdown 加粗标记直接清除，不转 Unicode bold
+ * - Markdown 加粗标题前缀后换行，让标题和正文分开
+ * - 有序列表统一成 `1. `，无序列表统一成 `- `
+ * - 任务列表、表格、引用、脚注转换为可读文本
+ * - 代码块保留代码内容但去掉围栏
+ */
+export const prepareTextForXPublish = (
+  input: string,
+  options: PrepareTextForXPublishOptions = {},
+): string => {
+  const orderedListStyle = options.orderedListStyle ?? "circled";
+  const clean = input
+    .replace(/`{3}[^\n`]*\n?([\s\S]*?)`{3}/g, (_m, code: string) => code.trim())
     .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\*\*([^*\n]{1,48}[：:])\*\*[ \t]*(?=\S)/g, "$1\n")
+    .replace(/__([^_\n]{1,48}[：:])__[ \t]*(?=\S)/g, "$1\n")
+    .replace(/\*\*([^*\n](?:[^*]|\*(?!\*))*)\*\*/g, "$1")
+    .replace(/__([^_\n](?:[^_]|_(?!_))*)__/g, "$1")
+    .replace(/^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$/gm, "")
+    .replace(/^[ \t]*((?:\d+\/\s*)?)\|(.+)\|[ \t]*$/gm, (_m, prefix: string, row: string) =>
+      prefix +
+      String(row)
+        .split("|")
+        .map((cell) => cell.trim())
+        .filter((cell) => cell.length > 0)
+        .join(" ｜ "),
+    )
+    .replace(/([^\n]*｜[^\n]*)\n{2,}(?=[^\n]*｜)/g, "$1\n")
+    .replace(/^[ \t]*[-*+][ \t]+\[[ xX]\][ \t]+/gm, "- ")
     .replace(/~~([^~]+)~~/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/`{3}[\s\S]*?`{3}/g, "")
+    .replace(/^#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]*([0-9]+)\uFE0F?\u20E3[ \t]*/gm, (_m, n: string) => {
+      return `${formatOrderedListMarker(n, orderedListStyle)} `;
+    })
+    .replace(/^[ \t]*[•●○◦·][ \t]*/gm, "- ")
+    .replace(/^[ \t]*[-*+][ \t]+/gm, "- ")
+    .replace(/^[ \t]*(\d+)[.)][ \t]+/gm, (_m, n: string) => `${formatOrderedListMarker(n, orderedListStyle)} `)
+    .replace(/\b(https?):\n\/\//g, "$1://")
+    .replace(/^(\d+\/ [^：:\n]{2,80}[：:])(?!\/\/)([^\n]+)$/gm, (_m, title: string, body: string) =>
+      `${title}\n\n${String(body).trimStart()}`,
+    )
+    .replace(/^(\d+\/ [^：:\n]{2,80}[：:])\n(?=\S)/gm, "$1\n\n")
+    .replace(/^((?:\d+\.|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]) [^：:\n]{2,80}[：:])\n(?=\S)/gm, "$1 ")
+    .replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, "")
+    .replace(/\[\^([^\]]+)\]/g, "($1)")
+    .replace(/^[ \t]{0,3}>[ \t]?/gm, "引用：")
     .replace(/[*_`>]/g, "")
-    .replace(/^\s*[-*]\s+/gm, "• ")
-    .replace(/^\s*\d+\.\s+/gm, "")
     .replace(/\|\|/g, "｜")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+  return normalizeReadableXLayout(clean);
 };
+
+/** 兼容旧命名：去掉 / 转换 markdown 标记，保留人能阅读的纯文本。 */
+export const stripMarkdown = prepareTextForXPublish;
 
 /**
  * 把一段超长文本按句末标点切成 ≤ maxChars 的 chunk。

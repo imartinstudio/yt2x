@@ -1,5 +1,6 @@
 export {
   findArticleArtifacts,
+  findCoverImage,
   type ArticleArtifacts,
 } from "./find-article-dir.js";
 export { loadTweetImageFromPath } from "./load-tweet-image.js";

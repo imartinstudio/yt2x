@@ -31,6 +31,7 @@ export type CommanderPipelineFlags = {
   thread?: boolean;
   publishMaxChars?: string;
   maxTweets?: string;
+  threadDelay?: string;
   llmProvider?: string;
   llmModel?: string;
   llmBaseUrl?: string;
@@ -72,12 +73,13 @@ export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): Pipe
     },
     publish: {
       publishDryRun: flags.publishDryRun ?? false,
-      format: flags.thread === true ? "thread" : "long",
+      format: flags.thread === true ? "thread" : "article",
       maxChars:
         flags.thread === true
-          ? (flags.publishMaxChars ?? flags.maxChars ?? "280")
-          : (flags.publishMaxChars ?? "25000"),
-      maxTweets: flags.maxTweets ?? "25",
+          ? (flags.publishMaxChars ?? flags.maxChars ?? "500")
+          : (flags.publishMaxChars ?? "500"),
+      maxTweets: flags.maxTweets ?? "8",
+      threadDelay: flags.threadDelay ?? "20-30",
     },
     control: {
       outDir: flags.outDir,

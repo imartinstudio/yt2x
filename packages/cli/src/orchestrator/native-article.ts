@@ -16,12 +16,19 @@ import {
   writeNativeArticleBundle,
   writeNativeShortBundle,
   writeNativeThreadBundle,
+  writeVisualSuggestions,
 } from "@yt2x/adapters-node";
 import {
+  checkArticleQuality,
+  checkShortQuality,
+  checkThreadQuality,
+  deriveArticleVisualSuggestions,
+  formatQualityIssues,
   isLlmError,
   manifestToAvailableVisuals,
   parseArticleOutputTargets,
   type ArticleOutputTarget,
+  type QualityIssue,
   type SceneManifest,
 } from "@yt2x/core";
 import { logger } from "../logger.js";
@@ -55,6 +62,30 @@ const addUsage = (
 
 const formatTargets = (targets: readonly ArticleOutputTarget[]): string => targets.join(",");
 
+/**
+ * 把 deterministic quality issues 输出到 logger（warning 级别）。
+ *
+ * Quality issues 不阻断生成产物落盘，只让用户在终端看到「哪条规则没满足、产物路径是什么」。
+ */
+const logQualityIssues = (
+  target: ArticleOutputTarget,
+  videoId: string,
+  artifactPath: string,
+  issues: readonly QualityIssue[],
+): void => {
+  if (issues.length === 0) return;
+  logger.warn(
+    {
+      videoId,
+      target,
+      artifact: artifactPath,
+      issueCount: issues.length,
+      codes: issues.map((i) => i.code),
+    },
+    `quality check warnings for ${target} (${videoId}):\n${formatQualityIssues(issues)}`,
+  );
+};
+
 /** 供 `pipeline` 编排器与 `yt2x article` 调用；返回进程退出码。 */
 export const executeNativeArticle = async (flags: ArticleFlags): Promise<number> => {
   const notesOutDir = path.resolve(flags.outDir ?? DEFAULT_OUT_DIR);
@@ -79,8 +110,8 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
     printCliErrorBlock({
       command: "article",
       reason: err instanceof Error ? err.message : String(err),
-      hints: ["Use --targets x-longform,x-thread,x-short or --targets all."],
-      retryCommand: "pnpm yt2x article --video-id <videoId> --targets x-longform",
+      hints: ["Use --targets article,x-thread,x-short or --targets all."],
+      retryCommand: "pnpm yt2x article --video-id <videoId> --targets article",
     });
     return NATIVE_EXIT.CONFIG_MISSING;
   }
@@ -173,7 +204,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           // 无截图清单时保持纯文本
         }
 
-    if (outputTargets.includes("x-longform")) {
+    if (outputTargets.includes("article")) {
         const result = await generateXArticleContent({
           llm: llm.adapter,
           model: llm.model,
@@ -220,8 +251,27 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             durationMs: result.durationMs,
             usage: result.usage,
           },
-          "article generated (native x longform)",
+          "article generated (native article)",
         );
+        const articleIssues = checkArticleQuality(renderedContent, {
+          sourceText: `${artifacts.metadata.title ?? ""}\n${artifacts.structuredNotesMd}`,
+        });
+        logQualityIssues("article", artifacts.videoId, written.articlePath, articleIssues);
+
+        const suggestions = deriveArticleVisualSuggestions(renderedContent);
+        const suggestionsPath = await writeVisualSuggestions(written.articleDir, suggestions);
+        if (suggestionsPath !== null) {
+          writtenArtifacts.push("visual-suggestions.json");
+          logger.info(
+            {
+              videoId: artifacts.videoId,
+              suggestionsPath,
+              count: suggestions.length,
+              kinds: suggestions.map((s) => s.kind),
+            },
+            "visual suggestions written (article)",
+          );
+        }
       }
 
       if (outputTargets.includes("x-thread")) {
@@ -252,6 +302,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           },
           "article generated (native x thread)",
         );
+        const threadIssues = checkThreadQuality(result.thread, {
+          sourceText: `${artifacts.metadata.title ?? ""}\n${artifacts.structuredNotesMd}`,
+        });
+        logQualityIssues("x-thread", artifacts.videoId, written.threadPath, threadIssues);
       }
 
       if (outputTargets.includes("x-short")) {
@@ -282,6 +336,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           },
           "article generated (native x short)",
         );
+        const shortIssues = checkShortQuality(result.shortPost, {
+          sourceText: `${artifacts.metadata.title ?? ""}\n${artifacts.structuredNotesMd}`,
+        });
+        logQualityIssues("x-short", artifacts.videoId, written.shortPath, shortIssues);
       }
 
       const finishedAt = new Date().toISOString();

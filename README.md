@@ -139,8 +139,8 @@ pnpm yt2x notes --video-id <videoId> --llm-provider openai
 # 从结构化笔记生成 X 长文
 pnpm yt2x article --video-id <videoId>
 
-# 自由组合生成长文、串推和短帖
-pnpm yt2x article --video-id <videoId> --targets x-longform,x-thread,x-short
+# 自由组合生成文章草稿、串推和短帖
+pnpm yt2x article --video-id <videoId> --targets article,x-thread,x-short
 
 # 预览发布内容，不调用 X API
 pnpm yt2x publish --video-id <videoId> --dry-run
@@ -179,12 +179,13 @@ pnpm yt2x auth whoami
 pnpm yt2x publish --video-id <videoId> --dry-run
 pnpm yt2x publish --video-id <videoId> --target x-thread --thread-source generated --dry-run
 pnpm yt2x publish --video-id <videoId> --target x-short --dry-run
+pnpm yt2x publish --video-id <videoId> --target x-thread-short --dry-run
 ```
 
 真实发布：
 
 ```bash
-pnpm yt2x publish --video-id <videoId>
+pnpm yt2x publish --video-id <videoId> --target x-thread
 ```
 
 流水线发布的安全规则：
@@ -205,14 +206,16 @@ pnpm yt2x pipeline \
 
 生成阶段可用 `--targets` 自由组合输出目标：
 
-| Target       | 产物                          | 说明                         |
-| ------------ | ----------------------------- | ---------------------------- |
-| `x-longform` | `article.md`、`run.json`      | X 长文，默认行为             |
-| `x-thread`   | `x-thread.md`、`x-hooks.json` | 专门生成的 X 串推和首推候选  |
-| `x-short`    | `x-short.md`                  | 单条 X 短帖                  |
-| `all`        | 以上全部                      | 等价于三个 target 的自由组合 |
+| Target     | 产物                          | 说明                                |
+| ---------- | ----------------------------- | ----------------------------------- |
+| `article`  | `article.md`、`run.json`      | 长文章草稿；暂不通过 X API 自动发布 |
+| `x-thread` | `x-thread.md`、`x-hooks.json` | 专门生成的 X 串推和首推候选         |
+| `x-short`  | `x-short.md`                  | 单条 X 短帖                         |
+| `all`      | 以上全部                      | 等价于三个 target 的自由组合        |
 
-发布阶段使用单数 `--target`，一次只发布一种目标；旧的 `--thread` 仍表示把 `article.md` 拆成串推。
+发布阶段使用单数 `--target`，一次只处理一种目标。`article` 只支持 preview / dry-run，不调用 X API；`x-thread`、`x-short` 和 `x-thread-short` 可通过 X API 发布。`x-thread-short` 会把 `x-short.md` 作为首推，再把 `x-thread.md` 全部作为回复依次发布；`x-short` / `x-thread-short` 的首推会尽量附带封面图。真实发布 `x-thread` / `x-thread-short` 时，每两条推文之间默认随机等待 20-30 秒，可用 `--thread-delay <seconds|range>` 配置，例如 `--thread-delay 10`、`--thread-delay 5-15` 或 `--thread-delay 0`。旧的 `x-longform` 仍作为 `article` 的兼容别名解析，但不再推荐。
+
+`x-thread.md` 发布时以行首 `1/`、`2/`、`3/` 作为 tweet 边界，单条 tweet 内部的空行、列表和代码块会保留在同一条回复里。发布前会把 Markdown 转成 X 兼容文本：英文 / 数字加粗转为 Unicode bold，中文保持原字形。
 
 ## 目录与产物
 

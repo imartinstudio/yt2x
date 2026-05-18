@@ -43,11 +43,35 @@ describe("projectSingleStage", () => {
     expect(args.control.continueFlag).toBe(true);
   });
 
+  it("maps force to control.force", () => {
+    const args = projectSingleStage("acquire", {
+      urls: ["https://www.youtube.com/watch?v=abc12345678"],
+      force: true,
+    });
+    expect(args.control.force).toBe(true);
+  });
+
   it("maps article targets for single-stage commands", () => {
     const args = projectSingleStage("article", {
       urls: ["https://example.com/video"],
       targets: "x-thread,x-short",
     });
     expect(args.article.targets).toEqual(["x-thread", "x-short"]);
+  });
+
+  it("maps legacy x-longform to article for single-stage commands", () => {
+    const args = projectSingleStage("article", {
+      urls: ["https://example.com/video"],
+      targets: "x-longform,x-short",
+    });
+    expect(args.article.targets).toEqual(["article", "x-short"]);
+  });
+
+  it("maps threadDelay for publish single-stage commands", () => {
+    const args = projectSingleStage("publish", {
+      urls: ["https://example.com/video"],
+      threadDelay: "12-18",
+    });
+    expect(args.publish.threadDelay).toBe("12-18");
   });
 });

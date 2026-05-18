@@ -1,7 +1,13 @@
 import type { Dirent } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ArticleVisualPlanItem, AvailableVisual, YouTubeMetadata } from "@yt2x/core";
+import {
+  pickArticleCoverFromCandidates,
+  type ArticleVisualPlanItem,
+  type AvailableVisual,
+  type VisualSuggestion,
+  type YouTubeMetadata,
+} from "@yt2x/core";
 
 /**
  * Native article 输出根目录（扁平）：articleOutDir/videoId/article.md
@@ -170,8 +176,9 @@ export const copyBestCoverFromNotesDir = async (
     throw err;
   }
   const allowed = /\.(webp|jpg|jpeg|png)$/i;
-  const pick = names.filter((n) => allowed.test(n)).sort()[0];
-  if (pick === undefined) return null;
+  const candidates = names.filter((n) => allowed.test(n)).sort();
+  const pick = pickArticleCoverFromCandidates(candidates);
+  if (pick === null) return null;
   const ext = path.extname(pick).toLowerCase();
   const dest = path.join(articleDir, "images", "cover" + ext);
   await mkdir(path.dirname(dest), { recursive: true });
@@ -247,6 +254,25 @@ export const renderArticleImages = async (
   }
 
   return rendered;
+};
+
+/**
+ * 在 article 目录写入 `visual-suggestions.json`。
+ *
+ * 该文件描述「这篇 article 应该生成 / 选用什么样的图」，不会修改 article.md 正文。
+ * 仅当 suggestions 数组非空时写入；空数组时静默跳过，避免污染输出目录。
+ */
+export const writeVisualSuggestions = async (
+  articleDir: string,
+  suggestions: readonly VisualSuggestion[],
+): Promise<string | null> => {
+  if (suggestions.length === 0) return null;
+  const targetPath = path.join(articleDir, "visual-suggestions.json");
+  await atomicWriteUtf8(
+    targetPath,
+    `${JSON.stringify({ v: 1, suggestions }, null, 2)}\n`,
+  );
+  return targetPath;
 };
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

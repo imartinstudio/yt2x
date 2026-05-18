@@ -24,7 +24,7 @@ acquire --keyframes
   -> thread/short visual_plan（后续发布阶段消费）
 ```
 
-首个可交付版本优先支持 `x-longform`，后续再扩展到 `x-thread` 和 `x-short`。
+首个可交付版本优先支持 `article`，后续再扩展到 `x-thread` 和 `x-short`。
 
 ## 非目标
 

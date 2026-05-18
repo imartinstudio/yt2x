@@ -75,4 +75,59 @@ describe("buildArticleUserPrompt", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/X（Twitter）/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不要用/);
   });
+
+  it("requires bold headings and colon labels", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/# \*\*标题\*\*/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/## \*\*小节标题\*\*/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/\*\*xxxx：\*\*/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/有序列表会保留编号/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/无序列表会转成/);
+  });
+
+  it("defines a 120-character lead and hook elements rule", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/首屏 Hook 规则/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/120 字以内/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/场景 \/ 痛点 \/ 损失 \/ 收益承诺 \/ 反差对比/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/至少 2 个元素/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/近年来/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/本视频介绍了/);
+  });
+
+  it("defines mobile rhythm: max 2 consecutive paragraphs and 250-char cap", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/移动端节奏规则/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/最多连续 2 个正文段落/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/250 字以内/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/加粗结论/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/准备 \/ 操作 \/ 验证 \/ 风险/);
+  });
+
+  it("requires a dedicated risk section for high-trust topics", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/风险与适用边界规则/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/## \*\*风险与适用边界\*\*/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/账号锁定/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/凭证泄露/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不得编造/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/官方认可/);
+  });
+
+  it("requires at least one executable asset per article", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/可执行资产规则/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/可复制 prompt、模板、检查清单、操作步骤表、风险清单、决策树/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/可立即使用的产物/);
+  });
+
+  it("forbids hallucinated links and fake official sources", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不得编造官方链接/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不要编造原笔记没有的信息/);
+  });
+
+  it("forbids fabricated images when no screenshots are available", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不要写任何图片引用/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不要虚构图片路径/);
+  });
+
+  it("requires concrete CTA instead of mechanical engagement bait", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/CTA 必须具体/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/评论区打 1/);
+  });
 });

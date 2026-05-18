@@ -6,6 +6,7 @@ export {
   readStructuredNotesArtifacts,
   renderArticleImages,
   writeNativeArticleBundle,
+  writeVisualSuggestions,
   type NativeArticleRunRecord,
   type ReadStructuredNotesError,
   type StructuredNotesArtifacts,

@@ -60,17 +60,19 @@ export const projectSingleStage = (target: SingleStageTarget, flags: SingleStage
     },
     publish: {
       publishDryRun: flags.publishDryRun === true || flags.dryRun === true,
-      format: flags.thread === true ? "thread" : "long",
+      format: flags.thread === true ? "thread" : "article",
       maxChars:
         flags.thread === true
-          ? (flags.publishMaxChars ?? flags.maxChars ?? "280")
-          : (flags.publishMaxChars ?? "25000"),
-      maxTweets: flags.maxTweets ?? "25",
+          ? (flags.publishMaxChars ?? flags.maxChars ?? "500")
+          : (flags.publishMaxChars ?? "500"),
+      maxTweets: flags.maxTweets ?? "8",
+      threadDelay: flags.threadDelay ?? "20-30",
     },
     control: {
       outDir: flags.outDir,
       continueFlag: flags.continueFrom ?? false,
       errorStrategy: flags.errorStrategy ?? "stop",
+      force: flags.force ?? false,
     },
     llm: {
       provider,

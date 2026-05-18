@@ -6,6 +6,7 @@ export type XAuthedJsonRequest = (req: {
   method: "GET" | "POST";
   path: string;
   body?: unknown;
+  formData?: FormData;
   signal?: AbortSignal;
 }) => Promise<unknown>;
 
@@ -21,7 +22,7 @@ type MediaUploadData = {
 
 type MediaUploadEnvelope = { data?: MediaUploadData };
 
-const ONESHOT_MAX_BYTES = 512 * 1024;
+const ONESHOT_MAX_BYTES = 5 * 1024 * 1024;
 const CHUNK_BYTES = 4 * 1024 * 1024;
 const STATUS_MAX_ROUNDS = 60;
 const STATUS_MAX_WAIT_MS = 120_000;
@@ -120,25 +121,68 @@ const waitUntilMediaReady = async (
   );
 };
 
+const ensureMediaReadyFromUploadResponse = async (
+  mediaId: string,
+  json: unknown,
+  authedJson: XAuthedJsonRequest,
+  signal: AbortSignal | undefined,
+): Promise<void> => {
+  const pi = (json as MediaUploadEnvelope)?.data?.processing_info;
+  if (pi === undefined || pi.state === "succeeded") return;
+  if (pi.state === "failed") {
+    throw new XPublishError(
+      "MEDIA_PROCESSING",
+      `Media ${mediaId} processing failed on X side`,
+      { detail: JSON.stringify((json as MediaUploadEnvelope)?.data).slice(0, 400) },
+    );
+  }
+  await waitUntilMediaReady(mediaId, authedJson, signal);
+};
+
 const oneShotUpload = async (
   buf: Buffer,
   kind: { media_type: string; media_category: "tweet_image" | "tweet_gif" },
   authedJson: XAuthedJsonRequest,
   signal: AbortSignal | undefined,
 ): Promise<string> => {
+  const form = new FormData();
+  form.set(
+    "media",
+    new Blob([new Uint8Array(buf)], { type: kind.media_type }),
+    kind.media_type === "image/png" ? "image.png" : "image",
+  );
+  form.set("media_category", kind.media_category);
+  form.set("media_type", kind.media_type);
+
   const json = await authedJson({
     method: "POST",
     path: "/2/media/upload",
-    body: {
-      media: buf.toString("base64"),
-      media_category: kind.media_category,
-      media_type: kind.media_type,
-    },
+    formData: form,
     ...(signal !== undefined ? { signal } : {}),
   });
   const id = parseMediaId(json, "POST /2/media/upload");
-  await waitUntilMediaReady(id, authedJson, signal);
+  await ensureMediaReadyFromUploadResponse(id, json, authedJson, signal);
   return id;
+};
+
+const summarizeUploadFailure = (err: XPublishError): string => {
+  const url = typeof err.context.url === "string" ? ` ${err.context.url}` : "";
+  return `${err.kind}${url}: ${err.message}`;
+};
+
+const buildCombinedUploadContext = (
+  first: XPublishError,
+  second: XPublishError,
+): XPublishError["context"] => {
+  const context: XPublishError["context"] = {
+    detail: `one-shot=${first.context.detail ?? first.message}; chunked=${second.context.detail ?? second.message}`,
+  };
+  const status = second.context.status ?? first.context.status;
+  if (status !== undefined) context.status = status;
+  const url = second.context.url ?? first.context.url;
+  if (url !== undefined) context.url = url;
+  if (second.context.retryAfterMs !== undefined) context.retryAfterMs = second.context.retryAfterMs;
+  return context;
 };
 
 const chunkedUpload = async (
@@ -183,7 +227,7 @@ const chunkedUpload = async (
     ...(signal !== undefined ? { signal } : {}),
   });
   parseMediaId(finJson, "POST /2/media/upload/{id}/finalize");
-  await waitUntilMediaReady(mediaId, authedJson, signal);
+  await ensureMediaReadyFromUploadResponse(mediaId, finJson, authedJson, signal);
   return mediaId;
 };
 
@@ -210,7 +254,16 @@ export const uploadTweetImageWithAuthedJson = async (input: {
       if (err.kind !== "BAD_REQUEST" && err.kind !== "BAD_RESPONSE" && err.kind !== "SERVER") {
         throw err;
       }
-      return chunkedUpload(buf, kind, input.authedJson, input.signal);
+      try {
+        return await chunkedUpload(buf, kind, input.authedJson, input.signal);
+      } catch (chunkErr: unknown) {
+        if (!(chunkErr instanceof XPublishError)) throw chunkErr;
+        throw new XPublishError(
+          chunkErr.kind,
+          `X v2 media upload failed. one-shot=${summarizeUploadFailure(err)}; chunked=${summarizeUploadFailure(chunkErr)}`,
+          buildCombinedUploadContext(err, chunkErr),
+        );
+      }
     }
   }
   return chunkedUpload(buf, kind, input.authedJson, input.signal);

@@ -206,6 +206,61 @@ describe("createXPublishAdapter.postThread", () => {
     expect(bodies[1].media).toBeUndefined();
   });
 
+  it("attaches tweetMediaIds to their matching thread replies", async () => {
+    let i = 0;
+    const fetcher = vi.fn(async (_u, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      i += 1;
+      return okTweet(String(i), body.text);
+    });
+    const adapter = createXPublishAdapter({
+      tokenSource: makeTokenSource(),
+      fetcher,
+    });
+    await adapter.postThread({
+      tweets: ["one", "two", "three"],
+      firstTweetMediaIds: ["cover"],
+      tweetMediaIds: { 1: ["reply-image"], 2: ["last-image"] },
+    });
+    const bodies = fetcher.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string));
+    expect(bodies[0].media).toEqual({ media_ids: ["cover"] });
+    expect(bodies[1].media).toEqual({ media_ids: ["reply-image"] });
+    expect(bodies[2].media).toEqual({ media_ids: ["last-image"] });
+  });
+
+  it("waits between thread replies when replyDelayMs is provided", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const ids = ["a", "b", "c"];
+    try {
+      const fetcher = vi.fn(async (_url, init) => {
+        const body = JSON.parse((init as RequestInit).body as string);
+        return okTweet(ids.shift()!, body.text);
+      });
+      const adapter = createXPublishAdapter({
+        tokenSource: makeTokenSource(),
+        fetcher,
+      });
+
+      const pending = adapter.postThread({
+        tweets: ["one", "two", "three"],
+        replyDelayMs: { min: 20_000, max: 20_000 },
+      });
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+      await vi.runOnlyPendingTimersAsync();
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+      await vi.runOnlyPendingTimersAsync();
+      const result = await pending;
+      expect(result.tweets.map((t) => t.id)).toEqual(["a", "b", "c"]);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      const threadDelayCalls = setTimeoutSpy.mock.calls.filter((call) => call[1] === 20_000);
+      expect(threadDelayCalls).toHaveLength(2);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("throws when the very first tweet fails (no partial)", async () => {
     const fetcher = vi.fn(async () => errResp(400, { detail: "bad" }));
     const adapter = createXPublishAdapter({
@@ -295,7 +350,7 @@ describe("createXPublishAdapter.uploadTweetImage", () => {
       headers: { "content-type": "application/json" },
     });
 
-  it("uploads a small PNG via one-shot + STATUS", async () => {
+  it("uploads a small PNG via one-shot without STATUS when no processing is reported", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "yt2x-pub-img-"));
     const imgPath = path.join(dir, "cover.png");
     await writeFile(imgPath, Buffer.alloc(64, 2));
@@ -312,7 +367,7 @@ describe("createXPublishAdapter.uploadTweetImage", () => {
       });
       expect(id).toBe("777000111222333444");
       expect(fetcher.mock.calls[0]![0].toString()).toContain("/2/media/upload");
-      expect(fetcher.mock.calls[1]![0].toString()).toContain("media_id=777000111222333444");
+      expect(fetcher).toHaveBeenCalledTimes(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

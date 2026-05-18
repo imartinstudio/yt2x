@@ -5,9 +5,9 @@ import {
 } from "./targets.js";
 
 describe("parseArticleOutputTargets", () => {
-  it("defaults to x-longform", () => {
-    expect(parseArticleOutputTargets(undefined)).toEqual(["x-longform"]);
-    expect(parseArticleOutputTargets("")).toEqual(["x-longform"]);
+  it("defaults to article", () => {
+    expect(parseArticleOutputTargets(undefined)).toEqual(["article"]);
+    expect(parseArticleOutputTargets("")).toEqual(["article"]);
   });
 
   it("parses comma-separated targets", () => {
@@ -15,7 +15,14 @@ describe("parseArticleOutputTargets", () => {
   });
 
   it("expands all to every concrete target", () => {
-    expect(parseArticleOutputTargets("all")).toEqual(["x-longform", "x-thread", "x-short"]);
+    expect(parseArticleOutputTargets("all")).toEqual(["article", "x-thread", "x-short"]);
+  });
+
+  it("maps legacy x-longform to article", () => {
+    expect(parseArticleOutputTargets("x-longform,x-short,article")).toEqual([
+      "article",
+      "x-short",
+    ]);
   });
 
   it("deduplicates repeated targets while preserving order", () => {
@@ -31,7 +38,7 @@ describe("parseArticleOutputTargets", () => {
 
   it("works through the zod schema", () => {
     expect(ArticleOutputTargetsSchema.parse(["x-longform,x-short", "x-thread"])).toEqual([
-      "x-longform",
+      "article",
       "x-short",
       "x-thread",
     ]);

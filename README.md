@@ -345,3 +345,14 @@ pnpm run ci:full
 ## License
 
 Apache-2.0。见 [LICENSE](./LICENSE) 与 [NOTICE](./NOTICE)。
+
+## Premium 支持（v0.2 新增）
+
+使用 `--premium` 可让 article / x-short 单帖使用更高上限（默认 4000 字符）：
+
+```bash
+pnpm yt2x publish --video-id <videoId> --target article --premium --dry-run
+```
+
+非 Premium 账号建议继续使用 `--thread`。
+

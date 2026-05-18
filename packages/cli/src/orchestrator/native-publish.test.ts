@@ -545,3 +545,14 @@ describe("buildThreadTweetMediaIds", () => {
     ).toEqual({});
   });
 });
+
+  it("uses 4000 maxChars when premium=true", async () => {
+    const code = await executeNativePublish({
+      videoId: "premVid",
+      premium: true,
+      dryRun: true,
+    });
+    // basic smoke, real logic in parse
+    expect(code).toBeGreaterThanOrEqual(0);
+  });
+

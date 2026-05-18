@@ -10,6 +10,19 @@ const okMedia = (id: string, processing?: { state: string; check_after_secs?: nu
   meta: {},
 });
 
+const expectImageForm = async (
+  form: FormData | undefined,
+  expected: { mediaType: string; mediaCategory: string },
+): Promise<void> => {
+  expect(form).toBeInstanceOf(FormData);
+  expect(form?.get("media_type")).toBe(expected.mediaType);
+  expect(form?.get("media_category")).toBe(expected.mediaCategory);
+  const media = form?.get("media");
+  expect(media).toBeInstanceOf(Blob);
+  expect((media as Blob).type).toBe(expected.mediaType);
+  expect((await (media as Blob).arrayBuffer()).byteLength).toBeGreaterThan(0);
+};
+
 describe("uploadTweetImageWithAuthedJson", () => {
   it("rejects empty bytes before any HTTP call", async () => {
     const authedJson = vi.fn();
@@ -23,18 +36,14 @@ describe("uploadTweetImageWithAuthedJson", () => {
     expect(authedJson).not.toHaveBeenCalled();
   });
 
-  it("uses one-shot POST /2/media/upload for small files", async () => {
+  it("uses one-shot POST /2/media/upload for small files without STATUS when no processing is reported", async () => {
     const body = Buffer.alloc(100, 7);
     const authedJson = vi.fn(async (req) => {
       if (req.method === "POST" && req.path === "/2/media/upload") {
-        expect((req.body as { media_category: string }).media_category).toBe("tweet_image");
-        expect((req.body as { media_type: string }).media_type).toBe("image/png");
-        expect(typeof (req.body as { media: string }).media).toBe("string");
-        return okMedia("999000111222333444");
-      }
-      if (req.method === "GET" && req.path.includes("/2/media/upload?")) {
-        expect(req.path).toContain("media_id=999000111222333444");
-        expect(req.path).toContain("command=STATUS");
+        await expectImageForm(req.formData, {
+          mediaType: "image/png",
+          mediaCategory: "tweet_image",
+        });
         return okMedia("999000111222333444");
       }
       throw new Error(`unexpected ${req.method} ${req.path}`);
@@ -45,7 +54,7 @@ describe("uploadTweetImageWithAuthedJson", () => {
       authedJson,
     });
     expect(id).toBe("999000111222333444");
-    expect(authedJson).toHaveBeenCalledTimes(2);
+    expect(authedJson).toHaveBeenCalledTimes(1);
   });
 
   it("polls STATUS until succeeded when processing_info is pending", async () => {
@@ -112,10 +121,41 @@ describe("uploadTweetImageWithAuthedJson", () => {
     expect(authedJson.mock.calls.some((c) => c[0]?.path === "/2/media/upload/initialize")).toBe(true);
   });
 
+  it("includes both one-shot and chunked failures when v2 media upload is unavailable", async () => {
+    const authedJson = vi.fn(async (req) => {
+      if (req.method === "POST" && req.path === "/2/media/upload") {
+        throw new XPublishError("BAD_REQUEST", "one-shot not found", {
+          status: 400,
+          url: "https://api.x.com/2/media/upload",
+          detail: "BadRequest: Not found",
+        });
+      }
+      if (req.method === "POST" && req.path === "/2/media/upload/initialize") {
+        throw new XPublishError("BAD_REQUEST", "chunked init not found", {
+          status: 400,
+          url: "https://api.x.com/2/media/upload/initialize",
+          detail: "BadRequest: Not found",
+        });
+      }
+      throw new Error(`unexpected ${req.method} ${req.path}`);
+    });
+
+    await expect(
+      uploadTweetImageWithAuthedJson({
+        bytes: Buffer.alloc(100, 9),
+        contentType: "image/png",
+        authedJson,
+      }),
+    ).rejects.toThrow(/one-shot=.*chunked=/);
+  });
+
   it("uses tweet_gif category for image/gif", async () => {
     const authedJson = vi.fn(async (req) => {
       if (req.method === "POST" && req.path === "/2/media/upload") {
-        expect((req.body as { media_category: string }).media_category).toBe("tweet_gif");
+        await expectImageForm(req.formData, {
+          mediaType: "image/gif",
+          mediaCategory: "tweet_gif",
+        });
         return okMedia("444");
       }
       if (req.method === "GET") return okMedia("444");
@@ -129,12 +169,16 @@ describe("uploadTweetImageWithAuthedJson", () => {
     expect(authedJson).toHaveBeenCalled();
   });
 
-  it("skips one-shot for files larger than 512 KiB (chunked only)", async () => {
+  it("uses one-shot for images up to 5 MiB", async () => {
     const size = 600 * 1024;
     const authedJson = vi.fn(async (req) => {
-      if (req.path === "/2/media/upload/initialize") return okMedia("555");
-      if (req.path.includes("/append")) return { data: {}, meta: {} };
-      if (req.path.includes("/finalize")) return okMedia("555");
+      if (req.path === "/2/media/upload") {
+        await expectImageForm(req.formData, {
+          mediaType: "image/png",
+          mediaCategory: "tweet_image",
+        });
+        return okMedia("555");
+      }
       if (req.method === "GET") return okMedia("555");
       throw new Error(`unexpected ${req.method} ${req.path}`);
     });
@@ -144,7 +188,7 @@ describe("uploadTweetImageWithAuthedJson", () => {
       authedJson,
     });
     expect(id).toBe("555");
-    expect(authedJson.mock.calls.every((c) => c[0]?.path !== "/2/media/upload")).toBe(true);
+    expect(authedJson.mock.calls.some((c) => c[0]?.path === "/2/media/upload")).toBe(true);
   });
 
   it("does not fall back to chunked on AUTH from one-shot", async () => {

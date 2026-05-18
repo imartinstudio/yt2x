@@ -178,7 +178,7 @@ describe("executeNativePublish", () => {
 
     const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { tweets: string[] };
-    expect(preview.tweets).toEqual(["1/ 标题：正文\n• item", "2/ A ｜ B\nok ｜ yes"]);
+    expect(preview.tweets).toEqual(["1/ 标题：\n\n正文\n- item", "2/ A ｜ B\nok ｜ yes"]);
   });
 
   it("keeps blank lines inside numbered generated thread tweets", async () => {
@@ -224,8 +224,8 @@ describe("executeNativePublish", () => {
     const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { tweets: string[] };
     expect(preview.tweets).toEqual([
-      "1/ 标题：第一段\n\n第二段保留在同一条 tweet\n\n• item",
-      "2/ 下一条：正文",
+      "1/ 标题：\n\n第一段\n\n第二段保留在同一条 tweet\n\n- item",
+      "2/ 下一条：\n\n正文",
     ]);
   });
 
@@ -335,7 +335,7 @@ describe("executeNativePublish", () => {
 
     const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { text: string };
-    expect(preview.text).toBe("核心：正文\n☑ done\n• next");
+    expect(preview.text).toBe("核心：\n正文\n- done\n- next");
   });
 
   it("includes cover path for short target on dry-run", async () => {

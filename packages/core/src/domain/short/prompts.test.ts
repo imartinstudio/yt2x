@@ -31,6 +31,7 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/可以在单条短帖内部使用 `1\. 2\. 3\.`/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/无序列表使用/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要写成 `1\/`、`2\/`/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要使用数字 emoji/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要输出多个备选版本/);
   });
 

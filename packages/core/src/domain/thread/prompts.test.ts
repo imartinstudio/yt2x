@@ -38,6 +38,8 @@ describe("THREAD_X_SYSTEM_PROMPT", () => {
   it("requires bold colon labels in tweets", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/\*\*xxxx：\*\*/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/\*\*关键判断：\*\*正文/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/使用 `① ② ③`/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要使用 `1\/`、`2\/`/);
   });
 
   it("forbids markdown tables in generated tweets", () => {

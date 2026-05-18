@@ -350,7 +350,7 @@ describe("createXPublishAdapter.uploadTweetImage", () => {
       headers: { "content-type": "application/json" },
     });
 
-  it("uploads a small PNG via one-shot + STATUS", async () => {
+  it("uploads a small PNG via one-shot without STATUS when no processing is reported", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "yt2x-pub-img-"));
     const imgPath = path.join(dir, "cover.png");
     await writeFile(imgPath, Buffer.alloc(64, 2));
@@ -367,7 +367,7 @@ describe("createXPublishAdapter.uploadTweetImage", () => {
       });
       expect(id).toBe("777000111222333444");
       expect(fetcher.mock.calls[0]![0].toString()).toContain("/2/media/upload");
-      expect(fetcher.mock.calls[1]![0].toString()).toContain("media_id=777000111222333444");
+      expect(fetcher).toHaveBeenCalledTimes(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

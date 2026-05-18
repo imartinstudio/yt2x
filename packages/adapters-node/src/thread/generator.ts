@@ -36,7 +36,7 @@ const ThreadHookSchema = z.object({
 const ThreadPlanningSchema = z.object({
   core_thesis: z.string().min(1),
   conflict: z.string().min(1),
-  key_points: z.array(z.string().min(1)).min(4).max(6),
+  key_points: z.array(z.string().min(1)).min(4).max(12),
   reader_gain: z.string().min(1),
   final_post: z.string().min(1),
 });
@@ -109,7 +109,10 @@ const normalizeThread = (
   assertNoMarkdownTables(raw.tweets);
   const thread: GeneratedThread = {
     title: raw.title,
-    planning: raw.planning,
+    planning: {
+      ...raw.planning,
+      key_points: raw.planning.key_points.slice(0, 6),
+    },
     tweets: raw.tweets.map((tweet) => stripTemplateTweetLabel(tweet)),
     hooks: raw.hooks,
   };

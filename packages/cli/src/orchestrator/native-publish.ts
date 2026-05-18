@@ -106,7 +106,7 @@ type PublishTarget = "article" | "x-thread" | "x-short" | "x-thread-short";
 type ThreadSource = "generated" | "article" | "auto";
 type PublishMode = "article" | "thread" | "short" | "thread-short";
 
-const THREAD_ITEM_START_RE = /^[ \t]*\d+\/(?:[ \t]|$)/u;
+const THREAD_ITEM_START_RE = /^[ \t]*(?:\d+\/|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])(?:[ \t]|$)/u;
 
 const parseGeneratedThreadMarkdown = (raw: string): string[] => {
   const blocks: string[] = [];
@@ -181,7 +181,7 @@ const loadGeneratedThreadTexts = async (
   const raw = await readFile(threadPath, "utf8");
   const texts = parseGeneratedThreadMarkdown(raw)
     .map((block) => block.trim())
-    .map((block) => prepareTextForXPublish(block))
+    .map((block) => prepareTextForXPublish(block, { orderedListStyle: "circled" }))
     .filter((block) => block.length > 0)
     .slice(0, maxTweets);
   if (texts.length === 0) {
@@ -199,7 +199,7 @@ const loadGeneratedThreadTexts = async (
 const loadGeneratedShortText = async (articleDir: string): Promise<{ texts: string[]; source: "x-short.md" }> => {
   const shortPath = path.join(articleDir, "x-short.md");
   const raw = await readFile(shortPath, "utf8");
-  const text = prepareTextForXPublish(raw);
+  const text = prepareTextForXPublish(raw, { orderedListStyle: "decimal" });
   if (text.length === 0) {
     throw new Error(`${shortPath} did not contain a publishable short post.`);
   }
@@ -698,10 +698,8 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
         logger.info({ mediaId: firstMediaId, coverPath }, "Cover uploaded");
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        logger.warn(
-          { coverPath, err: message },
-          threadLikeMode ? "Cover upload failed; posting text-only thread" : "Cover upload failed; posting text-only",
-        );
+        logger.error({ coverPath, err: message }, "Cover upload failed; aborting publish");
+        throw new Error(`Cover image upload failed for ${coverPath}: ${message}`);
       }
     }
 

@@ -98,6 +98,27 @@ describe("parseGeneratedThreadJson", () => {
     expect(parseGeneratedThreadJson(raw).tweets[0]).toBe("plain t1");
   });
 
+  it("normalizes extra planning key points without rejecting the thread", () => {
+    const raw = JSON.stringify({
+      title: "Thread title",
+      planning: {
+        core_thesis: "core",
+        conflict: "conflict",
+        key_points: ["p1", "p2", "p3", "p4", "p5", "p6", "p7"],
+        reader_gain: "gain",
+        final_post: "final",
+      },
+      tweets: ["判断：t1", "误区：t2", "方法：t3", "验证：t4", "工具：t5", "收益：t6"],
+      hooks: [
+        { text: "h1", angle: "反直觉", risk: "low" },
+        { text: "h2", angle: "实用收益", risk: "low" },
+        { text: "h3", angle: "技术洞察", risk: "medium" },
+      ],
+    });
+
+    expect(parseGeneratedThreadJson(raw).planning.key_points).toEqual(["p1", "p2", "p3", "p4", "p5", "p6"]);
+  });
+
   it("strips template labels while preserving content-derived labels and markdown", () => {
     const raw = JSON.stringify({
       title: "Thread title",

@@ -17,7 +17,7 @@ describe("prepareTextForXPublish", () => {
       "",
       "- [x] 完成",
       "- 待办",
-      "1. 第一步",
+      "① 第一步",
       "",
       "| Key | Value |",
       "| --- | --- |",
@@ -36,9 +36,9 @@ describe("prepareTextForXPublish", () => {
       [
         "标题",
         "",
-        "☑ 完成",
-        "• 待办",
-        "1. 第一步",
+        "- 完成",
+        "- 待办",
+        "① 第一步",
         "",
         "Key ｜ Value",
         "API ｜ ok",
@@ -101,25 +101,33 @@ describe("stripMarkdown", () => {
   it("removes inline emphasis chars", () => {
     expect(stripMarkdown("*bold* _ital_ `code` >quote")).toBe("bold ital code quote");
   });
-  it("converts markdown bold to visible X unicode bold where possible", () => {
-    expect(stripMarkdown("**API v2：**中文 __Bold 123__")).toBe("𝐀𝐏𝐈 𝐯𝟐：中文 𝐁𝐨𝐥𝐝 𝟏𝟐𝟑");
+  it("removes markdown bold and separates bold title prefixes from content", () => {
+    expect(stripMarkdown("**API v2：**中文 __Bold 123__")).toBe("API v2：\n中文 Bold 123");
   });
   it("preserves blank lines before lists", () => {
     expect(stripMarkdown("第一段。\n\n1. 第一项\n2. 第二项\n\n结尾。")).toBe(
-      "第一段。\n\n1. 第一项\n2. 第二项\n\n结尾。",
+      "第一段。\n\n① 第一项\n② 第二项\n\n结尾。",
     );
   });
-  it("converts unordered bullets to •", () => {
-    expect(stripMarkdown("- a\n* b\n+ c")).toBe("• a\n• b\n• c");
+  it("converts unordered bullets to hyphen bullets", () => {
+    expect(stripMarkdown("- a\n* b\n+ c")).toBe("- a\n- b\n- c");
+  });
+  it("converts emoji numbers to circled numbers and dot bullets to hyphen bullets", () => {
+    expect(stripMarkdown("1️⃣ 第一项\n2️⃣ 第二项\n① 第三项\n• 圆点\n· 中点")).toBe(
+      "① 第一项\n② 第二项\n① 第三项\n- 圆点\n- 中点",
+    );
+  });
+  it("preserves non-list emoji", () => {
+    expect(stripMarkdown("🔧 方法：配置\n✅ 验证通过\n结论💡")).toBe("🔧 方法：配置\n✅ 验证通过\n结论💡");
   });
   it("preserves ordered list numbering", () => {
-    expect(stripMarkdown("1. a\n2) b\n10. c")).toBe("1. a\n2. b\n10. c");
+    expect(stripMarkdown("1. a\n2) b\n10. c")).toBe("① a\n② b\n⑩ c");
   });
   it("preserves fenced code content without fence markers", () => {
     expect(stripMarkdown("before\n```ts\nconst x = 1;\n```\nafter")).toBe("before\nconst x = 1;\nafter");
   });
-  it("converts task list markers to checkbox glyphs", () => {
-    expect(stripMarkdown("- [ ] todo\n- [x] done\n* [X] shipped")).toBe("☐ todo\n☑ done\n☑ shipped");
+  it("converts task list markers to hyphen bullets", () => {
+    expect(stripMarkdown("- [ ] todo\n- [x] done\n* [X] shipped")).toBe("- todo\n- done\n- shipped");
   });
   it("converts markdown tables to pipe-separated text and removes divider rows", () => {
     const md = "| Name | Value |\n| --- | --- |\n| API | ok |";
@@ -133,6 +141,42 @@ describe("stripMarkdown", () => {
   });
   it("collapses 3+ newlines to 2", () => {
     expect(stripMarkdown("a\n\n\n\nb")).toBe("a\n\nb");
+  });
+  it("adds breathing room around list items for X readability", () => {
+    expect(stripMarkdown("配置步骤：\n1. **创建分组：** 直连、普通代理、静态住宅IP。\n2. **引入规则：** 添加RULE-SET。")).toBe(
+      [
+        "配置步骤：",
+        "① 创建分组： 直连、普通代理、静态住宅IP。",
+        "② 引入规则： 添加RULE-SET。",
+      ].join("\n"),
+    );
+  });
+  it("preserves slash thread markers and splits title/body lines", () => {
+    expect(stripMarkdown("6/ 日志抓包是适配小众App的万能方法：打开日志观察域名。\n\n7/ 下一步：创建规则。")).toBe(
+      [
+        "6/ 日志抓包是适配小众App的万能方法：",
+        "",
+        "打开日志观察域名。",
+        "",
+        "7/ 下一步：",
+        "",
+        "创建规则。",
+      ].join("\n"),
+    );
+  });
+  it("keeps circled step title and body on the same line", () => {
+    expect(stripMarkdown("③ 静态住宅IP分组（Static Residential）：Claude、TikTok等风控严格的平台\n给每个分组起容易识别的名字。")).toBe(
+      [
+        "③ 静态住宅IP分组（Static Residential）：Claude、TikTok等风控严格的平台",
+        "给每个分组起容易识别的名字。",
+      ].join("\n"),
+    );
+  });
+  it("can keep decimal ordered lists for short posts", () => {
+    expect(prepareTextForXPublish("1. a\n2) b\n3️⃣ c", { orderedListStyle: "decimal" })).toBe("1. a\n2. b\n3. c");
+  });
+  it("does not split URLs after the protocol colon", () => {
+    expect(stripMarkdown("curl https:\n//claude.ai/cdn-cgi/trace")).toBe("curl https://claude.ai/cdn-cgi/trace");
   });
 });
 
@@ -174,7 +218,7 @@ describe("truncateToWeightedLength", () => {
 describe("articleToLongPost", () => {
   it("returns stripped markdown as one body", () => {
     const post = articleToLongPost("# Title\n\nHello **world**.");
-    expect(post).toContain("Hello 𝐰𝐨𝐫𝐥𝐝");
+    expect(post).toContain("Hello world.");
     expect(post).not.toContain("**");
   });
 

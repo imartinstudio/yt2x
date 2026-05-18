@@ -41,6 +41,15 @@ type RawV2Error = {
   errors?: Array<{ message?: string; code?: number; parameters?: unknown }>;
 };
 
+const summarizeErrorDetail = (json: unknown, fallback: string): string => {
+  const raw = (json ?? {}) as RawV2Error;
+  const base = raw.detail ?? raw.title ?? raw.errors?.[0]?.message ?? fallback;
+  if (raw.errors !== undefined && raw.errors.length > 0) {
+    return `${base}; errors=${JSON.stringify(raw.errors).slice(0, 800)}`;
+  }
+  return base;
+};
+
 const parseRetryAfter = (resp: Response): number | undefined => {
   // x-rate-limit-reset：epoch second（X 自定义）
   const reset = resp.headers.get("x-rate-limit-reset");
@@ -82,8 +91,7 @@ const classifyError = (
   resp: Response,
 ): XPublishError => {
   const raw = (json ?? {}) as RawV2Error;
-  const detail =
-    raw.detail ?? raw.title ?? raw.errors?.[0]?.message ?? `HTTP ${status}`;
+  const detail = summarizeErrorDetail(json, `HTTP ${status}`);
 
   if (status === 401) {
     return new XPublishError("AUTH", `X API 401 Unauthorized: ${detail}`, {
@@ -161,6 +169,7 @@ export const createXPublishAdapter = (
     method: "GET" | "POST" | "DELETE";
     path: string;
     body?: unknown;
+    formData?: FormData;
     signal?: AbortSignal;
   };
 
@@ -173,10 +182,12 @@ export const createXPublishAdapter = (
       authorization: `Bearer ${accessToken}`,
       accept: "application/json",
     };
-    let body: string | undefined;
+    let body: RequestInit["body"] | undefined;
     if (req.body !== undefined) {
       headers["content-type"] = "application/json";
       body = JSON.stringify(req.body);
+    } else if (req.formData !== undefined) {
+      body = req.formData;
     }
     const { signal, clear } = withTimeout(req.signal, timeoutMs);
     const init: RequestInit = { method: req.method, headers, signal };
@@ -212,6 +223,7 @@ export const createXPublishAdapter = (
       method: req.method,
       path: req.path,
       ...(req.body !== undefined ? { body: req.body } : {}),
+      ...(req.formData !== undefined ? { formData: req.formData } : {}),
       ...(req.signal !== undefined ? { signal: req.signal } : {}),
     });
 

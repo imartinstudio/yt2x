@@ -29,7 +29,7 @@ export const registerPublishCommand = (program: Command): void => {
     .option("--thread-source <source>", "Thread source: generated|article|auto", "generated")
     .option("--thread", "Compatibility alias for --target x-thread", false)
     .option("--max-tweets <n>", "Max tweets when publishing x-thread (default 8; x-thread-short default 10)")
-    .option(" --thread-delay <seconds|range>", "Delay between thread tweets in seconds (default 20-30; 0 disables)")
+    .option("--thread-delay <seconds|range>", "Delay between thread tweets in seconds (default 20-30; 0 disables)")
     .option("--premium", "Premium account: allow longer single post for article (default 4000 chars)", false)
     .option("--numbering", "Prefix tweets with ①②③ (thread mode only)", false)
     .option("--continue-on-failure", "Keep posting remaining tweets if one fails (thread mode)", false)

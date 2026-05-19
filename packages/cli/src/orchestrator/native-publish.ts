@@ -441,6 +441,19 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       articleRootDir,
     };
     if (flags.articleDir !== undefined) findInput.articleDir = flags.articleDir;
+    if (publishTarget === "article") {
+      const artifacts = await findArticleArtifacts(findInput);
+      articleDirForStatus = artifacts.articleDir;
+      coverPath = artifacts.coverPath;
+      const raw = artifacts.articleContent.trim();
+      const prepared = prepareTextForXPublish(raw);
+      texts = prepared.length > 0 ? [prepared] : [];
+    } else if (publishTarget === "x-short") {
+      const loaded = await loadGeneratedShortText(articleDirForStatus);
+      source = loaded.source;
+      texts = loaded.texts;
+      coverPath = await findCoverImage(articleDirForStatus);
+    } else if (publishTarget === "x-thread-short") {
       const short = await loadGeneratedShortText(articleDirForStatus);
       const thread = await loadGeneratedThreadTexts(articleDirForStatus, maxTweets, maxChars);
       source = `${short.source} + ${thread.source}`;

@@ -51,6 +51,26 @@ export const AcquireOptionsSchema = z.object({
   maxWords: z.coerce.number().int().min(100).default(900),
   cookiesFromBrowser: z.string().optional(),
   proxy: z.string().optional(),
+  downloadVideo: z.boolean().default(false),
+  videoOnly: z.boolean().default(false),
+  videoStart: z.string().optional(),
+  videoEnd: z.string().optional(),
+  videoDuration: z.coerce.number().int().min(1).max(600).default(30),
+}).superRefine((data, ctx) => {
+  if ((data.videoStart !== undefined || data.videoEnd !== undefined) && !data.downloadVideo) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "--video-start / --video-end 需要开启 --download-video",
+      path: ["downloadVideo"],
+    });
+  }
+  if (data.videoOnly && !data.downloadVideo) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "--video-only 需要开启 --download-video",
+      path: ["downloadVideo"],
+    });
+  }
 });
 export type AcquireOptions = z.infer<typeof AcquireOptionsSchema>;
 

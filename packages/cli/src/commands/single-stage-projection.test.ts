@@ -66,4 +66,17 @@ describe("projectSingleStage", () => {
     });
     expect(args.publish.threadDelay).toBe("12-18");
   });
+
+  it("maps video-only acquire flags and auto-enables download", () => {
+    const args = projectSingleStage("acquire", {
+      urls: ["https://example.com/video"],
+      videoOnly: true,
+      videoStart: "00:01:00",
+      videoEnd: "00:01:30",
+    });
+    expect(args.acquire.downloadVideo).toBe(true);
+    expect(args.acquire.videoOnly).toBe(true);
+    expect(args.acquire.videoStart).toBe("00:01:00");
+    expect(args.acquire.videoEnd).toBe("00:01:30");
+  });
 });

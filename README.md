@@ -133,6 +133,15 @@ pnpm yt2x --help
 # 采集视频元数据、字幕、分块文本
 pnpm yt2x acquire --urls "<YOUTUBE_URL>"
 
+# 可选下载最高热度 30 秒视频片段
+pnpm yt2x acquire --urls "<YOUTUBE_URL>" --download-video
+
+# 只下载视频片段，不生成字幕和转写
+pnpm yt2x acquire --urls "<YOUTUBE_URL>" --video-only
+
+# 只下载从指定时间开始的 5 秒片段
+pnpm yt2x acquire --urls "<YOUTUBE_URL>" --video-only --video-start 00:07:13 --video-duration 5
+
 # 对已采集视频生成结构化笔记
 pnpm yt2x notes --video-id <videoId> --llm-provider openai
 
@@ -149,6 +158,12 @@ pnpm yt2x publish --video-id <videoId> --dry-run
 pnpm yt2x pipeline \
   --urls "<YOUTUBE_URL>" \
   --acquire auto --notes auto --article auto --publish skip
+
+# 全流水线并在采集阶段顺带下载视频片段
+pnpm yt2x pipeline \
+  --urls "<YOUTUBE_URL>" \
+  --download-video \
+  --acquire auto --notes auto --article auto --publish skip
 ```
 
 更完整的 CLI 参数说明见 [docs/USAGE.md](./docs/USAGE.md#cli-参数说明)。如果 YouTube 采集遇到登录、人机验证或区域 / 年龄限制，通常需要先在本机浏览器登录 YouTube，再传 `--cookies-from-browser`：
@@ -158,6 +173,10 @@ pnpm yt2x acquire \
   --urls "<YOUTUBE_URL>" \
   --cookies-from-browser chrome
 ```
+
+YouTube URL 用引号包住即可，不需要转义 `?` 或 `=`。例如使用 `"<YOUTUBE_URL>"`，不要写成带反斜杠的 URL。
+
+注意：`pipeline --download-video` 只是采集阶段的附加视频片段产物，后续 `notes` / `article` 仍依赖字幕转写产物。如果视频没有手动字幕或自动字幕，pipeline 会停在 acquire；只测试视频下载时使用 `yt2x acquire --video-only`。
 
 ## 发布到 X
 
@@ -234,6 +253,8 @@ pnpm yt2x pipeline \
 | `metadata.json`                 | acquire | 视频元数据                               |
 | `chunks.md`                     | acquire | 清洗后的转写分块                         |
 | `timestamped-cues.md`           | acquire | 带时间轴的字幕文本                       |
+| `video/clip.mp4`                | acquire | 可选下载的视频片段                       |
+| `video/clip-manifest.json`      | acquire | 视频片段范围、模式和 warning 清单        |
 | `structured-notes.md`           | notes   | LLM 结构化笔记                           |
 | `article.md`                    | article | 面向 X 的长文 Markdown                   |
 | `x-thread.md`                   | article | 面向 X 的生成式串推 Markdown             |
@@ -355,4 +376,3 @@ pnpm yt2x publish --video-id <videoId> --target article --premium --dry-run
 ```
 
 非 Premium 账号建议继续使用 `--thread`。
-

@@ -22,6 +22,11 @@ export const nativeAcquireOptionsFromPipelineArgs = (
     sceneMinGap: args.acquire.sceneMinGap,
     maxWords: args.acquire.maxWords,
     jobs: args.acquire.jobs,
+    downloadVideo: args.acquire.downloadVideo,
+    videoOnly: args.acquire.videoOnly,
+    videoDuration: args.acquire.videoDuration,
+    ...(args.acquire.videoStart !== undefined ? { videoStart: args.acquire.videoStart } : {}),
+    ...(args.acquire.videoEnd !== undefined ? { videoEnd: args.acquire.videoEnd } : {}),
     ...(args.acquire.subLangs !== undefined ? { subLangs: args.acquire.subLangs } : {}),
     ...(args.acquire.cookiesFromBrowser !== undefined
       ? { cookiesFromBrowser: args.acquire.cookiesFromBrowser }

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { access, readFile } from "node:fs/promises";
 import type { PipelineStep } from "@yt2x/core";
 import { defaultProcessRunner, isProcessError, type ProcessRunner } from "../process/index.js";
 import { isStepDone, markStepDone, markStepFailed } from "../fs/process-status-store.js";
@@ -32,6 +33,11 @@ export type NativeAcquireOptions = {
     subLangs?: string;
     cookiesFromBrowser?: string;
     proxy?: string;
+    downloadVideo?: boolean;
+    videoOnly?: boolean;
+    videoStart?: string;
+    videoEnd?: string;
+    videoDuration?: number;
   };
   stages: NativeAcquireStageModes;
   control: {
@@ -51,6 +57,18 @@ export type NativeAcquireOptions = {
 };
 
 const doneArtifacts = ["metadata.json", "chunks.md", "timestamped-cues.md"];
+const videoOnlyDoneArtifacts = ["metadata.json", "video/clip-manifest.json"];
+
+const validateVideoOnlyArtifacts = async (videoDir: string): Promise<boolean> => {
+  for (const file of videoOnlyDoneArtifacts) {
+    try {
+      await access(path.join(videoDir, file));
+    } catch {
+      return false;
+    }
+  }
+  return true;
+};
 
 const firstNonEmptyLines = (input: string, maxLines: number): string[] =>
   input
@@ -116,10 +134,34 @@ const printAcquireFailure = (
   }
 };
 
-const shouldSkipAcquireForVideo = async (outDir: string, rawVideoId: string): Promise<boolean> => {
+const shouldSkipAcquireForVideo = async (
+  outDir: string,
+  rawVideoId: string,
+  acquire: NativeAcquireOptions["acquire"],
+): Promise<boolean> => {
   const videoId = sanitizeVideoId(rawVideoId);
   const videoDir = path.join(outDir, videoId);
+  const videoOnly = acquire.videoOnly ?? false;
   if (await isStepDone(videoDir, "acquire")) {
+    if (videoOnly) {
+      if (acquire.videoStart !== undefined || acquire.videoEnd !== undefined) {
+        return false;
+      }
+      const requestedDuration = acquire.videoDuration ?? 30;
+      try {
+        const raw = await readFile(path.join(videoDir, "video", "clip-manifest.json"), "utf8");
+        const manifest = JSON.parse(raw) as { duration_seconds?: unknown };
+        if (
+          typeof manifest.duration_seconds === "number" &&
+          Math.abs(manifest.duration_seconds - requestedDuration) > 1
+        ) {
+          return false;
+        }
+      } catch {
+        return false;
+      }
+      return validateVideoOnlyArtifacts(videoDir);
+    }
     return validateArtifacts(videoDir, "acquire");
   }
   return false;
@@ -134,6 +176,9 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
   const runner = opts.runner ?? defaultProcessRunner;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_NATIVE_ACQUIRE_TIMEOUT_MS;
   const { outDir, stages, control, flags, acquire } = opts;
+  const downloadVideo = acquire.downloadVideo ?? false;
+  const videoOnly = acquire.videoOnly ?? false;
+  const videoDuration = acquire.videoDuration ?? 30;
 
   if (stages.acquire === "skip") {
     return 0;
@@ -159,7 +204,7 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
 
   for (const video of queue) {
     const videoId = sanitizeVideoId(video.video_id);
-    if (await shouldSkipAcquireForVideo(outDir, videoId)) {
+    if (await shouldSkipAcquireForVideo(outDir, videoId, acquire)) {
       continue;
     }
 
@@ -199,6 +244,13 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
           ? { cookiesFromBrowser: acquire.cookiesFromBrowser }
           : {}),
         ...(acquire.proxy !== undefined && acquire.proxy.length > 0 ? { proxy: acquire.proxy } : {}),
+        videoClip: {
+          enabled: downloadVideo || videoOnly,
+          videoOnly,
+          durationSeconds: videoDuration,
+          ...(acquire.videoStart !== undefined ? { start: acquire.videoStart } : {}),
+          ...(acquire.videoEnd !== undefined ? { end: acquire.videoEnd } : {}),
+        },
         runner,
         timeoutMs,
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
@@ -224,7 +276,9 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
         continue;
       }
 
-      const artifactsValid = await validateArtifacts(videoDir, "acquire");
+      const artifactsValid = videoOnly
+        ? await validateVideoOnlyArtifacts(videoDir)
+        : await validateArtifacts(videoDir, "acquire");
       if (!artifactsValid) {
         const detail = `acquire reported ok but artifacts are missing under ${videoDir}`;
         await markStepFailed(videoDir, "acquire", detail);
@@ -235,7 +289,7 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
         continue;
       }
 
-      await markStepDone(videoDir, "acquire", doneArtifacts);
+      await markStepDone(videoDir, "acquire", videoOnly ? videoOnlyDoneArtifacts : doneArtifacts);
 
       if (stages.acquire === "review" && opts.reviewPrompt !== undefined) {
         const answer = await opts.reviewPrompt(videoId);

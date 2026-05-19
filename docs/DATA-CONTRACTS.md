@@ -13,8 +13,32 @@
 | `timestamped-cues.md`             | 时间轴 cues                                                 |
 | `structured-notes.md`             | 笔记阶段产出（`yt2x notes` / pipeline notes 阶段）          |
 | `screenshots/scene_manifest.json` | 可选；截图清单                                              |
+| `video/clip.mp4`                  | 可选；`--download-video` 或 `--video-only` 下载的视频片段   |
+| `video/clip-manifest.json`        | 可选；视频片段范围、模式、来源和 warning 清单               |
 | `process-status.json`             | **步骤状态主 JSON**（见下节）                               |
 | `process-status.journal.ndjson`   | 瞬时日志；正常每次 patch 后会清空，崩溃恢复时与主 JSON 合并 |
+
+`video/clip-manifest.json` 示例：
+
+```json
+{
+  "version": 1,
+  "mode": "hottest",
+  "source": "youtube_heatmap",
+  "start_seconds": 123.4,
+  "end_seconds": 153.4,
+  "duration_seconds": 30,
+  "file": "video/clip.mp4",
+  "format": "mp4",
+  "warnings": []
+}
+```
+
+普通采集模式下，视频片段是可选 artifact；下载失败会写入 `prepare-result.json` 的 warnings，但不会让 acquire 主链路失败。`yt2x acquire --video-only` 模式下，`metadata.json`、`video/clip-manifest.json` 和 manifest 指向的视频片段文件是 acquire 成功条件，字幕和转写文件不再是必需产物。
+
+同一个视频目录下重新下载片段时，yt2x 会覆盖 `video/clip.mp4` 并重写 `video/clip-manifest.json`，确保 manifest 的 `start_seconds` / `end_seconds` 与实际视频文件一致。手动时间段变化（`--video-start` / `--video-end`）不会复用旧片段缓存；`--video-start` + `--video-duration` 会按开始时间和目标秒数计算 `end_seconds`。
+
+`pipeline --download-video` 只增加上述可选视频片段产物，不改变 notes / article 的输入契约。只要不是 `--video-only`，acquire 成功仍要求 `metadata.json`、`chunks.md`、`timestamped-cues.md` 存在。
 
 ## 2. `ProcessStatusV1`（`process-status.json`）
 

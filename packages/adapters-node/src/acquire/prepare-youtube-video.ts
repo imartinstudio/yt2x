@@ -12,6 +12,7 @@ import { normalizeYoutubeUrl, sanitizeVideoId, videoIdFromUrl } from "./video-id
 import { youtubeSubLangBase } from "./youtube-sub-lang.js";
 import { ensureOfficialYoutubeThumbnail, fetchVideoMetadata, type YtDlpOptions } from "./yt-dlp.js";
 import type { AcquireProgressCallbacks } from "./acquire-progress.js";
+import { downloadVideoClip, type VideoClipManifest, type VideoClipOptions } from "./video-clip.js";
 
 export type PrepareYoutubeVideoOptions = {
   url: string;
@@ -23,6 +24,7 @@ export type PrepareYoutubeVideoOptions = {
   subLangs?: string;
   cookiesFromBrowser?: string;
   proxy?: string;
+  videoClip?: VideoClipOptions;
   skipPreflight?: boolean;
   runner: ProcessRunner;
   timeoutMs: number;
@@ -40,6 +42,7 @@ export type PrepareYoutubeVideoResult = {
   title?: unknown;
   subtitle?: string;
   youtube_cover?: string;
+  video_clip?: VideoClipManifest;
   /** 各子步骤耗时（毫秒），便于排查慢点 */
   timingsMs?: Record<string, number>;
 };
@@ -130,6 +133,7 @@ export const prepareYoutubeVideo = async (
   };
 
   let metadata: Record<string, unknown> = {};
+  let metadataOk = false;
   try {
     metadata = await timedStep(opts, "metadata", timingsMs, () =>
       fetchVideoMetadata(pageUrl, ytdlpOpts),
@@ -150,10 +154,70 @@ export const prepareYoutubeVideo = async (
     );
     result.video_id = videoId;
     result.title = slim.title;
+    metadataOk = true;
   } catch (err: unknown) {
     await mkdir(videoDir, { recursive: true });
     const message = err instanceof Error ? err.message : String(err);
     result.warnings.push(`metadata failed: ${message}`);
+  }
+
+  if (opts.videoClip?.enabled === true && metadataOk) {
+    try {
+      const clip = await timedStep(opts, "video-clip", timingsMs, () =>
+        downloadVideoClip({
+          url: pageUrl,
+          videoDir,
+          metadata,
+          clip: opts.videoClip!,
+          ...(opts.cookiesFromBrowser !== undefined && opts.cookiesFromBrowser.length > 0
+            ? { cookiesFromBrowser: opts.cookiesFromBrowser }
+            : {}),
+          ...(opts.proxy !== undefined && opts.proxy.length > 0 ? { proxy: opts.proxy } : {}),
+          runner: opts.runner,
+          timeoutMs: opts.timeoutMs,
+          ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+        }),
+      );
+      result.video_clip = clip.manifest;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      result.warnings.push(`video clip download failed: ${message}`);
+    }
+  } else if (opts.videoClip?.enabled === true) {
+    result.warnings.push("video clip download skipped because metadata is unavailable");
+  }
+
+  if (opts.videoClip?.videoOnly === true) {
+    const required = ["metadata.json", "video/clip-manifest.json"] as const;
+    const missing: string[] = [];
+    for (const name of required) {
+      try {
+        await access(path.join(videoDir, name));
+      } catch {
+        missing.push(name);
+      }
+    }
+    if (result.video_clip?.file !== undefined) {
+      try {
+        await access(path.join(videoDir, result.video_clip.file));
+      } catch {
+        missing.push(result.video_clip.file);
+      }
+    } else {
+      missing.push("video/clip.*");
+    }
+    if (missing.length > 0) {
+      result.warnings.push(`missing required artifacts: ${missing.join(", ")}`);
+      result.ok = false;
+    } else {
+      result.ok = true;
+    }
+    await writeFile(
+      path.join(videoDir, "prepare-result.json"),
+      `${JSON.stringify(result, null, 2)}\n`,
+      "utf8",
+    );
+    return result;
   }
 
   const videoLanguage = String(metadata.language ?? "en").trim() || "en";

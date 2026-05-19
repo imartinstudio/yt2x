@@ -41,6 +41,13 @@ yt2x 处于 v0.1 开源前打磨期：
 - 发布失败后的重试、回滚或断点续发策略。
 - 更丰富的平台模板，例如 WeChat / newsletter。
 
+## v2.0 方向
+
+- 可选视频片段下载：`--download-video` 默认下载播放热度最高区域附近 30 秒。
+- 单独视频下载模式：`yt2x acquire --video-only` 只下载视频片段，不生成字幕和转写。
+- 手动时间段下载：`--video-start` / `--video-end` 指定片段范围。
+- 详细任务拆分见 [VIDEO-DOWNLOAD-V2-TASK.md](./VIDEO-DOWNLOAD-V2-TASK.md)。
+
 ## 不在 v0.1 范围
 
 - 自动绕过平台限制。

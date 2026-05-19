@@ -48,4 +48,27 @@ describe("parseCommanderPipelineFlags", () => {
     });
     expect(args.article.targets).toEqual(["article", "x-thread", "x-short"]);
   });
+
+  it("maps video download options and auto-enables download for manual ranges", () => {
+    const args = parseCommanderPipelineFlags({
+      urls: ["https://example.com/video"],
+      videoStart: "00:01:00",
+      videoEnd: "00:01:30",
+      videoDuration: "45",
+    });
+    expect(args.acquire.downloadVideo).toBe(true);
+    expect(args.acquire.videoOnly).toBe(false);
+    expect(args.acquire.videoStart).toBe("00:01:00");
+    expect(args.acquire.videoEnd).toBe("00:01:30");
+    expect(args.acquire.videoDuration).toBe(45);
+  });
+
+  it("rejects video-only on pipeline args", () => {
+    expect(() =>
+      parseCommanderPipelineFlags({
+        urls: ["https://example.com/video"],
+        videoOnly: true,
+      }),
+    ).toThrow(/video-only/);
+  });
 });

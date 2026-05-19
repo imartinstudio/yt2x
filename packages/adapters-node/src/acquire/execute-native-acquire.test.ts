@@ -6,12 +6,28 @@ import { executeNativeAcquire } from "./execute-native-acquire.js";
 import { isStepDone } from "../fs/process-status-store.js";
 
 vi.mock("./prepare-youtube-video.js", () => ({
-  prepareYoutubeVideo: vi.fn(async (opts: { url: string; outDir: string }) => {
+  prepareYoutubeVideo: vi.fn(async (opts: { url: string; outDir: string; videoClip?: { videoOnly: boolean } }) => {
     const { mkdir, writeFile } = await import("node:fs/promises");
     const videoId = "dQw4w9WgXcQ";
     const videoDir = path.join(opts.outDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await writeFile(path.join(videoDir, "metadata.json"), "{}\n", "utf8");
+    if (opts.videoClip?.videoOnly === true) {
+      await mkdir(path.join(videoDir, "video"), { recursive: true });
+      await writeFile(path.join(videoDir, "video", "clip.mp4"), "fake mp4", "utf8");
+      await writeFile(
+        path.join(videoDir, "video", "clip-manifest.json"),
+        `${JSON.stringify({ version: 1, file: "video/clip.mp4" })}\n`,
+        "utf8",
+      );
+      return {
+        url: opts.url,
+        dir: videoDir,
+        ok: true,
+        warnings: [],
+        video_id: videoId,
+      };
+    }
     await writeFile(path.join(videoDir, "chunks.md"), "# chunks\n", "utf8");
     await writeFile(path.join(videoDir, "timestamped-cues.md"), "# cues\n", "utf8");
     return {
@@ -101,6 +117,84 @@ describe("executeNativeAcquire", () => {
     expect(code).toBe(0);
     await expect(isStepDone(path.join(outDir, canonicalId), "acquire")).resolves.toBe(true);
     await expect(isStepDone(path.join(outDir, urlId), "acquire")).resolves.toBe(false);
+  });
+
+  it("marks video-only acquire done without transcript artifacts", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-acq-video-only-"));
+    const { prepareYoutubeVideo } = await import("./prepare-youtube-video.js");
+
+    const code = await executeNativeAcquire({
+      monorepoRoot: "/tmp",
+      outDir,
+      sources: { urls: ["https://youtu.be/dQw4w9WgXcQ"] },
+      acquire: {
+        keyframes: 0,
+        sceneThreshold: 0.35,
+        sceneMinGap: 12,
+        maxWords: 900,
+        jobs: 3,
+        downloadVideo: true,
+        videoOnly: true,
+        videoDuration: 30,
+      },
+      stages: baseStages,
+      control: { continueFlag: false, errorStrategy: "stop" },
+      flags: { verbose: false },
+    });
+
+    expect(code).toBe(0);
+    const videoDir = path.join(outDir, "dQw4w9WgXcQ");
+    await expect(isStepDone(videoDir, "acquire")).resolves.toBe(true);
+    await expect(access(path.join(videoDir, "chunks.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(prepareYoutubeVideo).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        videoClip: expect.objectContaining({ videoOnly: true, durationSeconds: 30 }),
+      }),
+    );
+  });
+
+  it("reruns video-only acquire when a manual range is requested over an existing clip", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-acq-video-only-range-"));
+    const { prepareYoutubeVideo } = await import("./prepare-youtube-video.js");
+    vi.mocked(prepareYoutubeVideo).mockClear();
+
+    const baseOpts = {
+      monorepoRoot: "/tmp",
+      outDir,
+      sources: { urls: ["https://youtu.be/dQw4w9WgXcQ"] },
+      acquire: {
+        keyframes: 0,
+        sceneThreshold: 0.35,
+        sceneMinGap: 12,
+        maxWords: 900,
+        jobs: 3,
+        downloadVideo: true,
+        videoOnly: true,
+        videoDuration: 30,
+      },
+      stages: baseStages,
+      control: { continueFlag: false, errorStrategy: "stop" as const },
+      flags: { verbose: false },
+    };
+
+    expect(await executeNativeAcquire(baseOpts)).toBe(0);
+    expect(await executeNativeAcquire({
+      ...baseOpts,
+      acquire: {
+        ...baseOpts.acquire,
+        videoStart: "00:07:13",
+        videoEnd: "00:07:30",
+      },
+    })).toBe(0);
+
+    expect(prepareYoutubeVideo).toHaveBeenCalledTimes(2);
+    expect(prepareYoutubeVideo).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        videoClip: expect.objectContaining({ start: "00:07:13", end: "00:07:30" }),
+      }),
+    );
   });
 
   it("returns 1 when no sources on fresh run", async () => {

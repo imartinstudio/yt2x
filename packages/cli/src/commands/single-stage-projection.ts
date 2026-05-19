@@ -31,6 +31,11 @@ export const projectSingleStage = (target: SingleStageTarget, flags: SingleStage
   const provider = flags.llmProvider
     ? LlmProviderSchema.parse(flags.llmProvider)
     : defaultCliLlmProvider();
+  const downloadVideo =
+    flags.downloadVideo === true ||
+    flags.videoOnly === true ||
+    flags.videoStart !== undefined ||
+    flags.videoEnd !== undefined;
 
   return PipelineArgsSchema.parse({
     sources: {
@@ -51,6 +56,11 @@ export const projectSingleStage = (target: SingleStageTarget, flags: SingleStage
       maxWords: flags.maxWords ?? "900",
       cookiesFromBrowser: flags.cookiesFromBrowser,
       proxy: flags.proxy,
+      downloadVideo,
+      videoOnly: flags.videoOnly ?? false,
+      videoStart: flags.videoStart,
+      videoEnd: flags.videoEnd,
+      videoDuration: flags.videoDuration ?? "30",
     },
     article: {
       platform: flags.platform ?? "x",

@@ -249,12 +249,14 @@ export type ClipRange = {
 
 ```text
 yt-dlp
-  -f bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]
+  -f bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][vcodec^=avc1]
   --merge-output-format mp4
   --download-sections "*<START>-<END>"
   -o "<videoDir>/video/clip.%(ext)s"
   "<YOUTUBE_URL>"
 ```
+
+视频片段下载只选择 H.264/AVC (`avc1`) MP4，避免 YouTube 返回 AV1-in-MP4 后无法上传到 X。
 
 必须复用现有 `cookiesFromBrowser`、`proxy`、`timeoutMs`、`signal` 和 `ProcessRunner`。
 

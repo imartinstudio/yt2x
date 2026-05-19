@@ -76,6 +76,12 @@ describe("buildArticleUserPrompt", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不要用/);
   });
 
+  it("forbids trailing source attribution in generated articles", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不要在文末追加来源说明/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Source 行/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).not.toMatch(/最后一行单独一段来源说明/);
+  });
+
   it("requires bold headings and colon labels", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/# \*\*标题\*\*/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/## \*\*小节标题\*\*/);

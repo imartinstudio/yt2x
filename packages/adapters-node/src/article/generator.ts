@@ -35,6 +35,9 @@ const stripCodeFenceWrapper = (s: string): string => {
   return m !== null && m[1] !== undefined ? m[1].trim() : s;
 };
 
+const TRAILING_SOURCE_LINE_RE = /\n+(?:来源|Source)\s*[:：][^\n]*\s*$/i;
+const stripTrailingSourceAttribution = (s: string): string => s.replace(TRAILING_SOURCE_LINE_RE, "").trim();
+
 /** 从 Markdown 中提取所有图片引用 `![caption](screenshots/<file>)` */
 const extractImageRefs = (content: string): Array<{ caption: string; file: string }> => {
   const re = /!\[([^\]]*)\]\(screenshots\/([^)]+)\)/g;
@@ -126,7 +129,7 @@ export const generateXArticleContent = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
 
-  const content = stripCodeFenceWrapper(resp.content.trim());
+  const content = stripTrailingSourceAttribution(stripCodeFenceWrapper(resp.content.trim()));
 
   // 验证图片引用
   const visualPlan = validateArticleVisualPlan(content, input.availableVisuals);

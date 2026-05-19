@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { executeNativeAcquire } from "./execute-native-acquire.js";
-import { isStepDone } from "../fs/process-status-store.js";
+import { isStepDone, markStepDone } from "../fs/process-status-store.js";
 
 vi.mock("./prepare-youtube-video.js", () => ({
   prepareYoutubeVideo: vi.fn(async (opts: { url: string; outDir: string; videoClip?: { videoOnly: boolean } }) => {
@@ -215,6 +215,33 @@ describe("executeNativeAcquire", () => {
       flags: { verbose: false },
     });
     expect(code).toBe(1);
+  });
+
+  it("re-runs acquire when force is true even if status is already done", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-acq-force-"));
+    const videoDir = path.join(outDir, "dQw4w9WgXcQ");
+    await markStepDone(videoDir, "acquire", ["metadata.json", "chunks.md", "timestamped-cues.md"]);
+    const { prepareYoutubeVideo } = await import("./prepare-youtube-video.js");
+    const before = vi.mocked(prepareYoutubeVideo).mock.calls.length;
+
+    const code = await executeNativeAcquire({
+      monorepoRoot: "/tmp",
+      outDir,
+      sources: { urls: ["https://youtu.be/dQw4w9WgXcQ"] },
+      acquire: {
+        keyframes: 0,
+        sceneThreshold: 0.35,
+        sceneMinGap: 12,
+        maxWords: 900,
+        jobs: 3,
+      },
+      stages: baseStages,
+      control: { continueFlag: false, errorStrategy: "stop", force: true },
+      flags: { verbose: false },
+    });
+
+    expect(code).toBe(0);
+    expect(vi.mocked(prepareYoutubeVideo).mock.calls.length).toBe(before + 1);
   });
 
   it("prints acquire failure details without requiring verbose mode", async () => {

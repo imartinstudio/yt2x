@@ -43,6 +43,14 @@ describe("projectSingleStage", () => {
     expect(args.control.continueFlag).toBe(true);
   });
 
+  it("maps force to control.force", () => {
+    const args = projectSingleStage("acquire", {
+      urls: ["https://www.youtube.com/watch?v=abc12345678"],
+      force: true,
+    });
+    expect(args.control.force).toBe(true);
+  });
+
   it("maps article targets for single-stage commands", () => {
     const args = projectSingleStage("article", {
       urls: ["https://example.com/video"],

@@ -21,5 +21,6 @@ export const registerAcquireCommand = (program: Command): void => {
     .option("--video-end <time>", "Video clip end time (seconds, MM:SS, or HH:MM:SS)")
     .option("--video-duration <seconds>", "Auto-selected video clip duration in seconds", "30")
     .option("--error-strategy <mode>", "On failure: stop|skip", "stop")
+    .option("--force", "Re-run acquire even when process-status marks it done")
     .action((flags: SingleStageFlags) => runAcquireStage(flags));
 };

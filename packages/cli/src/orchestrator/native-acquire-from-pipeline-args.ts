@@ -42,6 +42,7 @@ export const nativeAcquireOptionsFromPipelineArgs = (
   control: {
     continueFlag: args.control.continueFlag,
     errorStrategy: args.control.errorStrategy,
+    force: args.control.force,
   },
   flags: args.flags,
   ...(ctx.runner !== undefined ? { runner: ctx.runner } : {}),

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ProcessRunner } from "../process/index.js";
 import { fingerprintChanged, subtitleFingerprint } from "./subtitle-files.js";
-import { screenshotsDirHasRaster } from "./screenshots.js";
+import { screenshotsDirHasOfficialYoutubeThumbnail } from "./screenshots.js";
 import { youtubeSubLangBase } from "./youtube-sub-lang.js";
 
 export type YtDlpOptions = {
@@ -157,7 +157,7 @@ export const ensureOfficialYoutubeThumbnail = async (
   opts: YtDlpOptions,
   warnings: string[],
 ): Promise<string | undefined> => {
-  if (await screenshotsDirHasRaster(videoDir)) {
+  if (await screenshotsDirHasOfficialYoutubeThumbnail(videoDir)) {
     return undefined;
   }
 

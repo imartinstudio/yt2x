@@ -22,6 +22,7 @@
 | 发布安全预览         | 已落地 | `--dry-run` / `pipeline --publish review` 不真实发帖       |
 | 批次队列 + 步骤状态  | 已落地 | 每视频 `process-status.json`，无根级 `pipeline-state.json` |
 | 历史文档清理         | 已落地 | 历史 PR 验收稿、旧重构蓝图、一次性修复记录已从 docs 中移除 |
+| v2.0 视频片段下载    | 进行中 | `--download-video` / `--video-only` 任务文档与实现推进中   |
 
 ## 架构快照
 
@@ -46,13 +47,14 @@ packages/cli
 
 ## 当前文档入口
 
-| 文档                                     | 说明                         |
-| ---------------------------------------- | ---------------------------- |
-| [README.md](../README.md)                | 项目入口、快速开始、常用命令 |
-| [USAGE.md](./USAGE.md)                   | 详细命令、环境变量、续跑说明 |
-| [ARCHITECTURE.md](./ARCHITECTURE.md)     | 包职责与数据流               |
-| [DATA-CONTRACTS.md](./DATA-CONTRACTS.md) | 磁盘产物与状态文件契约       |
-| [ROADMAP.md](./ROADMAP.md)               | 当前路线图                   |
-| [AGENT-PROMPTS.md](./AGENT-PROMPTS.md)   | 多 Agent 协作提示词          |
-| [adr/README.md](./adr/README.md)         | 架构决策记录                 |
-| [CONTRIBUTING.md](../CONTRIBUTING.md)    | 贡献与发布流程               |
+| 文档                                                     | 说明                         |
+| -------------------------------------------------------- | ---------------------------- |
+| [README.md](../README.md)                                | 项目入口、快速开始、常用命令 |
+| [USAGE.md](./USAGE.md)                                   | 详细命令、环境变量、续跑说明 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md)                     | 包职责与数据流               |
+| [DATA-CONTRACTS.md](./DATA-CONTRACTS.md)                 | 磁盘产物与状态文件契约       |
+| [ROADMAP.md](./ROADMAP.md)                               | 当前路线图                   |
+| [VIDEO-DOWNLOAD-V2-TASK.md](./VIDEO-DOWNLOAD-V2-TASK.md) | v2.0 视频片段下载执行任务    |
+| [AGENT-PROMPTS.md](./AGENT-PROMPTS.md)                   | 多 Agent 协作提示词          |
+| [adr/README.md](./adr/README.md)                         | 架构决策记录                 |
+| [CONTRIBUTING.md](../CONTRIBUTING.md)                    | 贡献与发布流程               |

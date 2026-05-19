@@ -58,21 +58,105 @@ pnpm yt2x publish --help
 | `--all`               | `notes`、`article`                           | 批量处理所有符合条件的视频目录。                                 |
 | `--out-dir <path>`    | `acquire`、`notes`、`article`、`pipeline` 等 | 采集和笔记根目录，默认 `files/downloads`。                       |
 
+YouTube URL 用引号包住即可，不要在引号内转义 `?` 或 `=`。正确示例：
+
+```bash
+pnpm yt2x acquire --urls "<YOUTUBE_URL>"
+```
+
+错误示例：
+
+```bash
+pnpm yt2x acquire --urls "https://www.youtube.com/watch\?v\=<videoId>"
+```
+
 ### 采集参数
 
 这些参数适用于 `yt2x acquire`，也适用于 `yt2x pipeline` 的采集阶段。
 
-| 参数                            | 默认值 | 说明                                                                                       |
-| ------------------------------- | ------ | ------------------------------------------------------------------------------------------ |
-| `--keyframes <n>`               | `0`    | 提取场景关键帧数量；`0` 表示跳过关键帧。需要 `ffmpeg`。                                    |
-| `--jobs <n>`                    | `3`    | 并发采集任务数。                                                                           |
-| `--sub-langs <lang>`            | 自动   | 手动字幕语言覆盖值，会传给 `yt-dlp --sub-langs`，例如 `en`、`zh-Hans`、`en,zh.*`。         |
-| `--scene-threshold <n>`         | `0.35` | 场景检测阈值；值越低通常越容易切出更多关键帧。                                             |
-| `--scene-min-gap <n>`           | `12`   | 关键帧最小间隔秒数。                                                                       |
-| `--max-words <n>`               | `900`  | `chunks.md` 每个转写分块的最大词数。                                                       |
-| `--cookies-from-browser <name>` | 无     | 把浏览器登录态 cookies 传给 `yt-dlp --cookies-from-browser`。详见下方“人机验证 / 登录态”。 |
-| `--proxy <url>`                 | 无     | 把代理传给 `yt-dlp --proxy`，例如 `http://127.0.0.1:1082`。                                |
-| `--error-strategy stop\|skip`   | `stop` | 批量采集时遇到失败是立刻停止，还是跳过失败项继续处理后续视频。                             |
+| 参数                            | 默认值 | 说明                                                                                                         |
+| ------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------ |
+| `--keyframes <n>`               | `0`    | 提取场景关键帧数量；`0` 表示跳过关键帧。需要 `ffmpeg`。                                                      |
+| `--jobs <n>`                    | `3`    | 并发采集任务数。                                                                                             |
+| `--sub-langs <lang>`            | 自动   | 手动字幕语言覆盖值，会传给 `yt-dlp --sub-langs`，例如 `en`、`zh-Hans`、`en,zh.*`。                           |
+| `--scene-threshold <n>`         | `0.35` | 场景检测阈值；值越低通常越容易切出更多关键帧。                                                               |
+| `--scene-min-gap <n>`           | `12`   | 关键帧最小间隔秒数。                                                                                         |
+| `--max-words <n>`               | `900`  | `chunks.md` 每个转写分块的最大词数。                                                                         |
+| `--cookies-from-browser <name>` | 无     | 把浏览器登录态 cookies 传给 `yt-dlp --cookies-from-browser`。详见下方“人机验证 / 登录态”。                   |
+| `--proxy <url>`                 | 无     | 把代理传给 `yt-dlp --proxy`，例如 `http://127.0.0.1:1082`。                                                  |
+| `--download-video`              | 关闭   | 可选下载视频片段；默认选择播放热度最高区域附近 30 秒。                                                       |
+| `--video-only`                  | 关闭   | 仅 `acquire` 支持；只下载视频片段，跳过字幕、转写、截图和后续文档生成。                                      |
+| `--video-start <time>`          | 无     | 手动指定视频片段开始时间，支持秒数、`MM:SS` 或 `HH:MM:SS`；可配合 `--video-end` 或 `--video-duration` 使用。 |
+| `--video-end <time>`            | 无     | 手动指定视频片段结束时间；与 `--video-start` 同时使用，且优先于自动热度选择。                                |
+| `--video-duration <seconds>`    | `30`   | 自动选择视频片段时的目标秒数；也可与 `--video-start` 组合表示从开始时间下载 N 秒，当前最大 600 秒。          |
+| `--error-strategy stop\|skip`   | `stop` | 批量采集时遇到失败是立刻停止，还是跳过失败项继续处理后续视频。                                               |
+
+视频片段下载示例：
+
+```bash
+# 下载播放热度最高区域附近 30 秒
+pnpm yt2x acquire --urls "<YOUTUBE_URL>" --download-video
+
+# 手动下载指定时间段
+pnpm yt2x acquire \
+  --urls "<YOUTUBE_URL>" \
+  --download-video \
+  --video-start 00:03:10 \
+  --video-end 00:03:40
+
+# 从指定开始时间下载 5 秒
+pnpm yt2x acquire \
+  --urls "<YOUTUBE_URL>" \
+  --video-only \
+  --video-start 00:07:13 \
+  --video-duration 5
+
+# 只下载视频片段，不生成字幕和转写
+pnpm yt2x acquire --urls "<YOUTUBE_URL>" --video-only
+```
+
+下载产物位于 `files/downloads/<videoId>/video/`。普通采集模式下，视频片段下载失败只记录 warning，不影响 `metadata.json`、`chunks.md` 和 `timestamped-cues.md` 的主链路；`--video-only` 模式下，视频片段就是主目标，下载失败会导致 acquire 失败。
+
+重新下载视频片段时，yt2x 会清理旧的 `video/clip.*` 并让 `yt-dlp` 覆盖输出，避免 `clip-manifest.json` 已更新但 `clip.mp4` 仍是旧文件。用户侧不需要传 `--force-overwrites`；这是 yt2x 内部传给 `yt-dlp` 的实现细节。
+
+`--force` 是 yt2x 的阶段级覆盖语义：当前主要用于 notes / pipeline 中覆盖已有阶段产物，不是 `acquire` 单阶段参数。`yt2x acquire --video-only` 变更 `--video-start` / `--video-end` / `--video-duration` 时会按新范围重新下载，不需要 `--force`。
+
+#### pipeline 中的视频下载组合
+
+`pipeline` 支持在 acquire 阶段顺带下载视频片段，但不支持 `--video-only`。`--video-only` 是 `yt2x acquire` 单阶段能力。
+
+```bash
+# 全流水线，并在 acquire 阶段下载最高热度 30 秒片段
+pnpm yt2x pipeline \
+  --urls "<YOUTUBE_URL>" \
+  --download-video \
+  --acquire auto --notes auto --article auto --publish skip
+
+# 自动选择最高热度片段，但改成 60 秒
+pnpm yt2x pipeline \
+  --urls "<YOUTUBE_URL>" \
+  --download-video \
+  --video-duration 60 \
+  --acquire auto --notes auto --article skip --publish skip
+
+# 下载手动指定时间段，同时继续生成笔记和文章
+pnpm yt2x pipeline \
+  --urls "<YOUTUBE_URL>" \
+  --download-video \
+  --video-start 00:07:13 \
+  --video-end 00:07:30 \
+  --acquire auto --notes auto --article auto --publish skip
+
+# 从指定开始时间下载 5 秒，同时只跑到 notes
+pnpm yt2x pipeline \
+  --urls "<YOUTUBE_URL>" \
+  --download-video \
+  --video-start 00:07:13 \
+  --video-duration 5 \
+  --acquire auto --notes auto --article skip --publish skip
+```
+
+`pipeline --download-video` 不会把视频片段转写成文本。后续 `notes` / `article` 仍需要 acquire 阶段生成 `chunks.md` 和 `timestamped-cues.md`。如果 YouTube 没有手动字幕或自动字幕，pipeline 会在 acquire 失败；此时可先用 `yt2x acquire --video-only` 只验证视频片段下载。
 
 #### YouTube 人机验证 / 登录态
 

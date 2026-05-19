@@ -46,7 +46,24 @@
 
 ---
 
-## 3. 仅笔记 / 仅长文（已有视频目录）
+## 3. 仅下载视频片段
+
+```text
+请在本机用 yt2x 只下载某条 YouTube 的视频片段，不生成字幕、笔记或文章：
+
+  pnpm yt2x acquire \
+    --urls "<YOUTUBE_URL>" \
+    --video-only \
+    --video-start 00:07:13 \
+    --video-duration 5 \
+    --cookies-from-browser chrome
+
+输出默认在 files/downloads/<videoId>/video/。YouTube URL 用引号包住即可，不要在引号内转义 ? 或 =。--video-only 只适用于 acquire，不适用于 pipeline。
+```
+
+---
+
+## 4. 仅笔记 / 仅长文（已有视频目录）
 
 ```text
 视频目录已在 files/downloads/<videoId>/，且含 chunks.md 等。请生成结构化笔记（默认 native）：
@@ -62,7 +79,7 @@
 
 ---
 
-## 4. 仅发布（已有 article.md）
+## 5. 仅发布（已有 article.md）
 
 ```text
 长文已生成在 files/articles/<videoId>/article.md。请先 dry-run 再真发：
@@ -75,7 +92,7 @@
 
 ---
 
-## 5. 自定义改写风格（对话里约束，不改代码）
+## 6. 自定义改写风格（对话里约束，不改代码）
 
 ```text
 在运行 pnpm yt2x article 之前，我希望长文风格更偏「<例如：口语化 / 硬核技术 / 少形容词>」。
@@ -86,14 +103,14 @@
 
 ---
 
-## 6. 与「真实 prompt 文本」的关系
+## 7. 与「真实 prompt 文本」的关系
 
 - **笔记 / 长文** 的 system prompt 与拼装逻辑在 **`packages/core/src/domain/notes/`**、**`packages/core/src/domain/article/`**，以 TypeScript 为准。
 - 本文件 **不复制** 全文 prompt，避免与代码漂移；Agent 场景以 **CLI + 上述路径** 为单一事实来源。
 
 ---
 
-## 7. 本地 Agent Skill（可选）
+## 8. 本地 Agent Skill（可选）
 
 如果你使用支持本地 Skill / Rules / Agent instruction 的客户端，可以把下面模板复制到对应的用户级配置目录。不要把个人配置目录、API Key、OAuth token 或 cookies 提交进本仓库。
 

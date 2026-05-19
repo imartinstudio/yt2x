@@ -12,6 +12,11 @@ export type SingleStageFlags = {
   maxWords?: string;
   cookiesFromBrowser?: string;
   proxy?: string;
+  downloadVideo?: boolean;
+  videoOnly?: boolean;
+  videoStart?: string;
+  videoEnd?: string;
+  videoDuration?: string;
   platform?: string;
   maxChars?: string;
   rewriteMode?: string;

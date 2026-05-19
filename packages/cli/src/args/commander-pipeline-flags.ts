@@ -24,6 +24,11 @@ export type CommanderPipelineFlags = {
   maxWords?: string;
   cookiesFromBrowser?: string;
   proxy?: string;
+  downloadVideo?: boolean;
+  videoOnly?: boolean;
+  videoStart?: string;
+  videoEnd?: string;
+  videoDuration?: string;
   continueFrom?: boolean;
   errorStrategy?: string;
   force?: boolean;
@@ -32,6 +37,7 @@ export type CommanderPipelineFlags = {
   publishMaxChars?: string;
   maxTweets?: string;
   threadDelay?: string;
+  premium?: boolean;
   llmProvider?: string;
   llmModel?: string;
   llmBaseUrl?: string;
@@ -39,7 +45,14 @@ export type CommanderPipelineFlags = {
 };
 
 export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): PipelineArgs => {
+  if (flags.videoOnly === true) {
+    throw new Error("--video-only 只支持 yt2x acquire；pipeline 请使用 acquire 单阶段命令。");
+  }
   const provider = flags.llmProvider ? LlmProviderSchema.parse(flags.llmProvider) : defaultCliLlmProvider();
+  const downloadVideo =
+    flags.downloadVideo === true ||
+    flags.videoStart !== undefined ||
+    flags.videoEnd !== undefined;
   return PipelineArgsSchema.parse({
     sources: {
       urls: flags.urls ?? [],
@@ -64,6 +77,11 @@ export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): Pipe
       maxWords: flags.maxWords ?? "900",
       cookiesFromBrowser: flags.cookiesFromBrowser,
       proxy: flags.proxy,
+      downloadVideo,
+      videoOnly: flags.videoOnly ?? false,
+      videoStart: flags.videoStart,
+      videoEnd: flags.videoEnd,
+      videoDuration: flags.videoDuration ?? "30",
     },
     article: {
       platform: flags.platform ?? "x",
@@ -72,6 +90,7 @@ export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): Pipe
       targets: flags.targets,
     },
     publish: {
+      premium: flags.premium ?? false,
       publishDryRun: flags.publishDryRun ?? false,
       format: flags.thread === true ? "thread" : "article",
       maxChars:

@@ -15,6 +15,11 @@ export const registerAcquireCommand = (program: Command): void => {
     .option("--max-words <n>", "Max words per transcript chunk", "900")
     .option("--cookies-from-browser <name>", "yt-dlp browser cookies")
     .option("--proxy <url>", "yt-dlp proxy")
+    .option("--download-video", "Download an optional video clip", false)
+    .option("--video-only", "Only download the video clip; skip subtitles/transcript/screenshots", false)
+    .option("--video-start <time>", "Video clip start time (seconds, MM:SS, or HH:MM:SS)")
+    .option("--video-end <time>", "Video clip end time (seconds, MM:SS, or HH:MM:SS)")
+    .option("--video-duration <seconds>", "Auto-selected video clip duration in seconds", "30")
     .option("--error-strategy <mode>", "On failure: stop|skip", "stop")
     .option("--force", "Re-run acquire even when process-status marks it done")
     .action((flags: SingleStageFlags) => runAcquireStage(flags));

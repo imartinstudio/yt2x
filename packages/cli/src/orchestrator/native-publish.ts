@@ -54,6 +54,8 @@ export type PublishFlags = SingleStageFlags & {
   continueOnFailure?: boolean;
   dryRun?: boolean;
   showProgress?: boolean;
+  /** Premium 账号支持更长单帖（article / x-short）；默认 false = 普通账号上限 280 */
+  premium?: boolean;
 };
 
 const EXIT_CONFIG_MISSING = NATIVE_EXIT.CONFIG_MISSING;
@@ -411,7 +413,8 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
   let maxTweets: number;
   let threadDelayMs: { min: number; max: number } = DEFAULT_THREAD_REPLY_DELAY_MS;
   try {
-    maxChars = parsePositiveInt(flags.publishMaxChars ?? flags.maxChars, 500, "max-chars");
+    const defaultMax = flags.premium ? 4000 : 280;
+    maxChars = parsePositiveInt(flags.publishMaxChars ?? flags.maxChars, defaultMax, "max-chars");
     maxTweets = threadLikeMode ? parseMaxTweets(flags.maxTweets, publishMode === "thread-short" ? 10 : 8) : 1;
     if (threadLikeMode) threadDelayMs = parseThreadDelayMs(flags.threadDelay);
   } catch (err: unknown) {
@@ -442,7 +445,9 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       const artifacts = await findArticleArtifacts(findInput);
       articleDirForStatus = artifacts.articleDir;
       coverPath = artifacts.coverPath;
-      texts = [artifacts.articleContent.trim()].filter((text) => text.length > 0);
+      const raw = artifacts.articleContent.trim();
+      const prepared = prepareTextForXPublish(raw);
+      texts = prepared.length > 0 ? [prepared] : [];
     } else if (publishTarget === "x-short") {
       const loaded = await loadGeneratedShortText(articleDirForStatus);
       source = loaded.source;
@@ -592,17 +597,6 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       },
     ).catch(() => {});
     return 0;
-  }
-
-  if (publishTarget === "article") {
-    printCliErrorBlock({
-      command: "publish",
-      subject: flags.videoId,
-      reason: "Article targets are draft/preview only because X does not expose a public Article publishing API.",
-      details: "Use --dry-run to preview article.md, or publish --target x-thread / --target x-short / --target x-thread-short for API-backed posts.",
-      hints: ["Run `pnpm yt2x publish --video-id <videoId> --target article --dry-run` to preview the article."],
-    });
-    return EXIT_CONFIG_MISSING;
   }
 
   const store = createTokenStore();

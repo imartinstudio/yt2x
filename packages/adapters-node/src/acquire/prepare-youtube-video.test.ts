@@ -13,6 +13,8 @@ const SAMPLE_METADATA = {
   id: "testVideo12",
   title: "Integration Test Video",
   language: "en",
+  duration: 300,
+  heatmap: [{ start_time: 120, end_time: 130, value: 1 }],
 };
 
 const baseProcessResult = (
@@ -43,6 +45,7 @@ const outputDirFromYtDlpArgs = (args: readonly string[]): string | null => {
 
 const createMockRunner = (opts: {
   subtitleFileName?: string;
+  failVideoClip?: boolean;
   onRun?: (spec: ProcessSpec) => void;
 }): ProcessRunner => {
   const subtitleName = opts.subtitleFileName ?? "fixture.en.srt";
@@ -80,6 +83,21 @@ const createMockRunner = (opts: {
           );
           subtitleWritten = true;
         }
+        return baseProcessResult(spec);
+      }
+
+      if (spec.command === "yt-dlp" && args.includes("--download-sections")) {
+        if (opts.failVideoClip === true) {
+          return baseProcessResult(spec, { exitCode: 1, stderr: "clip failed" });
+        }
+        const oIdx = args.indexOf("-o");
+        const outputPattern = oIdx >= 0 ? args[oIdx + 1]! : "";
+        const outputDir = outputPattern.includes("/")
+          ? outputPattern.slice(0, outputPattern.lastIndexOf("/"))
+          : ".";
+        const { mkdir, writeFile } = await import("node:fs/promises");
+        await mkdir(outputDir, { recursive: true });
+        await writeFile(path.join(outputDir, "clip.mp4"), "fake mp4", "utf8");
         return baseProcessResult(spec);
       }
 
@@ -191,5 +209,109 @@ describe("prepareYoutubeVideo (integration, mocked yt-dlp)", () => {
     expect(args).toContain("http://127.0.0.1:1082");
     expect(args).toContain("--cookies-from-browser");
     expect(args).toContain("chrome");
+  });
+
+  it("downloads an optional video clip when enabled", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-clip-"));
+    const calls: ProcessSpec[] = [];
+    const runner = createMockRunner({
+      onRun: (spec) => {
+        calls.push(spec);
+      },
+    });
+
+    const result = await prepareYoutubeVideo({
+      url: "https://www.youtube.com/watch?v=testVideo12",
+      outDir,
+      maxWords: 900,
+      keyframes: 0,
+      sceneThreshold: 0.35,
+      sceneMinGap: 12,
+      videoClip: { enabled: true, videoOnly: false, durationSeconds: 30 },
+      runner,
+      timeoutMs: 60_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.video_clip?.file).toBe("video/clip.mp4");
+    const clipCall = calls.find(
+      (c) => c.command === "yt-dlp" && (c.args ?? []).includes("--download-sections"),
+    );
+    expect(clipCall).toBeDefined();
+    const args = clipCall!.args ?? [];
+    expect(args[args.indexOf("--download-sections") + 1]).toBe("*110-140");
+    await expect(readFile(path.join(outDir, "testVideo12", "video", "clip-manifest.json"), "utf8"))
+      .resolves
+      .toContain('"source": "youtube_heatmap"');
+  });
+
+  it("supports video-only mode without transcript artifacts", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-video-only-"));
+    const runner = createMockRunner({});
+
+    const result = await prepareYoutubeVideo({
+      url: "https://www.youtube.com/watch?v=testVideo12",
+      outDir,
+      maxWords: 900,
+      keyframes: 0,
+      sceneThreshold: 0.35,
+      sceneMinGap: 12,
+      videoClip: { enabled: true, videoOnly: true, durationSeconds: 30 },
+      runner,
+      timeoutMs: 60_000,
+    });
+
+    expect(result.ok).toBe(true);
+    const videoDir = path.join(outDir, "testVideo12");
+    await expect(readFile(path.join(videoDir, "video", "clip-manifest.json"), "utf8")).resolves.toContain(
+      '"file": "video/clip.mp4"',
+    );
+    await expect(readFile(path.join(videoDir, "chunks.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("keeps normal acquire ok when optional video clip download fails", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-clip-fail-"));
+    const runner = createMockRunner({ failVideoClip: true });
+
+    const result = await prepareYoutubeVideo({
+      url: "https://www.youtube.com/watch?v=testVideo12",
+      outDir,
+      maxWords: 900,
+      keyframes: 0,
+      sceneThreshold: 0.35,
+      sceneMinGap: 12,
+      videoClip: { enabled: true, videoOnly: false, durationSeconds: 30 },
+      runner,
+      timeoutMs: 60_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toContain("video clip download failed");
+    await expect(readFile(path.join(outDir, "testVideo12", "chunks.md"), "utf8")).resolves.toContain(
+      "Hello integration test",
+    );
+  });
+
+  it("fails video-only mode when the clip download fails", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-video-only-fail-"));
+    const runner = createMockRunner({ failVideoClip: true });
+
+    const result = await prepareYoutubeVideo({
+      url: "https://www.youtube.com/watch?v=testVideo12",
+      outDir,
+      maxWords: 900,
+      keyframes: 0,
+      sceneThreshold: 0.35,
+      sceneMinGap: 12,
+      videoClip: { enabled: true, videoOnly: true, durationSeconds: 30 },
+      runner,
+      timeoutMs: 60_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.warnings.join("\n")).toContain("video clip download failed");
+    expect(result.warnings.join("\n")).toContain("missing required artifacts");
   });
 });

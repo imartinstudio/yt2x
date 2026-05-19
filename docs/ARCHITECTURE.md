@@ -23,7 +23,7 @@ packages/cli               # Commander CLI，装配 adapters 并暴露命令
 - **笔记 / 长文（native）**：`src/notes/*`、`src/article/*` — 读视频目录产物、调 `LlmPort`、原子写。
 - **X**：`src/x-auth/*`、`src/x-publish/*` — OAuth 2.0 PKCE、`findArticleArtifacts`、发帖与媒体上传。
 - **状态**：`src/fs/process-status-store.ts` — 锁 + `process-status.json` + NDJSON journal 合并读。
-- **采集（Node）**：`packages/adapters-node/src/acquire/*` — **`executeNativeAcquire`** 进程内调用 `prepareYoutubeVideo`（yt-dlp / ffmpeg 子进程）。
+- **采集（Node）**：`packages/adapters-node/src/acquire/*` — **`executeNativeAcquire`** 进程内调用 `prepareYoutubeVideo`（yt-dlp / ffmpeg 子进程），可选通过 `video-clip.ts` 下载短视频片段。
 
 ### `packages/cli`
 
@@ -34,7 +34,7 @@ packages/cli               # Commander CLI，装配 adapters 并暴露命令
 
 ## 数据流（概念）
 
-1. **Acquire**：字幕 + 元数据 + 可选截图 → `files/downloads/<videoId>/`（`executeNativeAcquire`）。
+1. **Acquire**：字幕 + 元数据 + 可选截图 + 可选视频片段 → `files/downloads/<videoId>/`（`executeNativeAcquire`）。
 2. **Notes**：`chunks.md` + `timestamped-cues.md` + `metadata.json` → `structured-notes.md`（native LLM）。
 3. **Article**：structured notes → `article.md`（`files/articles/<videoId>/`）。
 4. **Publish**：`article.md` → thread → X API（native 使用 OAuth 2.0 v2）。
@@ -44,6 +44,8 @@ packages/cli               # Commander CLI，装配 adapters 并暴露命令
 每个视频目录下的 **`process-status.json`** 为 **acquire / notes / article / publish** 四步的权威存储；native 路径通过 `patchProcessStatus` / `patchStepRunning` 更新。详见 [DATA-CONTRACTS.md](./DATA-CONTRACTS.md)。
 
 **无根级 `pipeline-state.json`**：`yt2x pipeline` 与 native acquire 通过 **`listBatchVideosFromOutRoot`** / **`resolveAcquireVideoQueue`**（`batch-queue.ts`）发现视频子目录（含 **`metadata.json`** 或 **`process-status.json`** 即入队，字典序）。步骤状态仅各目录 **`process-status.json`**。
+
+视频片段下载是 acquire 的附加产物：`--download-video` 写入 `video/clip.mp4` 和 `video/clip-manifest.json`，但不替代字幕转写。`pipeline --download-video` 后续仍以 `chunks.md` / `timestamped-cues.md` 驱动 notes 和 article；`yt2x acquire --video-only` 是单阶段特殊模式，只验证 metadata 与视频片段产物。
 
 ## 测试与质量闸
 

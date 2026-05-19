@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ProcessRunner, ProcessSpec } from "../process/index.js";
 import {
+  X_COMPATIBLE_VIDEO_FORMAT,
   downloadVideoClip,
   parseClipTimestamp,
   resolveClipRange,
@@ -130,6 +131,11 @@ describe("downloadVideoClip", () => {
     const args = calls[0]!.args ?? [];
     expect(args).toContain("--download-sections");
     expect(args[args.indexOf("--download-sections") + 1]).toBe("*110-140");
+    const formatSelector = args[args.indexOf("-f") + 1]!;
+    expect(formatSelector).toBe(X_COMPATIBLE_VIDEO_FORMAT);
+    expect(formatSelector.split("/").every((candidate) => candidate.includes("[vcodec^=avc1]"))).toBe(
+      true,
+    );
     expect(args).toContain("--merge-output-format");
     expect(args).toContain("--force-overwrites");
     expect(args).toContain("--cookies-from-browser");

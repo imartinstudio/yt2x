@@ -51,6 +51,9 @@ export type VideoClipResult = {
   file: string;
 };
 
+export const X_COMPATIBLE_VIDEO_FORMAT =
+  "bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][vcodec^=avc1]";
+
 type HeatmapPoint = {
   start_time?: unknown;
   end_time?: unknown;
@@ -224,7 +227,7 @@ export const downloadVideoClip = async (opts: DownloadVideoClipOptions): Promise
     args: [
       ...ytdlpBaseArgs,
       "-f",
-      "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
+      X_COMPATIBLE_VIDEO_FORMAT,
       "--merge-output-format",
       "mp4",
       "--download-sections",

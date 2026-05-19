@@ -48,6 +48,16 @@ describe("generateXArticleContent", () => {
     expect(r.content).toBe("# T\n\nx");
   });
 
+  it("strips trailing source attribution from generated article markdown", async () => {
+    const llm = makeLlm(() => ({
+      content: "# T\n\nbody\n\n来源：<YOUTUBE_URL>",
+      model: "m",
+      finishReason: "stop",
+    }));
+    const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
+    expect(r.content).toBe("# T\n\nbody");
+  });
+
   it("includes available_visuals in user prompt when provided", async () => {
     const llm = makeLlm((req) => {
       expect(req.messages[1]!.content).toMatch(/Available screenshots/);

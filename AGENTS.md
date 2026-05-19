@@ -13,7 +13,16 @@
 
 要求：
 
-- 从最新 `main` 创建短分支。
+- 从最新远端 `main` 创建短分支。创建新分支前必须先同步远端：
+
+  ```bash
+  git fetch origin
+  git checkout main
+  git pull --ff-only origin main
+  git checkout -b <type>/<short-topic>
+  ```
+
+- 如果本地 `main` 不能 fast-forward，或存在未提交 / 未推送改动，必须先停止并说明状态，不得强行覆盖或重置。
 - 分支名使用小写 kebab-case，格式为 `<type>/<short-topic>`。
 - `<type>` 必须从以下类型中选择：
   - `feature/`：新功能、实验性能力、用户可见增强。

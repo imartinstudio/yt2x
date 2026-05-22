@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  decorateNativeArticleMarkdown,
   findPendingNativeArticleDirs,
   readStructuredNotesArtifacts,
   writeNativeArticleBundle,
@@ -25,7 +26,7 @@ afterEach(async () => {
 
 const seedNotesVideo = async (
   videoId: string,
-  opts: { notes?: string; meta?: string; shot?: Buffer } = {},
+  opts: { notes?: string; meta?: string; shot?: Buffer; clip?: Buffer } = {},
 ): Promise<string> => {
   const dir = path.join(notesRoot, videoId);
   await mkdir(dir, { recursive: true });
@@ -37,6 +38,10 @@ const seedNotesVideo = async (
   if (opts.shot !== undefined) {
     await mkdir(path.join(dir, "screenshots"), { recursive: true });
     await writeFile(path.join(dir, "screenshots", "a.webp"), opts.shot);
+  }
+  if (opts.clip !== undefined) {
+    await mkdir(path.join(dir, "video"), { recursive: true });
+    await writeFile(path.join(dir, "video", "clip.mp4"), opts.clip);
   }
   return dir;
 };
@@ -140,6 +145,45 @@ describe("writeNativeArticleBundle", () => {
 
     expect(w.coverPath).toBe(path.join(w.articleDir, "images", "cover.jpg"));
     expect(await readFile(w.coverPath!, "hex")).toBe("ffd8ff");
+  });
+
+  it("writes cover, video clip, hashtags body, and source footer into article layout", async () => {
+    const dir = await seedNotesVideo("v1", {
+      shot: Buffer.from([0x52, 0x49, 0x46, 0x46]),
+      clip: Buffer.from("fake mp4"),
+    });
+    const run = {
+      v: 1 as const,
+      platform: "x" as const,
+      videoId: "v1",
+      model: "m",
+      finishReason: "stop",
+      generatedAt: new Date().toISOString(),
+      durationMs: 1,
+    };
+    const body = "# **标题**\n\n导语。\n\n## **第一节**\n\n正文。\n\n#话题一 #话题二 #TopicThree";
+    const w = await writeNativeArticleBundle(articleRoot, "v1", body, run, {
+      notesVideoDir: dir,
+      sourceVideoUrl: "<YOUTUBE_URL>",
+    });
+
+    expect(w.videoPath).toBe(path.join(w.articleDir, "video", "clip.mp4"));
+    expect(await readFile(w.videoPath!, "utf8")).toBe("fake mp4");
+    expect(await readFile(w.articlePath, "utf8")).toBe(
+      "# **标题**\n\n![封面](images/cover.webp)\n\n导语。\n\n<video controls src=\"video/clip.mp4\"></video>\n\n## **第一节**\n\n正文。\n\n#话题一 #话题二 #TopicThree\n\n👇完整视频：\n<YOUTUBE_URL>",
+    );
+  });
+});
+
+describe("decorateNativeArticleMarkdown", () => {
+  it("keeps H1 first and inserts video before the first H2", () => {
+    expect(
+      decorateNativeArticleMarkdown("# **标题**\n\n导语。\n\n## **正文**\n\n内容。", {
+        coverPath: "images/cover.jpg",
+        videoPath: "video/clip.mp4",
+        sourceVideoUrl: "<YOUTUBE_URL>",
+      }),
+    ).toMatch(/^# \*\*标题\*\*\n\n!\[封面\]\(images\/cover.jpg\)[\s\S]*<video controls src="video\/clip.mp4"><\/video>\n\n## \*\*正文\*\*[\s\S]*👇完整视频：\n<YOUTUBE_URL>$/);
   });
 });
 

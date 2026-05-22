@@ -63,12 +63,21 @@ describe("buildArticleUserPrompt", () => {
   it("system prompt mentions screenshot rules when visuals available", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/截图配图规则/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/available_visuals/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/图片引用必须单独成段/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/禁止插在同一列表的两个列表项之间/);
   });
 
   it("system prompt defines emoji policy", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Emoji 策略/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/默认不使用 emoji/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/语义锚点/);
+  });
+
+  it("requires extracted topic hashtags at the article end", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/话题标签规则/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/3–5 个 X 话题标签/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/视频主题、关键工具、核心方法或读者问题/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/系统会在落盘时补完整视频地址/);
   });
 
   it("system prompt mentions X and markdown-only output", () => {

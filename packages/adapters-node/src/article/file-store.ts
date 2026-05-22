@@ -108,6 +108,7 @@ export type WriteNativeArticleResult = {
   articlePath: string;
   runPath: string;
   coverPath: string | null;
+  videoPath: string | null;
 };
 
 /**
@@ -123,7 +124,7 @@ export const writeNativeArticleBundle = async (
   videoId: string,
   articleMd: string,
   run: NativeArticleRunRecord,
-  options: { force?: boolean; notesVideoDir?: string } = {},
+  options: { force?: boolean; notesVideoDir?: string; sourceVideoUrl?: string } = {},
 ): Promise<WriteNativeArticleResult> => {
   if (!isValidVideoId(videoId)) {
     throw new Error(`Invalid videoId: "${videoId}". Expected alphanumeric, hyphens, and underscores only.`);
@@ -144,19 +145,27 @@ export const writeNativeArticleBundle = async (
   }
 
   await mkdir(path.join(articleDir, "images"), { recursive: true });
-  await atomicWriteUtf8(articlePath, articleMd);
-  await atomicWriteUtf8(runPath, JSON.stringify(run, null, 2) + "\n");
-
   let coverPath: string | null = null;
+  let videoPath: string | null = null;
   if (options.notesVideoDir !== undefined) {
     coverPath = await copyBestCoverFromNotesDir(options.notesVideoDir, articleDir);
+    videoPath = await copyVideoClipFromNotesDir(options.notesVideoDir, articleDir);
   }
+
+  const finalArticleMd = decorateNativeArticleMarkdown(articleMd, {
+    ...(coverPath !== null ? { coverPath: "images/" + path.basename(coverPath) } : {}),
+    ...(videoPath !== null ? { videoPath: "video/" + path.basename(videoPath) } : {}),
+    ...(options.sourceVideoUrl !== undefined ? { sourceVideoUrl: options.sourceVideoUrl } : {}),
+  });
+  await atomicWriteUtf8(articlePath, finalArticleMd);
+  await atomicWriteUtf8(runPath, JSON.stringify(run, null, 2) + "\n");
 
   return {
     articleDir,
     articlePath,
     runPath,
     coverPath,
+    videoPath,
   };
 };
 
@@ -184,6 +193,75 @@ export const copyBestCoverFromNotesDir = async (
   await mkdir(path.dirname(dest), { recursive: true });
   await copyFile(path.join(shotDir, pick), dest);
   return dest;
+};
+
+/** 复制 acquire 下载的视频片段，供 article.md 在正文中按相对路径引用。 */
+export const copyVideoClipFromNotesDir = async (
+  notesVideoDir: string,
+  articleDir: string,
+): Promise<string | null> => {
+  const videoDir = path.join(notesVideoDir, "video");
+  let names: string[];
+  try {
+    names = await readdir(videoDir);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  const clipName = names
+    .filter((name) => /^clip\.(mp4|mkv|webm|mov)$/i.test(name))
+    .sort((a, b) => (a === "clip.mp4" ? -1 : b === "clip.mp4" ? 1 : a.localeCompare(b)))[0];
+  if (clipName === undefined) return null;
+
+  const dest = path.join(articleDir, "video", clipName);
+  await mkdir(path.dirname(dest), { recursive: true });
+  await copyFile(path.join(videoDir, clipName), dest);
+  return dest;
+};
+
+export type DecorateNativeArticleOptions = {
+  coverPath?: string;
+  videoPath?: string;
+  sourceVideoUrl?: string;
+};
+
+/**
+ * 在 LLM 正文之外补齐 X Article 所需的本地产物布局。
+ * H1 仍保持第一段，避免 article 质量检查与下游标题解析退化。
+ */
+export const decorateNativeArticleMarkdown = (
+  articleMd: string,
+  options: DecorateNativeArticleOptions,
+): string => {
+  const lines = articleMd.trim().split(/\r?\n/);
+  if (options.coverPath !== undefined) {
+    insertArticleCover(lines, options.coverPath);
+  }
+  if (options.videoPath !== undefined) {
+    insertArticleVideo(lines, options.videoPath);
+  }
+
+  const blocks = [lines.join("\n").trim()];
+  if (options.sourceVideoUrl !== undefined && options.sourceVideoUrl.trim() !== "") {
+    blocks.push(`👇完整视频：\n${options.sourceVideoUrl.trim()}`);
+  }
+  return blocks.join("\n\n");
+};
+
+const insertArticleCover = (lines: string[], coverPath: string): void => {
+  const cover = `![封面](${coverPath})`;
+  if (lines.some((line) => line.trim() === cover)) return;
+  const h1Index = lines.findIndex((line) => line.startsWith("# "));
+  const insertAt = h1Index === -1 ? 0 : h1Index + 1;
+  lines.splice(insertAt, 0, "", cover);
+};
+
+const insertArticleVideo = (lines: string[], videoPath: string): void => {
+  const video = `<video controls src="${videoPath}"></video>`;
+  if (lines.some((line) => line.trim() === video)) return;
+  const firstH2 = lines.findIndex((line) => line.startsWith("## "));
+  const insertAt = firstH2 === -1 ? lines.length : firstH2;
+  lines.splice(insertAt, 0, video, "");
 };
 
 /**

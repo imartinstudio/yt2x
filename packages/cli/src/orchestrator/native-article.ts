@@ -235,7 +235,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             durationMs: result.durationMs,
             ...(result.usage !== undefined ? { usage: result.usage } : {}),
           },
-          { force: flags.force === true, notesVideoDir: videoDir },
+          { force: flags.force === true, notesVideoDir: videoDir, sourceVideoUrl: url },
         );
         writtenArtifacts.push("article.md", "run.json");
         articleDirForStatus = written.articleDir;
@@ -246,6 +246,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             videoId: result.videoId,
             articleDir: written.articleDir,
             coverPath: written.coverPath,
+            videoPath: written.videoPath,
             model: result.model,
             finishReason: result.finishReason,
             durationMs: result.durationMs,

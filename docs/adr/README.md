@@ -9,6 +9,7 @@
 | [0001](./0001-multi-target-architecture.md)         | 多端架构与 Monorepo         | Accepted | 2026-05-14 |
 | [0002](./0002-llm-provider-abstraction.md)          | LLM Provider 抽象与国内兼容 | Accepted | 2026-05-14 |
 | [0003](./0003-publish-safety-and-process-status.md) | 发布安全与每视频状态契约    | Accepted | 2026-05-16 |
+| [0004](./0004-article-browser-draft-publish.md)     | Article 浏览器草稿发布通道  | Accepted | 2026-05-23 |
 
 ## 格式约定
 

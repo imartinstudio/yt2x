@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as adaptersNode from "@yt2x/adapters-node";
 import { readProcessStatusMerged } from "@yt2x/adapters-node";
 import { buildThreadTweetMediaIds, executeNativePublish } from "./native-publish.js";
 
@@ -464,25 +465,120 @@ describe("executeNativePublish", () => {
     const videoId = "articleNoApi1";
     const outDir = path.join(root, "downloads");
     const articleOutDir = path.join(root, "articles");
+    const createTokenSource = vi.spyOn(adaptersNode, "createTokenSource");
+    const createXPublishAdapter = vi.spyOn(adaptersNode, "createXPublishAdapter");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await executeNativePublish({
+        videoId,
+        outDir,
+        articleOutDir,
+        target: "article",
+        dryRun: false,
+      });
+
+      expect(code).toBe(2);
+      expect(consoleError.mock.calls.flat().join("\n")).toContain("no API publish path");
+      expect(consoleError.mock.calls.flat().join("\n")).toContain("--dry-run");
+      expect(createTokenSource).not.toHaveBeenCalled();
+      expect(createXPublishAdapter).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+      createTokenSource.mockRestore();
+      createXPublishAdapter.mockRestore();
+    }
+  });
+
+  it("writes adapted article result and status through browser-draft adapter", async () => {
+    const videoId = "articleDraft1";
+    const outDir = path.join(root, "downloads");
+    const articleOutDir = path.join(root, "articles");
     const videoDir = path.join(outDir, videoId);
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
-      JSON.stringify({ id: videoId, webpage_url: "https://example.com/article-no-api" }),
+      JSON.stringify({ id: videoId, webpage_url: "https://example.com/article-draft" }),
     );
-    await writeFile(path.join(articleDir, "article.md"), "Article body");
+    await writeFile(
+      path.join(articleDir, "article.md"),
+      "# Draft\n\n### Detail\n\n<video controls src=\"video/clip.mp4\"></video>\n",
+    );
 
-    const code = await executeNativePublish({
-      videoId,
-      outDir,
-      articleOutDir,
-      target: "article",
-      dryRun: false,
-    });
+    const saveDraft = vi.fn(async () => ({
+      draftSavedAt: "2026-05-23T00:00:00.000Z",
+      editorUrl: "https://x.com/compose/articles/draft",
+      warnings: ["manual divider check"],
+    }));
+    const createDraftAdapter = vi
+      .spyOn(adaptersNode, "createXArticlesDraftAdapter")
+      .mockReturnValue({ saveDraft });
+    try {
+      const code = await executeNativePublish({
+        videoId,
+        outDir,
+        articleOutDir,
+        target: "article",
+        browserDraft: true,
+        showProgress: false,
+      });
 
-    expect(code).toBe(2);
+      expect(code).toBe(0);
+      expect(saveDraft).toHaveBeenCalledOnce();
+      expect(await readFile(path.join(articleDir, "article_for_x.md"), "utf8")).toContain("**Detail**");
+      const result = JSON.parse(await readFile(path.join(articleDir, "publish-result.json"), "utf8")) as {
+        mode: string;
+        editorUrl: string;
+        warnings: string[];
+      };
+      expect(result).toMatchObject({
+        mode: "article-draft",
+        editorUrl: "https://x.com/compose/articles/draft",
+      });
+      expect(result.warnings).toEqual(["manual divider check"]);
+      const status = await readProcessStatusMerged(videoDir, {
+        videoId,
+        url: "https://example.com/article-draft",
+      });
+      expect(status?.steps.publish.resultFile).toBe("publish-result.json");
+    } finally {
+      createDraftAdapter.mockRestore();
+    }
+  });
+
+  it("rejects invalid browser-draft subscription tier before opening Playwright", async () => {
+    const videoId = "articleDraftTier1";
+    const outDir = path.join(root, "downloads");
+    const articleOutDir = path.join(root, "articles");
+    const videoDir = path.join(outDir, videoId);
+    const articleDir = path.join(articleOutDir, videoId);
+    await mkdir(videoDir, { recursive: true });
+    await mkdir(articleDir, { recursive: true });
+    await writeFile(
+      path.join(videoDir, "metadata.json"),
+      JSON.stringify({ id: videoId, webpage_url: "https://example.com/article-tier" }),
+    );
+    await writeFile(path.join(articleDir, "article.md"), "# Draft\n\nBody\n");
+    const createDraftAdapter = vi.spyOn(adaptersNode, "createXArticlesDraftAdapter");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await executeNativePublish({
+        videoId,
+        outDir,
+        articleOutDir,
+        target: "article",
+        browserDraft: true,
+        xSubscription: "plus",
+      });
+
+      expect(code).toBe(2);
+      expect(consoleError.mock.calls.flat().join("\n")).toContain("Invalid --x-subscription");
+      expect(createDraftAdapter).not.toHaveBeenCalled();
+    } finally {
+      createDraftAdapter.mockRestore();
+      consoleError.mockRestore();
+    }
   });
 
   it("rejects x-thread max tweets above ten", async () => {
@@ -555,4 +651,3 @@ describe("buildThreadTweetMediaIds", () => {
     // basic smoke, real logic in parse
     expect(code).toBeGreaterThanOrEqual(0);
   });
-

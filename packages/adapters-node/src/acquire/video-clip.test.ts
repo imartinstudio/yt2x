@@ -51,6 +51,22 @@ describe("resolveClipRange", () => {
     });
   });
 
+  it("clamps manual start plus duration at the video end", () => {
+    const range = resolveClipRange(
+      { duration: 99 },
+      { enabled: true, videoOnly: true, durationSeconds: 30, start: "00:01:12" },
+    );
+    expect(range).toMatchObject({
+      mode: "range",
+      source: "user_range",
+      startSeconds: 72,
+      endSeconds: 99,
+      warnings: [
+        "requested duration extends past video end; clamped range to 00:01:12-00:01:39",
+      ],
+    });
+  });
+
   it("rejects invalid manual ranges", () => {
     expect(() =>
       resolveClipRange(
@@ -58,6 +74,15 @@ describe("resolveClipRange", () => {
         { enabled: true, videoOnly: false, durationSeconds: 30, start: "90", end: "60" },
       ),
     ).toThrow(/greater/);
+  });
+
+  it("rejects manual starts outside the video duration", () => {
+    expect(() =>
+      resolveClipRange(
+        { duration: 99 },
+        { enabled: true, videoOnly: false, durationSeconds: 30, start: "00:01:39" },
+      ),
+    ).toThrow(/--video-start exceeds video duration/);
   });
 });
 

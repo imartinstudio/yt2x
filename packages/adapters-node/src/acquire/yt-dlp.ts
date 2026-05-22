@@ -115,8 +115,11 @@ export const downloadSubtitlesTwoPhase = async (
     return { manualOk: true, autoOk: false };
   }
 
-  // 自动字幕：先试 metadata 语言，失败时依次回退常见语言
-  const autoFallbacks = [...new Set([primaryAutoLang, "zh-Hans-orig", "zh-orig", "en-orig"])];
+  // 自动字幕回退策略：优先尝试中文自动字幕，再回退视频语言和英文
+  const autoFallbacks = [...new Set([
+    "zh-CN-orig", "zh-Hans-orig", "zh-orig",
+    primaryAutoLang, "en-orig"
+  ])];
 
   for (const subLang of autoFallbacks) {
     await runYtDlpSubtitles(url, videoDir, {

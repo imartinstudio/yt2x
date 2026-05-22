@@ -224,8 +224,13 @@ export const prepareYoutubeVideo = async (
   const subLangBase = youtubeSubLangBase(videoLanguage);
   let manualSubLangs = (opts.subLangs ?? "").trim();
   if (manualSubLangs.length === 0) {
-    // 当 language 缺失时（YouTube 常见），多试几种常见语言提高命中率
-    const langs = [...new Set([`${subLangBase}-orig`, subLangBase, "zh-Hans", "zh", "en"])];
+    // 优先尝试中文（包括 zh-CN、zh-Hans），再回退视频语言和英文
+    const langs = [...new Set([
+      "zh-CN", "zh-Hans", "zh",
+      `${subLangBase}-orig`, subLangBase,
+      "zh-Hans-orig", "zh-orig",
+      "en"
+    ])];
     manualSubLangs = langs.join(",");
   }
 

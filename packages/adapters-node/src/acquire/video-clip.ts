@@ -160,20 +160,34 @@ export const resolveClipRange = (
       throw new Error("--video-start is required when --video-end is provided");
     }
     const start = parseClipTimestamp(clip.start);
-    const end = clip.end !== undefined ? parseClipTimestamp(clip.end) : start + clip.durationSeconds;
+    const requestedEnd =
+      clip.end !== undefined ? parseClipTimestamp(clip.end) : start + clip.durationSeconds;
+    let end = requestedEnd;
+    const warnings: string[] = [];
     if (end <= start) {
       throw new Error("--video-end must be greater than --video-start");
     }
     const duration = numberFromMetadata(metadata.duration);
-    if (duration !== undefined && end > duration) {
-      throw new Error("--video-end exceeds video duration");
+    if (duration !== undefined) {
+      if (start >= duration) {
+        throw new Error("--video-start exceeds video duration");
+      }
+      if (end > duration) {
+        if (clip.end !== undefined) {
+          throw new Error("--video-end exceeds video duration");
+        }
+        end = duration;
+        warnings.push(
+          `requested duration extends past video end; clamped range to ${secondsToTimestamp(start)}-${secondsToTimestamp(end)}`,
+        );
+      }
     }
     return {
       mode: "range",
       source: "user_range",
       startSeconds: start,
       endSeconds: end,
-      warnings: [],
+      warnings,
     };
   }
 

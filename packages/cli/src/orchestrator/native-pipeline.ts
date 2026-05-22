@@ -41,12 +41,21 @@ export const mergePipelineExitCode = (current: number, next: number): number => 
 const resolveOutRoot = (monorepoRoot: string, outDir: string | undefined): string =>
   outDir !== undefined ? path.resolve(outDir) : path.resolve(monorepoRoot, DEFAULT_OUT_DIR);
 
-const logAcquireFailuresUnderOutRoot = async (outRoot: string): Promise<void> => {
+const logAcquireFailuresUnderOutRoot = async (
+  outRoot: string,
+  options: { updatedAfterIso?: string } = {},
+): Promise<void> => {
   const rows = await listBatchVideosFromOutRoot(outRoot);
   for (const row of rows) {
     const videoDir = path.join(outRoot, row.video_id);
     const url = row.url.length > 0 ? row.url : await readYoutubePageUrl(videoDir, row.video_id);
     const merged = await readProcessStatusMerged(videoDir, { videoId: row.video_id, url });
+    if (
+      options.updatedAfterIso !== undefined &&
+      (merged?.updatedAt === undefined || merged.updatedAt < options.updatedAfterIso)
+    ) {
+      continue;
+    }
     const acquire = merged?.steps.acquire;
     if (acquire?.status !== "failed" || acquire.error === undefined) continue;
     const detail = typeof acquire.error === "string" ? acquire.error : acquire.error.message;
@@ -277,13 +286,14 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         outDir: outRoot,
         ...(runner !== undefined ? { runner } : {}),
       });
+      const acquireStartedAt = new Date(Date.now() - 1000).toISOString();
       const acquireCode = await executeNativeAcquire({
         ...base,
         progress: acquireSubStepProgressFromHandle(progress, "acquire"),
         ...(args.stages.acquire === "review" ? { reviewPrompt: createAcquireReviewPrompt() } : {}),
       });
       if (acquireCode !== 0) {
-        await logAcquireFailuresUnderOutRoot(outRoot);
+        await logAcquireFailuresUnderOutRoot(outRoot, { updatedAfterIso: acquireStartedAt });
         logger.error({ outRoot, exitCode: acquireCode }, "yt2x pipeline: acquire stage failed");
         finalExitCode = acquireCode;
         return finalExitCode;

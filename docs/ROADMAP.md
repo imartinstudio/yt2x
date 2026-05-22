@@ -33,8 +33,11 @@ yt2x 处于 v0.1 开源前打磨期：
 
 以下方向尚未承诺排期：
 
-- 内容质量规则层：提升 Article / Short / Thread 的 X 平台适配、移动端可读性、风险边界、可执行资产与质量检查，见 [CONTENT-QUALITY-TASK.md](./CONTENT-QUALITY-TASK.md)。
-- Chrome 扩展或浏览器侧工作流。
+- 内容质量规则层：提升 Article / Short / Thread 的 X 平台适配、移动端可读性、风险边界、可执行资产与质量检查，见 [CONTENT-QUALITY-TASK.md](./CONTENT-QUALITY-TASK.md)（**Task 1–7 已完成**）。
+- **X Articles 发布安全与草稿通道**：先交付已知安全修复，阻断 `publish --target article`
+  在非 dry-run 下误走 Tweet API；随后将 `article.md` 写入 X Articles 草稿箱（无 API）。
+  详见 [ARTICLE-DRAFT-PUBLISH-TASK.md](./ARTICLE-DRAFT-PUBLISH-TASK.md)（**最早安全交付 Task 7；Task 1–15 未开始**）。
+- Chrome 扩展或浏览器侧工作流（可与 Article 草稿任务合并规划，见上）。
 - LLM streaming 输出。
 - 本地模型 / Ollama provider。
 - 更细的成本统计与 usage 汇总。

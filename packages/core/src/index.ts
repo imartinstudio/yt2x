@@ -9,6 +9,7 @@ export * from "./domain/short/index.js";
 export * from "./domain/thread/index.js";
 export * from "./domain/visuals/index.js";
 export * from "./ports/x-publish.js";
+export * from "./ports/x-articles-draft.js";
 
 export { LlmError, isLlmError } from "./ports/llm.js";
 export type {

@@ -6,14 +6,18 @@ import {
   DEFAULT_OUT_DIR,
   NoCredentialsError,
   NoRefreshTokenError,
+  assertArticleDraftImagesExist,
   createTokenSource,
   createTokenStore,
+  createXArticlesDraftAdapter,
   createXPublishAdapter,
   defaultCredentialsPath,
   findArticleArtifacts,
   findCoverImage,
   isValidVideoId,
   loadTweetImageFromPath,
+  materializeArticleDraftAdaptations,
+  parseArticleDraftMarkdown,
   patchProcessStatus,
   patchStepRunning,
   readYoutubePageUrl,
@@ -21,6 +25,8 @@ import {
 import type { ThreadVisualItem, ShortVisualItem } from "@yt2x/core";
 import {
   XAuthError,
+  XArticleSubscriptionTierSchema,
+  adaptArticleForX,
   articleToLongPost,
   articleToThread,
   isXPublishError,
@@ -56,6 +62,14 @@ export type PublishFlags = SingleStageFlags & {
   showProgress?: boolean;
   /** Premium 账号支持更长单帖（article / x-short）；默认 false = 普通账号上限 280 */
   premium?: boolean;
+  /** 把 article.md 写入 X Articles 草稿编辑器，而不是调用 X API。 */
+  browserDraft?: boolean;
+  /** X Articles 订阅档位，影响 article_for_x.md 适配。 */
+  xSubscription?: string;
+  /** Playwright persistent context 用户目录。 */
+  browserProfileDir?: string;
+  /** Playwright 有头模式默认值为 false。 */
+  headless?: boolean;
 };
 
 const EXIT_CONFIG_MISSING = NATIVE_EXIT.CONFIG_MISSING;
@@ -406,6 +420,21 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
     });
     return EXIT_CONFIG_MISSING;
   }
+  const isDryRun = flags.dryRun === true || flags.publishDryRun === true;
+  if (publishTarget === "article" && !isDryRun && flags.browserDraft !== true) {
+    printCliErrorBlock({
+      command: "publish",
+      subject: flags.videoId,
+      reason: "X Articles have no API publish path. Use browser-draft or preview the article output.",
+      hints: [
+        "Use --browser-draft to save article.md into the X Articles editor without publishing it.",
+        "Use --dry-run to preview article.md without publishing.",
+        "Use --target x-thread, --target x-short, or --target x-thread-short for X API publishing.",
+      ],
+      retryCommand: `pnpm yt2x publish --video-id ${flags.videoId} --target article --dry-run`,
+    });
+    return EXIT_CONFIG_MISSING;
+  }
   const publishMode = publishModeForTarget(publishTarget);
   const threadMode = publishMode === "thread";
   const threadLikeMode = publishMode === "thread" || publishMode === "thread-short";
@@ -429,7 +458,6 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
     });
     return EXIT_CONFIG_MISSING;
   }
-  const isDryRun = flags.dryRun === true || flags.publishDryRun === true;
 
   let articleDirForStatus = resolveArticleDirForTarget(flags, articleRootDir);
   let coverPath: string | null = null;
@@ -597,6 +625,86 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       },
     ).catch(() => {});
     return 0;
+  }
+
+  if (publishTarget === "article" && flags.browserDraft === true) {
+    const subscription = XArticleSubscriptionTierSchema.safeParse(flags.xSubscription ?? "premium");
+    if (!subscription.success) {
+      printCliErrorBlock({
+        command: "publish",
+        subject: flags.videoId,
+        reason: `Invalid --x-subscription: "${flags.xSubscription ?? ""}" (expected premium or premium-plus).`,
+        hints: ["Use --x-subscription premium unless the X account has Premium+ article formatting support."],
+      });
+      return EXIT_CONFIG_MISSING;
+    }
+    try {
+      const adapted = await materializeArticleDraftAdaptations({
+        adapted: adaptArticleForX({
+          markdown: await readFile(path.join(articleDirForStatus, "article.md"), "utf8"),
+          subscriptionTier: subscription.data,
+          sourceVideoUrl: pageUrl,
+        }),
+        articleDir: articleDirForStatus,
+      });
+      const adaptedPath = path.join(articleDirForStatus, "article_for_x.md");
+      await writeFile(adaptedPath, adapted.markdown, "utf8");
+      const parseResult = parseArticleDraftMarkdown(adapted.markdown, articleDirForStatus, coverPath);
+      await assertArticleDraftImagesExist(parseResult);
+      await patchStepRunning(
+        youtubeVideoDir,
+        { videoId: flags.videoId, url: pageUrl },
+        "publish",
+        { articleOutDir: articleDirForStatus },
+      ).catch(() => {});
+      const saved = await createXArticlesDraftAdapter().saveDraft({
+        parseResult,
+        articleDir: articleDirForStatus,
+        ...(flags.browserProfileDir !== undefined ? { browserProfileDir: flags.browserProfileDir } : {}),
+        ...(flags.headless !== undefined ? { headless: flags.headless } : {}),
+      });
+      const resultFile = path.join(articleDirForStatus, "publish-result.json");
+      const payload = {
+        profile,
+        mode: "article-draft",
+        source,
+        adaptedSource: path.basename(adaptedPath),
+        subscriptionTier: subscription.data,
+        draftSavedAt: saved.draftSavedAt,
+        ...(saved.editorUrl !== undefined ? { editorUrl: saved.editorUrl } : {}),
+        warnings: [...adapted.warnings, ...saved.warnings],
+        adaptations: adapted.adaptations,
+      };
+      await writeFile(resultFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+      await patchProcessStatus(
+        youtubeVideoDir,
+        { videoId: flags.videoId, url: pageUrl },
+        {
+          step: "publish",
+          stepInfo: {
+            status: "done",
+            finishedAt: payload.draftSavedAt,
+            artifacts: [path.basename(adaptedPath), path.basename(resultFile)],
+            resultFile: path.basename(resultFile),
+          },
+          articleOutDir: articleDirForStatus,
+        },
+      ).catch(() => {});
+      logger.info({ articleDir: articleDirForStatus, resultFile }, "X Article draft saved in browser");
+      return 0;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printCliErrorBlock({
+        command: "publish",
+        subject: flags.videoId,
+        reason: message,
+        hints: [
+          "Use a logged-in X Premium browser profile and keep the editor open for browser-draft automation.",
+          "Run --dry-run first if the adapted article or article images need inspection.",
+        ],
+      });
+      return 1;
+    }
   }
 
   const store = createTokenStore();

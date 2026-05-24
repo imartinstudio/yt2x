@@ -95,8 +95,15 @@ describe("buildArticleUserPrompt", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/# \*\*标题\*\*/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/## \*\*小节标题\*\*/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/\*\*xxxx：\*\*/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/有序列表会保留编号/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/无序列表会转成/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/列表必须保留 Markdown 源格式/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/无序列表每项使用/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/禁止直接输出/);
+  });
+
+  it("requires fenced blocks for all copyable snippets", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/代码、命令、配置片段、prompt、提示词、模板文本/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/fenced code block/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/禁止把可复制内容仅写成行内代码/);
   });
 
   it("defines a 120-character lead and hook elements rule", () => {

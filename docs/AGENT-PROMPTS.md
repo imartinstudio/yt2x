@@ -82,10 +82,11 @@
 ## 5. 仅发布（已有 article.md）
 
 ```text
-长文已生成在 files/articles/<videoId>/article.md。请先 dry-run 再真发：
+长文已生成在 files/articles/<videoId>/article.md。Article 没有公开 API 发布路径，
+请先 dry-run；若要写入 X Articles，只生成浏览器草稿：
 
   pnpm yt2x publish --video-id <videoId> --dry-run
-  pnpm yt2x publish --video-id <videoId>
+  pnpm yt2x publish --video-id <videoId> --target article --browser-draft
 
 `pnpm yt2x publish --video-id <id> --dry-run`（默认从 `files/articles/<id>/article.md` 解析；可用 `--article-out-dir` / `--article-dir` 覆盖）。
 ```

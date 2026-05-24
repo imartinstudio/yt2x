@@ -369,10 +369,14 @@ Apache-2.0。见 [LICENSE](./LICENSE) 与 [NOTICE](./NOTICE)。
 
 ## Premium 支持（v0.2 新增）
 
-使用 `--premium` 可让 article / x-short 单帖使用更高上限（默认 4000 字符）：
+X Articles 没有公开发布 API。长文可先 dry-run，再显式写入浏览器草稿箱：
 
 ```bash
-pnpm yt2x publish --video-id <videoId> --target article --premium --dry-run
+pnpm yt2x publish --video-id <videoId> --target article --dry-run
+pnpm yt2x publish --video-id <videoId> --target article --browser-draft
 ```
 
-非 Premium 账号建议继续使用 `--thread`。
+browser-draft 使用本机已登录 X Premium 的 Playwright profile，只保存草稿，不点击发布。
+`--x-subscription premium-plus` 用于 Premium+ 文章格式适配。Tweet API 的 Premium
+长帖上限仍可通过 `--premium` 用于 short 等单帖路径；非 Premium 账号建议使用
+`--target x-thread`。

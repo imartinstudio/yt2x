@@ -265,7 +265,9 @@ pnpm yt2x llm ping --provider openai
 
 先完成 `yt2x auth login`，token 默认在 `~/.config/yt2x/credentials.json`。`publish` 使用 **`--article-out-dir`**（默认 **`./files/articles`**）。
 
-采集在 **`packages/adapters-node/src/acquire/`**（Node + yt-dlp/ffmpeg）。**`yt2x publish` 使用 OAuth 2.0 API**，不依赖浏览器自动化。
+采集在 **`packages/adapters-node/src/acquire/`**（Node + yt-dlp/ffmpeg）。`yt2x publish`
+对 `x-thread`、`x-short` 和 `x-thread-short` 使用 OAuth 2.0 API；X Articles
+没有公开发布 API，`article` 只能 dry-run 或显式走浏览器草稿通道。
 
 发布命令只接受安全的视频目录名作为 **`--video-id`**（字母、数字、连字符、下划线），避免把路径误当成视频 ID。需要指定非默认内容目录时使用 **`--article-dir`**。
 
@@ -285,7 +287,25 @@ pnpm yt2x publish --video-id <videoId> --target x-short --dry-run
 pnpm yt2x publish --video-id <videoId> --target x-thread-short --dry-run
 ```
 
-`article` 目标只做草稿预览；X 当前没有公开 Article 发布 API，因此真实 API 发布覆盖 `x-thread`、`x-short` 和 `x-thread-short`。`x-thread-short` 会把 `x-short.md` 作为首推，再把 `x-thread.md` 中的内容按顺序作为回复发布；`x-short` / `x-thread-short` 发布首推时会尽量附带 `images/cover.*` 封面图。真实发布 `x-thread` / `x-thread-short` 时，每两条推文之间默认随机等待 20-30 秒，可用 `--thread-delay` 配置。旧参数 **`--thread`** 保持兼容，等价于 **`--target x-thread`**。
+要把长文写入 X Articles 草稿箱，先准备 Playwright 浏览器，再用登录过 X Premium 的
+persistent browser profile：
+
+```bash
+pnpm exec playwright install chromium
+pnpm yt2x publish --video-id <videoId> --target article --browser-draft
+```
+
+首次运行时可用 `--browser-profile-dir <path>` 指定专用 profile 并在有头浏览器里完成
+登录；`--x-subscription premium-plus` 会保留 Premium+ 可接受的深层标题和表格。
+命令只填充草稿，不点击 X 的正式发布按钮。成功后 article 目录会新增
+`article_for_x.md` 与 `publish-result.json`；原始 `article.md` 保持不变。
+
+`article` 无 flag 的真实发布会直接失败，避免把长文误走 Tweet API；真实 API 发布覆盖
+`x-thread`、`x-short` 和 `x-thread-short`。`x-thread-short` 会把 `x-short.md`
+作为首推，再把 `x-thread.md` 中的内容按顺序作为回复发布；`x-short` /
+`x-thread-short` 发布首推时会尽量附带 `images/cover.*` 封面图。真实发布
+`x-thread` / `x-thread-short` 时，每两条推文之间默认随机等待 20-30 秒，可用
+`--thread-delay` 配置。旧参数 **`--thread`** 保持兼容，等价于 **`--target x-thread`**。
 
 `x-thread.md` 发布时用行首 `1/`、`2/`、`3/` 作为 tweet 边界，单条 tweet 内部的空行、列表和代码块会保留到同一条回复中。发布前会把 Markdown 转成 X 兼容文本：加粗中的英文 / 数字转为 Unicode bold，中文保持原字形；列表、代码块、链接、引用等会按 X 可读形式转换。
 

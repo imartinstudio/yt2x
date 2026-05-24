@@ -49,7 +49,7 @@ export const AcquireOptionsSchema = z.object({
   sceneThreshold: z.coerce.number().min(0).default(0.35),
   sceneMinGap: z.coerce.number().min(0).default(12),
   maxWords: z.coerce.number().int().min(100).default(900),
-  cookiesFromBrowser: z.string().optional(),
+  cookiesFromBrowser: z.string().default("chrome"),
   proxy: z.string().optional(),
   downloadVideo: z.boolean().default(false),
   videoOnly: z.boolean().default(false),

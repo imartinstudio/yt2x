@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { adaptArticleForX } from "./article-for-x.js";
 
 describe("adaptArticleForX", () => {
-  it("flattens deep headings and HTML video for X Premium", () => {
+  it("flattens deep headings and preserves uploadable HTML video for X Premium", () => {
     const adapted = adaptArticleForX({
       markdown: "# Title\n\n### **Detail**\n\n<video controls src=\"video/clip.mp4\"></video>\n",
       subscriptionTier: "premium",
@@ -10,8 +10,8 @@ describe("adaptArticleForX", () => {
     });
 
     expect(adapted.markdown).toContain("**Detail**");
-    expect(adapted.markdown).toContain("完整视频：<YOUTUBE_URL>");
-    expect(adapted.adaptations.map((item) => item.kind)).toEqual(["deep-heading", "video"]);
+    expect(adapted.markdown).toContain('<video controls src="video/clip.mp4"></video>');
+    expect(adapted.adaptations.map((item) => item.kind)).toEqual(["deep-heading"]);
   });
 
   it("keeps H3 and tables for Premium Plus", () => {

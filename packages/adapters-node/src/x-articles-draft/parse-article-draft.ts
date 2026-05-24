@@ -3,11 +3,12 @@ import path from "node:path";
 import { ArticleDraftParseResultSchema, type ArticleDraftParseResult } from "@yt2x/core";
 
 type DraftBlock = {
-  kind: "markdown" | "image" | "divider";
+  kind: "markdown" | "image" | "video" | "code" | "divider";
   source: string;
 };
 
 const IMAGE_RE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)$/u;
+const VIDEO_RE = /^<video\b[^>]*\bsrc=["']([^"']+)["'][^>]*>(?:<\/video>)?$/iu;
 
 export const parseArticleDraftMarkdown = (
   markdown: string,
@@ -15,16 +16,19 @@ export const parseArticleDraftMarkdown = (
   fallbackCoverImage?: string | null,
 ): ArticleDraftParseResult => {
   const { title, body } = extractArticleTitle(markdown);
-  const blocks = splitDraftBlocks(body);
+  const blocks = ensureHeadingDividers(splitDraftBlocks(body));
   const contentBlocks: string[] = [];
   const images: ArticleDraftParseResult["contentImages"] = [];
+  const contentVideos: ArticleDraftParseResult["contentVideos"] = [];
+  const contentCodeBlocks: ArticleDraftParseResult["contentCodeBlocks"] = [];
   const dividers: ArticleDraftParseResult["dividers"] = [];
+  let lastAnchorText = "";
 
   for (const block of blocks) {
     if (block.kind === "divider") {
       dividers.push({
         blockIndex: contentBlocks.length,
-        afterText: afterText(contentBlocks.at(-1)),
+        afterText: lastAnchorText,
       });
       continue;
     }
@@ -32,15 +36,38 @@ export const parseArticleDraftMarkdown = (
       const match = IMAGE_RE.exec(block.source.trim());
       if (match !== null) {
         images.push({
-          path: resolveArticleImagePath(articleDir, match[2]!),
+          path: resolveArticleMediaPath(articleDir, match[2]!),
           alt: match[1]!,
           blockIndex: contentBlocks.length,
-          afterText: afterText(contentBlocks.at(-1)),
+          afterText: lastAnchorText,
         });
         continue;
       }
     }
+    if (block.kind === "video") {
+      const match = VIDEO_RE.exec(block.source.trim());
+      if (match !== null) {
+        contentVideos.push({
+          path: resolveArticleMediaPath(articleDir, match[1]!),
+          alt: "",
+          blockIndex: contentBlocks.length,
+          afterText: lastAnchorText,
+        });
+        continue;
+      }
+    }
+    if (block.kind === "code") {
+      const codeBlock = parseCodeBlock(block.source);
+      contentCodeBlocks.push({
+        ...codeBlock,
+        blockIndex: contentBlocks.length,
+        afterText: lastAnchorText,
+      });
+      lastAnchorText = codeAnchorText(codeBlock.code);
+      continue;
+    }
     contentBlocks.push(block.source);
+    lastAnchorText = afterText(block.source);
   }
 
   const [cover, ...contentImages] = images;
@@ -48,6 +75,8 @@ export const parseArticleDraftMarkdown = (
     title,
     coverImage: cover?.path ?? fallbackCoverImage ?? null,
     contentImages,
+    contentVideos,
+    contentCodeBlocks,
     dividers,
     html: contentBlocks.map(renderMarkdownBlock).filter(Boolean).join(""),
     totalBlocks: contentBlocks.length,
@@ -55,16 +84,17 @@ export const parseArticleDraftMarkdown = (
 };
 
 export const assertArticleDraftImagesExist = async (parsed: ArticleDraftParseResult): Promise<void> => {
-  const images = [
+  const media = [
     ...(parsed.coverImage === null ? [] : [{ role: "cover image", path: parsed.coverImage }]),
     ...parsed.contentImages.map((image) => ({ role: "content image", path: image.path })),
+    ...parsed.contentVideos.map((video) => ({ role: "content video", path: video.path })),
   ];
-  for (const image of images) {
+  for (const item of media) {
     try {
-      await stat(image.path);
+      await stat(item.path);
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(`X Article ${image.role} was not found: ${image.path}`);
+        throw new Error(`X Article ${item.role} was not found: ${item.path}`);
       }
       throw err;
     }
@@ -106,7 +136,7 @@ const splitDraftBlocks = (markdown: string): DraftBlock[] => {
         fenced = [line];
       } else {
         fenced.push(line);
-        blocks.push({ kind: "markdown", source: fenced.join("\n") });
+        blocks.push({ kind: "code", source: fenced.join("\n") });
         fenced = null;
       }
       continue;
@@ -134,22 +164,69 @@ const splitDraftBlocks = (markdown: string): DraftBlock[] => {
       blocks.push({ kind: "image", source: trimmed });
       continue;
     }
+    if (VIDEO_RE.test(trimmed)) {
+      flush();
+      blocks.push({ kind: "video", source: trimmed });
+      continue;
+    }
     current.push(line);
   }
   if (fenced !== null) {
-    blocks.push({ kind: "markdown", source: fenced.join("\n") });
+    blocks.push({ kind: "code", source: fenced.join("\n") });
   }
   flush();
   return blocks;
 };
 
-const classifyBlock = (source: string): DraftBlock["kind"] => (IMAGE_RE.test(source) ? "image" : "markdown");
+const classifyBlock = (source: string): DraftBlock["kind"] => {
+  if (/^```/u.test(source)) return "code";
+  if (IMAGE_RE.test(source)) return "image";
+  if (VIDEO_RE.test(source)) return "video";
+  return "markdown";
+};
 
-const resolveArticleImagePath = (articleDir: string, source: string): string =>
+const parseCodeBlock = (source: string): { code: string; language: string } => {
+  const opener = /^```([^\n]*)\n?/u.exec(source);
+  const language = opener?.[1]?.trim() ?? "";
+  const withoutOpening = source.replace(/^```[^\n]*\n?/u, "");
+  return {
+    code: withoutOpening.replace(/\n?```$/u, ""),
+    language,
+  };
+};
+
+const codeAnchorText = (code: string): string =>
+  code
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .at(-1)
+    ?.slice(0, 80) ?? "";
+
+const ensureHeadingDividers = (blocks: DraftBlock[]): DraftBlock[] => {
+  const withDividers: DraftBlock[] = [];
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index]!;
+    withDividers.push(block);
+    if (block.kind !== "markdown" || !/^##\s+/u.test(block.source.trim())) continue;
+    if (blocks[index + 1]?.kind === "divider") continue;
+    withDividers.push({ kind: "divider", source: "---" });
+  }
+  return withDividers;
+};
+
+const resolveArticleMediaPath = (articleDir: string, source: string): string =>
   path.isAbsolute(source) ? source : path.resolve(articleDir, decodeURIComponent(source));
 
 const afterText = (block: string | undefined): string =>
-  block === undefined ? "" : stripInlineMarkdown(block.split("\n").filter(Boolean).at(-1) ?? "").slice(0, 80);
+  block === undefined
+    ? ""
+    : stripInlineMarkdown(
+        block
+          .split("\n")
+          .filter((line) => line.trim().length > 0 && !line.trim().startsWith("```"))
+          .at(-1) ?? "",
+      ).slice(0, 80);
 
 const renderMarkdownBlock = (block: string): string => {
   const trimmed = block.trim();
@@ -158,10 +235,6 @@ const renderMarkdownBlock = (block: string): string => {
   if (heading !== null) {
     const level = Math.min(heading[1]!.length, 6);
     return `<h${level}>${renderInline(heading[2]!)}</h${level}>`;
-  }
-  if (/^```/u.test(trimmed)) {
-    const code = trimmed.replace(/^```[^\n]*\n?/u, "").replace(/\n?```$/u, "");
-    return `<blockquote><pre>${escapeHtml(code)}</pre></blockquote>`;
   }
   if (trimmed.split("\n").every((line) => line.trim().startsWith(">"))) {
     const quote = trimmed

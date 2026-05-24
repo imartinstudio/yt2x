@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Locator, type Page } from "playwright";
@@ -36,17 +35,25 @@ const saveDraft = async (input: SaveArticleDraftInput): Promise<SaveArticleDraft
     await editor.click();
     await editor.press(pasteShortcut());
 
-    for (const image of [...input.parseResult.contentImages].sort((a, b) => b.blockIndex - a.blockIndex)) {
-      await focusBlock(editor, image.blockIndex);
-      await copyImageToClipboard(page, image.path);
-      await editor.press(pasteShortcut());
-      await waitForMediaUploadComplete(page);
+    for (const codeBlock of input.parseResult.contentCodeBlocks) {
+      await focusInsertionAnchor(editor, codeBlock.afterText, codeBlock.blockIndex);
+      await insertCodeBlock(page, codeBlock.code);
+    }
+
+    const contentMedia = [...input.parseResult.contentImages, ...input.parseResult.contentVideos].sort(
+      (a, b) => b.blockIndex - a.blockIndex,
+    );
+    for (const media of contentMedia) {
+      await focusInsertionAnchor(editor, media.afterText, media.blockIndex);
+      await insertContentMedia(page, media.path);
     }
 
     for (const divider of [...input.parseResult.dividers].sort((a, b) => b.blockIndex - a.blockIndex)) {
-      await focusBlock(editor, divider.blockIndex);
+      await focusInsertionAnchor(editor, divider.afterText, divider.blockIndex);
       const inserted = await insertDivider(page);
-      if (!inserted) warnings.push(`Divider after block ${divider.blockIndex} needs manual insertion.`);
+      if (!inserted) {
+        throw new Error(`X Article divider could not be inserted after block ${divider.blockIndex}.`);
+      }
     }
 
     await waitForMediaUploadComplete(page);
@@ -69,19 +76,19 @@ const clickCreate = async (page: Page): Promise<void> => {
 };
 
 const uploadCover = async (page: Page, coverImage: string): Promise<void> => {
-  const input = page.locator('input[type="file"]').first();
-  if ((await input.count()) > 0) {
-    await input.setInputFiles(coverImage);
+  const chooseFile = page.getByRole("button", { name: /choose file|选择文件/iu }).first();
+  const addMedia = page.getByRole("button", { name: /add.*(?:photo|video)|添加照片或视频/iu }).first();
+  const upload = (await chooseFile.count()) > 0 ? chooseFile : addMedia;
+  if ((await upload.count()) > 0) {
+    const chooser = page.waitForEvent("filechooser");
+    await upload.click();
+    await (await chooser).setFiles(coverImage);
     await waitForMediaUploadComplete(page);
     return;
   }
-  const upload = page
-    .getByRole("button", { name: /add.*(?:photo|media)|添加.*(?:照片|媒体|封面)/iu })
-    .first();
-  if ((await upload.count()) === 0) throw new Error("X Articles cover upload control was not found.");
-  const chooser = page.waitForEvent("filechooser");
-  await upload.click();
-  await (await chooser).setFiles(coverImage);
+  const input = page.locator('input[type="file"]').first();
+  if ((await input.count()) === 0) throw new Error("X Articles cover upload control was not found.");
+  await input.setInputFiles(coverImage);
   await waitForMediaUploadComplete(page);
 };
 
@@ -103,15 +110,38 @@ const articleEditor = async (page: Page): Promise<Locator> => {
   return editors.nth(count - 1);
 };
 
-const focusBlock = async (editor: Locator, blockIndex: number): Promise<void> => {
-  const blocks = editor.locator(":scope > *");
-  const count = await blocks.count();
-  if (count === 0) {
-    await editor.click();
-    return;
+const focusInsertionAnchor = async (editor: Locator, afterText: string, blockIndex: number): Promise<void> => {
+  if (afterText.trim().length === 0) {
+    throw new Error(`X Article media after block ${blockIndex} has no text anchor for reliable insertion.`);
   }
-  await blocks.nth(Math.min(blockIndex, count - 1)).click();
-  await editor.press("End");
+  const anchor = editor.getByText(afterText, { exact: false }).last();
+  if ((await anchor.count()) === 0) {
+    throw new Error(`X Article insertion anchor was not found after block ${blockIndex}: "${afterText}"`);
+  }
+  await anchor.click();
+  await anchor.press("End");
+};
+
+const insertContentMedia = async (page: Page, mediaPath: string): Promise<void> => {
+  const insert = page.getByRole("button", { name: /add media content|添加媒体内容|insert/iu }).first();
+  if ((await insert.count()) === 0) throw new Error("X Articles media insertion control was not found.");
+  await insert.click();
+  const media = page.getByRole("menuitem", { name: /^(?:media|媒体)$/iu }).first();
+  if ((await media.count()) === 0) throw new Error("X Articles media menu item was not found.");
+  await media.click();
+  const dialog = page.getByRole("dialog").last();
+  await dialog.waitFor({ state: "visible" });
+  const input = dialog.locator('input[type="file"]').first();
+  if ((await input.count()) > 0) {
+    await input.setInputFiles(mediaPath);
+  } else {
+    const upload = dialog.getByRole("button", { name: /choose file|add.*(?:photo|video)|添加照片或视频|选择文件/iu }).first();
+    if ((await upload.count()) === 0) throw new Error("X Articles content media upload control was not found.");
+    const chooser = page.waitForEvent("filechooser");
+    await upload.click();
+    await (await chooser).setFiles(mediaPath);
+  }
+  await waitForMediaUploadComplete(page);
 };
 
 const insertDivider = async (page: Page): Promise<boolean> => {
@@ -122,6 +152,16 @@ const insertDivider = async (page: Page): Promise<boolean> => {
   if ((await divider.count()) === 0) return false;
   await divider.click();
   return true;
+};
+
+const insertCodeBlock = async (page: Page, code: string): Promise<void> => {
+  const insert = page.getByRole("button", { name: /insert|add.*media|插入|添加/iu }).first();
+  if ((await insert.count()) === 0) throw new Error("X Articles code insertion control was not found.");
+  await insert.click();
+  const codeItem = page.getByRole("menuitem", { name: /^(?:code|代码)$/iu }).first();
+  if ((await codeItem.count()) === 0) throw new Error("X Articles code menu item was not found.");
+  await codeItem.click();
+  await page.keyboard.insertText(code);
 };
 
 const waitForMediaUploadComplete = async (page: Page): Promise<void> => {
@@ -152,32 +192,6 @@ const copyHtmlToClipboard = async (page: Page, html: string): Promise<void> => {
     },
     html,
   );
-};
-
-const copyImageToClipboard = async (page: Page, imagePath: string): Promise<void> => {
-  const bytes = await readFile(imagePath);
-  const contentType = contentTypeForImage(imagePath);
-  await page.evaluate(
-    async ({ base64, type }) => {
-      const clip = globalThis as unknown as {
-        navigator: { clipboard: { write(items: unknown[]): Promise<void> } };
-        ClipboardItem: new (items: Record<string, Blob>) => unknown;
-        Blob: typeof Blob;
-        fetch(url: string): Promise<{ blob(): Promise<Blob> }>;
-      };
-      const blob = await (await clip.fetch(`data:${type};base64,${base64}`)).blob();
-      await clip.navigator.clipboard.write([new clip.ClipboardItem({ [type]: blob })]);
-    },
-    { base64: bytes.toString("base64"), type: contentType },
-  );
-};
-
-const contentTypeForImage = (filePath: string): string => {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
-  if (ext === ".webp") return "image/webp";
-  if (ext === ".gif") return "image/gif";
-  return "image/png";
 };
 
 const pasteShortcut = (): string => (process.platform === "darwin" ? "Meta+V" : "Control+V");

@@ -14,10 +14,20 @@ export const ArticleDraftDividerSchema = z.object({
 });
 export type ArticleDraftDivider = z.infer<typeof ArticleDraftDividerSchema>;
 
+export const ArticleDraftCodeBlockSchema = z.object({
+  code: z.string(),
+  language: z.string().default(""),
+  blockIndex: z.number().int().min(0),
+  afterText: z.string().default(""),
+});
+export type ArticleDraftCodeBlock = z.infer<typeof ArticleDraftCodeBlockSchema>;
+
 export const ArticleDraftParseResultSchema = z.object({
   title: z.string().min(1),
   coverImage: z.string().min(1).nullable(),
   contentImages: z.array(ArticleDraftMediaSchema),
+  contentVideos: z.array(ArticleDraftMediaSchema).default([]),
+  contentCodeBlocks: z.array(ArticleDraftCodeBlockSchema).default([]),
   dividers: z.array(ArticleDraftDividerSchema),
   html: z.string(),
   totalBlocks: z.number().int().min(0),

@@ -89,17 +89,6 @@ export const adaptArticleForX = (input: {
     }
     flushTable();
 
-    const video = /<video\b[^>]*\bsrc=["']([^"']+)["'][^>]*>(?:<\/video>)?/iu.exec(line);
-    if (video !== null) {
-      const href = input.sourceVideoUrl?.trim() || video[1]!;
-      output.push(`完整视频：${href}`);
-      adaptations.push({
-        kind: "video",
-        message: "Replaced an HTML video tag with a link for X Articles.",
-      });
-      continue;
-    }
-
     const heading = /^(#{3,6})\s+(.+)$/u.exec(line);
     if (heading !== null && input.subscriptionTier === "premium") {
       output.push(`**${stripOuterEmphasis(heading[2]!.trim())}**`);

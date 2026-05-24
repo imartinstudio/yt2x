@@ -497,6 +497,7 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "video"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/article-draft" }),
@@ -505,6 +506,7 @@ describe("executeNativePublish", () => {
       path.join(articleDir, "article.md"),
       "# Draft\n\n### Detail\n\n<video controls src=\"video/clip.mp4\"></video>\n",
     );
+    await writeFile(path.join(articleDir, "video", "clip.mp4"), "video");
 
     const saveDraft = vi.fn(async () => ({
       draftSavedAt: "2026-05-23T00:00:00.000Z",
@@ -527,6 +529,9 @@ describe("executeNativePublish", () => {
       expect(code).toBe(0);
       expect(saveDraft).toHaveBeenCalledOnce();
       expect(await readFile(path.join(articleDir, "article_for_x.md"), "utf8")).toContain("**Detail**");
+      expect(await readFile(path.join(articleDir, "article_for_x.md"), "utf8")).toContain(
+        '<video controls src="video/clip.mp4"></video>',
+      );
       const result = JSON.parse(await readFile(path.join(articleDir, "publish-result.json"), "utf8")) as {
         mode: string;
         editorUrl: string;

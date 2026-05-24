@@ -46,10 +46,11 @@ files/articles/<videoId>/article.md
 ## 设计原则
 
 - **双通道发布**：`XPublishPort`（API）与 `XArticlesDraftPort`（浏览器）职责分离。
-- **先文后图后分割线**：正文 HTML 一次粘贴；图片与 `---` 按 `block_index` **从大到小**插入。
+- **先文后结构块**：普通正文 HTML 一次粘贴；fenced code block 通过 X 原生 Code 区块插入；图片、视频与分割线按定位锚点补齐；发布解析层为每个 `##` 小节补一条分割线，源码已紧随 `---` 时不重复。
+- **版式完整性优先**：要求插入的分割线无法完成时，草稿流程报错退出，不把缺分割线的草稿记录为成功产物。
 - **不改原稿**：预处理写入 `article_for_x.md` 或 `/tmp/`，保留 `article.md`。
 - **显式 opt-in**：`--browser-draft` 才启动浏览器；默认 `article` 仍只做 dry-run / preview。
-- **与生成阶段对齐**：复用 `images/cover.*`、正文图片路径；`<video>` 标签在预处理阶段降级为链接或说明文字。
+- **与生成阶段对齐**：复用 `images/cover.*`、正文图片路径和本地 `<video>` 视频片段；X Articles 支持的视频媒体按正文位置上传。
 
 ## 架构示意
 
@@ -161,13 +162,13 @@ flowchart LR
   若选择该方案，脚本必须进入发布包契约：构建时复制到 `dist/scripts/x-articles/`
   并从安装后的稳定路径解析，或在 package `files` 中显式分发等价脚本路径。
 - 方案 B（已采用）：将 `parse_markdown.py` 逻辑移植为 TypeScript（自研 block 切分与 X draft HTML 渲染）。
-- 输出类型在 `packages/core` 定义 Zod schema：`ArticleDraftParseResult`（title, cover_image, content_images, dividers, html, total_blocks）。
+- 输出类型在 `packages/core` 定义 Zod schema：`ArticleDraftParseResult`（title, cover_image, content_images, content_videos, content_code_blocks, dividers, html, total_blocks）。
 - 封面规则：第一张图或 `images/cover.*`；与 `findCoverImage` 对齐。
 
 验收：
 
 - 对 `packages/core` 或 adapters 内 fixture `article.md` 解析稳定。
-- `block_index` 与 `total_blocks` 有单测；图片、分割线位置可复现。
+- `block_index` 与 `total_blocks` 有单测；代码、图片、视频、每个 `##` 后的分割线位置可复现，显式 `---` 不会导致重复插入。
 - 若保留 Python 解析脚本，`pnpm pack` 后 tarball 含运行所需脚本，安装后不依赖源码目录或外部 Skill 路径。
 
 完成后标记：
@@ -238,10 +239,11 @@ export interface XArticlesDraftPort {
   2. 点击 **Create**
   3. `file_upload` 封面
   4. 填写标题
-  5. 剪贴板粘贴 HTML 正文
-  6. 按 `block_index` **降序**插入内容图
-  7. 按 `block_index` **降序** Insert → Divider
-  8. 等待自动保存；**不**点击发布按钮
+  5. 剪贴板粘贴不含 fenced code block 的 HTML 正文
+  6. 按正文锚点 Insert → Code，写入可复制代码或 prompt
+  7. 按正文锚点插入内容图与视频
+  8. 按正文锚点 Insert → Divider
+  9. 等待自动保存；**不**点击发布按钮
 - 登录态：使用 **persistent context** 用户数据目录（例如 `~/.config/yt2x/browser-profile`），文档说明首次需人工登录。
 - 等待策略：集中封装上传完成等待，优先使用与 locale 无关的编辑器 / 上传状态信号；
   上传提示文案只能作为多语言 fallback，不能把 `textGone="正在上传媒体"` 作为唯一条件；
@@ -363,13 +365,13 @@ export interface XArticlesDraftPort {
 
 范围：
 
-- `article_for_x` 预处理将 `<video controls src="...">` 转为「完整视频」链接块（复用 `metadata.json` 的 `webpage_url` 若可得）。
+- `article_for_x` 预处理保留本地 `<video controls src="...">`；解析阶段提取为 `content_videos`，浏览器草稿流程在对应正文位置上传。
 - 正文内相对路径图片解析为绝对路径（与 `parse_markdown` 搜索目录一致）。
 - 生成阶段已有「列表内图片」校验；发布前再 guard 一次，失败时 warning 或 exit。
 
 验收：
 
-- 含 `<video>` 的 fixture 预处理后无 HTML video 标签进入粘贴 HTML。
+- 含 `<video>` 的 fixture 解析为待上传视频媒体，视频标签不作为正文 HTML 粘贴。
 - 缺失图片文件时 CLI 报错或 warning 列表可读。
 
 完成后标记：

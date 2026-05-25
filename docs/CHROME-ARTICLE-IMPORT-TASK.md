@@ -215,7 +215,7 @@ Divider 推导和 HTML 渲染抽到 `packages/core` 的浏览器安全模块，N
 
 ### Task 1: 共享解析层拆分
 
-状态：待实施
+状态：已完成
 
 范围：
 
@@ -231,7 +231,7 @@ Divider 推导和 HTML 渲染抽到 `packages/core` 的浏览器安全模块，N
 
 ### Task 2: 扩展 package 与开发加载骨架
 
-状态：待实施
+状态：已完成
 
 范围：
 
@@ -248,7 +248,7 @@ Divider 推导和 HTML 渲染抽到 `packages/core` 的浏览器安全模块，N
 
 ### Task 3: 文件读取、素材授权与预览面板
 
-状态：待实施
+状态：已完成
 
 范围：
 
@@ -264,7 +264,7 @@ Divider 推导和 HTML 渲染抽到 `packages/core` 的浏览器安全模块，N
 
 ### Task 4: 浏览器侧 Markdown 适配与 PNG 生成
 
-状态：待实施
+状态：已完成
 
 范围：
 
@@ -280,7 +280,7 @@ Divider 推导和 HTML 渲染抽到 `packages/core` 的浏览器安全模块，N
 
 ### Task 5: X Articles DOM 写入适配器
 
-状态：待实施
+状态：已完成
 
 范围：
 
@@ -296,7 +296,7 @@ Divider 推导和 HTML 渲染抽到 `packages/core` 的浏览器安全模块，N
 
 ### Task 6: 安全、回归测试与真实手测
 
-状态：待实施
+状态：部分完成（单测与 DOM fixture 已落地；真实 X Premium 手测待你在目标页面执行）
 
 范围：
 

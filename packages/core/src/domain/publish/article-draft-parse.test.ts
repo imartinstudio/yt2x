@@ -266,6 +266,46 @@ describe("parseArticleDraftFromMarkdown", () => {
     expect(parsed.html).toContain("<pre><code>Create a new GitHub repository");
     expect(parsed.html).toContain("<hr>");
   });
+
+  it("keeps imported prose while mapping dividers, lists, and prompt blocks to native X blocks", () => {
+    const parsed = parseArticleDraftFromMarkdown(
+      [
+        "# 中文标题",
+        "",
+        "An English introduction that must remain in an imported draft.",
+        "",
+        "## Section",
+        "",
+        "**Prompt examples:**",
+        "- first point",
+        "- second point",
+        "",
+        "```text",
+        "Create a new GitHub repository for this project.",
+        "Summarize everything important about this project.",
+        "```",
+        "",
+        "正文。",
+      ].join("\n"),
+      {
+        resolveMediaPath: (source) => source,
+        preserveSourceContent: true,
+        useNativeEditorBlocks: true,
+      },
+    );
+
+    expect(parsed.html).toContain("An English introduction");
+    expect(parsed.html).toContain("<p><strong>Prompt examples:</strong></p>");
+    expect(parsed.html).toContain("<ul>");
+    expect(parsed.html).not.toContain("<pre>");
+    expect(parsed.dividers).toEqual([expect.objectContaining({ afterText: "Section" })]);
+    expect(parsed.contentCodeBlocks).toEqual([
+      expect.objectContaining({
+        code: "Create a new GitHub repository for this project.\nSummarize everything important about this project.",
+        language: "text",
+      }),
+    ]);
+  });
 });
 
 describe("collectLocalMediaReferences", () => {

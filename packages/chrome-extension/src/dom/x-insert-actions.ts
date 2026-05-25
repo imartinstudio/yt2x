@@ -219,6 +219,18 @@ const openGenericInsertMenu = async (): Promise<void> => {
   }
 };
 
+const openStructuralInsertMenu = async (): Promise<void> => {
+  const addMedia = findButtonByName(LOCALE_PATTERNS.insertAddMedia, editorMainRoot());
+  if (addMedia !== null) {
+    dismissOpenOverlays();
+    articleEditor().focus();
+    addMedia.click();
+    if (await waitForInsertMenu(2_000)) return;
+    dismissOpenOverlays();
+  }
+  await openGenericInsertMenu();
+};
+
 const clickMenuItem = async (pattern: RegExp, label: string): Promise<void> => {
   const direct = findToolbarActionButton(pattern);
   if (direct !== null) {
@@ -318,7 +330,7 @@ const openCodeInsertionSurface = async (): Promise<void> => {
     dismissOpenOverlays();
   }
 
-  await openGenericInsertMenu();
+  await openStructuralInsertMenu();
   await clickMenuItem(LOCALE_PATTERNS.codeMenu, "code");
   await wait(250);
 };
@@ -545,38 +557,6 @@ const uploadFileThroughMediaAction = async (file: File): Promise<boolean> => {
   return uploadFileThroughAction(mediaItem, file);
 };
 
-const isVideoFile = (file: File): boolean =>
-  /^video\//iu.test(file.type) || /\.(?:mp4|webm|mov|m4v)$/iu.test(file.name);
-
-export const prepareClipboardImage = async (file: File): Promise<Blob> => {
-  if (file.type === "image/png") return file;
-
-  const bitmap = await createImageBitmap(file);
-  try {
-    const maxDimension = 2_000;
-    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const context = canvas.getContext("2d");
-    if (context === null) {
-      throw new Error("X Articles image clipboard preparation failed: canvas is unavailable.");
-    }
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((blob) => {
-        if (blob === null) {
-          reject(new Error("X Articles image clipboard preparation failed: PNG conversion failed."));
-          return;
-        }
-        resolve(blob);
-      }, "image/png");
-    });
-  } finally {
-    bitmap.close();
-  }
-};
-
 export const precedingContentBlockIndex = (blockIndex: number): number =>
   Math.max(0, blockIndex - 1);
 
@@ -593,15 +573,6 @@ const placeMediaInsertionCaret = (anchor: InsertionAnchor): SavedEditorSelection
     focusByBlockIndex(editor, precedingContentBlockIndex(anchor.blockIndex));
   }
   return saveEditorSelection(editor);
-};
-
-const pasteImageAtCaret = async (file: File): Promise<void> => {
-  const png = await prepareClipboardImage(file);
-  await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
-  await wait(120);
-  if (!document.execCommand("paste")) {
-    throw new Error("X Articles rejected the clipboard image paste command.");
-  }
 };
 
 const confirmDialogAction = async (): Promise<void> => {
@@ -627,16 +598,6 @@ export const insertContentMedia = async (file: File, anchor: InsertionAnchor): P
   const savedSelection = placeMediaInsertionCaret(anchor);
   await wait(250);
   const before = takeEditorSnapshot(editor);
-
-  if (!isVideoFile(normalized)) {
-    restoreEditorSelection(savedSelection);
-    await pasteImageAtCaret(normalized);
-    if (!(await waitForEditorMediaChange(editor, before, 90_000))) {
-      throw new Error("X Articles did not insert the clipboard PNG into the editor body.");
-    }
-    dismissOpenOverlays();
-    return;
-  }
 
   restoreEditorSelection(savedSelection);
   await wait(100);
@@ -701,7 +662,7 @@ export const insertDivider = async (anchor?: InsertionAnchor): Promise<boolean> 
       dismissOpenOverlays();
       return true;
     }
-    await openGenericInsertMenu();
+    await openStructuralInsertMenu();
     const item = findMenuItemByName(LOCALE_PATTERNS.dividerMenu);
     if (item === null) return false;
     item.click();

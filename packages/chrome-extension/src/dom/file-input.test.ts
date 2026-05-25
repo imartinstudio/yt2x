@@ -189,4 +189,159 @@ describe("file-input", () => {
       }
     }
   });
+
+  it("keeps intercepting while a media menu creates its file input asynchronously", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ blob: vi.fn().mockResolvedValue(new Blob(["media"])) }));
+    vi.stubGlobal(
+      "DataTransfer",
+      class {
+        files: File[] = [];
+        items = {
+          add: (file: File): void => {
+            this.files.push(file);
+          },
+        };
+      },
+    );
+    const action = document.createElement("button");
+    action.id = "async-media-menu-item";
+    const input = document.createElement("input");
+    input.type = "file";
+    let uploadedName = "";
+    input.addEventListener("change", () => {
+      uploadedName = input.files?.[0]?.name ?? "";
+    });
+    action.addEventListener("click", () => {
+      window.setTimeout(() => input.click(), 150);
+    });
+    document.body.appendChild(action);
+
+    const filesDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+    Object.defineProperty(HTMLInputElement.prototype, "files", {
+      configurable: true,
+      get() {
+        return (this as HTMLInputElement & { uploadedFiles?: File[] }).uploadedFiles ?? [];
+      },
+      set(files: File[]) {
+        (this as HTMLInputElement & { uploadedFiles?: File[] }).uploadedFiles = files;
+      },
+    });
+    try {
+      await expect(
+        triggerFileUploadMainWorld(
+          "#async-media-menu-item",
+          "blob:https://x.com/media",
+          "scene.jpg",
+          "image/jpeg",
+        ),
+      ).resolves.toBe(true);
+      expect(uploadedName).toBe("scene.jpg");
+    } finally {
+      if (filesDescriptor !== undefined) {
+        Object.defineProperty(HTMLInputElement.prototype, "files", filesDescriptor);
+      }
+    }
+  });
+
+  it("intercepts a file input activated through a media label", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ blob: vi.fn().mockResolvedValue(new Blob(["media"])) }));
+    vi.stubGlobal(
+      "DataTransfer",
+      class {
+        files: File[] = [];
+        items = {
+          add: (file: File): void => {
+            this.files.push(file);
+          },
+        };
+      },
+    );
+    const action = document.createElement("label");
+    action.id = "label-media-action";
+    action.htmlFor = "body-media-input";
+    const input = document.createElement("input");
+    input.id = "body-media-input";
+    input.type = "file";
+    let uploadedName = "";
+    input.addEventListener("change", () => {
+      uploadedName = input.files?.[0]?.name ?? "";
+    });
+    document.body.append(action, input);
+
+    const filesDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+    Object.defineProperty(HTMLInputElement.prototype, "files", {
+      configurable: true,
+      get() {
+        return (this as HTMLInputElement & { uploadedFiles?: File[] }).uploadedFiles ?? [];
+      },
+      set(files: File[]) {
+        (this as HTMLInputElement & { uploadedFiles?: File[] }).uploadedFiles = files;
+      },
+    });
+    try {
+      await expect(
+        triggerFileUploadMainWorld(
+          "#label-media-action",
+          "blob:https://x.com/media",
+          "scene.jpg",
+          "image/jpeg",
+        ),
+      ).resolves.toBe(true);
+      expect(uploadedName).toBe("scene.jpg");
+    } finally {
+      if (filesDescriptor !== undefined) {
+        Object.defineProperty(HTMLInputElement.prototype, "files", filesDescriptor);
+      }
+    }
+  });
+
+  it("reacquires a rendered media menu action when its tagged node was replaced", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ blob: vi.fn().mockResolvedValue(new Blob(["media"])) }));
+    vi.stubGlobal(
+      "DataTransfer",
+      class {
+        files: File[] = [];
+        items = {
+          add: (file: File): void => {
+            this.files.push(file);
+          },
+        };
+      },
+    );
+    const action = document.createElement("button");
+    action.setAttribute("role", "menuitem");
+    action.textContent = "媒体";
+    const input = document.createElement("input");
+    input.type = "file";
+    action.addEventListener("click", () => {
+      input.click();
+    });
+    document.body.appendChild(action);
+
+    const filesDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+    Object.defineProperty(HTMLInputElement.prototype, "files", {
+      configurable: true,
+      get() {
+        return (this as HTMLInputElement & { uploadedFiles?: File[] }).uploadedFiles ?? [];
+      },
+      set(files: File[]) {
+        (this as HTMLInputElement & { uploadedFiles?: File[] }).uploadedFiles = files;
+      },
+    });
+    try {
+      await expect(
+        triggerFileUploadMainWorld(
+          "[data-yt2x-upload-action='removed']",
+          "blob:https://x.com/media",
+          "clip.mp4",
+          "video/mp4",
+        ),
+      ).resolves.toBe(true);
+      expect(input.files?.[0]?.name).toBe("clip.mp4");
+    } finally {
+      if (filesDescriptor !== undefined) {
+        Object.defineProperty(HTMLInputElement.prototype, "files", filesDescriptor);
+      }
+    }
+  });
 });

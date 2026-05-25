@@ -4,7 +4,7 @@ import {
   readTitleFieldText,
   waitForArticleDraftReady,
 } from "./locators.js";
-import { focusEditorEnd, focusInsertionAnchor } from "./insertion-anchor.js";
+import { focusInsertionAnchor } from "./insertion-anchor.js";
 import {
   dismissOpenOverlays,
   insertCodeBlock,
@@ -35,6 +35,8 @@ export type WriteArticleDraftResult = {
   lastMediaError: string | null;
 };
 
+class ArticleStructureRestoreError extends Error {}
+
 export const writeArticleDraftToPage = async (
   prepared: PreparedArticleImport,
   options: WriteArticleDraftOptions = {},
@@ -57,53 +59,51 @@ export const writeArticleDraftToPage = async (
     report("正在写入标题…");
     await fillTitle(parseResult.title);
     const contentMedia = [...parseResult.contentImages, ...parseResult.contentVideos].sort(
-      (a, b) => a.blockIndex - b.blockIndex,
+      (a, b) => b.blockIndex - a.blockIndex,
     );
-    let writtenBlocks = parseResult.totalBlocks;
-    const initialHtml =
-      contentMedia.length === 0
-        ? parseResult.html
-        : parseResult.htmlBlocks.slice(0, contentMedia[0]!.blockIndex).join("");
-    if (contentMedia.length > 0) {
-      writtenBlocks = contentMedia[0]!.blockIndex;
-    }
     report("正在写入正文…");
-    await writeHtmlToEditor(editor, initialHtml);
+    await writeHtmlToEditor(editor, parseResult.html);
     report("正在确认标题与正文…");
     await fillTitle(parseResult.title);
-    if (initialHtml.trim().length > 0) {
+    if (parseResult.html.trim().length > 0) {
       await waitForWrittenDraft(parseResult.title, editor);
     }
 
     dismissOpenOverlays();
     await wait(350);
 
+    report("正在应用正文格式…");
+    await applyStructuralFormatting(editor, parseResult, report);
+    await fillTitle(parseResult.title);
+    await waitForWrittenDraft(parseResult.title, editor);
+    report("正文格式已完成，正在上传素材…");
+
     if (parseResult.coverImage !== null) {
       const coverFile = resolveUploadFile(prepared, parseResult.coverImage);
       if (coverFile === undefined) {
-        throw new Error(`Cover image is not authorized: ${parseResult.coverImage}`);
+        lastMediaError = `Cover image is not authorized: ${parseResult.coverImage}`;
+        skippedMedia.push(parseResult.coverImage);
+      } else {
+        report("正在上传封面…");
+        try {
+          await uploadCoverImage(coverFile);
+          dismissOpenOverlays();
+          await wait(350);
+        } catch (err: unknown) {
+          lastMediaError = err instanceof Error ? err.message : "Unknown cover upload error";
+          skippedMedia.push(parseResult.coverImage);
+          dismissOpenOverlays();
+        }
       }
-      report("正在上传封面…");
-      await uploadCoverImage(coverFile);
-      dismissOpenOverlays();
-      await wait(350);
     }
 
     for (let index = 0; index < contentMedia.length; index += 1) {
       const media = contentMedia[index]!;
-      if (media.blockIndex > writtenBlocks) {
-        const nextHtml = parseResult.htmlBlocks.slice(writtenBlocks, media.blockIndex).join("");
-        report("正在追加正文片段…");
-        await appendHtmlToEditor(
-          editor,
-          nextHtml,
-          parseResult.htmlBlocks.slice(0, media.blockIndex).join(""),
-        );
-        writtenBlocks = media.blockIndex;
-      }
       const file = resolveUploadFile(prepared, media.path);
       if (file === undefined) {
-        throw new Error(`Content media is not authorized: ${media.path}`);
+        lastMediaError = `Content media is not authorized: ${media.path}`;
+        skippedMedia.push(media.path);
+        continue;
       }
       report(formatIndexedStep("正在插入图片/视频", index + 1, contentMedia.length));
       try {
@@ -112,79 +112,23 @@ export const writeArticleDraftToPage = async (
           afterText: media.afterText,
           blockIndex: media.blockIndex,
           totalBlocks: parseResult.totalBlocks,
-          appendAtEnd: true,
         });
-        const writtenHtml = parseResult.htmlBlocks.slice(0, writtenBlocks).join("");
-        if (!editorRetainsExpectedBody(editor, writtenHtml)) {
+        if (!editorRetainsExpectedBody(editor, parseResult.html)) {
           report("检测到媒体覆盖正文，正在恢复正文…");
-          await writeHtmlToEditor(editor, parseResult.html);
-          await fillTitle(parseResult.title);
+          await restoreFormattedBody(editor, parseResult, report);
           throw new Error("X Articles media insertion replaced the article body; the body text was restored.");
         }
       } catch (err: unknown) {
+        if (err instanceof ArticleStructureRestoreError) throw err;
         lastMediaError =
           err instanceof Error ? err.message : "Unknown media insertion error";
-        throw new Error(`X Articles 正文媒体未能插入（${media.path}）：${lastMediaError}`);
+        skippedMedia.push(media.path);
+        dismissOpenOverlays();
       }
-    }
-
-    if (writtenBlocks < parseResult.totalBlocks) {
-      report("正在追加剩余正文…");
-      await appendHtmlToEditor(
-        editor,
-        parseResult.htmlBlocks.slice(writtenBlocks).join(""),
-        parseResult.html,
-      );
-    }
-    await fillTitle(parseResult.title);
-    await waitForWrittenDraft(parseResult.title, editor);
-
-    const dividers = [...parseResult.dividers].sort((a, b) => b.blockIndex - a.blockIndex);
-    for (let index = 0; index < dividers.length; index += 1) {
-      const divider = dividers[index]!;
-      report(formatIndexedStep("正在插入分割线", index + 1, dividers.length));
-      let dividerAnchor:
-        | { editor: HTMLElement; afterText: string; blockIndex: number; totalBlocks: number }
-        | undefined;
-      try {
-        focusInsertionAnchor(editor, divider.afterText, divider.blockIndex, parseResult.totalBlocks);
-        dividerAnchor = {
-          editor,
-          afterText: divider.afterText,
-          blockIndex: divider.blockIndex,
-          totalBlocks: parseResult.totalBlocks,
-        };
-      } catch (error: unknown) {
-        throw new Error(
-          `X Articles 分割线插入位置无法定位（block ${divider.blockIndex}）：${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      const inserted = await insertDivider(dividerAnchor);
-      if (!inserted) {
-        throw new Error(`X Articles 分割线无法插入（block ${divider.blockIndex}）。`);
-      }
-    }
-
-    const codeBlocks = parseResult.contentCodeBlocks;
-    for (let index = 0; index < codeBlocks.length; index += 1) {
-      const codeBlock = codeBlocks[index]!;
-      report(formatIndexedStep("正在插入代码块", index + 1, codeBlocks.length));
-      try {
-        await insertCodeBlock(codeBlock.code, {
-          editor,
-          afterText: codeBlock.afterText,
-          blockIndex: codeBlock.blockIndex,
-          totalBlocks: parseResult.totalBlocks,
-        });
-      } catch (error: unknown) {
-        throw new Error(
-          `X Articles 代码块无法插入（block ${codeBlock.blockIndex}）：${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      await fillTitle(parseResult.title);
     }
 
     await fillTitle(parseResult.title);
+    await waitForWrittenDraft(parseResult.title, editor);
 
     report("正在等待媒体上传完成…");
     await waitForMediaUploadComplete(6_000);
@@ -192,6 +136,74 @@ export const writeArticleDraftToPage = async (
     return { skippedDividers, skippedPromptCodeBlocks, skippedMedia, lastMediaError };
   } finally {
     dismissOpenOverlays();
+  }
+};
+
+const restoreFormattedBody = async (
+  editor: HTMLElement,
+  parseResult: PreparedArticleImport["parseResult"],
+  report: (message: string) => void,
+): Promise<void> => {
+  try {
+    await writeHtmlToEditor(editor, parseResult.html);
+    await fillTitle(parseResult.title);
+    await applyStructuralFormatting(editor, parseResult, report);
+    await waitForWrittenDraft(parseResult.title, editor);
+  } catch (error: unknown) {
+    throw new ArticleStructureRestoreError(
+      `X Articles media damaged the formatted article body and restoration failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+};
+
+const applyStructuralFormatting = async (
+  editor: HTMLElement,
+  parseResult: PreparedArticleImport["parseResult"],
+  report: (message: string) => void,
+): Promise<void> => {
+  const codeBlocks = parseResult.contentCodeBlocks;
+  for (let index = 0; index < codeBlocks.length; index += 1) {
+    const codeBlock = codeBlocks[index]!;
+    report(formatIndexedStep("正在插入代码块", index + 1, codeBlocks.length));
+    try {
+      await insertCodeBlock(codeBlock.code, {
+        editor,
+        afterText: codeBlock.afterText,
+        blockIndex: codeBlock.blockIndex,
+        totalBlocks: parseResult.totalBlocks,
+      });
+    } catch (error: unknown) {
+      throw new Error(
+        `X Articles 代码块无法插入（block ${codeBlock.blockIndex}）：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    await fillTitle(parseResult.title);
+  }
+
+  const dividers = [...parseResult.dividers].sort((a, b) => b.blockIndex - a.blockIndex);
+  for (let index = 0; index < dividers.length; index += 1) {
+    const divider = dividers[index]!;
+    report(formatIndexedStep("正在插入分割线", index + 1, dividers.length));
+    let dividerAnchor:
+      | { editor: HTMLElement; afterText: string; blockIndex: number; totalBlocks: number }
+      | undefined;
+    try {
+      focusInsertionAnchor(editor, divider.afterText, divider.blockIndex, parseResult.totalBlocks);
+      dividerAnchor = {
+        editor,
+        afterText: divider.afterText,
+        blockIndex: divider.blockIndex,
+        totalBlocks: parseResult.totalBlocks,
+      };
+    } catch (error: unknown) {
+      throw new Error(
+        `X Articles 分割线插入位置无法定位（block ${divider.blockIndex}）：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const inserted = await insertDivider(dividerAnchor);
+    if (!inserted) {
+      throw new Error(`X Articles 分割线无法插入（block ${divider.blockIndex}）。`);
+    }
   }
 };
 
@@ -395,24 +407,4 @@ const writeHtmlToEditor = async (editor: HTMLElement, html: string): Promise<voi
   }
 
   throw new Error("X Articles body editor did not accept pasted HTML content.");
-};
-
-const appendHtmlToEditor = async (
-  editor: HTMLElement,
-  html: string,
-  expectedHtml: string,
-): Promise<void> => {
-  if (html.trim().length === 0) return;
-
-  const activeEditor = liveArticleEditor(editor);
-  focusEditorEnd(activeEditor);
-  document.execCommand("insertHTML", false, html);
-  activeEditor.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-  const deadline = Date.now() + 4_000;
-  while (Date.now() < deadline) {
-    if (editorRetainsExpectedBody(editor, expectedHtml)) return;
-    await wait(120);
-  }
-  throw new Error("X Articles body editor did not accept appended HTML content.");
 };

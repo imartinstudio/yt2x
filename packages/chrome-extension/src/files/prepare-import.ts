@@ -73,6 +73,7 @@ export const prepareArticleImport = async (input: {
   const parseResult = parseArticleDraftFromMarkdown(adapted.markdown, {
     resolveMediaPath: (source) => input.mediaRegistry.resolveMediaPath(source),
     preserveSourceContent: true,
+    useNativeEditorBlocks: true,
   });
 
   return {

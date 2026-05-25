@@ -17,6 +17,8 @@ export type ParseArticleDraftOptions = {
   fallbackCoverImage?: string | null;
   /** Keep author-provided blocks intact for interactive Markdown imports. */
   preserveSourceContent?: boolean;
+  /** Render dividers and fenced code through native X editor actions while keeping author text. */
+  useNativeEditorBlocks?: boolean;
 };
 
 export const parseArticleDraftFromMarkdown = (
@@ -24,9 +26,13 @@ export const parseArticleDraftFromMarkdown = (
   options: ParseArticleDraftOptions,
 ): ArticleDraftParseResult => {
   const preserveSourceContent = options.preserveSourceContent === true;
+  const useNativeEditorBlocks = options.useNativeEditorBlocks === true;
   const { title, body } = extractArticleTitle(markdown, { preserveSourceContent });
   const splitBlocks = splitDraftBlocks(body);
-  const blocks = preserveSourceContent ? splitBlocks : ensureHeadingDividers(splitBlocks);
+  const blocks =
+    preserveSourceContent && !useNativeEditorBlocks
+      ? splitBlocks
+      : ensureHeadingDividers(splitBlocks);
   const contentBlocks: string[] = [];
   const images: ArticleDraftParseResult["contentImages"] = [];
   const contentVideos: ArticleDraftParseResult["contentVideos"] = [];
@@ -36,7 +42,7 @@ export const parseArticleDraftFromMarkdown = (
 
   for (const block of blocks) {
     if (block.kind === "divider") {
-      if (preserveSourceContent) {
+      if (preserveSourceContent && !useNativeEditorBlocks) {
         contentBlocks.push(block.source);
         lastAnchorText = "---";
         continue;
@@ -73,12 +79,12 @@ export const parseArticleDraftFromMarkdown = (
     }
     if (block.kind === "code") {
       const codeBlock = parseCodeBlock(block.source);
-      if (preserveSourceContent) {
+      if (preserveSourceContent && !useNativeEditorBlocks) {
         contentBlocks.push(block.source);
         lastAnchorText = codeAnchorText(codeBlock.code);
         continue;
       }
-      if (isPromptArtifactCode(codeBlock.code)) continue;
+      if (!preserveSourceContent && isPromptArtifactCode(codeBlock.code)) continue;
       contentCodeBlocks.push({
         ...codeBlock,
         blockIndex: contentBlocks.length,
@@ -336,6 +342,7 @@ const splitDraftBlocks = (markdown: string): DraftBlock[] => {
   const blocks: DraftBlock[] = [];
   let current: string[] = [];
   let fenced: string[] | null = null;
+  const isListLine = (line: string): boolean => /^(?:[-*]\s+|\d+\.\s+)/u.test(line.trim());
   const flush = (): void => {
     if (current.length === 0) return;
     const source = current.join("\n").trim();
@@ -383,6 +390,9 @@ const splitDraftBlocks = (markdown: string): DraftBlock[] => {
       flush();
       blocks.push({ kind: "video", source: trimmed });
       continue;
+    }
+    if (current.length > 0 && isListLine(trimmed) !== current.every((item) => isListLine(item))) {
+      flush();
     }
     current.push(line);
   }

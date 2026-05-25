@@ -98,16 +98,26 @@ export const triggerFileUploadMainWorld = async (
   name: string,
   type: string,
 ): Promise<boolean> => {
-  const action = document.querySelector(selector);
+  const action =
+    document.querySelector(selector) ??
+    [...document.querySelectorAll("[role='menuitem'],[role='option']")].find((node) =>
+      /^(?:media|媒体)$/iu.test((node.textContent ?? "").trim()),
+    );
   if (!(action instanceof HTMLElement)) return false;
 
   const blob = await (await fetch(blobUrl)).blob();
   const upload = new File([blob], name, { type });
   const nativeClick = HTMLInputElement.prototype.click;
   const nativeShowPicker = HTMLInputElement.prototype.showPicker;
+  const observedInputs = new Set<HTMLInputElement>();
   let intercepted = false;
+  let resolveIntercepted: ((value: boolean) => void) | null = null;
+  const interceptedPromise = new Promise<boolean>((resolve) => {
+    resolveIntercepted = resolve;
+  });
 
   const assign = (input: HTMLInputElement): void => {
+    if (intercepted) return;
     const transfer = new DataTransfer();
     transfer.items.add(upload);
     const files = transfer.files;
@@ -120,7 +130,37 @@ export const triggerFileUploadMainWorld = async (
     intercepted = true;
     input.dispatchEvent(new Event("change", { bubbles: true }));
     input.dispatchEvent(new Event("input", { bubbles: true }));
+    resolveIntercepted?.(true);
   };
+
+  const interceptDefaultActivation = (event: Event): void => {
+    const input = event.currentTarget;
+    if (!(input instanceof HTMLInputElement) || input.type !== "file") return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    assign(input);
+  };
+
+  const observeInput = (input: HTMLInputElement): void => {
+    if (input.type !== "file" || observedInputs.has(input)) return;
+    observedInputs.add(input);
+    input.addEventListener("click", interceptDefaultActivation, true);
+  };
+
+  const observeInputsWithin = (root: ParentNode): void => {
+    if (root instanceof HTMLInputElement) observeInput(root);
+    root.querySelectorAll<HTMLInputElement>('input[type="file"]').forEach(observeInput);
+  };
+
+  observeInputsWithin(document);
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node instanceof Element) observeInputsWithin(node);
+      }
+    }
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
 
   HTMLInputElement.prototype.click = function (...args: Parameters<HTMLInputElement["click"]>): void {
     if (this.type === "file") {
@@ -139,11 +179,17 @@ export const triggerFileUploadMainWorld = async (
 
   try {
     action.click();
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, 100);
-    });
-    return intercepted;
+    return await Promise.race([
+      interceptedPromise,
+      new Promise<boolean>((resolve) => {
+        window.setTimeout(() => resolve(false), 2_000);
+      }),
+    ]);
   } finally {
+    observer.disconnect();
+    observedInputs.forEach((input) => {
+      input.removeEventListener("click", interceptDefaultActivation, true);
+    });
     HTMLInputElement.prototype.click = nativeClick;
     HTMLInputElement.prototype.showPicker = nativeShowPicker;
   }

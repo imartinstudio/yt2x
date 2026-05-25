@@ -6,9 +6,9 @@ import {
   LOCALE_PATTERNS,
 } from "./locators.js";
 import {
+  insertDivider,
   isCoverFileInput,
   precedingContentBlockIndex,
-  prepareClipboardImage,
 } from "./x-insert-actions.js";
 
 describe("insert button routing", () => {
@@ -66,27 +66,24 @@ describe("insert button routing", () => {
     expect(precedingContentBlockIndex(3)).toBe(2);
   });
 
-  it("uses a PNG clipboard blob when the source image is JPEG", async () => {
-    const close = vi.fn();
-    vi.stubGlobal(
-      "createImageBitmap",
-      vi.fn().mockResolvedValue({ width: 4_000, height: 1_000, close }),
-    );
-    const drawImage = vi.fn();
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      drawImage,
-    } as unknown as CanvasRenderingContext2D);
-    const png = new Blob(["converted"], { type: "image/png" });
-    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) => {
-      callback(png);
+  it("inserts a divider through the visible add-media content menu used by X Articles", async () => {
+    document.querySelectorAll("#toolbar button:not([aria-label='添加媒体内容'])").forEach((node) => {
+      node.remove();
+    });
+    const addMedia = document.querySelector<HTMLButtonElement>("button[aria-label='添加媒体内容']");
+    let clickedDivider = false;
+    addMedia?.addEventListener("click", () => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.textContent = "分割线";
+      item.addEventListener("click", () => {
+        clickedDivider = true;
+      });
+      document.body.appendChild(item);
     });
 
-    const result = await prepareClipboardImage(
-      new File(["jpeg"], "scene.jpg", { type: "image/jpeg" }),
-    );
-
-    expect(result).toBe(png);
-    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 2_000, 500);
-    expect(close).toHaveBeenCalled();
+    await expect(insertDivider()).resolves.toBe(true);
+    expect(clickedDivider).toBe(true);
   });
 });

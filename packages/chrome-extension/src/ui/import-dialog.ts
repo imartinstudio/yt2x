@@ -42,6 +42,7 @@ export const buildImportPreviewState = (input: {
   const parseResult = parseArticleDraftFromMarkdown(adapted.markdown, {
     resolveMediaPath: (source) => input.mediaRegistry.resolveMediaPath(source),
     preserveSourceContent: true,
+    useNativeEditorBlocks: true,
   });
   return {
     title: parseResult.title,
@@ -125,7 +126,7 @@ export const showImportSuccessToast = (input: {
   if (skippedMedia.length > 0) {
     const detail =
       lastMediaError !== null && lastMediaError.length > 0 ? `：${lastMediaError}` : "";
-    notes.push(`${skippedMedia.length} 个正文图片/视频未插入，请手动添加媒体${detail}`);
+    notes.push(`${skippedMedia.length} 个封面/正文媒体自动插入失败，正文格式已保留${detail}`);
   }
   if (skippedPromptCodeBlocks > 0) {
     notes.push(`${skippedPromptCodeBlocks} 段英文 prompt 代码块已跳过（非正文内容）`);
@@ -135,7 +136,7 @@ export const showImportSuccessToast = (input: {
   toast.style.cssText =
     "position:fixed;right:24px;bottom:24px;z-index:2147483647;padding:12px 16px;border-radius:8px;background:#111;color:#fff;font:14px system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.2)";
   document.body.appendChild(toast);
-  window.setTimeout(() => toast.remove(), 6_000);
+  window.setTimeout(() => toast.remove(), skippedMedia.length > 0 ? 15_000 : 6_000);
 };
 
 export const showImportError = (message: string): void => {

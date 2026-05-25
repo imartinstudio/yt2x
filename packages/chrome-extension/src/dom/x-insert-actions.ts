@@ -1,4 +1,4 @@
-import { assignFileToInput, normalizeUploadFile } from "./file-input.js";
+import { assignFileToInput, normalizeUploadFile, uploadFileThroughAction } from "./file-input.js";
 import { queryAllDeep } from "./dom-query.js";
 import {
   activateInsertionAnchor,
@@ -16,7 +16,6 @@ import {
   findButtonByName,
   findGenericInsertButton,
   findMenuItemByName,
-  findTitleField,
   findToolbarActionButton,
   isTitleComposerElement,
   menuHasInsertItems,
@@ -27,6 +26,7 @@ export type InsertionAnchor = {
   afterText: string;
   blockIndex: number;
   totalBlocks?: number;
+  appendAtEnd?: boolean;
 };
 
 const restoreInsertionAnchor = (anchor: InsertionAnchor): void => {
@@ -49,6 +49,14 @@ const restoreInsertionAnchor = (anchor: InsertionAnchor): void => {
 const draftEditorRoot = (editor: HTMLElement): HTMLElement =>
   editor.closest(".DraftEditor-root") ?? editor;
 
+const liveArticleEditor = (fallback: HTMLElement): HTMLElement => {
+  try {
+    return articleEditor();
+  } catch {
+    return fallback;
+  }
+};
+
 type EditorSnapshot = {
   signature: string;
   mediaNodes: number;
@@ -56,7 +64,7 @@ type EditorSnapshot = {
 };
 
 const takeEditorSnapshot = (editor: HTMLElement): EditorSnapshot => {
-  const root = draftEditorRoot(editor);
+  const root = draftEditorRoot(liveArticleEditor(editor));
   const mediaNodes = root.querySelectorAll(
     [
       "img",
@@ -81,10 +89,7 @@ const takeEditorSnapshot = (editor: HTMLElement): EditorSnapshot => {
 
 const editorMediaChanged = (editor: HTMLElement, before: EditorSnapshot): boolean => {
   const after = takeEditorSnapshot(editor);
-  if (after.signature !== before.signature) return true;
-  if (after.mediaNodes > before.mediaNodes) return true;
-  if (after.blocks > before.blocks) return true;
-  return false;
+  return after.mediaNodes > before.mediaNodes;
 };
 
 const waitForEditorMediaChange = async (
@@ -94,7 +99,6 @@ const waitForEditorMediaChange = async (
 ): Promise<boolean> => {
   if (editorMediaChanged(editor, before)) return true;
 
-  const root = draftEditorRoot(editor);
   const changed = await new Promise<boolean>((resolve) => {
     const timeout = window.setTimeout(() => {
       observer.disconnect();
@@ -106,7 +110,12 @@ const waitForEditorMediaChange = async (
       observer.disconnect();
       resolve(true);
     });
-    observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    });
   });
   return changed;
 };
@@ -129,18 +138,14 @@ const waitForDialogUploadPreview = async (dialog: HTMLElement, timeoutMs: number
   return dialogHasUploadPreview(dialog);
 };
 
-const titleFieldBottom = (): number | null => {
-  try {
-    return findTitleField().getBoundingClientRect().bottom;
-  } catch {
-    return null;
+export const isCoverFileInput = (input: HTMLInputElement): boolean => {
+  const root = input.parentElement;
+  if (root === null) return false;
+  for (const node of queryAllDeep(root, "button,[role='button']")) {
+    const label = (node.getAttribute("aria-label") ?? node.textContent ?? "").trim();
+    if (LOCALE_PATTERNS.addMedia.test(label)) return true;
   }
-};
-
-const isCoverFileInput = (input: HTMLInputElement): boolean => {
-  const titleBottom = titleFieldBottom();
-  if (titleBottom === null) return false;
-  return input.getBoundingClientRect().bottom <= titleBottom + 16;
+  return false;
 };
 
 const wait = (ms: number): Promise<void> =>
@@ -169,9 +174,6 @@ export const dismissOpenOverlays = (): void => {
     );
   }
 };
-
-const buttonLabel = (button: HTMLButtonElement): string =>
-  (button.getAttribute("aria-label") ?? button.getAttribute("title") ?? button.textContent ?? "").trim();
 
 const waitForInsertMenu = async (timeoutMs = 4_000): Promise<boolean> => {
   const started = Date.now();
@@ -350,12 +352,12 @@ const activeMediaDialog = (): HTMLElement | null => {
   for (const dialog of dialogs.reverse()) {
     if (dialogLooksLikeContentMedia(dialog)) return dialog;
   }
-  return dialogs.at(-1) ?? null;
+  return null;
 };
 
 const contentMediaDialogSearchRoots = (): ParentNode[] => {
   const dialog = activeMediaDialog();
-  return dialog === null ? [] : [dialog];
+  return dialog === null ? [editorMainRoot()] : [dialog, editorMainRoot()];
 };
 
 const findDeepFileInput = (roots: ParentNode[] = contentMediaDialogSearchRoots()): HTMLInputElement | null => {
@@ -405,25 +407,6 @@ const dialogChooseFileButton = (dialog: ParentNode): HTMLButtonElement | null =>
   return null;
 };
 
-let chooseFileTriggeredForUpload = false;
-
-const triggerChooseFileInActiveDialogOnce = async (): Promise<HTMLInputElement | null> => {
-  if (chooseFileTriggeredForUpload) return findDeepFileInput();
-  const dialog = activeMediaDialog();
-  if (dialog === null) return null;
-  const choose = dialogChooseFileButton(dialog);
-  if (choose === null) return null;
-  chooseFileTriggeredForUpload = true;
-  choose.click();
-  return waitForDeepFileInput(4_000, [dialog]);
-};
-
-const isMediaUploadInProgress = (): boolean =>
-  document.querySelector('[role="progressbar"],[aria-busy="true"]') !== null ||
-  [...document.querySelectorAll("*")].some((node) =>
-    LOCALE_PATTERNS.uploading.test(node.textContent ?? ""),
-  );
-
 const isContentMediaUploadDialogOpen = (): boolean => {
   const dialog = activeMediaDialog();
   if (dialog === null) return false;
@@ -434,7 +417,7 @@ const isContentMediaUploadDialogOpen = (): boolean => {
 };
 
 const openContentMediaUploadSurface = async (): Promise<void> => {
-  if (isContentMediaUploadDialogOpen()) return;
+  if (isContentMediaUploadDialogOpen() || findDeepFileInput() !== null) return;
 
   const openViaAddMediaToolbar = async (): Promise<boolean> => {
     const root = editorMainRoot();
@@ -442,12 +425,13 @@ const openContentMediaUploadSurface = async (): Promise<void> => {
     if (addMedia === null) return false;
     addMedia.click();
     await wait(450);
+    if (findDeepFileInput() !== null) return true;
     const mediaItem = findMenuItemByName(LOCALE_PATTERNS.mediaMenu);
     if (mediaItem !== null) {
       mediaItem.click();
       await wait(450);
     }
-    return isContentMediaUploadDialogOpen();
+    return isContentMediaUploadDialogOpen() || findDeepFileInput() !== null;
   };
 
   if (await openViaAddMediaToolbar()) return;
@@ -460,7 +444,7 @@ const openContentMediaUploadSurface = async (): Promise<void> => {
   mediaItem.click();
   await wait(450);
 
-  if (!isContentMediaUploadDialogOpen()) {
+  if (!isContentMediaUploadDialogOpen() && findDeepFileInput() === null) {
     throw new Error("X Articles content media upload dialog did not open.");
   }
 };
@@ -525,61 +509,99 @@ const listDialogFileInputs = (dialog: HTMLElement): HTMLInputElement[] =>
       node instanceof HTMLInputElement && !isCoverFileInput(node),
   );
 
-const uploadFileThroughDialog = async (dialog: HTMLElement, file: File): Promise<void> => {
+const uploadFileThroughSurface = async (dialog: HTMLElement | null, file: File): Promise<void> => {
   const normalized = normalizeUploadFile(file);
-  let inputs = listDialogFileInputs(dialog);
+  let inputs = dialog === null ? [] : listDialogFileInputs(dialog);
   if (inputs.length === 0) {
-    const waited = await waitForDeepFileInput(6_000, [dialog]);
+    const input = findDeepFileInput();
+    if (input !== null) inputs = [input];
+  }
+  if (inputs.length === 0) {
+    const roots = dialog === null ? contentMediaDialogSearchRoots() : [dialog, editorMainRoot()];
+    const waited = await waitForDeepFileInput(6_000, roots);
     if (waited !== null && !isCoverFileInput(waited)) inputs = [waited];
   }
 
   if (inputs.length === 0) {
-    throw new Error("X Articles content media upload control was not found inside the insert dialog.");
+    throw new Error("X Articles content media upload control was not found after opening Add media content.");
   }
 
   for (const input of inputs) {
     await assignFileToInput(input, normalized);
     await wait(600);
-    if (await waitForDialogUploadPreview(dialog, 12_000)) return;
+    if (dialog === null || (await waitForDialogUploadPreview(dialog, 12_000))) return;
   }
 
   throw new Error("X Articles did not accept the media file in the upload dialog.");
 };
 
-const pasteMediaFileAtCursor = async (file: File): Promise<boolean> => {
-  const isVideo = /^video\//iu.test(file.type) || /\.(?:mp4|webm|mov|m4v)$/iu.test(file.name);
-  if (isVideo) return false;
+const uploadFileThroughMediaAction = async (file: File): Promise<boolean> => {
+  const addMedia = findButtonByName(LOCALE_PATTERNS.insertAddMedia, editorMainRoot());
+  if (addMedia === null) return false;
+  addMedia.click();
+  await wait(250);
+  const mediaItem = findMenuItemByName(LOCALE_PATTERNS.mediaMenu);
+  if (mediaItem === null) return false;
+  return uploadFileThroughAction(mediaItem, file);
+};
 
-  const type = file.type || "image/png";
+const isVideoFile = (file: File): boolean =>
+  /^video\//iu.test(file.type) || /\.(?:mp4|webm|mov|m4v)$/iu.test(file.name);
+
+export const prepareClipboardImage = async (file: File): Promise<Blob> => {
+  if (file.type === "image/png") return file;
+
+  const bitmap = await createImageBitmap(file);
   try {
-    await navigator.clipboard.write([new ClipboardItem({ [type]: file })]);
-  } catch {
-    return false;
+    const maxDimension = 2_000;
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (context === null) {
+      throw new Error("X Articles image clipboard preparation failed: canvas is unavailable.");
+    }
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob === null) {
+          reject(new Error("X Articles image clipboard preparation failed: PNG conversion failed."));
+          return;
+        }
+        resolve(blob);
+      }, "image/png");
+    });
+  } finally {
+    bitmap.close();
   }
-  await wait(120);
-  return document.execCommand("paste");
 };
 
-const dropFileOnEditor = (editor: HTMLElement, file: File): void => {
-  const root = draftEditorRoot(editor);
-  const transfer = new DataTransfer();
-  transfer.items.add(file);
-  for (const type of ["dragenter", "dragover", "drop"] as const) {
-    root.dispatchEvent(
-      new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }),
-    );
-  }
-};
+export const precedingContentBlockIndex = (blockIndex: number): number =>
+  Math.max(0, blockIndex - 1);
 
-const placeInsertionCaret = (anchor: InsertionAnchor): SavedEditorSelection | null => {
+const placeMediaInsertionCaret = (anchor: InsertionAnchor): SavedEditorSelection | null => {
   const editor = anchor.editor;
   editor.focus();
+  if (anchor.appendAtEnd === true) {
+    focusEditorEnd(liveArticleEditor(editor));
+    return saveEditorSelection(liveArticleEditor(editor));
+  }
   if (anchor.afterText.trim().length > 0) {
     activateInsertionAnchor(editor, anchor.afterText, anchor.blockIndex, anchor.totalBlocks ?? 0);
   } else {
-    focusByBlockIndex(editor, anchor.blockIndex);
+    focusByBlockIndex(editor, precedingContentBlockIndex(anchor.blockIndex));
   }
   return saveEditorSelection(editor);
+};
+
+const pasteImageAtCaret = async (file: File): Promise<void> => {
+  const png = await prepareClipboardImage(file);
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+  await wait(120);
+  if (!document.execCommand("paste")) {
+    throw new Error("X Articles rejected the clipboard image paste command.");
+  }
 };
 
 const confirmDialogAction = async (): Promise<void> => {
@@ -596,54 +618,68 @@ const confirmDialogAction = async (): Promise<void> => {
 };
 
 export const insertContentMedia = async (file: File, anchor: InsertionAnchor): Promise<void> => {
-  chooseFileTriggeredForUpload = false;
   const editor = anchor.editor;
+  const normalized = normalizeUploadFile(file);
+
+  dismissOpenOverlays();
+  await wait(200);
+
+  const savedSelection = placeMediaInsertionCaret(anchor);
+  await wait(250);
   const before = takeEditorSnapshot(editor);
 
-  if (activeMediaDialog() !== null) {
+  if (!isVideoFile(normalized)) {
+    restoreEditorSelection(savedSelection);
+    await pasteImageAtCaret(normalized);
+    if (!(await waitForEditorMediaChange(editor, before, 90_000))) {
+      throw new Error("X Articles did not insert the clipboard PNG into the editor body.");
+    }
     dismissOpenOverlays();
-    await wait(200);
-  }
-
-  let savedSelection = placeInsertionCaret(anchor);
-  await wait(250);
-
-  await openContentMediaUploadSurface();
-
-  const dialog = activeMediaDialog();
-  if (dialog === null) {
-    throw new Error("X Articles content media upload dialog was not found.");
+    return;
   }
 
   restoreEditorSelection(savedSelection);
-  editor.focus();
-  await uploadFileThroughDialog(dialog, normalizeUploadFile(file));
+  await wait(100);
+  if (await uploadFileThroughMediaAction(normalized)) {
+    await waitForMediaUploadComplete(30_000);
+    const dialog = activeMediaDialog();
+    if (dialog !== null) {
+      await finishContentMediaUpload(anchor, dialog);
+    } else if (!(await waitForEditorMediaChange(editor, before, 8_000))) {
+      throw new Error("X Articles accepted the media file but did not insert it into the editor body.");
+    }
+    dismissOpenOverlays();
+    return;
+  }
+  if (await waitForEditorMediaChange(editor, before, 8_000)) {
+    dismissOpenOverlays();
+    return;
+  }
 
+  restoreEditorSelection(savedSelection);
+  await openContentMediaUploadSurface();
+
+  const dialog = activeMediaDialog();
+  restoreEditorSelection(savedSelection);
+  editor.focus();
   try {
-    restoreEditorSelection(savedSelection);
+    await uploadFileThroughSurface(dialog, normalized);
+  } catch (error: unknown) {
+    if (await waitForEditorMediaChange(editor, before, 15_000)) {
+      dismissOpenOverlays();
+      return;
+    }
+    throw error;
+  }
+
+  restoreEditorSelection(savedSelection);
+  if (dialog !== null) {
     await finishContentMediaUpload(anchor, dialog);
-  } catch (primaryError) {
-    restoreEditorSelection(savedSelection);
-    editor.focus();
-    const pasted = await pasteMediaFileAtCursor(file);
-    if (pasted && (await waitForEditorMediaChange(editor, before, 5_000))) {
-      dismissOpenOverlays();
-      return;
+  } else {
+    await waitForMediaUploadComplete(30_000);
+    if (!(await waitForEditorMediaChange(editor, before, 6_000))) {
+      throw new Error("X Articles content media was not inserted into the editor body.");
     }
-    restoreEditorSelection(savedSelection);
-    dropFileOnEditor(editor, file);
-    if (await waitForEditorMediaChange(editor, before, 5_000)) {
-      dismissOpenOverlays();
-      return;
-    }
-    savedSelection = placeInsertionCaret(anchor);
-    focusEditorEnd(editor);
-    dropFileOnEditor(editor, file);
-    if (await waitForEditorMediaChange(editor, before, 5_000)) {
-      dismissOpenOverlays();
-      return;
-    }
-    throw primaryError;
   }
 
   if (activeMediaDialog() !== null) {

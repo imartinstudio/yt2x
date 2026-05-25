@@ -30,6 +30,11 @@ const setRangeAtEnd = (element: HTMLElement): void => {
   selection?.addRange(range);
 };
 
+const syncEditorSelection = (editor: HTMLElement): void => {
+  document.dispatchEvent(new Event("selectionchange"));
+  editor.dispatchEvent(new Event("select", { bubbles: true }));
+};
+
 const setRangeAtMatch = (match: TextMatch): void => {
   const range = document.createRange();
   const endOffset = Math.min(match.offset, match.node.data.length);
@@ -44,17 +49,22 @@ export const focusByBlockIndex = (editor: HTMLElement, blockIndex: number): bool
   const blocks = listEditorBlocks(editor);
   if (blocks.length === 0) return false;
   const index = Math.max(0, Math.min(blockIndex, blocks.length - 1));
+  editor.focus({ preventScroll: true });
   setRangeAtEnd(blocks[index]!);
+  syncEditorSelection(editor);
   return true;
 };
 
 export const focusEditorEnd = (editor: HTMLElement): void => {
   const blocks = listEditorBlocks(editor);
+  editor.focus({ preventScroll: true });
   if (blocks.length > 0) {
     setRangeAtEnd(blocks.at(-1)!);
+    syncEditorSelection(editor);
     return;
   }
   setRangeAtEnd(editor);
+  syncEditorSelection(editor);
 };
 
 const anchorNeedles = (afterText: string): string[] => {
@@ -139,7 +149,9 @@ export const focusInsertionAnchor = (
         matches.length === 1
           ? matches[0]!
           : pickMatchForBlockIndex(editor, matches, blockIndex, totalBlocks);
+      editor.focus({ preventScroll: true });
       setRangeAtMatch(match);
+      syncEditorSelection(editor);
       return;
     }
   }
@@ -161,7 +173,7 @@ const blockElementFromRange = (range: Range): HTMLElement | null => {
   return block instanceof HTMLElement ? block : node;
 };
 
-/** Mirror Playwright: click anchor text, then move caret to block end before opening Insert. */
+/** Activate the target Draft.js block, then move the native caret to its end. */
 export const activateInsertionAnchor = (
   editor: HTMLElement,
   afterText: string,
@@ -181,12 +193,14 @@ export const activateInsertionAnchor = (
     endRange.collapse(false);
     selection.removeAllRanges();
     selection.addRange(endRange);
+    syncEditorSelection(editor);
     return;
   }
 
   range.collapse(false);
   selection.removeAllRanges();
   selection.addRange(range);
+  syncEditorSelection(editor);
 };
 
 export type SavedEditorSelection = {
@@ -204,8 +218,9 @@ export const saveEditorSelection = (editor: HTMLElement): SavedEditorSelection |
 
 export const restoreEditorSelection = (saved: SavedEditorSelection | null): void => {
   if (saved === null) return;
-  saved.editor.focus();
+  saved.editor.focus({ preventScroll: true });
   const selection = window.getSelection();
   selection?.removeAllRanges();
   selection?.addRange(saved.range);
+  syncEditorSelection(saved.editor);
 };

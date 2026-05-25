@@ -30,6 +30,7 @@ export const ArticleDraftParseResultSchema = z.object({
   contentCodeBlocks: z.array(ArticleDraftCodeBlockSchema).default([]),
   dividers: z.array(ArticleDraftDividerSchema),
   html: z.string(),
+  htmlBlocks: z.array(z.string()).default([]),
   totalBlocks: z.number().int().min(0),
 });
 export type ArticleDraftParseResult = z.infer<typeof ArticleDraftParseResultSchema>;

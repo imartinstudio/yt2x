@@ -1,5 +1,33 @@
 /** Assign files to hidden inputs in a way React-controlled X forms accept. */
 
+export const ASSIGN_FILE_MAIN_WORLD_MESSAGE = "yt2x:assign-file-main-world";
+export const TRIGGER_FILE_UPLOAD_MAIN_WORLD_MESSAGE = "yt2x:trigger-file-upload-main-world";
+
+export type AssignFileMainWorldRequest = {
+  type: typeof ASSIGN_FILE_MAIN_WORLD_MESSAGE;
+  selector: string;
+  blobUrl: string;
+  name: string;
+  mimeType: string;
+};
+
+export type AssignFileMainWorldResponse = {
+  ok: boolean;
+  error?: string;
+};
+
+export type TriggerFileUploadMainWorldRequest = {
+  type: typeof TRIGGER_FILE_UPLOAD_MAIN_WORLD_MESSAGE;
+  selector: string;
+  blobUrl: string;
+  name: string;
+  mimeType: string;
+};
+
+export type TriggerFileUploadMainWorldResponse = AssignFileMainWorldResponse & {
+  intercepted?: boolean;
+};
+
 export const normalizeUploadFile = (file: File): File => {
   if (file.type.length > 0) return file;
   const lower = file.name.toLowerCase();
@@ -63,11 +91,83 @@ export const assignFileMainWorld = (
   })();
 };
 
-const assignViaInlineScript = (selector: string, blobUrl: string, name: string, type: string): void => {
-  const script = document.createElement("script");
-  script.textContent = `(${assignFileMainWorld.toString()})(${JSON.stringify(selector)}, ${JSON.stringify(blobUrl)}, ${JSON.stringify(name)}, ${JSON.stringify(type)});`;
-  document.documentElement.appendChild(script);
-  script.remove();
+/** Trigger a React-owned upload action while replacing the native chooser with the supplied file. */
+export const triggerFileUploadMainWorld = async (
+  selector: string,
+  blobUrl: string,
+  name: string,
+  type: string,
+): Promise<boolean> => {
+  const action = document.querySelector(selector);
+  if (!(action instanceof HTMLElement)) return false;
+
+  const blob = await (await fetch(blobUrl)).blob();
+  const upload = new File([blob], name, { type });
+  const nativeClick = HTMLInputElement.prototype.click;
+  const nativeShowPicker = HTMLInputElement.prototype.showPicker;
+  let intercepted = false;
+
+  const assign = (input: HTMLInputElement): void => {
+    const transfer = new DataTransfer();
+    transfer.items.add(upload);
+    const files = transfer.files;
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+    if (descriptor?.set !== undefined) {
+      descriptor.set.call(input, files);
+    } else {
+      input.files = files;
+    }
+    intercepted = true;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  HTMLInputElement.prototype.click = function (...args: Parameters<HTMLInputElement["click"]>): void {
+    if (this.type === "file") {
+      assign(this);
+      return;
+    }
+    nativeClick.apply(this, args);
+  };
+  HTMLInputElement.prototype.showPicker = function (): void {
+    if (this.type === "file") {
+      assign(this);
+      return;
+    }
+    nativeShowPicker.call(this);
+  };
+
+  try {
+    action.click();
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 100);
+    });
+    return intercepted;
+  } finally {
+    HTMLInputElement.prototype.click = nativeClick;
+    HTMLInputElement.prototype.showPicker = nativeShowPicker;
+  }
+};
+
+export const requestMainWorldFileAssignment = async (
+  selector: string,
+  blobUrl: string,
+  name: string,
+  mimeType: string,
+): Promise<void> => {
+  const request: AssignFileMainWorldRequest = {
+    type: ASSIGN_FILE_MAIN_WORLD_MESSAGE,
+    selector,
+    blobUrl,
+    name,
+    mimeType,
+  };
+  const response = (await chrome.runtime.sendMessage(request)) as
+    | AssignFileMainWorldResponse
+    | undefined;
+  if (response?.ok !== true) {
+    throw new Error(response?.error ?? "Failed to assign an X Articles upload in the page context.");
+  }
 };
 
 export const assignFileToInput = async (input: HTMLInputElement, file: File): Promise<void> => {
@@ -80,19 +180,40 @@ export const assignFileToInput = async (input: HTMLInputElement, file: File): Pr
   const blobUrl = URL.createObjectURL(normalized);
 
   try {
-    const tab = await chrome.tabs.getCurrent();
-    if (tab?.id !== undefined) {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        world: "MAIN",
-        func: assignFileMainWorld,
-        args: [selector, blobUrl, normalized.name, normalized.type],
-      });
-      return;
-    }
-    assignViaInlineScript(selector, blobUrl, normalized.name, normalized.type);
+    await requestMainWorldFileAssignment(selector, blobUrl, normalized.name, normalized.type);
   } finally {
     window.setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
     input.removeAttribute("data-yt2x-upload-target");
+  }
+};
+
+export const uploadFileThroughAction = async (
+  action: HTMLElement,
+  file: File,
+): Promise<boolean> => {
+  const normalized = normalizeUploadFile(file);
+  const token = `yt2x-action-${Date.now().toString(36)}`;
+  action.setAttribute("data-yt2x-upload-action", token);
+  const selector = `[data-yt2x-upload-action="${token}"]`;
+  const blobUrl = URL.createObjectURL(normalized);
+  const request: TriggerFileUploadMainWorldRequest = {
+    type: TRIGGER_FILE_UPLOAD_MAIN_WORLD_MESSAGE,
+    selector,
+    blobUrl,
+    name: normalized.name,
+    mimeType: normalized.type,
+  };
+
+  try {
+    const response = (await chrome.runtime.sendMessage(request)) as
+      | TriggerFileUploadMainWorldResponse
+      | undefined;
+    if (response?.ok !== true) {
+      throw new Error(response?.error ?? "Failed to invoke the X Articles media upload action.");
+    }
+    return response.intercepted === true;
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
+    action.removeAttribute("data-yt2x-upload-action");
   }
 };

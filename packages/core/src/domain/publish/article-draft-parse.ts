@@ -15,14 +15,18 @@ type DraftBlock = {
 export type ParseArticleDraftOptions = {
   resolveMediaPath: (source: string) => string;
   fallbackCoverImage?: string | null;
+  /** Keep author-provided blocks intact for interactive Markdown imports. */
+  preserveSourceContent?: boolean;
 };
 
 export const parseArticleDraftFromMarkdown = (
   markdown: string,
   options: ParseArticleDraftOptions,
 ): ArticleDraftParseResult => {
-  const { title, body } = extractArticleTitle(markdown);
-  const blocks = ensureHeadingDividers(splitDraftBlocks(body));
+  const preserveSourceContent = options.preserveSourceContent === true;
+  const { title, body } = extractArticleTitle(markdown, { preserveSourceContent });
+  const splitBlocks = splitDraftBlocks(body);
+  const blocks = preserveSourceContent ? splitBlocks : ensureHeadingDividers(splitBlocks);
   const contentBlocks: string[] = [];
   const images: ArticleDraftParseResult["contentImages"] = [];
   const contentVideos: ArticleDraftParseResult["contentVideos"] = [];
@@ -32,6 +36,11 @@ export const parseArticleDraftFromMarkdown = (
 
   for (const block of blocks) {
     if (block.kind === "divider") {
+      if (preserveSourceContent) {
+        contentBlocks.push(block.source);
+        lastAnchorText = "---";
+        continue;
+      }
       dividers.push({
         blockIndex: contentBlocks.length,
         afterText: lastAnchorText,
@@ -64,6 +73,11 @@ export const parseArticleDraftFromMarkdown = (
     }
     if (block.kind === "code") {
       const codeBlock = parseCodeBlock(block.source);
+      if (preserveSourceContent) {
+        contentBlocks.push(block.source);
+        lastAnchorText = codeAnchorText(codeBlock.code);
+        continue;
+      }
       if (isPromptArtifactCode(codeBlock.code)) continue;
       contentCodeBlocks.push({
         ...codeBlock,
@@ -74,11 +88,11 @@ export const parseArticleDraftFromMarkdown = (
       continue;
     }
     if (block.kind === "markdown") {
-      if (isDuplicateFooterMarkdown(block.source)) {
+      if (!preserveSourceContent && isDuplicateFooterMarkdown(block.source)) {
         if (contentBlocks.some((existing) => isDuplicateFooterMarkdown(existing))) continue;
       }
-      const trimmed = trimEnglishLeadFromMarkdownBlock(block.source);
-      if (trimmed.length === 0 || isEnglishOnlyMarkdownBlock(trimmed)) continue;
+      const trimmed = preserveSourceContent ? block.source.trim() : trimEnglishLeadFromMarkdownBlock(block.source);
+      if (trimmed.length === 0 || (!preserveSourceContent && isEnglishOnlyMarkdownBlock(trimmed))) continue;
       contentBlocks.push(trimmed);
       lastAnchorText = afterText(trimmed);
       continue;
@@ -90,6 +104,7 @@ export const parseArticleDraftFromMarkdown = (
   const [cover, ...contentImages] = images;
   const coverPath = cover?.path ?? options.fallbackCoverImage ?? null;
   const dedupedMedia = dedupeContentMedia(contentImages, contentVideos, coverPath);
+  const htmlBlocks = contentBlocks.map(renderMarkdownBlock).filter(Boolean);
   return ArticleDraftParseResultSchema.parse({
     title,
     coverImage: coverPath,
@@ -97,7 +112,8 @@ export const parseArticleDraftFromMarkdown = (
     contentVideos: dedupedMedia.videos,
     contentCodeBlocks,
     dividers,
-    html: contentBlocks.map(renderMarkdownBlock).filter(Boolean).join(""),
+    html: htmlBlocks.join(""),
+    htmlBlocks,
     totalBlocks: contentBlocks.length,
   });
 };
@@ -146,8 +162,13 @@ const isUnusableTitleLine = (line: string): boolean => {
   return false;
 };
 
-export const extractArticleTitle = (markdown: string): { title: string; body: string } => {
+export const extractArticleTitle = (
+  markdown: string,
+  options: { preserveSourceContent?: boolean } = {},
+): { title: string; body: string } => {
   const lines = markdown.replaceAll("\r\n", "\n").trim().split("\n");
+  const prepareBody = (body: string): string =>
+    options.preserveSourceContent === true ? body : stripLeadingArticleBoilerplate(body);
 
   for (let index = 0; index < lines.length; index += 1) {
     const h1 = /^#\s+(.+)$/u.exec(lines[index]!.trim());
@@ -156,7 +177,7 @@ export const extractArticleTitle = (markdown: string): { title: string; body: st
     bodyLines.splice(index, 1);
     return {
       title: stripInlineMarkdown(h1[1]!),
-      body: stripLeadingArticleBoilerplate(bodyLines.join("\n")),
+      body: prepareBody(bodyLines.join("\n")),
     };
   }
 
@@ -167,7 +188,7 @@ export const extractArticleTitle = (markdown: string): { title: string; body: st
     if (isUnusableTitleLine(candidate)) continue;
     return {
       title: candidate.slice(0, 100),
-      body: stripLeadingArticleBoilerplate(lines.join("\n")),
+      body: prepareBody(lines.join("\n")),
     };
   }
 
@@ -176,11 +197,11 @@ export const extractArticleTitle = (markdown: string): { title: string; body: st
     if (isUnusableTitleLine(line)) continue;
     return {
       title: stripInlineMarkdown(line).slice(0, 100),
-      body: stripLeadingArticleBoilerplate(lines.join("\n")),
+      body: prepareBody(lines.join("\n")),
     };
   }
 
-  return { title: "Untitled", body: stripLeadingArticleBoilerplate(lines.join("\n")) };
+  return { title: "Untitled", body: prepareBody(lines.join("\n")) };
 };
 
 export const isEnglishOnlyMarkdownBlock = (source: string): boolean => {
@@ -422,6 +443,11 @@ const afterText = (block: string | undefined): string =>
 export const renderMarkdownBlock = (block: string): string => {
   const trimmed = block.trim();
   if (trimmed.length === 0) return "";
+  if (/^---+$/u.test(trimmed)) return "<hr>";
+  if (/^```/u.test(trimmed)) {
+    const codeBlock = parseCodeBlock(trimmed);
+    return `<pre><code>${escapeHtml(codeBlock.code)}</code></pre>`;
+  }
   const heading = /^(#{2,6})\s+(.+)$/u.exec(trimmed);
   if (heading !== null) {
     const level = Math.min(heading[1]!.length, 6);

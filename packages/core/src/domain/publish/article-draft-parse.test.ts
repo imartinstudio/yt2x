@@ -75,6 +75,12 @@ describe("parseArticleDraftFromMarkdown", () => {
     expect(parsed.html).toContain("<strong>bold</strong>");
     expect(parsed.html).toContain("<h2>Section</h2>");
     expect(parsed.html).toContain("<ul>");
+    expect(parsed.htmlBlocks).toEqual([
+      expect.stringContaining("<strong>bold</strong>"),
+      expect.stringContaining("<h2>Section</h2>"),
+      expect.stringContaining("<ul>"),
+      expect.stringContaining("<blockquote>"),
+    ]);
   });
 
   it("uses a generated cover fallback when Markdown has no images", () => {
@@ -231,6 +237,34 @@ describe("parseArticleDraftFromMarkdown", () => {
       expect.objectContaining({ blockIndex: 1, afterText: "One" }),
       expect.objectContaining({ blockIndex: 3, afterText: "Two" }),
     ]);
+  });
+
+  it("preserves author content without generating structural inserts for Markdown imports", () => {
+    const parsed = parseArticleDraftFromMarkdown(
+      [
+        "# 中文标题",
+        "",
+        "An English introduction that must remain in an imported draft.",
+        "",
+        "## Section",
+        "",
+        "```text",
+        "Create a new GitHub repository for this project.",
+        "Summarize everything important about this project.",
+        "```",
+        "",
+        "---",
+        "",
+        "正文。",
+      ].join("\n"),
+      { resolveMediaPath: (source) => source, preserveSourceContent: true },
+    );
+
+    expect(parsed.contentCodeBlocks).toEqual([]);
+    expect(parsed.dividers).toEqual([]);
+    expect(parsed.html).toContain("An English introduction");
+    expect(parsed.html).toContain("<pre><code>Create a new GitHub repository");
+    expect(parsed.html).toContain("<hr>");
   });
 });
 

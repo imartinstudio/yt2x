@@ -6,8 +6,11 @@
   "icons": {
     "128": "icons/icon.svg"
   },
-  "permissions": ["storage", "scripting"],
+  "permissions": ["storage", "scripting", "clipboardWrite", "clipboardRead"],
   "host_permissions": ["https://x.com/*"],
+  "background": {
+    "service_worker": "background/main-world-bridge.js"
+  },
   "content_scripts": [
     {
       "matches": ["https://x.com/compose/articles*"],

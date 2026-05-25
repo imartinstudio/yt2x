@@ -41,6 +41,7 @@ export const buildImportPreviewState = (input: {
   });
   const parseResult = parseArticleDraftFromMarkdown(adapted.markdown, {
     resolveMediaPath: (source) => input.mediaRegistry.resolveMediaPath(source),
+    preserveSourceContent: true,
   });
   return {
     title: parseResult.title,

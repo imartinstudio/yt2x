@@ -10,11 +10,14 @@ const dist = join(root, "dist");
 mkdirSync(dist, { recursive: true });
 
 await esbuild.build({
-  entryPoints: [join(root, "src/content/x-articles.ts")],
+  entryPoints: {
+    "content/x-articles": join(root, "src/content/x-articles.ts"),
+    "background/main-world-bridge": join(root, "src/background/main-world-bridge.ts"),
+  },
   bundle: true,
   format: "iife",
   target: "chrome120",
-  outfile: join(dist, "content/x-articles.js"),
+  outdir: dist,
   sourcemap: true,
   minify: false,
   define: {

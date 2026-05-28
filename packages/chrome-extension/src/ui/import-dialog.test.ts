@@ -1,11 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MediaRegistry } from "../files/local-media.js";
-import { buildImportPreviewState, showImportSuccessToast } from "./import-dialog.js";
+
+const runtimeMocks = vi.hoisted(() => ({
+  loadSubscriptionTier: vi.fn(),
+  saveSubscriptionTier: vi.fn(),
+}));
+
+vi.mock("../runtime/extension-runtime.js", () => runtimeMocks);
+
+import {
+  buildImportPreview,
+  buildImportPreviewState,
+  showImportError,
+  showImportPreviewDialog,
+  showImportSuccessToast,
+} from "./import-dialog.js";
 
 describe("X Articles import media policy", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     vi.useRealTimers();
+    vi.clearAllMocks();
   });
 
   it("does not block confirmation for unresolved body media", () => {
@@ -43,5 +58,114 @@ describe("X Articles import media policy", () => {
     expect(document.querySelector("[data-yt2x-import-toast]")?.textContent).toContain(
       "2 个正文图片/视频未自动插入，请手动补充",
     );
+    vi.runAllTimers();
+    expect(document.querySelector("[data-yt2x-import-toast]")).toBeNull();
+  });
+
+  it("summarizes cover upload failures and skipped structural content", () => {
+    vi.useFakeTimers();
+    showImportSuccessToast({
+      skippedDividers: [2, 4],
+      skippedPromptCodeBlocks: 1,
+      skippedMedia: ["cover.png"],
+      lastMediaError: "upload failed",
+    });
+
+    const text = document.querySelector("[data-yt2x-import-toast]")?.textContent ?? "";
+    expect(text).toContain("2 处分割线未插入");
+    expect(text).toContain("1 个封面上传失败，正文格式已保留：upload failed");
+    expect(text).toContain("1 段英文 prompt 代码块已跳过");
+    vi.runAllTimers();
+    expect(document.querySelector("[data-yt2x-import-toast]")).toBeNull();
+  });
+
+  it("builds preview state from a prepared import and checks only missing cover sources", () => {
+    const registry = {
+      missingSources: ["cover.png", "images/body.png"],
+      resolveMediaPath: (source: string) => source,
+      getUploadable: (path: string) =>
+        path === "images/body.png" ? new File(["body"], "body.png") : undefined,
+    } as unknown as MediaRegistry;
+
+    const preview = buildImportPreview({
+      prepared: {
+        parseResult: {
+          title: "标题",
+          coverImage: "cover.png",
+          contentImages: [{ path: "images/body.png" }],
+          contentVideos: [],
+        },
+        adapted: { adaptations: [{ kind: "premium-image", message: "converted" }], warnings: ["warn"] },
+        mediaRegistry: registry,
+      } as never,
+    });
+
+    expect(preview).toMatchObject({
+      title: "标题",
+      coverImage: "cover.png",
+      contentImageCount: 1,
+      contentVideoCount: 0,
+      missingSources: ["cover.png"],
+    });
+  });
+
+  it("blocks confirmation until missing cover media is authorized", async () => {
+    runtimeMocks.saveSubscriptionTier.mockResolvedValue(undefined);
+    const result = showImportPreviewDialog({
+      title: "A <title>",
+      coverImage: "cover.png",
+      contentImageCount: 1,
+      contentVideoCount: 1,
+      adaptations: [{ kind: "premium-image", message: "Use <image>" }],
+      warnings: ["Careful <warning>"],
+      missingSources: ["cover.png"],
+    });
+    const host = document.querySelector("[data-yt2x-import-dialog]") as HTMLElement;
+    const shadow = host.shadowRoot!;
+
+    expect(shadow.textContent).toContain("仍缺少封面素材：cover.png");
+    shadow.querySelector<HTMLButtonElement>("[data-action='confirm']")!.click();
+    await Promise.resolve();
+    expect(host.isConnected).toBe(true);
+
+    shadow.querySelector<HTMLButtonElement>("[data-action='pick-files']")!.click();
+    await expect(result).resolves.toEqual({ type: "pick-files" });
+    expect(runtimeMocks.saveSubscriptionTier).toHaveBeenCalledWith("premium");
+    expect(host.isConnected).toBe(false);
+  });
+
+  it("saves the selected tier when confirming the import preview", async () => {
+    runtimeMocks.saveSubscriptionTier.mockResolvedValue(undefined);
+    const result = showImportPreviewDialog({
+      title: "标题",
+      coverImage: null,
+      contentImageCount: 0,
+      contentVideoCount: 0,
+      adaptations: [],
+      warnings: [],
+      missingSources: [],
+    });
+    const host = document.querySelector("[data-yt2x-import-dialog]") as HTMLElement;
+    const shadow = host.shadowRoot!;
+    shadow.querySelector<HTMLSelectElement>("[name='subscription-tier']")!.value = "premium-plus";
+    shadow.querySelector<HTMLButtonElement>("[data-action='confirm']")!.click();
+
+    await expect(result).resolves.toEqual({
+      type: "confirm",
+      subscriptionTier: "premium-plus",
+    });
+    expect(runtimeMocks.saveSubscriptionTier).toHaveBeenCalledWith("premium-plus");
+  });
+
+  it("renders import errors with prefixed text and the longer refresh timeout", () => {
+    vi.useFakeTimers();
+    showImportError("请刷新页面后重试");
+
+    const toast = document.querySelector("[data-yt2x-import-error]");
+    expect(toast?.textContent).toBe("yt2x 导入失败：请刷新页面后重试");
+    vi.advanceTimersByTime(11_999);
+    expect(document.querySelector("[data-yt2x-import-error]")).not.toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(document.querySelector("[data-yt2x-import-error]")).toBeNull();
   });
 });

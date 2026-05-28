@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { prepareArticleImport } from "./prepare-import.js";
+import { prepareArticleImport, resolveUploadFile } from "./prepare-import.js";
 import type { MediaRegistry } from "./local-media.js";
 
 describe("prepareArticleImport", () => {
@@ -59,5 +59,40 @@ describe("prepareArticleImport", () => {
 
     expect(prepared.parseResult.contentImages).toHaveLength(1);
     expect(prepared.parseResult.contentVideos).toHaveLength(1);
+  });
+
+  it("requires unresolved local cover media before import", async () => {
+    const mediaRegistry = {
+      missingSources: ["images/cover.png", "images/body.png"],
+      resolveMediaPath: (source: string) => source,
+      getUploadable: () => undefined,
+    } as unknown as MediaRegistry;
+
+    await expect(
+      prepareArticleImport({
+        markdown: ["# 标题", "", "![cover](images/cover.png)", "", "![body](images/body.png)"].join(
+          "\n",
+        ),
+        subscriptionTier: "premium",
+        mediaRegistry,
+      }),
+    ).rejects.toThrow("Missing authorized cover media: images/cover.png");
+  });
+
+  it("resolves generated blobs before falling back to local media", () => {
+    const localFile = new File(["local"], "local.png", { type: "image/png" });
+    const prepared = {
+      generatedBlobs: new Map([["generated.png", new Blob(["generated"], { type: "image/png" })]]),
+      mediaRegistry: {
+        getUploadable: (path: string) => (path === "local.png" ? localFile : undefined),
+      },
+    } as never;
+
+    const generated = resolveUploadFile(prepared, "generated.png");
+    expect(generated).toBeInstanceOf(File);
+    expect(generated?.name).toBe("generated.png");
+    expect(generated?.type).toBe("image/png");
+    expect(resolveUploadFile(prepared, "local.png")).toBe(localFile);
+    expect(resolveUploadFile(prepared, "missing.png")).toBeUndefined();
   });
 });

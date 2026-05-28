@@ -24,6 +24,7 @@ describe("projectSingleStage", () => {
     expect(args.stages.notes).toBe("skip");
     expect(args.stages.article).toBe("skip");
     expect(args.stages.publish).toBe("skip");
+    expect(args.acquire.downloadVideo).toBe(true);
   });
 
   it("honors --mode for the target stage", () => {
@@ -86,5 +87,13 @@ describe("projectSingleStage", () => {
     expect(args.acquire.videoOnly).toBe(true);
     expect(args.acquire.videoStart).toBe("00:01:00");
     expect(args.acquire.videoEnd).toBe("00:01:30");
+  });
+
+  it("supports opting out of the default video download", () => {
+    const args = projectSingleStage("acquire", {
+      urls: ["https://example.com/video"],
+      downloadVideo: false,
+    });
+    expect(args.acquire.downloadVideo).toBe(false);
   });
 });

@@ -27,11 +27,12 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/没有编号 list 的 text 视为不合格/);
   });
 
-  it("allows an in-post list but forbids thread formatting", () => {
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/可以在单条短帖内部使用 `1\. 2\. 3\.`/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/无序列表使用/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要写成 `1\/`、`2\/`/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要使用数字 emoji/);
+  it("requires plain-text post formatting shared with thread posts", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/Post 文本格式规则必须和串推保持一致/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要使用 Markdown 加粗、行内代码、代码块、有序列表、无序列表/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/序号后必须换行/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/emoji 数字/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要写成 `1\. 内容`/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要输出多个备选版本/);
   });
 
@@ -41,20 +42,21 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/"angle"/);
   });
 
-  it("requires bold headings and colon labels", () => {
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/\*\*xxxx：\*\*/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/\*\*核心判断：\*\*正文/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/1\. \*\*关键步骤：\*\*正文/);
+  it("requires colon labels to wrap after the colon without bold", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/冒号后必须换行/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/关键判断：/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要加粗/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/核心判断：\\n正文/);
   });
 
   it("forbids markdown tables in generated short posts", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/禁止在短帖中使用 Markdown 表格/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/编号列表、要点列表或「字段：值」短行/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/冒号后换行、序号后换行规则/);
   });
 
-  it("preserves useful markdown except tables inside short text", () => {
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/text 字段内部可以包含除表格外的 Markdown/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/加粗、行内代码、代码块、有序列表、无序列表、链接、引用/);
+  it("forbids markdown formatting inside short text", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/text 字段内部也不要包含 Markdown 格式/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要使用 Markdown 粗体/);
   });
 
   it("requires strong judgment hook in the first sentence", () => {

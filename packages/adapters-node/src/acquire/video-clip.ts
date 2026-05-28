@@ -3,8 +3,8 @@ import path from "node:path";
 import type { ProcessRunner } from "../process/index.js";
 import { buildYtDlpArgs } from "./yt-dlp.js";
 
-export type VideoClipMode = "hottest" | "range";
-export type VideoClipSource = "youtube_heatmap" | "fallback_no_heatmap" | "user_range";
+export type VideoClipMode = "full" | "hottest" | "range";
+export type VideoClipSource = "full_video" | "youtube_heatmap" | "fallback_no_heatmap" | "user_range";
 
 export type VideoClipOptions = {
   enabled: boolean;
@@ -191,7 +191,17 @@ export const resolveClipRange = (
     };
   }
 
-  return selectHottestClipRange(metadata, clip.durationSeconds);
+  const duration = numberFromMetadata(metadata.duration) ?? 0;
+  return {
+    mode: "full",
+    source: "full_video",
+    startSeconds: 0,
+    endSeconds: duration,
+    warnings:
+      duration > 0
+        ? []
+        : ["metadata duration unavailable; downloaded full video without a fixed end timestamp"],
+  };
 };
 
 const secondsToTimestamp = (seconds: number): string => {
@@ -207,18 +217,18 @@ const secondsForYtDlp = (seconds: number): string => {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 };
 
-const findClipFile = async (videoSubdir: string): Promise<string | undefined> => {
+const findDownloadedVideoFile = async (videoSubdir: string, basename: string): Promise<string | undefined> => {
   const names = await readdir(videoSubdir).catch(() => []);
   return names
-    .filter((name) => /^clip\.(mp4|mkv|webm|mov)$/i.test(name))
-    .sort((a, b) => (a === "clip.mp4" ? -1 : b === "clip.mp4" ? 1 : a.localeCompare(b)))[0];
+    .filter((name) => new RegExp(`^${basename}\\.(mp4|mkv|webm|mov)$`, "i").test(name))
+    .sort((a, b) => (a === `${basename}.mp4` ? -1 : b === `${basename}.mp4` ? 1 : a.localeCompare(b)))[0];
 };
 
-const removeExistingClipFiles = async (videoSubdir: string): Promise<void> => {
+const removeExistingVideoFiles = async (videoSubdir: string): Promise<void> => {
   const names = await readdir(videoSubdir).catch(() => []);
   await Promise.all(
     names
-      .filter((name) => name.startsWith("clip.") && name !== "clip-manifest.json")
+      .filter((name) => /^(?:clip|full)\./i.test(name) && name !== "clip-manifest.json")
       .map((name) => rm(path.join(videoSubdir, name), { force: true })),
   );
 };
@@ -227,14 +237,16 @@ export const downloadVideoClip = async (opts: DownloadVideoClipOptions): Promise
   const range = resolveClipRange(opts.metadata, opts.clip);
   const videoSubdir = path.join(opts.videoDir, "video");
   await mkdir(videoSubdir, { recursive: true });
-  await removeExistingClipFiles(videoSubdir);
+  await removeExistingVideoFiles(videoSubdir);
 
-  const outputPattern = path.join(videoSubdir, "clip.%(ext)s");
+  const outputBasename = range.mode === "full" ? "full" : "clip";
+  const outputPattern = path.join(videoSubdir, `${outputBasename}.%(ext)s`);
   const section = `*${secondsForYtDlp(range.startSeconds)}-${secondsForYtDlp(range.endSeconds)}`;
   const ytdlpBaseArgs = buildYtDlpArgs({
     ...(opts.cookiesFromBrowser !== undefined ? { cookiesFromBrowser: opts.cookiesFromBrowser } : {}),
     ...(opts.proxy !== undefined ? { proxy: opts.proxy } : {}),
   }).slice(1);
+  const sectionArgs = range.mode === "full" ? [] : ["--download-sections", section];
 
   const result = await opts.runner.run({
     command: "yt-dlp",
@@ -244,8 +256,7 @@ export const downloadVideoClip = async (opts: DownloadVideoClipOptions): Promise
       X_COMPATIBLE_VIDEO_FORMAT,
       "--merge-output-format",
       "mp4",
-      "--download-sections",
-      section,
+      ...sectionArgs,
       "--force-overwrites",
       "-o",
       outputPattern,
@@ -262,9 +273,9 @@ export const downloadVideoClip = async (opts: DownloadVideoClipOptions): Promise
     );
   }
 
-  const fileName = await findClipFile(videoSubdir);
+  const fileName = await findDownloadedVideoFile(videoSubdir, outputBasename);
   if (fileName === undefined) {
-    throw new Error("yt-dlp video clip did not write clip file");
+    throw new Error("yt-dlp video download did not write video file");
   }
   await access(path.join(videoSubdir, fileName));
 

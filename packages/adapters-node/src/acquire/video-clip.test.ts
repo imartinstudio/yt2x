@@ -25,6 +25,19 @@ describe("parseClipTimestamp", () => {
 });
 
 describe("resolveClipRange", () => {
+  it("defaults to the full video when no manual range is provided", () => {
+    const range = resolveClipRange(
+      { duration: 300 },
+      { enabled: true, videoOnly: false, durationSeconds: 30 },
+    );
+    expect(range).toMatchObject({
+      mode: "full",
+      source: "full_video",
+      startSeconds: 0,
+      endSeconds: 300,
+    });
+  });
+
   it("uses manual start and end when provided", () => {
     const range = resolveClipRange(
       { duration: 300 },
@@ -113,10 +126,11 @@ describe("selectHottestClipRange", () => {
 });
 
 describe("downloadVideoClip", () => {
-  it("calls yt-dlp with download sections and writes a manifest", async () => {
+  it("downloads a full mp4 video by default and writes a manifest", async () => {
     const videoDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-clip-"));
     await mkdir(path.join(videoDir, "video"), { recursive: true });
     await writeFile(path.join(videoDir, "video", "clip.mp4"), "old mp4", "utf8");
+    await writeFile(path.join(videoDir, "video", "full.webm"), "old webm", "utf8");
     const calls: ProcessSpec[] = [];
     const runner: ProcessRunner = {
       run: vi.fn(async (spec) => {
@@ -126,7 +140,7 @@ describe("downloadVideoClip", () => {
         const outputPattern = args[outputIndex + 1]!;
         const outputDir = path.dirname(outputPattern);
         await mkdir(outputDir, { recursive: true });
-        await writeFile(path.join(outputDir, "clip.mp4"), "fake mp4", "utf8");
+        await writeFile(path.join(outputDir, "full.mp4"), "fake mp4", "utf8");
         return {
           exitCode: 0,
           signal: null,
@@ -152,10 +166,9 @@ describe("downloadVideoClip", () => {
       timeoutMs: 60_000,
     });
 
-    expect(result.file).toBe("video/clip.mp4");
+    expect(result.file).toBe("video/full.mp4");
     const args = calls[0]!.args ?? [];
-    expect(args).toContain("--download-sections");
-    expect(args[args.indexOf("--download-sections") + 1]).toBe("*110-140");
+    expect(args).not.toContain("--download-sections");
     const formatSelector = args[args.indexOf("-f") + 1]!;
     expect(formatSelector).toBe(X_COMPATIBLE_VIDEO_FORMAT);
     expect(formatSelector.split("/").every((candidate) => candidate.includes("[vcodec^=avc1]"))).toBe(
@@ -167,8 +180,52 @@ describe("downloadVideoClip", () => {
     expect(args).toContain("chrome");
     expect(args).toContain("--proxy");
     expect(args).toContain("http://127.0.0.1:1082");
-    await expect(readFile(path.join(videoDir, "video", "clip.mp4"), "utf8")).resolves.toBe(
+    await expect(readFile(path.join(videoDir, "video", "full.mp4"), "utf8")).resolves.toBe(
       "fake mp4",
     );
+    await expect(readFile(path.join(videoDir, "video", "clip.mp4"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("uses download sections for manual ranges", async () => {
+    const videoDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-clip-range-"));
+    const calls: ProcessSpec[] = [];
+    const runner: ProcessRunner = {
+      run: vi.fn(async (spec) => {
+        calls.push(spec);
+        const args = spec.args ?? [];
+        const outputIndex = args.indexOf("-o");
+        const outputPattern = args[outputIndex + 1]!;
+        const outputDir = path.dirname(outputPattern);
+        await mkdir(outputDir, { recursive: true });
+        await writeFile(path.join(outputDir, "clip.mp4"), "fake clip", "utf8");
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 1,
+          command: spec.command,
+          args: spec.args ?? [],
+        };
+      }),
+    };
+
+    const result = await downloadVideoClip({
+      url: "https://www.youtube.com/watch?v=testVideo12",
+      videoDir,
+      metadata: { duration: 300 },
+      clip: { enabled: true, videoOnly: false, durationSeconds: 30, start: "01:50", end: "02:20" },
+      runner,
+      timeoutMs: 60_000,
+    });
+
+    expect(result.file).toBe("video/clip.mp4");
+    const args = calls[0]!.args ?? [];
+    expect(args).toContain("--download-sections");
+    expect(args[args.indexOf("--download-sections") + 1]).toBe("*110-140");
   });
 });

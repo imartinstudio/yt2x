@@ -27,6 +27,7 @@ describe("parseCommanderPipelineFlags", () => {
     expect(args.stages.article).toBe("review");
     expect(args.stages.publish).toBe("review");
     expect(args.acquire.keyframes).toBe(0);
+    expect(args.acquire.downloadVideo).toBe(true);
     expect(args.publish.format).toBe("article");
     expect(args.publish.maxChars).toBe(500);
     expect(args.publish.maxTweets).toBe(8);
@@ -61,6 +62,14 @@ describe("parseCommanderPipelineFlags", () => {
     expect(args.acquire.videoStart).toBe("00:01:00");
     expect(args.acquire.videoEnd).toBe("00:01:30");
     expect(args.acquire.videoDuration).toBe(45);
+  });
+
+  it("supports opting out of the default video download", () => {
+    const args = parseCommanderPipelineFlags({
+      urls: ["https://example.com/video"],
+      downloadVideo: false,
+    });
+    expect(args.acquire.downloadVideo).toBe(false);
   });
 
   it("rejects video-only on pipeline args", () => {

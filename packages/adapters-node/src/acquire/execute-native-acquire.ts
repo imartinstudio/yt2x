@@ -152,10 +152,13 @@ const shouldSkipAcquireForVideo = async (
       if (acquire.videoStart !== undefined || acquire.videoEnd !== undefined) {
         return false;
       }
-      const requestedDuration = acquire.videoDuration ?? 30;
       try {
         const raw = await readFile(path.join(videoDir, "video", "clip-manifest.json"), "utf8");
-        const manifest = JSON.parse(raw) as { duration_seconds?: unknown };
+        const manifest = JSON.parse(raw) as { duration_seconds?: unknown; mode?: unknown };
+        if (manifest.mode === "full") {
+          return validateVideoOnlyArtifacts(videoDir);
+        }
+        const requestedDuration = acquire.videoDuration ?? 30;
         if (
           typeof manifest.duration_seconds === "number" &&
           Math.abs(manifest.duration_seconds - requestedDuration) > 1
@@ -181,7 +184,7 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
   const runner = opts.runner ?? defaultProcessRunner;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_NATIVE_ACQUIRE_TIMEOUT_MS;
   const { outDir, stages, control, flags, acquire } = opts;
-  const downloadVideo = acquire.downloadVideo ?? false;
+  const downloadVideo = acquire.downloadVideo ?? true;
   const videoOnly = acquire.videoOnly ?? false;
   const videoDuration = acquire.videoDuration ?? 30;
 

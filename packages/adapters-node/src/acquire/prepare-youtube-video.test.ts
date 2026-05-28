@@ -86,7 +86,7 @@ const createMockRunner = (opts: {
         return baseProcessResult(spec);
       }
 
-      if (spec.command === "yt-dlp" && args.includes("--download-sections")) {
+      if (spec.command === "yt-dlp" && args.includes("--merge-output-format")) {
         if (opts.failVideoClip === true) {
           return baseProcessResult(spec, { exitCode: 1, stderr: "clip failed" });
         }
@@ -97,7 +97,11 @@ const createMockRunner = (opts: {
           : ".";
         const { mkdir, writeFile } = await import("node:fs/promises");
         await mkdir(outputDir, { recursive: true });
-        await writeFile(path.join(outputDir, "clip.mp4"), "fake mp4", "utf8");
+        await writeFile(
+          path.join(outputDir, args.includes("--download-sections") ? "clip.mp4" : "full.mp4"),
+          "fake mp4",
+          "utf8",
+        );
         return baseProcessResult(spec);
       }
 
@@ -233,16 +237,16 @@ describe("prepareYoutubeVideo (integration, mocked yt-dlp)", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.video_clip?.file).toBe("video/clip.mp4");
+    expect(result.video_clip?.file).toBe("video/full.mp4");
     const clipCall = calls.find(
-      (c) => c.command === "yt-dlp" && (c.args ?? []).includes("--download-sections"),
+      (c) => c.command === "yt-dlp" && (c.args ?? []).includes("--merge-output-format"),
     );
     expect(clipCall).toBeDefined();
     const args = clipCall!.args ?? [];
-    expect(args[args.indexOf("--download-sections") + 1]).toBe("*110-140");
+    expect(args).not.toContain("--download-sections");
     await expect(readFile(path.join(outDir, "testVideo12", "video", "clip-manifest.json"), "utf8"))
       .resolves
-      .toContain('"source": "youtube_heatmap"');
+      .toContain('"source": "full_video"');
   });
 
   it("supports video-only mode without transcript artifacts", async () => {
@@ -264,7 +268,7 @@ describe("prepareYoutubeVideo (integration, mocked yt-dlp)", () => {
     expect(result.ok).toBe(true);
     const videoDir = path.join(outDir, "testVideo12");
     await expect(readFile(path.join(videoDir, "video", "clip-manifest.json"), "utf8")).resolves.toContain(
-      '"file": "video/clip.mp4"',
+      '"file": "video/full.mp4"',
     );
     await expect(readFile(path.join(videoDir, "chunks.md"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",

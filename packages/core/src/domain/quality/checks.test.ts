@@ -167,6 +167,40 @@ describe("checkShortQuality", () => {
     expect(codes).not.toContain("short.author-phrase");
   });
 
+  it("accepts plain numbered items split across marker and content lines", () => {
+    const post: GeneratedShortPost = {
+      text: `别被外区账号教程骗了：
+真正决定账号能不能活下来的是网络、设备、支付的一致性。
+
+1
+邮箱与地址：
+必须使用未注册过 Apple ID 的邮箱与真实外区地址。
+2
+网络一致性：
+注册过程中不要切换出口 IP，否则风控很快触发。
+3
+支付方式：
+优先用礼品卡充值，跳过信用卡绑定。
+4
+风险提醒：
+一旦账号被锁定，礼品卡余额与已购内容都可能无法恢复。
+5
+可执行 prompt：
+帮我整理一份外区 Apple ID 注册前的最小检查清单
+
+回复你最担心哪一步出问题，我帮你拆出最稳路径。`,
+      angle: "practical",
+      risk: "medium",
+    };
+    const issues = checkShortQuality(post, {
+      sourceText: HIGH_TRUST_FIXTURE.structuredNotesMd,
+    });
+    const codes = issues.map((i) => i.code);
+    expect(codes).not.toContain("short.list-out-of-range");
+    expect(codes).not.toContain("short.no-executable-item");
+    expect(codes).not.toContain("short.missing-risk-reminder");
+  });
+
   it("flags list count out of range", () => {
     const post: GeneratedShortPost = {
       text: `**判断：** 工具用错了。

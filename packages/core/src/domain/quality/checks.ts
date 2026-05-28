@@ -371,32 +371,40 @@ export const checkArticleQuality = (
 };
 
 /** 计算 Short post text 中的 list item 数量。 */
-const countShortListItems = (text: string): number => {
+const collectShortListItems = (text: string): string[] => {
   const lines = text.split(/\r?\n/);
-  let count = 0;
-  for (const line of lines) {
-    if (/^\s*(?:\d+\.|[-*+])\s+/.test(line)) count += 1;
+  const items: string[] = [];
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const line = lines[idx] ?? "";
+    if (/^\s*(?:\d+\.|[-*+])\s+/.test(line)) {
+      items.push(line);
+      continue;
+    }
+    if (/^\s*(?:\d+|[①②③④⑤⑥⑦⑧⑨⑩]|[0-9]️⃣)\s*$/.test(line)) {
+      const next = lines.slice(idx + 1).find((candidate) => candidate.trim().length > 0);
+      if (next !== undefined) {
+        items.push(`${line.trim()} ${next.trim()}`);
+      }
+    }
   }
-  return count;
+  return items;
 };
 
-/** Short text 中是否包含至少一条「可执行要点」：代码块、命令风格行、或命中关键字的 list item。 */
+const countShortListItems = (text: string): number => collectShortListItems(text).length;
+
+/** Short text 中是否包含至少一条「可执行要点」：命令风格行、或命中关键字的 list item。 */
 const shortHasExecutableItem = (text: string): boolean => {
-  if (/```[\s\S]*?```/.test(text)) return true;
-  if (/`[^`]+`/.test(text)) return true;
-  const lines = text.split(/\r?\n/);
-  for (const line of lines) {
-    if (!/^\s*(?:\d+\.|[-*+])\s+/.test(line)) continue;
-    if (hasExecutableAssetKeyword(line)) return true;
+  const items = collectShortListItems(text);
+  for (const item of items) {
+    if (hasExecutableAssetKeyword(item)) return true;
   }
   return false;
 };
 
 const shortHasRiskReminder = (text: string): boolean => {
-  const lines = text.split(/\r?\n/);
-  for (const line of lines) {
-    if (!/^\s*(?:\d+\.|[-*+])\s+/.test(line)) continue;
-    if (matchesAny(stripMarkdownEmphasis(line), RISK_SECTION_KEYWORDS)) return true;
+  const items = collectShortListItems(text);
+  for (const item of items) {
+    if (matchesAny(stripMarkdownEmphasis(item), RISK_SECTION_KEYWORDS)) return true;
   }
   return false;
 };

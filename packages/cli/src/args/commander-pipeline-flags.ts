@@ -50,7 +50,7 @@ export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): Pipe
   }
   const provider = flags.llmProvider ? LlmProviderSchema.parse(flags.llmProvider) : defaultCliLlmProvider();
   const downloadVideo =
-    flags.downloadVideo === true ||
+    flags.downloadVideo !== false ||
     flags.videoStart !== undefined ||
     flags.videoEnd !== undefined;
   return PipelineArgsSchema.parse({

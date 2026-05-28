@@ -32,7 +32,7 @@ export const projectSingleStage = (target: SingleStageTarget, flags: SingleStage
     ? LlmProviderSchema.parse(flags.llmProvider)
     : defaultCliLlmProvider();
   const downloadVideo =
-    flags.downloadVideo === true ||
+    flags.downloadVideo !== false ||
     flags.videoOnly === true ||
     flags.videoStart !== undefined ||
     flags.videoEnd !== undefined;

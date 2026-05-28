@@ -56,6 +56,7 @@ describe("PipelineArgsSchema", () => {
   it("defaults article targets to all three formats", () => {
     const parsed = PipelineArgsSchema.parse(baseInput);
     expect(parsed.article.targets).toEqual(["article", "x-thread", "x-short"]);
+    expect(parsed.acquire.downloadVideo).toBe(true);
     expect(parsed.publish.format).toBe("article");
     expect(parsed.publish.maxChars).toBe(500);
     expect(parsed.publish.maxTweets).toBe(8);
@@ -111,6 +112,14 @@ describe("PipelineArgsSchema", () => {
     expect(() =>
       PipelineArgsSchema.parse({ ...baseInput, acquire: { keyframes: -1 } }),
     ).toThrow();
+  });
+
+  it("allows disabling default video download", () => {
+    const parsed = PipelineArgsSchema.parse({
+      ...baseInput,
+      acquire: { downloadVideo: false },
+    });
+    expect(parsed.acquire.downloadVideo).toBe(false);
   });
 
   it("allows empty sources when --acquire skip", () => {

@@ -13,8 +13,9 @@
 | `timestamped-cues.md`             | 时间轴 cues                                                 |
 | `structured-notes.md`             | 笔记阶段产出（`yt2x notes` / pipeline notes 阶段）          |
 | `screenshots/scene_manifest.json` | 可选；截图清单                                              |
-| `video/clip.mp4`                  | 可选；`--download-video` 或 `--video-only` 下载的视频片段   |
-| `video/clip-manifest.json`        | 可选；视频片段范围、模式、来源和 warning 清单               |
+| `video/full.mp4`                  | 默认；完整视频下载产物，MP4，限制到 720p                    |
+| `video/clip.mp4`                  | 可选；手动 `--video-start` / `--video-end` 下载的视频片段   |
+| `video/clip-manifest.json`        | 视频下载范围、模式、来源、文件和 warning 清单               |
 | `process-status.json`             | **步骤状态主 JSON**（见下节）                               |
 | `process-status.journal.ndjson`   | 瞬时日志；正常每次 patch 后会清空，崩溃恢复时与主 JSON 合并 |
 
@@ -23,22 +24,22 @@
 ```json
 {
   "version": 1,
-  "mode": "hottest",
-  "source": "youtube_heatmap",
-  "start_seconds": 123.4,
-  "end_seconds": 153.4,
-  "duration_seconds": 30,
-  "file": "video/clip.mp4",
+  "mode": "full",
+  "source": "full_video",
+  "start_seconds": 0,
+  "end_seconds": 1234,
+  "duration_seconds": 1234,
+  "file": "video/full.mp4",
   "format": "mp4",
   "warnings": []
 }
 ```
 
-普通采集模式下，视频片段是可选 artifact；下载失败会写入 `prepare-result.json` 的 warnings，但不会让 acquire 主链路失败。`yt2x acquire --video-only` 模式下，`metadata.json`、`video/clip-manifest.json` 和 manifest 指向的视频片段文件是 acquire 成功条件，字幕和转写文件不再是必需产物。
+普通采集模式下，完整视频是默认 artifact；下载失败会写入 `prepare-result.json` 的 warnings，但不会让 acquire 主链路失败。`yt2x acquire --video-only` 模式下，`metadata.json`、`video/clip-manifest.json` 和 manifest 指向的视频文件是 acquire 成功条件，字幕和转写文件不再是必需产物。
 
-同一个视频目录下重新下载片段时，yt2x 会覆盖 `video/clip.mp4` 并重写 `video/clip-manifest.json`，确保 manifest 的 `start_seconds` / `end_seconds` 与实际视频文件一致。手动时间段变化（`--video-start` / `--video-end`）不会复用旧片段缓存；`--video-start` + `--video-duration` 会按开始时间和目标秒数计算 `end_seconds`。
+同一个视频目录下重新下载时，yt2x 会清理旧的 `video/full.*` / `video/clip.*` 并重写 `video/clip-manifest.json`，确保 manifest 与实际视频文件一致。默认不传时间段时下载完整视频；手动时间段变化（`--video-start` / `--video-end`）会下载片段，`--video-start` + `--video-duration` 会按开始时间和目标秒数计算 `end_seconds`。
 
-`pipeline --download-video` 只增加上述可选视频片段产物，不改变 notes / article 的输入契约。只要不是 `--video-only`，acquire 成功仍要求 `metadata.json`、`chunks.md`、`timestamped-cues.md` 存在。
+`pipeline` 默认下载完整 MP4 视频（720p 上限）；可用 `--no-download-video` 跳过。不改变 notes / article 的输入契约。只要不是 `--video-only`，acquire 成功仍要求 `metadata.json`、`chunks.md`、`timestamped-cues.md` 存在。
 
 ## 2. `ProcessStatusV1`（`process-status.json`）
 
@@ -67,23 +68,23 @@
 
 ## 3. Native article 产物（`files/articles/<videoId>/`）
 
-| 文件                    | 说明                                         |
-| ----------------------- | -------------------------------------------- |
-| `article.md`            | 长文章草稿 Markdown；暂不通过 X API 自动发布 |
-| `run.json`              | 文章生成元数据（模型、耗时、usage 等）       |
-| `x-thread.md`           | 专门生成的 X 串推 Markdown                   |
-| `x-hooks.json`          | 串推首推候选                                 |
-| `x-short.md`            | 单条 X 短帖                                  |
-| `images/cover.*`        | 可选；从笔记目录 `screenshots/` 复制         |
-| `video/clip.*`          | 可选；从采集目录的视频片段复制供长文引用     |
-| `x-thread-visuals.json` | 可选；串推配图计划（v0.2）                   |
-| `x-short-visual.json`   | 可选；短文配图计划（v0.2）                   |
+| 文件                            | 说明                                             |
+| ------------------------------- | ------------------------------------------------ |
+| `article.md`                    | 长文章草稿 Markdown；暂不通过 X API 自动发布     |
+| `run.json`                      | 文章生成元数据（模型、耗时、usage 等）           |
+| `x-thread.md`                   | 专门生成的 X 串推 Markdown                       |
+| `x-hooks.json`                  | 串推首推候选                                     |
+| `x-short.md`                    | 单条 X 短帖                                      |
+| `images/cover.*`                | 可选；从笔记目录 `screenshots/` 复制             |
+| `video/full.*` / `video/clip.*` | 可选；从采集目录复制完整视频或手动片段供长文引用 |
+| `x-thread-visuals.json`         | 可选；串推配图计划（v0.2）                       |
+| `x-short-visual.json`           | 可选；短文配图计划（v0.2）                       |
 
 `article.md` 落盘时会固定补齐首屏素材与尾注：如果存在 `images/cover.*`，H1 后的第一张图就是封面；如果存在下载视频片段，首个 `##` 小节前会插入引用 `video/clip.*` 的 `<video>`；LLM 正文末尾应输出 3-5 个从主题提取的 X 话题标签，之后再追加固定格式 `👇完整视频：` 与原视频地址。
 
-`x-thread.md` / `x-short.md` 面向 X post 发布，生成阶段不得使用 Markdown 表格。对比、参数、步骤或结构化信息应写成编号列表、要点列表或「字段：值」短行。除表格外，生成文件应保留有助于阅读的 Markdown，包括加粗、行内代码、代码块、有序列表、无序列表、链接、引用、分隔段落和空行；发布前转换 hook 仅作为发布兼容层，不作为生成格式约定。
+`x-thread.md` / `x-short.md` 面向 X post 发布，生成阶段不得使用 Markdown 加粗、行内代码、代码块、有序列表、无序列表、Markdown 链接、引用或表格。对比、参数、步骤或结构化信息应写成纯文本短行。冒号式标题或标签必须在冒号后换行；数字序号、圈号序号和 emoji 数字序号都必须让序号单独占一行，内容从下一行开始。
 
-`x-thread.md` 发布读取时以行首 `1/`、`2/`、`3/` 这类编号作为 tweet 边界；单条 tweet 内部允许保留空行、列表和代码块，不会再按空行切成多条回复。发布前转换 hook 会把 Markdown 加粗中的英文 / 数字转为 X 可见的 Unicode bold；中文等没有通用 Unicode 粗体字形的字符保持原字形。
+`x-thread.md` 发布读取时以行首 `1/`、`2/`、`3/` 这类编号作为 tweet 边界；单条 tweet 内部允许保留空行和纯文本结构，不会再按空行切成多条回复。发布前转换 hook 仍兼容旧 Markdown 产物，但新生成规则不再依赖 Markdown 转换。
 
 ## 4. 视觉内容链路（v0.2）
 

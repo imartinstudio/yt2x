@@ -5,7 +5,8 @@ export const LOCALE_PATTERNS = {
   articlesHeading: /^文章$/u,
   addArticle: /^(?:添加|\+|add)$/iu,
   create: /create|创建|新建/iu,
-  chooseFile: /choose file|选择文件|上传文件|browse files?/iu,
+  chooseFile:
+    /choose file|select files?|browse files?|选择(?:文件|照片|图片|视频|媒体)|上传(?:文件|照片|图片|视频|媒体)/iu,
   addMedia: /add.*(?:photo|video)|添加照片或视频/iu,
   titlePlaceholder: /title/i,
   insert: /(?:^|\b)(?:insert|插入)(?:\b|$)|^insert$|^插入$/iu,

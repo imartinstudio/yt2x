@@ -357,14 +357,21 @@ const dialogLooksLikeContentMedia = (dialog: HTMLElement): boolean => {
   return /媒体|media|photo|video|照片|视频|upload|choose file|选择文件|裁剪|crop/iu.test(text);
 };
 
-const activeMediaDialog = (): HTMLElement | null => {
+const latestVisibleDialog = (): HTMLElement | null => {
+  const dialogs = [...document.querySelectorAll('[role="dialog"],[aria-modal="true"]')].filter(
+    (node): node is HTMLElement => node instanceof HTMLElement,
+  );
+  return dialogs.reverse().find((dialog) => isVisibleElement(dialog)) ?? null;
+};
+
+const activeMediaDialog = (allowUnlabelled = false): HTMLElement | null => {
   const dialogs = [...document.querySelectorAll('[role="dialog"],[aria-modal="true"]')].filter(
     (node): node is HTMLElement => node instanceof HTMLElement,
   );
   for (const dialog of dialogs.reverse()) {
     if (dialogLooksLikeContentMedia(dialog)) return dialog;
   }
-  return null;
+  return allowUnlabelled ? latestVisibleDialog() : null;
 };
 
 const contentMediaDialogSearchRoots = (): ParentNode[] => {
@@ -372,24 +379,29 @@ const contentMediaDialogSearchRoots = (): ParentNode[] => {
   return dialog === null ? [editorMainRoot()] : [dialog, editorMainRoot()];
 };
 
+const isLikelyContentMediaInput = (input: HTMLInputElement): boolean =>
+  /(?:video\/|image\/gif|gif)/iu.test(input.accept);
+
 const findDeepFileInput = (roots: ParentNode[] = contentMediaDialogSearchRoots()): HTMLInputElement | null => {
+  const candidates: HTMLInputElement[] = [];
   for (const root of roots) {
     for (const node of queryAllDeep(root, 'input[type="file"]')) {
       if (!(node instanceof HTMLInputElement)) continue;
       if (isCoverFileInput(node)) continue;
-      return node;
+      if (!candidates.includes(node)) candidates.push(node);
     }
   }
-  return null;
+  return candidates.find((input) => isLikelyContentMediaInput(input)) ?? candidates[0] ?? null;
 };
 
 const waitForDeepFileInput = (
   timeoutMs = 4_000,
   roots: ParentNode[] = contentMediaDialogSearchRoots(),
+  accept: (input: HTMLInputElement) => boolean = () => true,
 ): Promise<HTMLInputElement | null> =>
   new Promise((resolve) => {
     const initial = findDeepFileInput(roots);
-    if (initial !== null) {
+    if (initial !== null && accept(initial)) {
       resolve(initial);
       return;
     }
@@ -397,7 +409,7 @@ const waitForDeepFileInput = (
     let timeout = 0;
     const observer = new MutationObserver(() => {
       const input = findDeepFileInput(roots);
-      if (input === null) return;
+      if (input === null || !accept(input)) return;
       window.clearTimeout(timeout);
       observer.disconnect();
       resolve(input);
@@ -410,26 +422,59 @@ const waitForDeepFileInput = (
     observer.observe(document.body, { childList: true, subtree: true, attributes: true });
   });
 
-const dialogChooseFileButton = (dialog: ParentNode): HTMLButtonElement | null => {
-  for (const node of queryAllDeep(dialog, "button,[role='button']")) {
-    if (!(node instanceof HTMLButtonElement)) continue;
-    const label = (node.getAttribute("aria-label") ?? node.textContent ?? "").trim();
-    if (LOCALE_PATTERNS.chooseFile.test(label) || /上传|browse/i.test(label)) return node;
+const dialogChooseFileAction = (dialog: ParentNode): HTMLElement | null => {
+  for (const node of queryAllDeep(dialog, "button,[role='button'],label")) {
+    if (!(node instanceof HTMLElement)) continue;
+    const label = (
+      node.getAttribute("aria-label") ??
+      node.getAttribute("title") ??
+      node.textContent ??
+      ""
+    ).trim();
+    if (LOCALE_PATTERNS.chooseFile.test(label) || /拖放|drop\s*(?:files?|media)/iu.test(label)) {
+      return node;
+    }
   }
   return null;
+};
+
+const dialogUploadActions = (dialog: HTMLElement): HTMLElement[] => {
+  const explicit = dialogChooseFileAction(dialog);
+  const actions: HTMLElement[] = explicit === null ? [] : [explicit];
+  const inferred: HTMLElement[] = [];
+  for (const node of queryAllDeep(dialog, "button,[role='button'],label,[tabindex='0']")) {
+    if (!(node instanceof HTMLElement) || actions.includes(node)) continue;
+    const label = (
+      node.getAttribute("aria-label") ??
+      node.getAttribute("title") ??
+      node.textContent ??
+      ""
+    ).trim();
+    if (/^(?:关闭|取消|close|cancel|done|完成)$/iu.test(label)) continue;
+    if (/close|cancel|app-bar-close/iu.test(node.getAttribute("data-testid") ?? "")) continue;
+    inferred.push(node);
+  }
+  inferred.sort((a, b) => {
+    const aRect = a.getBoundingClientRect();
+    const bRect = b.getBoundingClientRect();
+    return bRect.width * bRect.height - aRect.width * aRect.height;
+  });
+  actions.push(...inferred.slice(0, 3));
+  actions.push(dialog);
+  return actions;
 };
 
 const isContentMediaUploadDialogOpen = (): boolean => {
   const dialog = activeMediaDialog();
   if (dialog === null) return false;
   if (findDeepFileInput([dialog]) !== null) return true;
-  if (dialogChooseFileButton(dialog) !== null) return true;
+  if (dialogChooseFileAction(dialog) !== null) return true;
   const text = dialog.textContent ?? "";
   return /媒体|media|photo|video|照片|视频|upload|choose file|选择文件/iu.test(text);
 };
 
 const openContentMediaUploadSurface = async (): Promise<void> => {
-  if (isContentMediaUploadDialogOpen() || findDeepFileInput() !== null) return;
+  if (isContentMediaUploadDialogOpen() || latestVisibleDialog() !== null || findDeepFileInput() !== null) return;
 
   const openViaAddMediaToolbar = async (): Promise<boolean> => {
     const root = editorMainRoot();
@@ -456,7 +501,7 @@ const openContentMediaUploadSurface = async (): Promise<void> => {
   mediaItem.click();
   await wait(450);
 
-  if (!isContentMediaUploadDialogOpen() && findDeepFileInput() === null) {
+  if (!isContentMediaUploadDialogOpen() && latestVisibleDialog() === null && findDeepFileInput() === null) {
     throw new Error("X Articles content media upload dialog did not open.");
   }
 };
@@ -516,22 +561,44 @@ const finishContentMediaUpload = async (
 };
 
 const listDialogFileInputs = (dialog: HTMLElement): HTMLInputElement[] =>
-  queryAllDeep(dialog, 'input[type="file"]').filter(
+  queryAllDeep(dialog, 'input[type="file"]')
+    .filter(
     (node): node is HTMLInputElement =>
       node instanceof HTMLInputElement && !isCoverFileInput(node),
-  );
+    )
+    .sort((a, b) => Number(isLikelyContentMediaInput(b)) - Number(isLikelyContentMediaInput(a)));
 
-const uploadFileThroughSurface = async (dialog: HTMLElement | null, file: File): Promise<void> => {
+export const uploadFileThroughSurface = async (dialog: HTMLElement | null, file: File): Promise<void> => {
   const normalized = normalizeUploadFile(file);
   let inputs = dialog === null ? [] : listDialogFileInputs(dialog);
   if (inputs.length === 0) {
-    const input = findDeepFileInput();
+    const input = dialog === null ? findDeepFileInput() : findDeepFileInput([dialog]);
     if (input !== null) inputs = [input];
   }
+  if (inputs.length === 0 && dialog !== null) {
+    const portalInput = findDeepFileInput([document.body]);
+    if (portalInput !== null && isLikelyContentMediaInput(portalInput)) inputs = [portalInput];
+  }
+  if (inputs.length === 0 && dialog !== null) {
+    for (const action of dialogUploadActions(dialog)) {
+      if (await uploadFileThroughAction(action, normalized)) {
+        return;
+      }
+    }
+  }
   if (inputs.length === 0) {
-    const roots = dialog === null ? contentMediaDialogSearchRoots() : [dialog, editorMainRoot()];
-    const waited = await waitForDeepFileInput(6_000, roots);
-    if (waited !== null && !isCoverFileInput(waited)) inputs = [waited];
+    const roots =
+      dialog === null ? contentMediaDialogSearchRoots() : [dialog, editorMainRoot(), document.body];
+    const waited = await waitForDeepFileInput(
+      6_000,
+      roots,
+      dialog === null
+        ? () => true
+        : (input) => isLikelyContentMediaInput(input) || dialog.contains(input),
+    );
+    if (waited !== null && !isCoverFileInput(waited)) {
+      inputs = [waited];
+    }
   }
 
   if (inputs.length === 0) {
@@ -620,7 +687,7 @@ export const insertContentMedia = async (file: File, anchor: InsertionAnchor): P
   restoreEditorSelection(savedSelection);
   await openContentMediaUploadSurface();
 
-  const dialog = activeMediaDialog();
+  const dialog = activeMediaDialog(true);
   restoreEditorSelection(savedSelection);
   editor.focus();
   try {

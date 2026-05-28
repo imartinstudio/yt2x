@@ -126,6 +126,7 @@ const handleImportClick = async (): Promise<void> => {
         skippedPromptCodeBlocks: result.skippedPromptCodeBlocks,
         skippedMedia: result.skippedMedia,
         lastMediaError: result.lastMediaError,
+        manualContentMedia: result.manualContentMedia,
       });
     } finally {
       loading?.close();

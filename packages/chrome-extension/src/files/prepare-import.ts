@@ -52,12 +52,6 @@ export const prepareArticleImport = async (input: {
   subscriptionTier: XArticleSubscriptionTier;
   mediaRegistry: MediaRegistry;
 }): Promise<PreparedArticleImport> => {
-  if (input.mediaRegistry.missingSources.length > 0) {
-    throw new Error(
-      `Missing authorized media: ${input.mediaRegistry.missingSources.join(", ")}`,
-    );
-  }
-
   const generatedBlobs = new Map<string, Blob>();
   const withMermaid = await materializeMermaidBlocks(input.markdown, generatedBlobs);
   const adapted = adaptArticleForX({
@@ -73,8 +67,17 @@ export const prepareArticleImport = async (input: {
   const parseResult = parseArticleDraftFromMarkdown(adapted.markdown, {
     resolveMediaPath: (source) => input.mediaRegistry.resolveMediaPath(source),
     preserveSourceContent: true,
-    useNativeEditorBlocks: true,
+    omitDividers: true,
   });
+  const missingCoverSources =
+    parseResult.coverImage === null || input.mediaRegistry.getUploadable(parseResult.coverImage) !== undefined
+      ? []
+      : input.mediaRegistry.missingSources.filter(
+          (source) => input.mediaRegistry.resolveMediaPath(source) === parseResult.coverImage,
+        );
+  if (missingCoverSources.length > 0) {
+    throw new Error(`Missing authorized cover media: ${missingCoverSources.join(", ")}`);
+  }
 
   return {
     parseResult,

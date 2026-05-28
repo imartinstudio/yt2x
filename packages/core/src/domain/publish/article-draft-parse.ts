@@ -19,6 +19,8 @@ export type ParseArticleDraftOptions = {
   preserveSourceContent?: boolean;
   /** Render dividers and fenced code through native X editor actions while keeping author text. */
   useNativeEditorBlocks?: boolean;
+  /** Omit Markdown divider blocks when the destination editor should not render them. */
+  omitDividers?: boolean;
 };
 
 export const parseArticleDraftFromMarkdown = (
@@ -42,6 +44,7 @@ export const parseArticleDraftFromMarkdown = (
 
   for (const block of blocks) {
     if (block.kind === "divider") {
+      if (options.omitDividers === true) continue;
       if (preserveSourceContent && !useNativeEditorBlocks) {
         contentBlocks.push(block.source);
         lastAnchorText = "---";

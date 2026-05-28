@@ -73,15 +73,17 @@ describe("writeArticleDraftToPage", () => {
     });
     document.execCommand = vi.fn((command: string, _showUi?: boolean, value?: string) => {
       if (command === "delete") {
-        editor.innerHTML = "";
+        if (document.activeElement === editor) editor.innerHTML = "";
+        else title.textContent = "";
         return true;
       }
       if (command === "paste") {
-        editor.innerHTML = clipboardHtml;
+        editor.innerHTML = `<div data-block="true">${clipboardHtml}</div>`;
         return true;
       }
-      if (command === "insertHTML") {
-        editor.innerHTML = value ?? "";
+      if (command === "insertText") {
+        if (document.activeElement === title) title.textContent = value ?? "";
+        else editor.innerHTML = `<div data-block="true">${value ?? ""}</div>`;
         return true;
       }
       return true;
@@ -94,7 +96,7 @@ describe("writeArticleDraftToPage", () => {
     document.body.innerHTML = "";
   });
 
-  it("finishes structural formatting before attempting media and keeps media failures non-fatal", async () => {
+  it("uploads only the cover and defers content media to manual insertion", async () => {
     const events: string[] = [];
     actionMocks.insertCodeBlock.mockImplementation(async () => {
       events.push("code");
@@ -107,11 +109,6 @@ describe("writeArticleDraftToPage", () => {
       events.push("cover");
       throw new Error("cover failed");
     });
-    actionMocks.insertContentMedia.mockImplementation(async () => {
-      events.push("media");
-      throw new Error("video failed");
-    });
-
     const file = new File(["asset"], "asset.bin");
     clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
     const prepared = {
@@ -136,9 +133,11 @@ describe("writeArticleDraftToPage", () => {
 
     const result = await writeArticleDraftToPage(prepared);
 
-    expect(events).toEqual(["code", "divider", "cover", "media"]);
-    expect(result.skippedMedia).toEqual(["cover.jpg", "clip.mp4"]);
-    expect(result.lastMediaError).toBe("video failed");
+    expect(events).toEqual(["code", "divider", "cover"]);
+    expect(result.skippedMedia).toEqual(["cover.jpg"]);
+    expect(result.lastMediaError).toBe("cover failed");
+    expect(result.manualContentMedia).toEqual(["clip.mp4"]);
+    expect(actionMocks.insertContentMedia).not.toHaveBeenCalled();
     expect(editor.textContent).toContain("Tail content remains here.");
   });
 
@@ -166,5 +165,108 @@ describe("writeArticleDraftToPage", () => {
     await expect(writeArticleDraftToPage(prepared)).rejects.toThrow("X Articles 分割线无法插入");
     expect(coverMocks.uploadCoverImage).not.toHaveBeenCalled();
     expect(actionMocks.insertContentMedia).not.toHaveBeenCalled();
+  });
+
+  it("restores the pasted body and stops when a legacy structural insert replaces it", async () => {
+    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
+    actionMocks.insertCodeBlock.mockImplementation(async () => {
+      editor.innerHTML = "<pre><code>Only inserted code remains.</code></pre>";
+    });
+    const prepared = {
+      parseResult: {
+        title: "Title",
+        coverImage: "cover.jpg",
+        contentImages: [],
+        contentVideos: [],
+        contentCodeBlocks: [
+          { code: "Only inserted code remains.", language: "text", blockIndex: 1, afterText: "Intro" },
+        ],
+        dividers: [],
+        html: clipboardHtml,
+        htmlBlocks: [clipboardHtml],
+        totalBlocks: 2,
+      },
+      mediaRegistry: {
+        getUploadable: () => new File(["cover"], "cover.jpg"),
+      },
+      generatedBlobs: new Map(),
+    } as unknown as PreparedArticleImport;
+
+    await expect(writeArticleDraftToPage(prepared)).rejects.toThrow(
+      "X Articles code insertion replaced the article body",
+    );
+    expect(editor.textContent).toContain("Tail content remains here.");
+    expect(coverMocks.uploadCoverImage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to persistent text editing without using raw DOM HTML insertion", async () => {
+    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
+    vi.mocked(document.execCommand).mockImplementation(
+      (command: string, _showUi?: boolean, value?: string) => {
+        if (command === "delete") {
+          if (document.activeElement === editor) editor.innerHTML = "";
+          else title.textContent = "";
+          return true;
+        }
+        if (command === "paste") return false;
+        if (command === "insertText") {
+          if (document.activeElement === title) title.textContent = value ?? "";
+          else editor.innerHTML = `<div data-block="true">${value ?? ""}</div>`;
+          return true;
+        }
+        return false;
+      },
+    );
+    const prepared = {
+      parseResult: {
+        title: "Title",
+        coverImage: null,
+        contentImages: [],
+        contentVideos: [],
+        contentCodeBlocks: [],
+        dividers: [],
+        html: clipboardHtml,
+        htmlBlocks: [clipboardHtml],
+        totalBlocks: 2,
+      },
+      mediaRegistry: { getUploadable: () => undefined },
+      generatedBlobs: new Map(),
+    } as unknown as PreparedArticleImport;
+
+    await expect(writeArticleDraftToPage(prepared)).resolves.toEqual(
+      expect.objectContaining({ skippedMedia: [] }),
+    );
+    expect(editor.textContent).toContain("Tail content remains here.");
+    expect(document.execCommand).not.toHaveBeenCalledWith("insertHTML", false, expect.anything());
+  });
+
+  it("does not invoke content-media insertion even when body media is present", async () => {
+    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
+    actionMocks.insertContentMedia.mockImplementation(async () => {
+      editor.innerHTML = "";
+      throw new Error("media picker failed");
+    });
+    const prepared = {
+      parseResult: {
+        title: "Title",
+        coverImage: null,
+        contentImages: [{ path: "shot.png", alt: "", blockIndex: 1, afterText: "Intro" }],
+        contentVideos: [],
+        contentCodeBlocks: [],
+        dividers: [],
+        html: clipboardHtml,
+        htmlBlocks: [clipboardHtml],
+        totalBlocks: 2,
+      },
+      mediaRegistry: { getUploadable: () => new File(["shot"], "shot.png") },
+      generatedBlobs: new Map(),
+    } as unknown as PreparedArticleImport;
+
+    const result = await writeArticleDraftToPage(prepared);
+
+    expect(result.lastMediaError).toBeNull();
+    expect(result.manualContentMedia).toEqual(["shot.png"]);
+    expect(actionMocks.insertContentMedia).not.toHaveBeenCalled();
+    expect(editor.textContent).toContain("Tail content remains here.");
   });
 });

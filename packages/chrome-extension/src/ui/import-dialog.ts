@@ -42,8 +42,9 @@ export const buildImportPreviewState = (input: {
   const parseResult = parseArticleDraftFromMarkdown(adapted.markdown, {
     resolveMediaPath: (source) => input.mediaRegistry.resolveMediaPath(source),
     preserveSourceContent: true,
-    useNativeEditorBlocks: true,
+    omitDividers: true,
   });
+  const missingSources = missingCoverSources(parseResult.coverImage, input.mediaRegistry);
   return {
     title: parseResult.title,
     coverImage: parseResult.coverImage,
@@ -51,7 +52,7 @@ export const buildImportPreviewState = (input: {
     contentVideoCount: parseResult.contentVideos.length,
     adaptations: adapted.adaptations,
     warnings: adapted.warnings,
-    missingSources: input.mediaRegistry.missingSources,
+    missingSources,
   };
 };
 
@@ -104,7 +105,10 @@ export const buildImportPreview = (input: {
   contentVideoCount: input.prepared.parseResult.contentVideos.length,
   adaptations: input.prepared.adapted.adaptations,
   warnings: input.prepared.adapted.warnings,
-  missingSources: input.prepared.mediaRegistry.missingSources,
+  missingSources: missingCoverSources(
+    input.prepared.parseResult.coverImage,
+    input.prepared.mediaRegistry,
+  ),
 });
 
 export const showImportSuccessToast = (input: {
@@ -112,11 +116,13 @@ export const showImportSuccessToast = (input: {
   skippedPromptCodeBlocks?: number;
   skippedMedia?: string[];
   lastMediaError?: string | null;
+  manualContentMedia?: string[];
 } = {}): void => {
   const skippedDividers = input.skippedDividers ?? [];
   const skippedPromptCodeBlocks = input.skippedPromptCodeBlocks ?? 0;
   const skippedMedia = input.skippedMedia ?? [];
   const lastMediaError = input.lastMediaError ?? null;
+  const manualContentMedia = input.manualContentMedia ?? [];
   const toast = document.createElement("div");
   toast.setAttribute("data-yt2x-import-toast", "true");
   const notes: string[] = [];
@@ -126,7 +132,10 @@ export const showImportSuccessToast = (input: {
   if (skippedMedia.length > 0) {
     const detail =
       lastMediaError !== null && lastMediaError.length > 0 ? `：${lastMediaError}` : "";
-    notes.push(`${skippedMedia.length} 个封面/正文媒体自动插入失败，正文格式已保留${detail}`);
+    notes.push(`${skippedMedia.length} 个封面上传失败，正文格式已保留${detail}`);
+  }
+  if (manualContentMedia.length > 0) {
+    notes.push(`${manualContentMedia.length} 个正文图片/视频未自动插入，请手动补充`);
   }
   if (skippedPromptCodeBlocks > 0) {
     notes.push(`${skippedPromptCodeBlocks} 段英文 prompt 代码块已跳过（非正文内容）`);
@@ -136,7 +145,10 @@ export const showImportSuccessToast = (input: {
   toast.style.cssText =
     "position:fixed;right:24px;bottom:24px;z-index:2147483647;padding:12px 16px;border-radius:8px;background:#111;color:#fff;font:14px system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.2)";
   document.body.appendChild(toast);
-  window.setTimeout(() => toast.remove(), skippedMedia.length > 0 ? 15_000 : 6_000);
+  window.setTimeout(
+    () => toast.remove(),
+    skippedMedia.length > 0 || manualContentMedia.length > 0 ? 15_000 : 6_000,
+  );
 };
 
 export const showImportError = (message: string): void => {
@@ -160,8 +172,8 @@ const renderDialogHtml = (preview: ImportPreview): string => {
       : `<section><h3>警告</h3><ul>${preview.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul></section>`;
   const missingLines =
     preview.missingSources.length === 0
-      ? "<p>本地素材已齐全。</p>"
-      : `<p class="error">仍缺少本地素材：${preview.missingSources.map(escapeHtml).join(", ")}</p>`;
+      ? "<p>封面素材已齐全；正文图片/视频需在导入后手动插入。</p>"
+      : `<p class="error">仍缺少封面素材：${preview.missingSources.map(escapeHtml).join(", ")}</p>`;
   const mediaActions =
     preview.missingSources.length === 0
       ? ""
@@ -169,7 +181,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
       <button type="button" data-action="pick-directory">选择文章目录</button>
       <button type="button" data-action="pick-files">选择素材文件</button>
     </div>
-    <p class="meta">请在确认导入前授权上述本地文件；远程图片链接无需选择。</p>`;
+    <p class="meta">请在确认导入前授权封面文件；正文图片/视频暂不自动插入。</p>`;
 
   return `
 <style>
@@ -204,7 +216,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     <h2>导入 Markdown 预览</h2>
     <p class="meta"><strong>标题：</strong>${escapeHtml(preview.title)}</p>
     <p class="meta"><strong>封面：</strong>${escapeHtml(preview.coverImage ?? "（无）")}</p>
-    <p class="meta"><strong>正文素材：</strong>${preview.contentImageCount} 张图片，${preview.contentVideoCount} 个视频（不含封面）</p>
+    <p class="meta"><strong>正文素材：</strong>${preview.contentImageCount} 张图片，${preview.contentVideoCount} 个视频（不含封面，导入后请手动插入）</p>
     <label>订阅档位
       <select name="subscription-tier">
         <option value="premium">X Premium</option>
@@ -232,3 +244,10 @@ const escapeHtml = (value: string): string =>
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+
+const missingCoverSources = (coverImage: string | null, registry: MediaRegistry): string[] => {
+  if (coverImage === null || registry.getUploadable(coverImage) !== undefined) return [];
+  return registry.missingSources.filter(
+    (source) => registry.resolveMediaPath(source) === coverImage,
+  );
+};

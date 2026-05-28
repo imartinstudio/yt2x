@@ -111,7 +111,7 @@ describe("executeNativePublish", () => {
     expect(preview.mode).toBe("thread");
     expect(preview.source).toBe("x-thread.md");
     expect(preview.tweets).toEqual(["1/ first", "2/ second"]);
-    expect(preview.sourceReply).toBe("👇完整视频：\nhttps://example.com/thread-preview");
+    expect(preview.sourceReply).toBeUndefined();
     expect(preview.threadDelayMs).toEqual({ min: 20_000, max: 30_000 });
   });
 
@@ -303,7 +303,7 @@ describe("executeNativePublish", () => {
     expect(preview.mode).toBe("short");
     expect(preview.source).toBe("x-short.md");
     expect(preview.text).toBe("short post body");
-    expect(preview.sourceReply).toBe("👇完整视频：\nhttps://example.com/short-preview");
+    expect(preview.sourceReply).toBeUndefined();
   });
 
   it("normalizes generated short markdown before previewing", async () => {
@@ -421,7 +421,7 @@ describe("executeNativePublish", () => {
     expect(preview.text).toBe("short head👇");
     expect(preview.replies).toEqual(["1/ first reply", "2/ second reply"]);
     expect(preview.tweets).toEqual(["short head👇", "1/ first reply", "2/ second reply"]);
-    expect(preview.sourceReply).toBe("👇完整视频：\nhttps://example.com/thread-short");
+    expect(preview.sourceReply).toBeUndefined();
     expect(preview.coverPath).toBe(coverPath);
     expect(preview.threadDelayMs).toEqual({ min: 20_000, max: 30_000 });
   });

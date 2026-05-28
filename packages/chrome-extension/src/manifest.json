@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "yt2x X Articles Markdown Import",
+  "version": "0.2.0",
+  "description": "Import local Markdown into the current X Articles draft editor.",
+  "icons": {
+    "128": "icons/icon.svg"
+  },
+  "permissions": ["storage", "scripting", "clipboardWrite", "clipboardRead"],
+  "host_permissions": ["https://x.com/*"],
+  "background": {
+    "service_worker": "background/main-world-bridge.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/compose/articles*"],
+      "js": ["content/x-articles.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

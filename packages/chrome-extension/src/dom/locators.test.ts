@@ -1,0 +1,97 @@
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import {
+  articleEditor,
+  editorHasContent,
+  findAddArticleButton,
+  findImportButtonAnchor,
+  findTitleField,
+  readTitleFieldText,
+  titleFieldShowsPlaceholder,
+} from "./locators.js";
+
+describe("x articles locators", () => {
+  describe("sidebar mount", () => {
+    beforeEach(() => {
+      document.body.innerHTML = `
+        <nav>
+          <div class="articles-row">
+            <span>文章</span>
+            <button type="button" aria-label="添加">+</button>
+          </div>
+          <div class="published-row">
+            <span>已发布</span>
+          </div>
+        </nav>
+      `;
+    });
+
+    afterEach(() => {
+      document.body.innerHTML = "";
+    });
+
+    it("finds the add button beside 文章 on the row above 已发布", () => {
+      const add = findAddArticleButton();
+      expect(add).not.toBeNull();
+      expect(add?.getAttribute("aria-label")).toBe("添加");
+      expect(findImportButtonAnchor()).toBe(add);
+    });
+  });
+
+  describe("editor", () => {
+    beforeEach(() => {
+      document.body.innerHTML = `
+        <main>
+          <div contenteditable="true" data-placeholder="添加标题">添加标题</div>
+          <div contenteditable="true" id="body" style="width:600px;height:400px">
+            <p>Existing draft body with enough text for detection.</p>
+          </div>
+          <footer>
+            <div contenteditable="true">AI Coding Workflow 探索者 bio text</div>
+          </footer>
+        </main>
+      `;
+    });
+
+    afterEach(() => {
+      document.body.innerHTML = "";
+    });
+
+    it("finds the article body editor instead of bio footer", () => {
+      const editor = articleEditor();
+      expect(editor.id).toBe("body");
+      expect(editorHasContent(editor)).toBe(true);
+    });
+
+    it("prefers the Draft.js article body surface when present", () => {
+      document.body.innerHTML = `
+        <main>
+          <div contenteditable="true" data-placeholder="添加标题">添加标题</div>
+          <div class="DraftEditor-root" style="width:500px;height:600px">
+            <div class="DraftEditor-editorContainer">
+              <div class="public-DraftEditor-content" contenteditable="true" style="width:500px;height:600px">
+                <div data-contents="true">
+                  <div data-block="true"><span>正文段落</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      `;
+      const editor = articleEditor();
+      expect(editor.classList.contains("public-DraftEditor-content")).toBe(true);
+    });
+
+    it("finds the Chinese title placeholder field", () => {
+      const title = findTitleField();
+      expect(title.getAttribute("data-placeholder")).toBe("添加标题");
+    });
+
+    it("detects placeholder vs filled title text", () => {
+      const title = findTitleField();
+      expect(titleFieldShowsPlaceholder(title)).toBe(true);
+      title.textContent = "示例标题";
+      expect(titleFieldShowsPlaceholder(title)).toBe(false);
+      expect(readTitleFieldText(title)).toBe("示例标题");
+    });
+  });
+});

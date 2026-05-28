@@ -6,6 +6,7 @@ export default tseslint.config(
   {
     ignores: [
       "**/dist/**",
+      "packages/chrome-extension/build.mjs",
       "**/node_modules/**",
       "**/*.tsbuildinfo",
       "files/downloads/**",

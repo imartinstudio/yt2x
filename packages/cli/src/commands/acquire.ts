@@ -21,6 +21,11 @@ export const registerAcquireCommand = (program: Command): void => {
     .option("--video-start <time>", "Video clip start time (seconds, MM:SS, or HH:MM:SS)")
     .option("--video-end <time>", "Video clip end time (seconds, MM:SS, or HH:MM:SS)")
     .option("--video-duration <seconds>", "Manual clip duration in seconds when --video-start omits --video-end", "30")
+    .option("--subtitle-zh <mode>", "Prepare Chinese subtitle assets: off|srt|burned|both", "off")
+    .option("--subtitle-source-lang <lang>", "Subtitle source language", "en")
+    .option("--subtitle-target-lang <lang>", "Subtitle target language", "zh-CN")
+    .option("--subtitle-source <mode>", "Subtitle source: auto|youtube|transcribe|file", "auto")
+    .option("--subtitle-file <path>", "Existing SRT/VTT subtitle file when --subtitle-source file is used")
     .option("--error-strategy <mode>", "On failure: stop|skip", "stop")
     .option("--force", "Re-run acquire even when process-status marks it done")
     .action((flags: SingleStageFlags) => runAcquireStage(flags));

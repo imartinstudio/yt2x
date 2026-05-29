@@ -96,4 +96,18 @@ describe("projectSingleStage", () => {
     });
     expect(args.acquire.downloadVideo).toBe(false);
   });
+
+  it("maps subtitle options for acquire commands", () => {
+    const args = projectSingleStage("acquire", {
+      urls: ["https://example.com/video"],
+      subtitleZh: "srt",
+      subtitleSourceLang: "en",
+      subtitleTargetLang: "zh-CN",
+      subtitleSource: "youtube",
+    });
+    expect(args.acquire.subtitleZh).toBe("srt");
+    expect(args.acquire.subtitleSourceLang).toBe("en");
+    expect(args.acquire.subtitleTargetLang).toBe("zh-CN");
+    expect(args.acquire.subtitleSource).toBe("youtube");
+  });
 });

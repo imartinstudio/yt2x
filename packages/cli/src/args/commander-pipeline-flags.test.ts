@@ -64,6 +64,22 @@ describe("parseCommanderPipelineFlags", () => {
     expect(args.acquire.videoDuration).toBe(45);
   });
 
+  it("maps subtitle options", () => {
+    const args = parseCommanderPipelineFlags({
+      urls: ["https://example.com/video"],
+      subtitleZh: "both",
+      subtitleSourceLang: "en",
+      subtitleTargetLang: "zh-CN",
+      subtitleSource: "file",
+      subtitleFile: "/tmp/source.vtt",
+    });
+    expect(args.acquire.subtitleZh).toBe("both");
+    expect(args.acquire.subtitleSourceLang).toBe("en");
+    expect(args.acquire.subtitleTargetLang).toBe("zh-CN");
+    expect(args.acquire.subtitleSource).toBe("file");
+    expect(args.acquire.subtitleFile).toBe("/tmp/source.vtt");
+  });
+
   it("supports opting out of the default video download", () => {
     const args = parseCommanderPipelineFlags({
       urls: ["https://example.com/video"],

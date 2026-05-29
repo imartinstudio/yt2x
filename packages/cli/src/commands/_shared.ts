@@ -8,6 +8,7 @@ import { logger } from "../logger.js";
 import type { PipelineArgs } from "../args/pipeline.js";
 import { createAcquireReviewPrompt } from "../orchestrator/acquire-review-prompt.js";
 import { nativeAcquireOptionsFromPipelineArgs } from "../orchestrator/native-acquire-from-pipeline-args.js";
+import { resolveNativeLlm } from "../orchestrator/native-stage-common.js";
 import {
   acquireSubStepProgressFromHandle,
   createAcquireOnlyProgress,
@@ -54,12 +55,30 @@ export const runAcquireStage = async (flags: SingleStageFlags): Promise<void> =>
     estimatePipelineVideoCount(args),
     args.acquire.keyframes,
   );
+
+  const needsTranslation =
+    args.acquire.subtitleZh === "srt" ||
+    args.acquire.subtitleZh === "burned" ||
+    args.acquire.subtitleZh === "both";
+  let llmResult: ReturnType<typeof resolveNativeLlm> | undefined;
+  if (needsTranslation) {
+    llmResult = resolveNativeLlm(flags);
+    if (!llmResult.ok) {
+      logger.error({ reason: llmResult.reason }, "LLM config missing for subtitle translation");
+      process.exitCode = llmResult.exitCode;
+      return;
+    }
+  }
+
   let exitCode = 1;
   try {
     const code = await executeNativeAcquire({
       ...base,
       progress: acquireSubStepProgressFromHandle(progress, "acquire"),
       ...(args.stages.acquire === "review" ? { reviewPrompt: createAcquireReviewPrompt() } : {}),
+      ...(llmResult?.ok === true
+        ? { llm: llmResult.adapter, llmModel: llmResult.model }
+        : {}),
     });
     exitCode = code;
     process.exitCode = code;

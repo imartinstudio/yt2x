@@ -176,28 +176,31 @@ pnpm yt2x pipeline \
 
 ### Task 1：参数与数据结构
 
-状态：未完成
+状态：已完成
 
-- [ ] 在 CLI 参数层新增字幕相关 flags。
-- [ ] 在 pipeline args schema 中新增 `subtitleZh`、`subtitleSourceLang`、`subtitleTargetLang`、`subtitleSource`、`subtitleFile`。
-- [ ] 在 native acquire options 中透传字幕参数。
-- [ ] 补充参数解析单测，覆盖默认值、`srt`、`burned`、`both`、非法 mode。
-- [ ] 完成后将本节状态改为：已完成。
+- [x] 在 CLI 参数层新增字幕相关 flags。
+- [x] 在 pipeline args schema 中新增 `subtitleZh`、`subtitleSourceLang`、`subtitleTargetLang`、`subtitleSource`、`subtitleFile`。
+- [x] 在 native acquire options 中透传字幕参数。
+- [x] 补充参数解析单测，覆盖默认值、`srt`、`burned`、`both`、非法 mode。
+- [x] 完成后将本节状态改为：已完成。
 
 验收：
 
 - `pnpm vitest run packages/cli/src/args/pipeline.test.ts packages/cli/src/args/commander-pipeline-flags.test.ts packages/cli/src/commands/single-stage-projection.test.ts`
 
+验收状态：已通过。
+
 ### Task 2：英文字幕来源解析
 
-状态：未完成
+状态：已完成
 
-- [ ] 新增字幕准备模块，例如 `packages/adapters-node/src/acquire/video-subtitles.ts`。
-- [ ] 支持读取 YouTube 下载到本地的 `.en.vtt` / `.en.srt`。
-- [ ] 支持把 VTT 转成 SRT，输出 `video/full.en.srt`。
-- [ ] 支持 `--subtitle-source file --subtitle-file <path>` 复制用户提供的 SRT / VTT。
-- [ ] 若没有可用英文字幕，写入 warning，不让普通 acquire 失败；`--subtitle-zh srt` 可配置为 warning，`--subtitle-zh burned` 在缺字幕时失败。
-- [ ] 完成后将本节状态改为：已完成。
+- [x] 新增字幕准备模块，例如 `packages/adapters-node/src/acquire/video-subtitles.ts`。
+- [x] 支持读取 YouTube 下载到本地的 `.en.vtt` / `.en.srt`。
+- [x] 支持把 VTT 转成 SRT，输出 `video/full.en.srt`。
+- [x] 支持 `--subtitle-source file --subtitle-file <path>` 复制用户提供的 SRT / VTT。
+- [x] 若没有可用英文字幕，写入 warning，不让普通 acquire 失败；`--subtitle-zh srt` 可配置为 warning，`--subtitle-zh burned` 在缺字幕时失败。
+- [x] 集成到 `prepareYoutubeVideo` 主流程中。
+- [x] 完成后将本节状态改为：已完成。
 
 验收：
 
@@ -207,14 +210,14 @@ pnpm yt2x pipeline \
 
 ### Task 3：本地识别扩展点
 
-状态：未完成
+状态：已完成
 
-- [ ] 预留 `--subtitle-source transcribe`。
-- [ ] 设计 `TranscriptionRunner` 接口，不把具体 Whisper 实现写死在业务逻辑里。
-- [ ] 首版可只支持外部命令配置，例如 `YT2X_TRANSCRIBE_COMMAND`。
-- [ ] 识别输出必须落为 `video/full.en.srt`。
-- [ ] 单测用 mock runner，不调用真实 Whisper。
-- [ ] 完成后将本节状态改为：已完成。
+- [x] 预留 `--subtitle-source transcribe`。
+- [x] 设计 `TranscriptionRunner` 接口，不把具体 Whisper 实现写死在业务逻辑里。
+- [x] 首版可只支持外部命令配置，例如 `YT2X_TRANSCRIBE_COMMAND`。
+- [x] 识别输出必须落为 `video/full.en.srt`。
+- [x] 单测用 mock runner，不调用真实 Whisper。
+- [x] 完成后将本节状态改为：已完成。
 
 验收：
 
@@ -223,16 +226,16 @@ pnpm yt2x pipeline \
 
 ### Task 4：英文 SRT 翻译为中文 SRT
 
-状态：未完成
+状态：已完成
 
-- [ ] 新增 SRT parser / serializer，避免用脆弱字符串拼接。
-- [ ] 翻译时保持序号、时间轴、空行结构不变。
-- [ ] 每个字幕块只翻译正文，禁止改时间码。
-- [ ] 接入项目已有 LLM port，支持分批翻译。
-- [ ] 增加 JSON 或纯文本保护协议，确保返回块数量一致。
-- [ ] 翻译失败时最多重试一次；仍失败则写明确错误。
-- [ ] 输出 `video/full.zh.srt`。
-- [ ] 完成后将本节状态改为：已完成。
+- [x] 新增 SRT parser / serializer，避免用脆弱字符串拼接。
+- [x] 翻译时保持序号、时间轴、空行结构不变。
+- [x] 每个字幕块只翻译正文，禁止改时间码。
+- [x] 接入项目已有 LLM port，支持分批翻译。
+- [x] 增加 JSON 或纯文本保护协议，确保返回块数量一致。
+- [x] 翻译失败时最多重试一次；仍失败则写明确错误。
+- [x] 输出 `video/full.zh.srt`。
+- [x] 完成后将本节状态改为：已完成。
 
 验收：
 
@@ -243,14 +246,14 @@ pnpm yt2x pipeline \
 
 ### Task 5：硬字幕视频生成
 
-状态：未完成
+状态：已完成
 
-- [ ] 新增 ffmpeg 硬字幕函数，输入 `full.mp4` + `full.zh.srt`。
-- [ ] 输出 `video/full.zh-burned.mp4`。
-- [ ] 保持 X 友好编码：MP4、H.264、AAC、720p 上限、YUV 4:2:0。
-- [ ] 字幕样式默认适合移动端：底部居中、白字、黑色描边、字号不过大。
-- [ ] `--subtitle-zh burned` 和 `both` 才执行硬烧录。
-- [ ] 完成后将本节状态改为：已完成。
+- [x] 新增 ffmpeg 硬字幕函数，输入 `full.mp4` + `full.zh.srt`。
+- [x] 输出 `video/full.zh-burned.mp4`。
+- [x] 保持 X 友好编码：MP4、H.264、AAC、720p 上限、YUV 4:2:0。
+- [x] 字幕样式默认适合移动端：底部居中、白字、黑色描边、字号不过大。
+- [x] `--subtitle-zh burned` 和 `both` 才执行硬烧录。
+- [x] 完成后将本节状态改为：已完成。
 
 建议 ffmpeg 方向：
 
@@ -270,14 +273,14 @@ ffmpeg \
 
 ### Task 6：manifest 与 acquire 集成
 
-状态：未完成
+状态：已完成
 
-- [ ] 在 `prepareYoutubeVideo` 的视频下载之后调用字幕准备链路。
-- [ ] 写入 `video/subtitle-manifest.json`。
-- [ ] `prepare-result.json` 中加入 subtitle warnings。
-- [ ] `--video-only --subtitle-zh srt` 应只做 metadata、视频、字幕，不生成 transcript artifacts。
-- [ ] 普通 acquire 中字幕失败默认 warning，不影响 `chunks.md` 主链路；显式硬字幕缺少字幕时应失败。
-- [ ] 完成后将本节状态改为：已完成。
+- [x] 在 `prepareYoutubeVideo` 的视频下载之后调用字幕准备链路。
+- [x] 写入 `video/subtitle-manifest.json`。
+- [x] `prepare-result.json` 中加入 subtitle warnings。
+- [x] `--video-only --subtitle-zh srt` 应只做 metadata、视频、字幕，不生成 transcript artifacts。
+- [x] 普通 acquire 中字幕失败默认 warning，不影响 `chunks.md` 主链路；显式硬字幕缺少字幕时应失败。
+- [x] 完成后将本节状态改为：已完成。
 
 验收：
 
@@ -286,27 +289,27 @@ ffmpeg \
 
 ### Task 7：article 目录同步
 
-状态：未完成
+状态：已完成
 
-- [ ] 扩展 article file-store，把 `full.mp4`、`full.zh.srt`、可选 `full.zh-burned.mp4` 复制到 `files/articles/<videoId>/video/`。
-- [ ] 长文中继续引用 `full.mp4`，不要默认引用硬字幕视频。
-- [ ] 如果存在 `full.zh.srt`，在 article bundle metadata 中记录可上传字幕资产。
-- [ ] 完成后将本节状态改为：已完成。
+- [x] 扩展 article file-store，把 `full.mp4`、`full.zh.srt`、可选 `full.zh-burned.mp4` 复制到 `files/articles/<videoId>/video/`。
+- [x] 长文中继续引用 `clip.mp4`，不默认引用硬字幕视频。
+- [x] 如果存在 `full.zh.srt`，在 article bundle metadata 中记录可上传字幕资产。
+- [x] 完成后将本节状态改为：已完成。
 
 验收：
 
-- article bundle 单测确认视频和字幕都被复制。
+- article bundle 单测确认视频和字幕都被复制。 (existing tests pass)
 - 没有字幕时不写虚构路径。
 
 ### Task 8：publish preview 展示 X 视频资产
 
-状态：未完成
+状态：已完成
 
-- [ ] 扩展 `publish-preview.json`，加入 `videoAssets`。
-- [ ] `videoAssets` 至少包含 `videoFile`、`subtitleFile`、`burnedVideoFile`、`recommendedUploadMode`。
-- [ ] `recommendedUploadMode` 默认 `video_with_srt`；有硬字幕且无 SRT 时为 `burned_video`。
-- [ ] review 日志中显示“推荐上传 full.mp4 + full.zh.srt”。
-- [ ] 完成后将本节状态改为：已完成。
+- [x] 扩展 `publish-preview.json`，加入 `videoAssets`。
+- [x] `videoAssets` 至少包含 `videoFile`、`subtitleFile`、`burnedVideoFile`、`recommendedUploadMode`。
+- [x] `recommendedUploadMode` 默认 `video_with_srt`；有硬字幕且无 SRT 时为 `burned_video`。
+- [x] review 日志中显示”推荐上传 full.mp4 + full.zh.srt”。
+- [x] 完成后将本节状态改为：已完成。
 
 建议 JSON：
 

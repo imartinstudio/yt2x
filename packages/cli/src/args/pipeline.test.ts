@@ -57,6 +57,11 @@ describe("PipelineArgsSchema", () => {
     const parsed = PipelineArgsSchema.parse(baseInput);
     expect(parsed.article.targets).toEqual(["article", "x-thread", "x-short"]);
     expect(parsed.acquire.downloadVideo).toBe(true);
+    expect(parsed.acquire.subtitleZh).toBe("off");
+    expect(parsed.acquire.subtitleSourceLang).toBe("en");
+    expect(parsed.acquire.subtitleTargetLang).toBe("zh-CN");
+    expect(parsed.acquire.subtitleSource).toBe("auto");
+    expect(parsed.acquire.subtitleFile).toBeUndefined();
     expect(parsed.publish.format).toBe("article");
     expect(parsed.publish.maxChars).toBe(500);
     expect(parsed.publish.maxTweets).toBe(8);
@@ -120,6 +125,48 @@ describe("PipelineArgsSchema", () => {
       acquire: { downloadVideo: false },
     });
     expect(parsed.acquire.downloadVideo).toBe(false);
+  });
+
+  it("parses subtitle options", () => {
+    const parsed = PipelineArgsSchema.parse({
+      ...baseInput,
+      acquire: {
+        subtitleZh: "burned",
+        subtitleSourceLang: "en-US",
+        subtitleTargetLang: "zh-CN",
+        subtitleSource: "file",
+        subtitleFile: "/tmp/source.srt",
+      },
+    });
+    expect(parsed.acquire.subtitleZh).toBe("burned");
+    expect(parsed.acquire.subtitleSourceLang).toBe("en-US");
+    expect(parsed.acquire.subtitleTargetLang).toBe("zh-CN");
+    expect(parsed.acquire.subtitleSource).toBe("file");
+    expect(parsed.acquire.subtitleFile).toBe("/tmp/source.srt");
+  });
+
+  it("rejects invalid subtitle mode", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        acquire: { subtitleZh: "hard" },
+      }),
+    ).toThrow();
+  });
+
+  it("requires subtitle file only with file source", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        acquire: { subtitleSource: "file" },
+      }),
+    ).toThrow(/subtitle-file/);
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        acquire: { subtitleFile: "/tmp/source.srt" },
+      }),
+    ).toThrow(/subtitle-source file/);
   });
 
   it("allows empty sources when --acquire skip", () => {

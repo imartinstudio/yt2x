@@ -10,6 +10,7 @@ import { registerLlmCommand } from "./commands/llm.js";
 import { registerNotesCommand } from "./commands/notes.js";
 import { registerPipelineCommand } from "./commands/pipeline.js";
 import { registerPublishCommand } from "./commands/publish.js";
+import { registerSubtitleCommand } from "./commands/subtitle.js";
 import { logger } from "./logger.js";
 
 const program = new Command();
@@ -30,6 +31,7 @@ registerAcquireCommand(program);
 registerNotesCommand(program);
 registerArticleCommand(program);
 registerPublishCommand(program);
+registerSubtitleCommand(program);
 registerAuthCommand(program);
 registerLlmCommand(program);
 

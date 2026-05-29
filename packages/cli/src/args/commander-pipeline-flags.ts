@@ -29,6 +29,11 @@ export type CommanderPipelineFlags = {
   videoStart?: string;
   videoEnd?: string;
   videoDuration?: string;
+  subtitleZh?: string;
+  subtitleSourceLang?: string;
+  subtitleTargetLang?: string;
+  subtitleSource?: string;
+  subtitleFile?: string;
   continueFrom?: boolean;
   errorStrategy?: string;
   force?: boolean;
@@ -82,6 +87,11 @@ export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): Pipe
       videoStart: flags.videoStart,
       videoEnd: flags.videoEnd,
       videoDuration: flags.videoDuration ?? "30",
+      subtitleZh: flags.subtitleZh,
+      subtitleSourceLang: flags.subtitleSourceLang,
+      subtitleTargetLang: flags.subtitleTargetLang,
+      subtitleSource: flags.subtitleSource,
+      subtitleFile: flags.subtitleFile,
     },
     article: {
       platform: flags.platform ?? "x",

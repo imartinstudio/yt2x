@@ -1,6 +1,6 @@
 import path from "node:path";
 import { access, readFile } from "node:fs/promises";
-import type { PipelineStep } from "@yt2x/core";
+import type { LlmPort, PipelineStep } from "@yt2x/core";
 import { defaultProcessRunner, isProcessError, type ProcessRunner } from "../process/index.js";
 import { isStepDone, markStepDone, markStepFailed } from "../fs/process-status-store.js";
 import { resolveAcquireVideoQueue, validateArtifacts } from "./batch-queue.js";
@@ -38,6 +38,11 @@ export type NativeAcquireOptions = {
     videoStart?: string;
     videoEnd?: string;
     videoDuration?: number;
+    subtitleZh?: "off" | "srt" | "burned" | "both";
+    subtitleSourceLang?: string;
+    subtitleTargetLang?: string;
+    subtitleSource?: "auto" | "youtube" | "transcribe" | "file";
+    subtitleFile?: string;
   };
   stages: NativeAcquireStageModes;
   control: {
@@ -46,9 +51,13 @@ export type NativeAcquireOptions = {
     force?: boolean;
   };
   flags: { verbose: boolean };
+  llm?: LlmPort;
+  llmModel?: string;
   runner?: ProcessRunner;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** When set, burned subtitle video is routed here instead of outDir. */
+  articleOutDir?: string;
   /**
    * `stages.acquire === "review"` 时，每完成一个视频的采集后调用。
    * 返回 `quit` / `no` 时中止后续视频（退出码 0，与 legacy 一致）。
@@ -259,6 +268,16 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
           ...(acquire.videoStart !== undefined ? { start: acquire.videoStart } : {}),
           ...(acquire.videoEnd !== undefined ? { end: acquire.videoEnd } : {}),
         },
+        videoSubtitles: {
+          mode: acquire.subtitleZh ?? "off",
+          sourceLang: acquire.subtitleSourceLang ?? "en",
+          targetLang: acquire.subtitleTargetLang ?? "zh-CN",
+          source: acquire.subtitleSource ?? "auto",
+          ...(acquire.subtitleFile !== undefined ? { file: acquire.subtitleFile } : {}),
+        },
+        ...(opts.llm !== undefined ? { llm: opts.llm } : {}),
+        ...(opts.llmModel !== undefined ? { llmModel: opts.llmModel } : {}),
+        ...(opts.articleOutDir !== undefined ? { burnedVideoOutDir: opts.articleOutDir } : {}),
         runner,
         timeoutMs,
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),

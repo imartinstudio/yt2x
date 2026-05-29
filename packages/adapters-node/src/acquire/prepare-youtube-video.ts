@@ -11,8 +11,10 @@ import { downloadSubtitlesTwoPhase } from "./yt-dlp.js";
 import { normalizeYoutubeUrl, sanitizeVideoId, videoIdFromUrl } from "./video-id-from-url.js";
 import { youtubeSubLangBase } from "./youtube-sub-lang.js";
 import { ensureOfficialYoutubeThumbnail, fetchVideoMetadata, type YtDlpOptions } from "./yt-dlp.js";
+import type { LlmPort } from "@yt2x/core";
 import type { AcquireProgressCallbacks } from "./acquire-progress.js";
 import { downloadVideoClip, type VideoClipManifest, type VideoClipOptions } from "./video-clip.js";
+import { runSubtitlePipeline, type VideoSubtitleOptions } from "./video-subtitles.js";
 
 export type PrepareYoutubeVideoOptions = {
   url: string;
@@ -25,12 +27,17 @@ export type PrepareYoutubeVideoOptions = {
   cookiesFromBrowser?: string;
   proxy?: string;
   videoClip?: VideoClipOptions;
+  videoSubtitles?: VideoSubtitleOptions;
+  /** When set, burned subtitle video is written here instead of videoDir. */
+  burnedVideoOutDir?: string;
   skipPreflight?: boolean;
   runner: ProcessRunner;
   timeoutMs: number;
   signal?: AbortSignal;
   verbose?: boolean;
   progress?: AcquireProgressCallbacks;
+  llm?: LlmPort;
+  llmModel?: string;
 };
 
 export type PrepareYoutubeVideoResult = {
@@ -187,7 +194,8 @@ export const prepareYoutubeVideo = async (
     result.warnings.push("video clip download skipped because metadata is unavailable");
   }
 
-  if (opts.videoClip?.videoOnly === true) {
+  const subtitleMode = opts.videoSubtitles?.mode ?? "off";
+  if (opts.videoClip?.videoOnly === true && subtitleMode === "off") {
     const required = ["metadata.json", "video/clip-manifest.json"] as const;
     const missing: string[] = [];
     for (const name of required) {
@@ -254,6 +262,31 @@ export const prepareYoutubeVideo = async (
     result.warnings.push(`subtitle download failed: ${message}`);
   }
 
+  if (subtitleMode !== "off" && opts.videoSubtitles !== undefined) {
+    try {
+      await timedStep(opts, "subtitle-zh", timingsMs, async () => {
+        const { manifest, warnings } = await runSubtitlePipeline({
+          videoDir,
+          subtitle: opts.videoSubtitles!,
+          ...(opts.llm !== undefined ? { llm: opts.llm } : {}),
+          ...(opts.llmModel !== undefined ? { llmModel: opts.llmModel } : {}),
+          runner: opts.runner,
+          ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+          ...(opts.burnedVideoOutDir !== undefined ? { burnedVideoOutDir: opts.burnedVideoOutDir } : {}),
+        });
+        result.warnings.push(...warnings);
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      result.warnings.push(`subtitle-zh failed: ${message}`);
+      if (subtitleMode === "burned") {
+        throw err;
+      }
+    }
+  }
+
+  const videoOnly = opts.videoClip?.videoOnly === true;
+  if (!videoOnly) {
   const subtitle = await chooseSubtitleFile(videoDir, videoLanguage);
   if (subtitle !== null) {
     result.subtitle = subtitle;
@@ -268,7 +301,9 @@ export const prepareYoutubeVideo = async (
   } else {
     result.warnings.push("no subtitle file found");
   }
+  }
 
+  if (!videoOnly) {
   if (opts.keyframes > 0) {
     const cuesPath = path.join(videoDir, "timestamped-cues.md");
     let cuesFile: string | undefined;
@@ -307,8 +342,11 @@ export const prepareYoutubeVideo = async (
       result.youtube_cover = cover;
     }
   });
+  }
 
-  const required = ["metadata.json", "chunks.md", "timestamped-cues.md"] as const;
+  const required: string[] = videoOnly
+    ? ["metadata.json", "video/clip-manifest.json"]
+    : ["metadata.json", "chunks.md", "timestamped-cues.md"];
   const missing: string[] = [];
   for (const name of required) {
     try {

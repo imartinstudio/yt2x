@@ -35,21 +35,24 @@ describe("THREAD_X_SYSTEM_PROMPT", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要展开具体步骤、配置项或教程细节/);
   });
 
-  it("requires bold colon labels in tweets", () => {
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/\*\*xxxx：\*\*/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/\*\*关键判断：\*\*正文/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/使用 `① ② ③`/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要使用 `1\/`、`2\/`/);
+  it("requires plain-text post formatting shared with short posts", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/Post 文本格式规则必须和短帖保持一致/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要使用 Markdown 加粗、行内代码、代码块、有序列表、无序列表/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/冒号后必须换行/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要加粗/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/序号后必须换行/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/emoji 数字/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要写成 `1\. 内容`/);
   });
 
   it("forbids markdown tables in generated tweets", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/禁止在 tweets 中使用 Markdown 表格/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/编号列表、要点列表或「字段：值」短行/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/冒号后换行、序号后换行规则/);
   });
 
-  it("preserves useful markdown except tables inside tweet text", () => {
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/tweets 字段内部可以包含除表格外的 Markdown/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/加粗、行内代码、代码块、有序列表、无序列表、链接、引用/);
+  it("forbids markdown formatting inside tweet text", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/tweets 字段内部也不要包含 Markdown 格式/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/关键判断：\\n正文/);
   });
 
   it("requires strict JSON for thread and hooks", () => {

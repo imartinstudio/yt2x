@@ -27,6 +27,7 @@ describe("parseCommanderPipelineFlags", () => {
     expect(args.stages.article).toBe("review");
     expect(args.stages.publish).toBe("review");
     expect(args.acquire.keyframes).toBe(0);
+    expect(args.acquire.downloadVideo).toBe(true);
     expect(args.publish.format).toBe("article");
     expect(args.publish.maxChars).toBe(500);
     expect(args.publish.maxTweets).toBe(8);
@@ -61,6 +62,30 @@ describe("parseCommanderPipelineFlags", () => {
     expect(args.acquire.videoStart).toBe("00:01:00");
     expect(args.acquire.videoEnd).toBe("00:01:30");
     expect(args.acquire.videoDuration).toBe(45);
+  });
+
+  it("maps subtitle options", () => {
+    const args = parseCommanderPipelineFlags({
+      urls: ["https://example.com/video"],
+      subtitleZh: "both",
+      subtitleSourceLang: "en",
+      subtitleTargetLang: "zh-CN",
+      subtitleSource: "file",
+      subtitleFile: "/tmp/source.vtt",
+    });
+    expect(args.acquire.subtitleZh).toBe("both");
+    expect(args.acquire.subtitleSourceLang).toBe("en");
+    expect(args.acquire.subtitleTargetLang).toBe("zh-CN");
+    expect(args.acquire.subtitleSource).toBe("file");
+    expect(args.acquire.subtitleFile).toBe("/tmp/source.vtt");
+  });
+
+  it("supports opting out of the default video download", () => {
+    const args = parseCommanderPipelineFlags({
+      urls: ["https://example.com/video"],
+      downloadVideo: false,
+    });
+    expect(args.acquire.downloadVideo).toBe(false);
   });
 
   it("rejects video-only on pipeline args", () => {

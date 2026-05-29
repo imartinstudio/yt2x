@@ -15,6 +15,12 @@ describe("videoIdFromUrl", () => {
   it("normalizes watch URLs", () => {
     expect(videoIdFromUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ")).toBe("dQw4w9WgXcQ");
   });
+
+  it("rejects watch URLs with non-canonical video id length instead of truncating", () => {
+    expect(() => videoIdFromUrl("https://www.youtube.com/watch?v=QiwgCc7LfXB0Mm1D")).toThrow(
+      /expected 11 characters, got 16/,
+    );
+  });
 });
 
 describe("normalizeYoutubeUrl", () => {

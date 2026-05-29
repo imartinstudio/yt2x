@@ -24,6 +24,7 @@ describe("projectSingleStage", () => {
     expect(args.stages.notes).toBe("skip");
     expect(args.stages.article).toBe("skip");
     expect(args.stages.publish).toBe("skip");
+    expect(args.acquire.downloadVideo).toBe(true);
   });
 
   it("honors --mode for the target stage", () => {
@@ -86,5 +87,27 @@ describe("projectSingleStage", () => {
     expect(args.acquire.videoOnly).toBe(true);
     expect(args.acquire.videoStart).toBe("00:01:00");
     expect(args.acquire.videoEnd).toBe("00:01:30");
+  });
+
+  it("supports opting out of the default video download", () => {
+    const args = projectSingleStage("acquire", {
+      urls: ["https://example.com/video"],
+      downloadVideo: false,
+    });
+    expect(args.acquire.downloadVideo).toBe(false);
+  });
+
+  it("maps subtitle options for acquire commands", () => {
+    const args = projectSingleStage("acquire", {
+      urls: ["https://example.com/video"],
+      subtitleZh: "srt",
+      subtitleSourceLang: "en",
+      subtitleTargetLang: "zh-CN",
+      subtitleSource: "youtube",
+    });
+    expect(args.acquire.subtitleZh).toBe("srt");
+    expect(args.acquire.subtitleSourceLang).toBe("en");
+    expect(args.acquire.subtitleTargetLang).toBe("zh-CN");
+    expect(args.acquire.subtitleSource).toBe("youtube");
   });
 });

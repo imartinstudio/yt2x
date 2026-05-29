@@ -1,4 +1,5 @@
 import type { NativeAcquireOptions, ProcessRunner } from "@yt2x/adapters-node";
+import type { LlmPort } from "@yt2x/core";
 import type { PipelineArgs } from "../args/pipeline.js";
 
 /**
@@ -27,6 +28,11 @@ export const nativeAcquireOptionsFromPipelineArgs = (
     videoDuration: args.acquire.videoDuration,
     ...(args.acquire.videoStart !== undefined ? { videoStart: args.acquire.videoStart } : {}),
     ...(args.acquire.videoEnd !== undefined ? { videoEnd: args.acquire.videoEnd } : {}),
+    subtitleZh: args.acquire.subtitleZh,
+    subtitleSourceLang: args.acquire.subtitleSourceLang,
+    subtitleTargetLang: args.acquire.subtitleTargetLang,
+    subtitleSource: args.acquire.subtitleSource,
+    ...(args.acquire.subtitleFile !== undefined ? { subtitleFile: args.acquire.subtitleFile } : {}),
     ...(args.acquire.subLangs !== undefined ? { subLangs: args.acquire.subLangs } : {}),
     ...(args.acquire.cookiesFromBrowser !== undefined
       ? { cookiesFromBrowser: args.acquire.cookiesFromBrowser }

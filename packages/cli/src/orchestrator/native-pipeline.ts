@@ -24,6 +24,7 @@ import {
   createPipelineProgress,
   estimatePipelineVideoCount,
 } from "../progress/pipeline-progress.js";
+import { resolveNativeLlm } from "./native-stage-common.js";
 
 export type NativePipelineOptions = {
   args: PipelineArgs;
@@ -286,11 +287,34 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         outDir: outRoot,
         ...(runner !== undefined ? { runner } : {}),
       });
+
+      const needsTranslation =
+        args.acquire.subtitleZh === "srt" ||
+        args.acquire.subtitleZh === "burned" ||
+        args.acquire.subtitleZh === "both";
+      let llmResult: ReturnType<typeof resolveNativeLlm> | undefined;
+      if (needsTranslation) {
+        llmResult = resolveNativeLlm({
+          llmProvider: args.llm.provider,
+          ...(args.llm.model !== undefined ? { llmModel: args.llm.model } : {}),
+          ...(args.llm.baseUrl !== undefined ? { llmBaseUrl: args.llm.baseUrl } : {}),
+        });
+        if (!llmResult.ok) {
+          logger.error({ reason: llmResult.reason }, "LLM config missing for subtitle translation");
+          finalExitCode = llmResult.exitCode;
+          return finalExitCode;
+        }
+      }
+
       const acquireStartedAt = new Date(Date.now() - 1000).toISOString();
       const acquireCode = await executeNativeAcquire({
         ...base,
         progress: acquireSubStepProgressFromHandle(progress, "acquire"),
+        articleOutDir: articleOutRoot,
         ...(args.stages.acquire === "review" ? { reviewPrompt: createAcquireReviewPrompt() } : {}),
+        ...(llmResult?.ok === true
+          ? { llm: llmResult.adapter, llmModel: llmResult.model }
+          : {}),
       });
       if (acquireCode !== 0) {
         await logAcquireFailuresUnderOutRoot(outRoot, { updatedAfterIso: acquireStartedAt });

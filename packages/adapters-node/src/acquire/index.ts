@@ -19,3 +19,24 @@ export {
   type ResolveAcquireQueueInput,
 } from "./batch-queue.js";
 export { resolveVideoSources, extractVideoId, type VideoSourceRow } from "./resolve-sources.js";
+export { sanitizeVideoId } from "./video-id-from-url.js";
+export {
+  runSubtitlePipeline,
+  prepareSourceSubtitle,
+  type RunSubtitlePipelineOptions,
+  type RunSubtitlePipelineResult,
+  type VideoSubtitleOptions,
+  type SubtitleManifest,
+  type SubtitleSourceMode,
+  type SubtitleSourceMethod,
+  type TranscriptionRunner,
+} from "./video-subtitles.js";
+export { translateSrt, type SrtTranslatorOptions } from "./srt-translator.js";
+export {
+  burnSubtitles,
+  validateSrtIntegrity,
+  verifyBurnedSubtitles,
+  type BurnSubtitlesOptions,
+  type SrtIntegrityIssue,
+  type VerificationResult,
+} from "./burn-subtitles.js";

@@ -47,7 +47,7 @@ describe("generateXThreadContent", () => {
       expect(req.messages[0]!.content).toMatch(/压缩表达或与相邻观点合并/);
       expect(req.messages[0]!.content).toMatch(/core_thesis/);
       expect(req.messages[0]!.content).toMatch(/内容本身提炼出的短标题/);
-      expect(req.messages[0]!.content).toMatch(/除表格外的 Markdown/);
+      expect(req.messages[0]!.content).toMatch(/tweets 字段内部也不要包含 Markdown 格式/);
       expect(req.messages[1]!.content).toMatch(/Structured notes/);
       expect(req.temperature).toBeCloseTo(0.55);
       return { content: threadJson, model: "m", finishReason: "stop" };

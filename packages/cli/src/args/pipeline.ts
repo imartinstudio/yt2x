@@ -10,6 +10,8 @@ import {
 import { LlmConfigSchema } from "./llm.js";
 
 export const SearchSortSchema = z.enum(["views"]);
+export const SubtitleZhModeSchema = z.enum(["off", "srt", "burned", "both"]);
+export const SubtitleSourceSchema = z.enum(["auto", "youtube", "transcribe", "file"]);
 
 export const VideoSourcesFieldsSchema = z
   .object({
@@ -51,24 +53,36 @@ export const AcquireOptionsSchema = z.object({
   maxWords: z.coerce.number().int().min(100).default(900),
   cookiesFromBrowser: z.string().default("chrome"),
   proxy: z.string().optional(),
-  downloadVideo: z.boolean().default(false),
+  downloadVideo: z.boolean().default(true),
   videoOnly: z.boolean().default(false),
   videoStart: z.string().optional(),
   videoEnd: z.string().optional(),
   videoDuration: z.coerce.number().int().min(1).max(600).default(30),
+  subtitleZh: SubtitleZhModeSchema.default("off"),
+  subtitleSourceLang: z.string().min(1).default("en"),
+  subtitleTargetLang: z.string().min(1).default("zh-CN"),
+  subtitleSource: SubtitleSourceSchema.default("auto"),
+  subtitleFile: z.string().min(1).optional(),
 }).superRefine((data, ctx) => {
-  if ((data.videoStart !== undefined || data.videoEnd !== undefined) && !data.downloadVideo) {
+  if (data.videoOnly && data.downloadVideo === false) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "--video-start / --video-end 需要开启 --download-video",
+      message: "--video-only 不能与 --no-download-video 同时使用",
       path: ["downloadVideo"],
     });
   }
-  if (data.videoOnly && !data.downloadVideo) {
+  if (data.subtitleSource === "file" && data.subtitleFile === undefined) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "--video-only 需要开启 --download-video",
-      path: ["downloadVideo"],
+      message: "--subtitle-source file 需要同时提供 --subtitle-file",
+      path: ["subtitleFile"],
+    });
+  }
+  if (data.subtitleFile !== undefined && data.subtitleSource !== "file") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "--subtitle-file 需要配合 --subtitle-source file 使用",
+      path: ["subtitleSource"],
     });
   }
 });

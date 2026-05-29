@@ -50,7 +50,7 @@ yt2x 处于 v0.1 开源前打磨期：
 
 ## v2.0 方向
 
-- 可选视频片段下载：`--download-video` 默认下载播放热度最高区域附近 30 秒。
+- 默认完整视频下载：acquire / pipeline 默认下载 720p 上限 MP4，可用 `--no-download-video` 跳过；手动时间段仍输出片段。
 - 单独视频下载模式：`yt2x acquire --video-only` 只下载视频片段，不生成字幕和转写。
 - 手动时间段下载：`--video-start` / `--video-end` 指定片段范围。
 - 详细任务拆分见 [VIDEO-DOWNLOAD-V2-TASK.md](./VIDEO-DOWNLOAD-V2-TASK.md)。

@@ -2,6 +2,8 @@
 
 版本归属：v2.0
 
+> 当前实现已在 v2.0 设计上调整：acquire / pipeline 默认下载完整 MP4 视频（720p 上限），写入 `video/full.mp4` 并更新 `video/clip-manifest.json`；`--no-download-video` 可跳过默认下载。只有显式提供 `--video-start` / `--video-end` / `--video-duration` 的手动范围时才下载 `video/clip.mp4` 片段。本文件保留原 v2.0 任务设计记录，现行数据契约以 `docs/DATA-CONTRACTS.md` 为准。
+
 ## 背景
 
 yt2x 当前采集阶段已经能通过 `yt-dlp` / `ffmpeg` 获取视频元数据、字幕、转写分块、时间轴 cues、可选关键帧截图和官方封面。现有链路的默认目标是“把视频内容采集成可生成文档的文本素材”，不会保存视频文件本身。

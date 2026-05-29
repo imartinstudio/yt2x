@@ -147,7 +147,7 @@ describe("writeNativeArticleBundle", () => {
     expect(await readFile(w.coverPath!, "hex")).toBe("ffd8ff");
   });
 
-  it("writes cover, video clip, hashtags body, and source footer into article layout", async () => {
+  it("writes cover and hashtags body into article layout", async () => {
     const dir = await seedNotesVideo("v1", {
       shot: Buffer.from([0x52, 0x49, 0x46, 0x46]),
       clip: Buffer.from("fake mp4"),
@@ -170,20 +170,20 @@ describe("writeNativeArticleBundle", () => {
     expect(w.videoPath).toBe(path.join(w.articleDir, "video", "clip.mp4"));
     expect(await readFile(w.videoPath!, "utf8")).toBe("fake mp4");
     expect(await readFile(w.articlePath, "utf8")).toBe(
-      "# **标题**\n\n![封面](images/cover.webp)\n\n导语。\n\n<video controls src=\"video/clip.mp4\"></video>\n\n## **第一节**\n\n正文。\n\n#话题一 #话题二 #TopicThree\n\n👇完整视频：\n<YOUTUBE_URL>",
+      "# **标题**\n\n![封面](images/cover.webp)\n\n导语。\n\n## **第一节**\n\n正文。\n\n#话题一 #话题二 #TopicThree",
     );
   });
 });
 
 describe("decorateNativeArticleMarkdown", () => {
-  it("keeps H1 first and inserts video before the first H2", () => {
+  it("keeps H1 first and inserts cover after it", () => {
     expect(
       decorateNativeArticleMarkdown("# **标题**\n\n导语。\n\n## **正文**\n\n内容。", {
         coverPath: "images/cover.jpg",
         videoPath: "video/clip.mp4",
         sourceVideoUrl: "<YOUTUBE_URL>",
       }),
-    ).toMatch(/^# \*\*标题\*\*\n\n!\[封面\]\(images\/cover.jpg\)[\s\S]*<video controls src="video\/clip.mp4"><\/video>\n\n## \*\*正文\*\*[\s\S]*👇完整视频：\n<YOUTUBE_URL>$/);
+    ).toMatch(/^# \*\*标题\*\*\n\n!\[封面\]\(images\/cover.jpg\)[\s\S]*## \*\*正文\*\*[\s\S]*内容。$/);
   });
 });
 

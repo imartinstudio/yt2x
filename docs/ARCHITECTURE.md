@@ -45,7 +45,7 @@ packages/cli               # Commander CLI，装配 adapters 并暴露命令
 
 **无根级 `pipeline-state.json`**：`yt2x pipeline` 与 native acquire 通过 **`listBatchVideosFromOutRoot`** / **`resolveAcquireVideoQueue`**（`batch-queue.ts`）发现视频子目录（含 **`metadata.json`** 或 **`process-status.json`** 即入队，字典序）。步骤状态仅各目录 **`process-status.json`**。
 
-视频片段下载是 acquire 的附加产物：`--download-video` 写入 `video/clip.mp4` 和 `video/clip-manifest.json`，但不替代字幕转写。`pipeline --download-video` 后续仍以 `chunks.md` / `timestamped-cues.md` 驱动 notes 和 article；`yt2x acquire --video-only` 是单阶段特殊模式，只验证 metadata 与视频片段产物。
+视频下载是 acquire 的附加产物：默认写入完整 MP4 `video/full.mp4`（720p 上限）和 `video/clip-manifest.json`，可用 `--no-download-video` 跳过；手动时间段写入 `video/clip.mp4`。视频下载不替代字幕转写，pipeline 后续仍以 `chunks.md` / `timestamped-cues.md` 驱动 notes 和 article；`yt2x acquire --video-only` 是单阶段特殊模式，只验证 metadata 与视频产物。
 
 ## 测试与质量闸
 

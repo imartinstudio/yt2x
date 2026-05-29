@@ -109,6 +109,7 @@ export type WriteNativeArticleResult = {
   runPath: string;
   coverPath: string | null;
   videoPath: string | null;
+  subtitlePath: string | null;
 };
 
 /**
@@ -147,9 +148,11 @@ export const writeNativeArticleBundle = async (
   await mkdir(path.join(articleDir, "images"), { recursive: true });
   let coverPath: string | null = null;
   let videoPath: string | null = null;
+  let subtitlePath: string | null = null;
   if (options.notesVideoDir !== undefined) {
     coverPath = await copyBestCoverFromNotesDir(options.notesVideoDir, articleDir);
     videoPath = await copyVideoClipFromNotesDir(options.notesVideoDir, articleDir);
+    subtitlePath = await copySubtitleAssetsFromNotesDir(options.notesVideoDir, articleDir);
   }
 
   const finalArticleMd = decorateNativeArticleMarkdown(articleMd, {
@@ -166,6 +169,7 @@ export const writeNativeArticleBundle = async (
     runPath,
     coverPath,
     videoPath,
+    subtitlePath,
   };
 };
 
@@ -219,6 +223,25 @@ export const copyVideoClipFromNotesDir = async (
   return dest;
 };
 
+/** 复制中文字幕资产（full.zh.srt）到 article video 目录，供 X 上传使用。 */
+export const copySubtitleAssetsFromNotesDir = async (
+  notesVideoDir: string,
+  articleDir: string,
+): Promise<string | null> => {
+  const srcVideoDir = path.join(notesVideoDir, "video");
+  const zhSrt = path.join(srcVideoDir, "full.zh.srt");
+  try {
+    await stat(zhSrt);
+  } catch {
+    return null;
+  }
+  const destDir = path.join(articleDir, "video");
+  await mkdir(destDir, { recursive: true });
+  const dest = path.join(destDir, "full.zh.srt");
+  await copyFile(zhSrt, dest);
+  return dest;
+};
+
 export type DecorateNativeArticleOptions = {
   coverPath?: string;
   videoPath?: string;
@@ -237,14 +260,7 @@ export const decorateNativeArticleMarkdown = (
   if (options.coverPath !== undefined) {
     insertArticleCover(lines, options.coverPath);
   }
-  if (options.videoPath !== undefined) {
-    insertArticleVideo(lines, options.videoPath);
-  }
-
   const blocks = [lines.join("\n").trim()];
-  if (options.sourceVideoUrl !== undefined && options.sourceVideoUrl.trim() !== "") {
-    blocks.push(`👇完整视频：\n${options.sourceVideoUrl.trim()}`);
-  }
   return blocks.join("\n\n");
 };
 
@@ -256,13 +272,6 @@ const insertArticleCover = (lines: string[], coverPath: string): void => {
   lines.splice(insertAt, 0, "", cover);
 };
 
-const insertArticleVideo = (lines: string[], videoPath: string): void => {
-  const video = `<video controls src="${videoPath}"></video>`;
-  if (lines.some((line) => line.trim() === video)) return;
-  const firstH2 = lines.findIndex((line) => line.startsWith("## "));
-  const insertAt = firstH2 === -1 ? lines.length : firstH2;
-  lines.splice(insertAt, 0, video, "");
-};
 
 /**
  * 将长文中的 screenshots/ 图片引用替换为 images/ 并复制实际文件。

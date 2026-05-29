@@ -32,7 +32,7 @@ export const projectSingleStage = (target: SingleStageTarget, flags: SingleStage
     ? LlmProviderSchema.parse(flags.llmProvider)
     : defaultCliLlmProvider();
   const downloadVideo =
-    flags.downloadVideo === true ||
+    flags.downloadVideo !== false ||
     flags.videoOnly === true ||
     flags.videoStart !== undefined ||
     flags.videoEnd !== undefined;
@@ -61,6 +61,11 @@ export const projectSingleStage = (target: SingleStageTarget, flags: SingleStage
       videoStart: flags.videoStart,
       videoEnd: flags.videoEnd,
       videoDuration: flags.videoDuration ?? "30",
+      subtitleZh: flags.subtitleZh,
+      subtitleSourceLang: flags.subtitleSourceLang,
+      subtitleTargetLang: flags.subtitleTargetLang,
+      subtitleSource: flags.subtitleSource,
+      subtitleFile: flags.subtitleFile,
     },
     article: {
       platform: flags.platform ?? "x",

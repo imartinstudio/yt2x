@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
@@ -170,6 +170,49 @@ const parseThreadSource = (raw: string | undefined): ThreadSource => {
   throw new Error(`Invalid --thread-source: "${raw}" (expected generated, article, or auto)`);
 };
 
+type VideoAssetsInfo = {
+  videoFile: string;
+  subtitleFile?: string;
+  burnedVideoFile?: string;
+  recommendedUploadMode: "video_with_srt" | "burned_video" | "video_only";
+};
+
+const resolveVideoAssets = async (articleDir: string): Promise<VideoAssetsInfo | null> => {
+  const videoDir = path.join(articleDir, "video");
+  const videoFile = path.join(videoDir, "clip.mp4");
+  try {
+    await access(videoFile);
+  } catch {
+    return null;
+  }
+
+  const subtitleFile = path.join(videoDir, "full.zh.srt");
+  const burnedFile = path.join(videoDir, "full.zh-burned.mp4");
+  let hasSubtitle = false;
+  let hasBurned = false;
+  try {
+    await access(subtitleFile);
+    hasSubtitle = true;
+  } catch { /* */ }
+  try {
+    await access(burnedFile);
+    hasBurned = true;
+  } catch { /* */ }
+
+  const recommendedUploadMode: VideoAssetsInfo["recommendedUploadMode"] = hasSubtitle
+    ? "video_with_srt"
+    : hasBurned
+      ? "burned_video"
+      : "video_only";
+
+  return {
+    videoFile: "video/clip.mp4",
+    ...(hasSubtitle ? { subtitleFile: "video/full.zh.srt" } : {}),
+    ...(hasBurned ? { burnedVideoFile: "video/full.zh-burned.mp4" } : {}),
+    recommendedUploadMode,
+  };
+};
+
 const buildPublishTexts = (
   articleContent: string,
   opts: { threadMode: boolean; maxChars: number; maxTweets: number; numbering: boolean },
@@ -332,7 +375,6 @@ const previewVisualPlans = (
   }
 };
 
-const buildSourceReplyText = (videoUrl: string): string => `👇完整视频：\n${videoUrl}`;
 
 const previewPublishTexts = (
   texts: string[],
@@ -548,10 +590,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
 
   const youtubeVideoDir = path.join(path.resolve(flags.outDir ?? DEFAULT_OUT_DIR), flags.videoId);
   const pageUrl = await readYoutubePageUrl(youtubeVideoDir, flags.videoId);
-  const sourceReplyText =
-    publishMode === "thread" || publishMode === "short" || publishMode === "thread-short"
-      ? buildSourceReplyText(pageUrl)
-      : null;
+  const sourceReplyText = null;
 
   if (isDryRun) {
     // 加载视觉计划用于预览
@@ -588,6 +627,9 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       );
     }
     const previewFile = path.join(articleDirForStatus, "publish-preview.json");
+
+    const videoAssets = await resolveVideoAssets(articleDirForStatus);
+
     const payload = {
       profile,
       format: publishMode,
@@ -601,6 +643,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       ...(publishMode === "thread-short" ? { text: texts[0] ?? "", replies: texts.slice(1), tweets: texts } : {}),
       ...(publishTarget === "x-short" || publishTarget === "article" ? { text: texts[0] ?? "" } : {}),
       ...(sourceReplyText !== null ? { sourceReply: sourceReplyText } : {}),
+      ...(videoAssets !== null ? { videoAssets } : {}),
       parts: texts.map((text, index) => ({
         index,
         text,

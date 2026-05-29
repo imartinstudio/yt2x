@@ -17,6 +17,11 @@ export type SingleStageFlags = {
   videoStart?: string;
   videoEnd?: string;
   videoDuration?: string;
+  subtitleZh?: string;
+  subtitleSourceLang?: string;
+  subtitleTargetLang?: string;
+  subtitleSource?: string;
+  subtitleFile?: string;
   platform?: string;
   maxChars?: string;
   rewriteMode?: string;

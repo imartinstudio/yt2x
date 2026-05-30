@@ -264,7 +264,7 @@ export const prepareYoutubeVideo = async (
   if (subtitleMode !== "off" && opts.videoSubtitles !== undefined) {
     try {
       await timedStep(opts, "subtitle-zh", timingsMs, async () => {
-        const { manifest, warnings } = await runSubtitlePipeline({
+        const { warnings } = await runSubtitlePipeline({
           videoDir,
           subtitle: opts.videoSubtitles!,
           ...(opts.llm !== undefined ? { llm: opts.llm } : {}),

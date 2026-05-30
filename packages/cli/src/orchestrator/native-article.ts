@@ -62,8 +62,6 @@ const addUsage = (
   totals.completionTokens += usage.completionTokens;
 };
 
-const formatTargets = (targets: readonly ArticleOutputTarget[]): string => targets.join(",");
-
 /**
  * 把 deterministic quality issues 输出到 logger（warning 级别）。
  *
@@ -176,10 +174,8 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
 
   for (const videoDir of targets) {
     const stageT0 = performance.now();
-    let progressKey = `article.${path.basename(videoDir)}`;
     try {
       const artifacts = await readStructuredNotesArtifacts(videoDir);
-      progressKey = `article.${artifacts.videoId}`;
       progress?.setActive(`article · ${artifacts.videoId}`);
       const url = await readYoutubePageUrl(videoDir, artifacts.videoId);
       const identity = { videoId: artifacts.videoId, url };

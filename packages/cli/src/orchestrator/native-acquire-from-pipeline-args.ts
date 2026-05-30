@@ -1,5 +1,4 @@
 import type { NativeAcquireOptions, ProcessRunner } from "@yt2x/adapters-node";
-import type { LlmPort } from "@yt2x/core";
 import type { PipelineArgs } from "../args/pipeline.js";
 
 /**

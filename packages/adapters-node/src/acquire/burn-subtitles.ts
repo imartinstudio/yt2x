@@ -2,7 +2,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ProcessError, isProcessError, type ProcessRunner } from "../process/index.js";
+import { isProcessError, type ProcessRunner } from "../process/index.js";
 
 export type BurnSubtitlesOptions = {
   videoPath: string;

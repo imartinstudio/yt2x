@@ -44,6 +44,7 @@ const repairTextControlChars = (s: string): string => {
   // 匹配 JSON 字符串值内的控制字符并转义
   // 策略：找到所有 JSON string literal（"..."），对其内部的控制字符进行转义
   return s.replace(/"((?:[^"\\]|\\.)*)"/g, (_match, content: string) => {
+    // eslint-disable-next-line no-control-regex
     const escaped = content.replace(/[\x00-\x1F]/g, (ch) => {
       switch (ch) {
         case "\n": return "\\n";

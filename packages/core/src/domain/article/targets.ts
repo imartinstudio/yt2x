@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const ARTICLE_OUTPUT_TARGETS = ["article", "x-thread", "x-short"] as const;
+export const ARTICLE_OUTPUT_TARGETS = ["article", "x-thread", "x-short", "x-video-short"] as const;
 export const ARTICLE_OUTPUT_TARGET_ALL = "all";
 export const LEGACY_ARTICLE_OUTPUT_TARGET_LONGFORM = "x-longform";
 

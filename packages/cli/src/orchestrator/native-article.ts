@@ -8,6 +8,7 @@ import {
   generateXArticleContent,
   generateXShortContent,
   generateXThreadContent,
+  generateXVideoShortContent,
   patchProcessStatus,
   patchStepRunning,
   readStructuredNotesArtifacts,
@@ -16,6 +17,7 @@ import {
   writeNativeArticleBundle,
   writeNativeShortBundle,
   writeNativeThreadBundle,
+  writeNativeVideoShortBundle,
   writeVisualSuggestions,
 } from "@yt2x/adapters-node";
 import {
@@ -110,7 +112,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
     printCliErrorBlock({
       command: "article",
       reason: err instanceof Error ? err.message : String(err),
-      hints: ["Use --targets article,x-thread,x-short or --targets all."],
+      hints: ["Use --targets article,x-thread,x-short,x-video-short or --targets all."],
       retryCommand: "pnpm yt2x article --video-id <videoId> --targets article",
     });
     return NATIVE_EXIT.CONFIG_MISSING;
@@ -343,63 +345,80 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
         logQualityIssues("x-short", artifacts.videoId, written.shortPath, shortIssues);
       }
 
+      if (outputTargets.includes("x-video-short")) {
+        const result = await generateXVideoShortContent({
+          llm: llm.adapter,
+          model: llm.model,
+          artifacts,
+          availableVisuals: null,
+        });
+        const written = await writeNativeVideoShortBundle(
+          articleOutDir,
+          artifacts.videoId,
+          result.videoShortPost,
+          { force: flags.force === true },
+        );
+        writtenArtifacts.push("x-video-short.md");
+        articleDirForStatus = written.articleDir;
+        resultFile ??= path.basename(written.shortPath);
+        addUsage(tokenTotals, result.usage);
+        logger.info(
+          {
+            videoId: result.videoId,
+            articleDir: written.articleDir,
+            model: result.model,
+            finishReason: result.finishReason,
+            durationMs: result.durationMs,
+            usage: result.usage,
+          },
+          "article generated (native x video short)",
+        );
+      }
+
       const finishedAt = new Date().toISOString();
       const durationMs = Date.now() - t0;
       await patchProcessStatus(videoDir, identity, {
         step: "article",
-        stepInfo: {
-          status: "done",
-          finishedAt,
-          durationMs,
+        status: "done",
+        finishedAt,
+        durationMs,
+        outputTargets: formatTargets(outputTargets),
+        resultFile,
+      }).catch(() => {});
+
+      exitCode = 0;
+      logger.info(
+        {
+          videoId: artifacts.videoId,
+          articleDir: articleDirForStatus,
+          durationMs: Date.now() - stageT0,
           artifacts: writtenArtifacts,
-          resultFile: resultFile ?? formatTargets(outputTargets),
         },
-        articleOutDir: articleDirForStatus ?? path.join(articleOutDir, artifacts.videoId),
-      });
-      progress?.record(progressKey, Math.round(performance.now() - stageT0));
+        "article stage finished",
+      );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       errors.push({ videoDir, message });
-      printCliErrorBlock({
-        command: "article",
-        subject: path.basename(videoDir),
-        reason: message,
-        details: path.join(videoDir, "process-status.json"),
-        hints: ["Ensure notes completed successfully before generating an article."],
-        retryCommand: `pnpm yt2x article --video-id ${path.basename(videoDir)}`,
-      });
-      try {
-        await patchLlmStepFailed(videoDir, "article", err);
-      } catch {
-        // ignore
-      }
+      logger.error({ videoDir, err: message }, "article stage failed");
       if (isLlmError(err)) {
-        if (flags.errorStrategy !== "skip") {
-          progress?.clear();
-          return exitFromLlmKind(err.kind);
-        }
-      } else if (flags.errorStrategy !== "skip") {
-        progress?.clear();
-        return 1;
+        await patchLlmStepFailed(videoDir, progressKey, err).catch(() => {});
+        exitCode = exitFromLlmKind(err.kind);
+        if (flags["error-strategy"] !== "skip") break;
+      } else if (flags["error-strategy"] !== "skip") {
+        exitCode = 1;
+        break;
       }
-      progress?.record(progressKey, Math.round(performance.now() - stageT0));
+    } finally {
+      progress?.advance();
     }
   }
 
-  logger.info(
-    {
-      ok: targets.length - errors.length,
-      failed: errors.length,
-      totalPromptTokens: tokenTotals.promptTokens,
-      totalCompletionTokens: tokenTotals.completionTokens,
-    },
-    "yt2x article (native x): done",
-  );
-  exitCode = errors.length > 0 ? NATIVE_EXIT.PARTIAL_FAILURE : 0;
-  if (exitCode === 0) {
-    progress?.printSummary();
-  } else {
-    progress?.clear();
+  if (errors.length > 0 && exitCode === 0) {
+    exitCode = 1;
   }
+  if (errors.length > 0) {
+    logger.error({ count: errors.length }, "article completed with errors");
+  }
+
   return exitCode;
 };

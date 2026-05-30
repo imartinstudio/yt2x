@@ -52,9 +52,10 @@ const ThreadVisualSchema = z.object({
 const GeneratedThreadSchema = z.object({
   title: z.string().min(1),
   planning: ThreadPlanningSchema,
-  tweets: z.array(TweetSchema).min(6).max(10),
+  tweets: z.array(TweetSchema).min(6).max(12),
   hooks: z.array(ThreadHookSchema).min(3).max(8),
-  visuals: z.array(ThreadVisualSchema).max(3).optional(),
+  visuals: z.array(ThreadVisualSchema).max(4).optional(),
+  thread_style: z.string().optional(),
 });
 
 const MARKDOWN_TABLE_DIVIDER_RE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;

@@ -63,3 +63,4 @@ files/_bench-*/
 
 .cache/
 **/.process-status.lock
+.hermes/

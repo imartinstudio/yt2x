@@ -29,6 +29,7 @@ coverage/
 # ── Agent / IDE local config (user-specific, not part of repo) ───────────────
 .codex/
 .cursor/
+.hermes/
 .claude/settings.local.json
 
 # ── Env / Secrets ────────────────────────────────────────────────────────────

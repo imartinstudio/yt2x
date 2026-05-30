@@ -8,6 +8,7 @@ export * from "./notes/index.js";
 export * from "./process/index.js";
 export * from "./short/index.js";
 export * from "./thread/index.js";
+export * from "./video-short/index.js";
 export * from "./x-auth/index.js";
 export * from "./x-articles-draft/index.js";
 export * from "./x-publish/index.js";

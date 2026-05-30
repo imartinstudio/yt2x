@@ -7,6 +7,7 @@ export * from "./domain/publish/index.js";
 export * from "./domain/quality/index.js";
 export * from "./domain/short/index.js";
 export * from "./domain/thread/index.js";
+export * from "./domain/video-short/index.js";
 export * from "./domain/visuals/index.js";
 export * from "./ports/x-publish.js";
 export * from "./ports/x-articles-draft.js";

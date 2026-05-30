@@ -4,28 +4,37 @@ import path from "node:path";
 const SUBTITLE_EXTS = new Set([".vtt", ".srt"]);
 
 export const listSubtitleFiles = async (videoDir: string): Promise<string[]> => {
-  let entries: string[];
-  try {
-    entries = await readdir(videoDir);
-  } catch {
-    return [];
-  }
   const files: string[] = [];
-  for (const name of entries) {
-    const full = path.join(videoDir, name);
-    const ext = path.extname(name).toLowerCase();
-    if (!SUBTITLE_EXTS.has(ext)) {
-      continue;
-    }
+
+  const scanDir = async (dir: string): Promise<void> => {
+    let entries: string[];
     try {
-      const st = await stat(full);
-      if (st.isFile()) {
-        files.push(full);
-      }
+      entries = await readdir(dir);
     } catch {
-      // skip
+      return;
     }
-  }
+    for (const name of entries) {
+      const full = path.join(dir, name);
+      const ext = path.extname(name).toLowerCase();
+      if (!SUBTITLE_EXTS.has(ext)) {
+        continue;
+      }
+      try {
+        const st = await stat(full);
+        if (st.isFile()) {
+          files.push(full);
+        }
+      } catch {
+        // skip
+      }
+    }
+  };
+
+  // 根目录（yt-dlp 下载的原始字幕文件）
+  await scanDir(videoDir);
+  // video/ 子目录（transcribe 等本地生成的 subtitle files）
+  await scanDir(path.join(videoDir, "video"));
+
   return files.sort();
 };
 

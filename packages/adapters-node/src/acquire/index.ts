@@ -40,3 +40,4 @@ export {
   type SrtIntegrityIssue,
   type VerificationResult,
 } from "./burn-subtitles.js";
+export { detectBurnedSubtitles, type DetectBurnedSubtitlesResult } from "./detect-burned-subs.js";

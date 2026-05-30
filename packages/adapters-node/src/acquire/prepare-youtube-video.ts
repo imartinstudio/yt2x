@@ -232,11 +232,10 @@ export const prepareYoutubeVideo = async (
   const subLangBase = youtubeSubLangBase(videoLanguage);
   let manualSubLangs = (opts.subLangs ?? "").trim();
   if (manualSubLangs.length === 0) {
-    // 优先尝试中文（包括 zh-CN、zh-Hans），再回退视频语言和英文
+    // 优先尝试中文（zh-CN/zh-Hans/zh-Hant/zh-TW/zh），再回退视频语言和英文
     const langs = [...new Set([
-      "zh-CN", "zh-Hans", "zh",
-      `${subLangBase}-orig`, subLangBase,
-      "zh-Hans-orig", "zh-orig",
+      "zh-CN", "zh-Hans", "zh-Hant", "zh-TW", "zh",
+      subLangBase,
       "en"
     ])];
     manualSubLangs = langs.join(",");

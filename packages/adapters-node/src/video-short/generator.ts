@@ -13,6 +13,7 @@ export type GenerateXVideoShortInput = {
   temperature?: number;
   maxTokens?: number;
   artifacts: StructuredNotesArtifacts;
+  availableVisuals?: unknown;
   signal?: AbortSignal;
 };
 
@@ -35,13 +36,39 @@ const stripJsonFenceWrapper = (s: string): string => {
   return m !== null && m[1] !== undefined ? m[1].trim() : s;
 };
 
+/**
+ * 修复 LLM 输出的 JSON 中 text 字段内未转义的控制字符。
+ * LLM 有时会在 JSON 字符串值中直接插入真实换行，导致 JSON.parse 失败。
+ */
+const repairTextControlChars = (s: string): string => {
+  // 匹配 JSON 字符串值内的控制字符并转义
+  // 策略：找到所有 JSON string literal（"..."），对其内部的控制字符进行转义
+  return s.replace(/"((?:[^"\\]|\\.)*)"/g, (_match, content: string) => {
+    const escaped = content.replace(/[\x00-\x1F]/g, (ch) => {
+      switch (ch) {
+        case "\n": return "\\n";
+        case "\r": return "\\r";
+        case "\t": return "\\t";
+        default: return " ";
+      }
+    });
+    return `"${escaped}"`;
+  });
+};
+
 export const parseGeneratedVideoShortPostJson = (jsonText: string): GeneratedVideoShortPost => {
   let parsed: unknown;
+  const raw = stripJsonFenceWrapper(jsonText.trim());
   try {
-    parsed = JSON.parse(stripJsonFenceWrapper(jsonText.trim()));
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Video short LLM response is not valid JSON: ${message}`);
+    parsed = JSON.parse(raw);
+  } catch {
+    // 如果首次解析失败，尝试修复字符串内的控制字符后重试
+    try {
+      parsed = JSON.parse(repairTextControlChars(raw));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Video short LLM response is not valid JSON: ${message}`);
+    }
   }
 
   const result = GeneratedVideoShortPostSchema.safeParse(parsed);

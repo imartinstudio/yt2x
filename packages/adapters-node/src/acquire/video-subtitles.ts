@@ -1,4 +1,5 @@
-import { access, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { LlmPort } from "@yt2x/core";
 import type { ProcessRunner } from "../process/index.js";
@@ -41,6 +42,8 @@ export type PrepareSourceSubtitleOptions = {
   targetLang: string;
   source: SubtitleSourceMode;
   file?: string;
+  runner?: ProcessRunner;
+  signal?: AbortSignal;
 };
 
 export type PrepareSourceSubtitleResult = {
@@ -251,6 +254,10 @@ const writeManifest = async (videoDir: string, manifest: SubtitleManifest): Prom
 
 const sourceLangPattern = (sourceLang: string): RegExp => {
   const escaped = sourceLang.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  // 中文语言代码变体匹配：zh-CN / zh-Hans / zh / zh-TW / zh-Hant 等
+  if (/^zh(?:[-_](?:CN|Hans|Hant|TW|SG|HK|MO))?$/iu.test(sourceLang)) {
+    return /\.(?:zh(?:[-_](?:CN|Hans|Hant|TW|SG|HK|MO))?)(?:-orig)?\.(?:srt|vtt)$/iu;
+  }
   return new RegExp(`\\.${escaped}(?:-orig)?\\.(?:srt|vtt)$`, "iu");
 };
 
@@ -300,15 +307,66 @@ export const prepareSourceSubtitle = async (
     sourceFile = opts.file;
     method = "file";
   } else if (opts.source === "transcribe") {
-    warnings.push("local transcription source is not implemented yet");
-    method = "local_transcription";
+    if (opts.runner === undefined) {
+      throw new Error("--subtitle-source transcribe requires a process runner");
+    }
+    const videoPath = path.join(opts.videoDir, "video", "full.mp4");
+    const modelPath = process.env.WHISPER_MODEL ?? path.join(os.homedir(), ".cache", "whisper-models", "ggml-base.bin");
+    const langArg = opts.sourceLang === "auto" ? "auto" : opts.sourceLang;
+    // whisper-cli 不支持直接读 MP4 容器，先提取音频为 WAV
+    const wavPath = path.join(opts.videoDir, "video", `transcribe-audio-${Date.now()}.wav`);
+
+    try {
+      await opts.runner.run({
+        command: "ffmpeg",
+        args: ["-y", "-i", videoPath, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", wavPath],
+        timeoutMs: 120_000,
+        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      });
+
+      const tmpOutput = path.join(opts.videoDir, "video", `transcribe-tmp-${Date.now()}`);
+      await opts.runner.run({
+        command: "whisper-cli",
+        args: [
+          "-m", modelPath,
+          "-l", langArg,
+          "-osrt",
+          "-of", tmpOutput,
+          wavPath,
+        ],
+        timeoutMs: 600_000,
+        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      });
+      sourceFile = tmpOutput + ".srt";
+
+      // 清理临时 WAV
+      await rm(wavPath).catch(() => {});
+      method = "local_transcription";
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      warnings.push(`local transcription failed: ${message}`);
+    }
   } else {
-    const found = await findYoutubeSubtitle(opts.videoDir, opts.sourceLang);
-    if (found !== null) {
-      sourceFile = found.file;
-      method = found.method;
+    // 优先取目标语言字幕（如中文），没有再取源语言（如英文）
+    const langsToTry = opts.sourceLang !== opts.targetLang
+      ? [opts.targetLang, opts.sourceLang]
+      : [opts.sourceLang];
+    let actualLang = "";
+    for (const lang of langsToTry) {
+      const found = await findYoutubeSubtitle(opts.videoDir, lang);
+      if (found !== null) {
+        sourceFile = found.file;
+        method = found.method;
+        actualLang = lang;
+        break;
+      }
+    }
+    if (sourceFile === null) {
+      warnings.push(`no YouTube subtitle file found (tried: ${langsToTry.join(", ")})`);
+      // 即使没找到也更新 manifest 里的 source_language，方便排查
+      manifest.source_language = opts.targetLang;
     } else {
-      warnings.push(`no ${opts.sourceLang} YouTube subtitle file found`);
+      manifest.source_language = actualLang;
     }
   }
 
@@ -383,6 +441,8 @@ export const runSubtitlePipeline = async (
     targetLang: subtitle.targetLang,
     source: subtitle.source,
     ...(subtitle.file !== undefined ? { file: subtitle.file } : {}),
+    ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+    ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
   warnings.push(...subResult.manifest.warnings);
   let manifest = { ...subResult.manifest };
@@ -390,8 +450,8 @@ export const runSubtitlePipeline = async (
   if (subResult.sourceSubtitle === undefined) {
     if (mustHaveSubtitles) {
       throw new Error(
-        "no English subtitles available. --subtitle-zh burned requires subtitle source. " +
-          "Provide subtitles via --subtitle-source file --subtitle-file, or ensure YouTube subtitles are downloaded.",
+        "no subtitles available. --subtitle-zh burned requires subtitle source. " +
+          "Provide subtitles via --subtitle-source file --subtitle-file, or ensure YouTube subtitles are available.",
       );
     }
     return { manifest, warnings };
@@ -407,9 +467,23 @@ export const runSubtitlePipeline = async (
   }
 
   const hasLlm = opts.llm !== undefined && opts.llmModel !== undefined;
+  const sourceIsTargetLang = manifest.source_language === subtitle.targetLang ||
+    // 宽松匹配：zh-CN / zh-Hans / zh 都算中文
+    (manifest.source_language.startsWith("zh") && subtitle.targetLang.startsWith("zh"));
 
-  // Only translate if zh.srt doesn't already exist
-  if (!hasZhSrt && hasLlm) {
+  // 如果源字幕已经是目标语言，直接复制，无需翻译
+  if (!hasZhSrt && sourceIsTargetLang) {
+    await copyFile(subResult.sourceSubtitle, zhSrtPath);
+    hasZhSrt = true;
+    manifest = {
+      ...manifest,
+      target_subtitle: "video/full.zh.srt",
+      translation_method: "manual",
+    };
+  }
+
+  // Only translate if zh.srt doesn't already exist and source is NOT target language
+  if (!hasZhSrt && !sourceIsTargetLang && hasLlm) {
     try {
       const enSrt = await readFile(subResult.sourceSubtitle, "utf8");
       const zhSrt = await translateSrt(enSrt, {
@@ -455,8 +529,21 @@ export const runSubtitlePipeline = async (
           : videoSubdir;
       const burnedPath = path.join(burnedSubdir, "full.zh-burned.mp4");
 
-      await mkdir(burnedSubdir, { recursive: true });
-      await burnSubtitles({
+      // 如果已烧录的中文字幕视频文件已存在，跳过烧录
+      let burnedExists = false;
+      try {
+        await access(burnedPath);
+        burnedExists = true;
+      } catch {
+        burnedExists = false;
+      }
+
+      if (burnedExists) {
+        manifest = { ...manifest, burned_video: burnedPath };
+        warnings.push("burned video already exists, skipping burn step");
+      } else {
+        await mkdir(burnedSubdir, { recursive: true });
+        await burnSubtitles({
         videoPath,
         srtPath: zhSrtPath,
         outputPath: burnedPath,
@@ -464,6 +551,7 @@ export const runSubtitlePipeline = async (
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       });
       manifest = { ...manifest, burned_video: burnedPath };
+      }
     } else {
       warnings.push("no MP4 video file found for subtitle burning");
     }

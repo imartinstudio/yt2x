@@ -373,17 +373,20 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           },
           "article generated (native x video short)",
         );
+        progress?.record(`article.${artifacts.videoId}`, Date.now() - stageT0);
       }
 
       const finishedAt = new Date().toISOString();
       const durationMs = Date.now() - t0;
       await patchProcessStatus(videoDir, identity, {
         step: "article",
-        status: "done",
-        finishedAt,
-        durationMs,
-        outputTargets: formatTargets(outputTargets),
-        resultFile,
+        stepInfo: {
+          status: "done",
+          artifacts: writtenArtifacts,
+          finishedAt,
+          durationMs,
+          resultFile,
+        },
       }).catch(() => {});
 
       exitCode = 0;
@@ -401,15 +404,15 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       errors.push({ videoDir, message });
       logger.error({ videoDir, err: message }, "article stage failed");
       if (isLlmError(err)) {
-        await patchLlmStepFailed(videoDir, progressKey, err).catch(() => {});
+        await patchLlmStepFailed(videoDir, "article", err).catch(() => {});
         exitCode = exitFromLlmKind(err.kind);
-        if (flags["error-strategy"] !== "skip") break;
-      } else if (flags["error-strategy"] !== "skip") {
+        if (flags.errorStrategy !== "skip") break;
+      } else if (flags.errorStrategy !== "skip") {
         exitCode = 1;
         break;
       }
     } finally {
-      progress?.advance();
+      // progress handled internally
     }
   }
 

@@ -1,10 +1,13 @@
-import { access, mkdir, readFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
+  burnSubtitles,
   collectNativePipelineVideoIds,
   DEFAULT_ARTICLE_OUT_DIR,
   DEFAULT_OUT_DIR,
+  defaultProcessRunner,
+  detectBurnedSubtitles,
   executeNativeAcquire,
   extractVideoId,
   listBatchVideosFromOutRoot,
@@ -77,6 +80,68 @@ const filterMaterializedVideoIds = async (outRoot: string, ids: string[]): Promi
     }
   }
   return materialized;
+};
+
+/** 对单个视频烧录中文字幕到 MP4，输出到 articleOutRoot/<id>/video/。 */
+const burnSubtitlesForVideo = async (
+  outRoot: string,
+  articleOutRoot: string,
+  videoId: string,
+): Promise<void> => {
+  const videoDir = path.join(outRoot, videoId, "video");
+  const zhSrtPath = path.join(videoDir, "full.zh.srt");
+
+  // 必须有 full.zh.srt 才能烧录
+  try {
+    await access(zhSrtPath);
+  } catch {
+    return;
+  }
+
+  // 找到 MP4 文件
+  const names = await readdir(videoDir).catch(() => [] as string[]);
+  const mp4File = names.find((n) => /\.mp4$/i.test(n));
+  if (mp4File === undefined) return;
+
+  // 输出路径
+  const burnedSubdir = path.join(articleOutRoot, videoId, "video");
+  const burnedPath = path.join(burnedSubdir, "full.zh-burned.mp4");
+
+  // 已烧录则跳过
+  try {
+    await access(burnedPath);
+    return;
+  } catch {
+    /* 不存在，继续 */
+  }
+
+  // 检测原视频是否已有硬字幕（硬编码到画面中的字幕）
+  const detectResult = await detectBurnedSubtitles(
+    path.join(videoDir, mp4File),
+    defaultProcessRunner,
+  );
+  if (detectResult.hasBurnedSubtitles) {
+    logger.info({ videoId }, "original video already has burned subtitles, skipping");
+    return;
+  }
+
+  await mkdir(burnedSubdir, { recursive: true });
+  await burnSubtitles({
+    videoPath: path.join(videoDir, mp4File),
+    srtPath: zhSrtPath,
+    outputPath: burnedPath,
+    runner: defaultProcessRunner,
+  });
+
+  // 更新 subtitle-manifest.json
+  const manifestPath = path.join(outRoot, videoId, "video", "subtitle-manifest.json");
+  try {
+    const existing = JSON.parse(await readFile(manifestPath, "utf8"));
+    existing.burned_video = burnedPath;
+    await writeFile(manifestPath, JSON.stringify(existing, null, 2) + "\n", "utf8");
+  } catch {
+    /* manifest 可能不存在 */
+  }
 };
 
 /** 格式化秒数为 HH:MM:SS */
@@ -270,6 +335,11 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
   const stageTimingKey = (stage: string, videoId: string): string =>
     videoIds.length > 1 ? `${stage}.${videoId}` : stage;
 
+  // 如果用户要求烧录字幕，推迟到 article 阶段之后执行。
+  // acquire 阶段只需生成 full.zh.srt，不需要烧录（无论 acquire 是否 skip）。
+  const deferredBurn =
+    args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both";
+
   try {
     if (args.control.continueFlag) {
       if (videoIds.length === 0) {
@@ -282,7 +352,15 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       }
     } else if (args.stages.acquire !== "skip") {
       logger.info({ outRoot, acquire: args.stages.acquire }, "yt2x pipeline: native acquire");
-      const base = nativeAcquireOptionsFromPipelineArgs(args, {
+
+      // acquire 阶段只需生成 full.zh.srt，烧录推迟到 article 之后。
+      const acquireSubtitleMode = deferredBurn ? ("srt" as const) : args.acquire.subtitleZh;
+      const acquireArgs = {
+        ...args,
+        acquire: { ...args.acquire, subtitleZh: acquireSubtitleMode },
+      };
+
+      const base = nativeAcquireOptionsFromPipelineArgs(acquireArgs, {
         monorepoRoot,
         outDir: outRoot,
         ...(runner !== undefined ? { runner } : {}),
@@ -425,6 +503,22 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
             return finalExitCode;
           }
         }
+      }
+    }
+
+    // subtitle burn stage (deferred from acquire — after article, before publish)
+    if (deferredBurn) {
+      for (const id of videoIds) {
+        progress.setActive(`subtitle-burn · ${id}`);
+        const t0 = performance.now();
+        try {
+          await burnSubtitlesForVideo(outRoot, articleOutRoot, id);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          logger.error({ videoId: id, err: message }, "subtitle burn failed");
+          // burn 失败不影响已生成的文章
+        }
+        progress.record(stageTimingKey("subtitle-burn", id), Math.round(performance.now() - t0));
       }
     }
 

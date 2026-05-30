@@ -8,8 +8,14 @@ export type WriteNativeVideoShortResult = {
   shortPath: string;
 };
 
-export const renderXVideoShortMarkdown = (post: GeneratedVideoShortPost): string =>
-  post.text.trim() + "\n";
+export const renderXVideoShortMarkdown = (post: GeneratedVideoShortPost): string => {
+  let text = post.text.trim();
+
+  // 确保 "完整视频+中文字幕" 前面有空行，且后面没有链接
+  text = text.replace(/\n?(完整视频\+中文字幕：👇).*/g, "\n\n$1");
+
+  return text + "\n";
+};
 
 export const writeNativeVideoShortBundle = async (
   articleOutDir: string,

@@ -100,7 +100,7 @@ export const downloadSubtitlesTwoPhase = async (
   opts: YtDlpOptions & { videoLanguage: string; manualSubLangs: string },
 ): Promise<{ manualOk: boolean; autoOk: boolean }> => {
   const lang = (opts.videoLanguage || "en").trim() || "en";
-  const primaryAutoLang = `${youtubeSubLangBase(lang)}-orig`;
+  const primaryAutoLang = youtubeSubLangBase(lang);
 
   const before = await subtitleFingerprint(videoDir);
 
@@ -117,8 +117,8 @@ export const downloadSubtitlesTwoPhase = async (
 
   // 自动字幕回退策略：优先尝试中文自动字幕，再回退视频语言和英文
   const autoFallbacks = [...new Set([
-    "zh-CN-orig", "zh-Hans-orig", "zh-orig",
-    primaryAutoLang, "en-orig"
+    "zh-Hans", "zh-Hant", "zh-CN", "zh-TW", "zh",
+    primaryAutoLang, "en"
   ])];
 
   for (const subLang of autoFallbacks) {

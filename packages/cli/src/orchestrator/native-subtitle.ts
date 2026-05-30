@@ -7,7 +7,6 @@ import {
   sanitizeVideoId,
   type VideoSubtitleOptions,
 } from "@yt2x/adapters-node";
-import type { LlmPort } from "@yt2x/core";
 import { logger } from "../logger.js";
 import { resolveNativeLlm, type NativeLlmCliFlags } from "./native-stage-common.js";
 

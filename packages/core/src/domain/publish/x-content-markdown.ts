@@ -97,7 +97,7 @@ const tryFormatNumberedSubsectionBlock = (lines: string[]): string | null => {
   const bare = section.title.replace(/[：:]\s*$/u, "").trim();
   if (prefix === bare && bare.length > 8) return null;
 
-  let rest = lines.slice(1);
+  const rest = lines.slice(1);
   const groups: NumberedSubsectionGroup[] = [];
   if (section.firstGroup !== undefined) groups.push(section.firstGroup);
 

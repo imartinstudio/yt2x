@@ -15,7 +15,7 @@ describe("parseArticleOutputTargets", () => {
   });
 
   it("expands all to every concrete target", () => {
-    expect(parseArticleOutputTargets("all")).toEqual(["article", "x-thread", "x-short"]);
+    expect(parseArticleOutputTargets("all")).toEqual(["article", "x-thread", "x-short", "x-video-short"]);
   });
 
   it("maps legacy x-longform to article", () => {

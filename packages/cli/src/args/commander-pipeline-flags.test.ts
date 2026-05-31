@@ -47,7 +47,7 @@ describe("parseCommanderPipelineFlags", () => {
       urls: ["https://example.com/video"],
       targets: "all",
     });
-    expect(args.article.targets).toEqual(["article", "x-thread", "x-short"]);
+    expect(args.article.targets).toEqual(["article", "x-thread", "x-short", "x-video-short"]);
   });
 
   it("maps video download options and auto-enables download for manual ranges", () => {

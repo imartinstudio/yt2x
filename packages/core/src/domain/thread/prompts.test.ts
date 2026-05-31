@@ -7,7 +7,7 @@ describe("THREAD_X_SYSTEM_PROMPT", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/6–8/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/最多 500 字符/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/压缩表达或与相邻观点合并/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/每条 tweet 只讲一个信息点/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/每条 tweet.*只讲.*信息点/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/core_thesis/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/final_post/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/第一条 tweet 是整条串推的独立总述/);
@@ -32,7 +32,7 @@ describe("THREAD_X_SYSTEM_PROMPT", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/内容本身提炼出的短标题/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要套用固定模板标签/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/key_points 必须有 4–6 项/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要展开具体步骤、配置项或教程细节/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不可逆/);
   });
 
   it("requires plain-text post formatting shared with short posts", () => {

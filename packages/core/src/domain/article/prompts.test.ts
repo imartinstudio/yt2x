@@ -109,8 +109,9 @@ describe("buildArticleUserPrompt", () => {
   it("defines a 120-character lead and hook elements rule", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/首屏 Hook 规则/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/120 字以内/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/场景 \/ 痛点 \/ 损失 \/ 收益承诺 \/ 反差对比/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/至少 2 个元素/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/具体痛点或常见误区/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/反差\/颠覆性判断/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/至少 3 个/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/近年来/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/本视频介绍了/);
   });

@@ -55,7 +55,7 @@ describe("PipelineArgsSchema", () => {
 
   it("defaults article targets to all three formats", () => {
     const parsed = PipelineArgsSchema.parse(baseInput);
-    expect(parsed.article.targets).toEqual(["article", "x-thread", "x-short"]);
+    expect(parsed.article.targets).toEqual(["article", "x-thread", "x-short", "x-video-short"]);
     expect(parsed.acquire.downloadVideo).toBe(true);
     expect(parsed.acquire.subtitleZh).toBe("off");
     expect(parsed.acquire.subtitleSourceLang).toBe("en");

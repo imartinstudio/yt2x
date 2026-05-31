@@ -7,7 +7,12 @@ import {
 } from "../files/local-media.js";
 import { prepareArticleImport } from "../files/prepare-import.js";
 import { dismissOpenOverlays, writeArticleDraftToPage } from "../dom/x-editor-adapter.js";
-import { createNewArticleDraft, findImportButtonAnchor } from "../dom/locators.js";
+import {
+  createNewArticleDraft,
+  findImportIconButtonAnchor,
+  findImportTextButtonAnchor,
+  waitForArticleDraftReady,
+} from "../dom/locators.js";
 import {
   buildImportPreviewState,
   loadSubscriptionTier,
@@ -21,45 +26,110 @@ import {
   toUserFacingImportError,
 } from "../runtime/extension-runtime.js";
 import {
-  IMPORT_BUTTON_ID,
+  IMPORT_BUTTON_IDS,
   type ImportLoadingHandle,
   showImportLoading,
 } from "../ui/import-loading.js";
+import {
+  alignImportIconPair,
+  ensureImportTextPair,
+  importIconMarkup,
+  isImportButtonPlaced,
+  styleImportButton,
+  type ImportButtonVariant,
+} from "../ui/import-button-style.js";
 
-const BUTTON_ID = IMPORT_BUTTON_ID;
 const MOUNT_ATTR = "data-yt2x-import-mounted";
 
-const mountImportButton = (): void => {
-  const anchor = findImportButtonAnchor();
-  const existing = document.getElementById(BUTTON_ID);
+type ImportMode = "new-draft" | "current-draft";
+
+type ImportButtonConfig = {
+  id: string;
+  variant: ImportButtonVariant;
+  mode: ImportMode;
+  placement: InsertPosition;
+  label: string;
+  title: string;
+  findAnchor: () => HTMLElement | null;
+};
+
+const buttonConfigs: ImportButtonConfig[] = [
+  {
+    id: IMPORT_BUTTON_IDS.icon,
+    variant: "icon",
+    mode: "new-draft",
+    placement: "beforebegin",
+    label: "导入Markdown",
+    title: "新建 X Articles 草稿并导入 Markdown",
+    findAnchor: findImportIconButtonAnchor,
+  },
+  {
+    id: IMPORT_BUTTON_IDS.text,
+    variant: "text",
+    mode: "new-draft",
+    placement: "afterend",
+    label: "导入",
+    title: "导入 Markdown 到当前 X Articles 草稿",
+    findAnchor: findImportTextButtonAnchor,
+  },
+];
+
+const mountImportButton = (config: ImportButtonConfig): void => {
+  const anchor = config.findAnchor();
+  const existing = document.getElementById(config.id);
   if (anchor === null) {
     existing?.remove();
     return;
   }
-  if (existing !== null && existing.previousElementSibling === anchor) return;
+  if (existing !== null && isImportButtonPlaced(existing, anchor, config.placement)) return;
   existing?.remove();
 
   const button = document.createElement("button");
-  button.id = BUTTON_ID;
+  button.id = config.id;
   button.type = "button";
-  button.textContent = "导入 Markdown";
-  button.setAttribute("aria-label", "新建 X Articles 草稿并导入 Markdown");
-  button.style.cssText =
-    "margin-inline:6px;padding:4px 10px;border-radius:999px;border:1px solid #cfd9de;background:#fff;color:#0f1419;font:13px system-ui,sans-serif;cursor:pointer;vertical-align:middle";
+  button.title = config.title;
+  button.setAttribute("aria-label", config.title);
+  styleImportButton(button, anchor, config.variant);
   if (!isExtensionRuntimeAlive()) {
     button.disabled = true;
     button.title = extensionInvalidatedUserMessage;
     button.textContent = "请刷新页面后导入";
   } else {
+    if (config.variant === "icon") {
+      button.innerHTML = importIconMarkup;
+    } else {
+      button.textContent = config.label;
+    }
     button.addEventListener("click", () => {
-      void handleImportClick();
+      void handleImportClick(config.mode);
     });
   }
-  anchor.insertAdjacentElement("afterend", button);
+  if (config.variant === "text") {
+    ensureImportTextPair(anchor, button);
+  } else {
+    anchor.insertAdjacentElement(config.placement, button);
+    alignImportIconPair(anchor, button);
+  }
   document.documentElement.setAttribute(MOUNT_ATTR, "true");
 };
 
-const handleImportClick = async (): Promise<void> => {
+const mountImportButtons = (): void => {
+  for (const config of buttonConfigs) {
+    mountImportButton(config);
+  }
+};
+
+let mountTimer = 0;
+
+const scheduleMountImportButtons = (): void => {
+  if (mountTimer !== 0) return;
+  mountTimer = window.setTimeout(() => {
+    mountTimer = 0;
+    mountImportButtons();
+  }, 350);
+};
+
+const handleImportClick = async (mode: ImportMode): Promise<void> => {
   if (!isExtensionRuntimeAlive()) {
     showImportError(extensionInvalidatedUserMessage);
     return;
@@ -104,10 +174,17 @@ const handleImportClick = async (): Promise<void> => {
       break;
     }
 
-    let loading: ImportLoadingHandle | null = showImportLoading("正在新建草稿…");
+    let loading: ImportLoadingHandle | null = showImportLoading(
+      mode === "new-draft" ? "正在新建草稿…" : "正在确认当前草稿…",
+    );
     try {
-      loading.update("正在新建草稿…");
-      await createNewArticleDraft();
+      if (mode === "new-draft") {
+        loading.update("正在新建草稿…");
+        await createNewArticleDraft();
+      } else {
+        loading.update("正在确认当前草稿…");
+        await waitForArticleDraftReady();
+      }
 
       loading.update("正在准备导入数据（表格/Mermaid 等）…");
       const confirmedPrepared = await prepareArticleImport({
@@ -137,9 +214,7 @@ const handleImportClick = async (): Promise<void> => {
   }
 };
 
-const observer = new MutationObserver(() => {
-  mountImportButton();
-});
+const observer = new MutationObserver(scheduleMountImportButtons);
 
 observer.observe(document.documentElement, { childList: true, subtree: true });
-mountImportButton();
+scheduleMountImportButtons();

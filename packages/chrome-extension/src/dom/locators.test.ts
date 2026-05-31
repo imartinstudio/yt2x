@@ -4,7 +4,10 @@ import {
   editorHasContent,
   findAddArticleButton,
   findImportButtonAnchor,
+  findImportIconButtonAnchor,
+  findImportTextButtonAnchor,
   findTitleField,
+  findWriteArticleButton,
   readTitleFieldText,
   titleFieldShowsPlaceholder,
 } from "./locators.js";
@@ -34,6 +37,19 @@ describe("x articles locators", () => {
       expect(add).not.toBeNull();
       expect(add?.getAttribute("aria-label")).toBe("添加");
       expect(findImportButtonAnchor()).toBe(add);
+      expect(findImportIconButtonAnchor()).toBe(add);
+    });
+
+    it("does not use the injected import icon as the create anchor", () => {
+      document.body.innerHTML = `
+        <nav>
+          <button id="yt2x-import-markdown-icon-btn" type="button" aria-label="新建 X Articles 草稿并导入 Markdown"></button>
+          <button type="button" aria-label="create">+</button>
+        </nav>
+      `;
+      const anchor = findImportIconButtonAnchor();
+      expect(anchor?.id).not.toBe("yt2x-import-markdown-icon-btn");
+      expect(anchor?.getAttribute("aria-label")).toBe("create");
     });
   });
 
@@ -92,6 +108,55 @@ describe("x articles locators", () => {
       title.textContent = "示例标题";
       expect(titleFieldShowsPlaceholder(title)).toBe(false);
       expect(readTitleFieldText(title)).toBe("示例标题");
+    });
+
+    it("does not probe the editor toolbar while mounting the text import button", () => {
+      document.body.innerHTML = `
+        <main>
+          <div contenteditable="true" data-placeholder="添加标题">添加标题</div>
+          <div class="toolbar">
+            <button type="button">添加媒体内容</button>
+          </div>
+          <div class="DraftEditor-root" style="width:500px;height:600px">
+            <div class="DraftEditor-editorContainer">
+              <div class="public-DraftEditor-content" contenteditable="true" style="width:500px;height:600px">
+                <div data-contents="true">
+                  <div data-block="true"><span>正文段落</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      `;
+      expect(findImportTextButtonAnchor()).toBeNull();
+    });
+
+    it("prefers the empty-state write button for the text import button", () => {
+      document.body.innerHTML = `
+        <main>
+          <section>
+            <h1>你可以在这里撰写</h1>
+            <button type="button">撰写</button>
+          </section>
+        </main>
+      `;
+      const write = findWriteArticleButton();
+      expect(write).toBeInstanceOf(HTMLElement);
+      expect(findImportTextButtonAnchor()).toBe(write);
+    });
+
+    it("finds the link-style empty-state write control used by X", () => {
+      document.body.innerHTML = `
+        <main>
+          <div data-yt2x-import-pair="text">
+            <a href="/compose/articles" role="link">撰写</a>
+            <button id="yt2x-import-markdown-text-btn" type="button">导入</button>
+          </div>
+        </main>
+      `;
+      const write = findWriteArticleButton();
+      expect(write).toBeInstanceOf(HTMLAnchorElement);
+      expect(findImportTextButtonAnchor()).toBe(write);
     });
   });
 });

@@ -1,4 +1,8 @@
-export const IMPORT_BUTTON_ID = "yt2x-import-markdown-btn";
+export const IMPORT_BUTTON_IDS = {
+  icon: "yt2x-import-markdown-icon-btn",
+  text: "yt2x-import-markdown-text-btn",
+} as const;
+export const IMPORT_BUTTON_ID = IMPORT_BUTTON_IDS.text;
 const LOADING_HOST_ATTR = "data-yt2x-import-loading";
 const BUSY_ATTR = "data-yt2x-import-busy";
 
@@ -11,13 +15,15 @@ export const formatIndexedStep = (label: string, index: number, total: number): 
   total <= 1 ? label : `${label}（${index}/${total}）`;
 
 export const setImportButtonDisabled = (disabled: boolean): void => {
-  const button = document.getElementById(IMPORT_BUTTON_ID);
-  if (!(button instanceof HTMLButtonElement)) return;
-  button.disabled = disabled;
-  button.setAttribute("aria-busy", disabled ? "true" : "false");
-  button.style.opacity = disabled ? "0.55" : "";
-  button.style.pointerEvents = disabled ? "none" : "";
-  button.style.cursor = disabled ? "not-allowed" : "pointer";
+  for (const id of Object.values(IMPORT_BUTTON_IDS)) {
+    const button = document.getElementById(id);
+    if (!(button instanceof HTMLButtonElement)) continue;
+    button.disabled = disabled;
+    button.setAttribute("aria-busy", disabled ? "true" : "false");
+    button.style.opacity = disabled ? "0.55" : "";
+    button.style.pointerEvents = disabled ? "none" : "";
+    button.style.cursor = disabled ? "not-allowed" : "pointer";
+  }
 };
 
 export const showImportLoading = (message: string): ImportLoadingHandle => {

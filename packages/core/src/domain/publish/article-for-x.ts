@@ -4,7 +4,7 @@ export const XArticleSubscriptionTierSchema = z.enum(["premium", "premium-plus"]
 export type XArticleSubscriptionTier = z.infer<typeof XArticleSubscriptionTierSchema>;
 
 export type ArticleForXAdaptation = {
-  kind: "deep-heading" | "video" | "premium-table" | "mermaid";
+  kind: "deep-heading" | "video" | "premium-table" | "premium-image" | "mermaid";
   message: string;
   placeholder?: string;
   sourceMarkdown?: string;

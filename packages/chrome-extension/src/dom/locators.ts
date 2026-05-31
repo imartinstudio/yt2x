@@ -8,6 +8,7 @@ export const LOCALE_PATTERNS = {
   chooseFile:
     /choose file|select files?|browse files?|选择(?:文件|照片|图片|视频|媒体)|上传(?:文件|照片|图片|视频|媒体)/iu,
   addMedia: /add.*(?:photo|video)|添加照片或视频/iu,
+  writeArticle: /^(?:撰写|write|compose)$/iu,
   titlePlaceholder: /title/i,
   insert: /(?:^|\b)(?:insert|插入)(?:\b|$)|^insert$|^插入$/iu,
   insertAddMedia: /add\s*media\s*content|添加媒体内容/iu,
@@ -22,6 +23,9 @@ const toButton = (node: Element): HTMLButtonElement | null => {
   const button = node.closest("button");
   return button instanceof HTMLButtonElement ? button : null;
 };
+
+const isYt2xImportElement = (element: Element): boolean =>
+  element.id.startsWith("yt2x-import-markdown-");
 
 const buttonLabel = (button: HTMLButtonElement): string => {
   const labelledBy = button.getAttribute("aria-labelledby");
@@ -89,8 +93,30 @@ export const findButtonByName = (pattern: RegExp, root: ParentNode = document): 
   for (const node of queryAllDeep(root, "button,[role='button']")) {
     const button = toButton(node);
     if (button === null) continue;
+    if (isYt2xImportElement(button)) continue;
     if (!pattern.test(buttonLabel(button))) continue;
     return button;
+  }
+  return null;
+};
+
+const elementLabel = (element: HTMLElement): string =>
+  (
+    element.getAttribute("aria-label") ??
+    element.getAttribute("title") ??
+    element.textContent ??
+    ""
+  ).trim();
+
+export const findActionElementByName = (
+  pattern: RegExp,
+  root: ParentNode = document,
+): HTMLElement | null => {
+  for (const node of queryAllDeep(root, "button,[role='button'],a,[role='link']")) {
+    if (!(node instanceof HTMLElement)) continue;
+    if (isYt2xImportElement(node)) continue;
+    if (!pattern.test(elementLabel(node))) continue;
+    return node;
   }
   return null;
 };
@@ -236,8 +262,18 @@ export const findAddArticleButton = (): HTMLButtonElement | null => {
   );
 };
 
-/** Mount import button immediately after the Articles “添加” control (row above “已发布”). */
-export const findImportButtonAnchor = (): HTMLElement | null => findAddArticleButton();
+/** Mount the compact import entry immediately before the Articles create control. */
+export const findImportIconButtonAnchor = (): HTMLElement | null =>
+  findButtonByName(LOCALE_PATTERNS.create) ?? findAddArticleButton();
+
+export const findWriteArticleButton = (): HTMLElement | null =>
+  findActionElementByName(LOCALE_PATTERNS.writeArticle);
+
+/** Mount the full import action beside the empty-state “撰写” control. */
+export const findImportTextButtonAnchor = (): HTMLElement | null => findWriteArticleButton();
+
+/** @deprecated Use findImportIconButtonAnchor or findImportTextButtonAnchor. */
+export const findImportButtonAnchor = (): HTMLElement | null => findImportIconButtonAnchor();
 
 export const articleEditors = (): HTMLElement[] =>
   queryAllDeep(document, '[contenteditable="true"]').filter(

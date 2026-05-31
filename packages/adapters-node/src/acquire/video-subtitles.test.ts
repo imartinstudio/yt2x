@@ -99,9 +99,9 @@ describe("prepareSourceSubtitle", () => {
     });
 
     expect(result.sourceSubtitle).toBeUndefined();
-    expect(result.manifest.warnings).toEqual(["no en YouTube subtitle file found"]);
+    expect(result.manifest.warnings).toEqual(["no YouTube subtitle file found (tried: zh-CN, en)"]);
     await expect(readFile(path.join(root, "video", "subtitle-manifest.json"), "utf8")).resolves.toContain(
-      "no en YouTube subtitle file found",
+      "no YouTube subtitle file found (tried: zh-CN, en)",
     );
   });
 });

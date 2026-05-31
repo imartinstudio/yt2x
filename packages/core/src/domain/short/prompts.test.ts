@@ -5,7 +5,7 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
   it("defines a dedicated X short post task", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/X（Twitter）/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/只生成 1 条短帖正文/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不设置固定字数上限/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/18 行以内/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/精炼表达核心判断/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/一句话核心总结/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/内容总结 list/);
@@ -66,7 +66,7 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
 
   it("requires at least one executable list item", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/可执行资产规则/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/至少有 1 条要在「可被复用、可被立刻执行」的层级/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/至少有 1 条.*具体可复制的例子/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不需要回看视频或文章/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不得编造命令、参数、链接或来源/);
   });

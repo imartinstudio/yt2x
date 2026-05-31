@@ -12,6 +12,8 @@ export default tseslint.config(
       "files/downloads/**",
       "files/articles/**",
       "src/**",
+      "coverage/**",
+      "**/.hermes/**",
     ],
   },
   eslint.configs.recommended,

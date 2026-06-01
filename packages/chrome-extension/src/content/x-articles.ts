@@ -204,6 +204,7 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
         skippedMedia: result.skippedMedia,
         lastMediaError: result.lastMediaError,
         manualContentMedia: result.manualContentMedia,
+        filteredVideos: result.filteredVideos,
       });
     } finally {
       loading?.close();

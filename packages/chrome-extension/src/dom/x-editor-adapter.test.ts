@@ -96,7 +96,7 @@ describe("writeArticleDraftToPage", () => {
     document.body.innerHTML = "";
   });
 
-  it("uploads only the cover and defers content media to manual insertion", async () => {
+  it("uploads the cover, inserts content images, and filters videos", async () => {
     const events: string[] = [];
     actionMocks.insertCodeBlock.mockImplementation(async () => {
       events.push("code");
@@ -104,6 +104,9 @@ describe("writeArticleDraftToPage", () => {
     actionMocks.insertDivider.mockImplementation(async () => {
       events.push("divider");
       return true;
+    });
+    actionMocks.insertContentMedia.mockImplementation(async () => {
+      events.push("image");
     });
     coverMocks.uploadCoverImage.mockImplementation(async () => {
       events.push("cover");
@@ -115,7 +118,7 @@ describe("writeArticleDraftToPage", () => {
       parseResult: {
         title: "Title",
         coverImage: "cover.jpg",
-        contentImages: [],
+        contentImages: [{ path: "shot.png", alt: "", blockIndex: 1, afterText: "Intro" }],
         contentVideos: [{ path: "clip.mp4", alt: "", blockIndex: 1, afterText: "Tail" }],
         contentCodeBlocks: [
           { code: "code", language: "text", blockIndex: 1, afterText: "Intro" },
@@ -133,11 +136,15 @@ describe("writeArticleDraftToPage", () => {
 
     const result = await writeArticleDraftToPage(prepared);
 
-    expect(events).toEqual(["code", "divider", "cover"]);
+    expect(events).toEqual(["code", "divider", "cover", "image"]);
     expect(result.skippedMedia).toEqual(["cover.jpg"]);
     expect(result.lastMediaError).toBe("cover failed");
-    expect(result.manualContentMedia).toEqual(["clip.mp4"]);
-    expect(actionMocks.insertContentMedia).not.toHaveBeenCalled();
+    expect(result.manualContentMedia).toEqual([]);
+    expect(result.filteredVideos).toEqual(["clip.mp4"]);
+    expect(actionMocks.insertContentMedia).toHaveBeenCalledWith(
+      file,
+      expect.objectContaining({ afterText: "Intro", blockIndex: 1 }),
+    );
     expect(editor.textContent).toContain("Tail content remains here.");
   });
 
@@ -240,7 +247,7 @@ describe("writeArticleDraftToPage", () => {
     expect(document.execCommand).not.toHaveBeenCalledWith("insertHTML", false, expect.anything());
   });
 
-  it("does not invoke content-media insertion even when body media is present", async () => {
+  it("keeps the body when content image insertion fails", async () => {
     clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
     actionMocks.insertContentMedia.mockImplementation(async () => {
       editor.innerHTML = "";
@@ -264,9 +271,38 @@ describe("writeArticleDraftToPage", () => {
 
     const result = await writeArticleDraftToPage(prepared);
 
-    expect(result.lastMediaError).toBeNull();
-    expect(result.manualContentMedia).toEqual(["shot.png"]);
-    expect(actionMocks.insertContentMedia).not.toHaveBeenCalled();
+    expect(result.lastMediaError).toBe("media picker failed");
+    expect(result.manualContentMedia).toEqual([]);
+    expect(result.skippedMedia).toEqual(["shot.png"]);
+    expect(actionMocks.insertContentMedia).toHaveBeenCalled();
     expect(editor.textContent).toContain("Tail content remains here.");
+  });
+
+  it("allows image-only drafts to insert media without requiring body text first", async () => {
+    const file = new File(["shot"], "shot.png", { type: "image/png" });
+    clipboardHtml = "";
+    const prepared = {
+      parseResult: {
+        title: "Title",
+        coverImage: null,
+        contentImages: [{ path: "shot.png", alt: "", blockIndex: 0, afterText: "" }],
+        contentVideos: [],
+        contentCodeBlocks: [],
+        dividers: [],
+        html: "",
+        htmlBlocks: [],
+        totalBlocks: 0,
+      },
+      mediaRegistry: { getUploadable: () => file },
+      generatedBlobs: new Map(),
+    } as unknown as PreparedArticleImport;
+
+    const result = await writeArticleDraftToPage(prepared);
+
+    expect(result.skippedMedia).toEqual([]);
+    expect(actionMocks.insertContentMedia).toHaveBeenCalledWith(
+      file,
+      expect.objectContaining({ appendAtEnd: true, blockIndex: 0 }),
+    );
   });
 });

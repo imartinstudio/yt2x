@@ -8,6 +8,7 @@ import { focusInsertionAnchor } from "./insertion-anchor.js";
 import {
   dismissOpenOverlays,
   insertCodeBlock,
+  insertContentMedia,
   insertDivider,
   resetInsertButtonCache,
   waitForMediaUploadComplete,
@@ -33,6 +34,7 @@ export type WriteArticleDraftResult = {
   skippedMedia: string[];
   lastMediaError: string | null;
   manualContentMedia: string[];
+  filteredVideos: string[];
 };
 
 class ArticleStructureRestoreError extends Error {}
@@ -58,16 +60,15 @@ export const writeArticleDraftToPage = async (
 
     report("正在写入标题…");
     await fillTitle(parseResult.title);
-    const manualContentMedia = [
-      ...parseResult.contentImages.map((media) => media.path),
-      ...parseResult.contentVideos.map((media) => media.path),
-    ];
+    const filteredVideos = parseResult.contentVideos.map((media) => media.path);
     report("正在写入正文…");
     await writeHtmlToEditor(editor, parseResult.html);
     report("正在确认标题与正文…");
     await fillTitle(parseResult.title);
     if (parseResult.html.trim().length > 0) {
       await waitForWrittenDraft(parseResult.title, editor);
+    } else {
+      await waitForWrittenTitle(parseResult.title);
     }
 
     dismissOpenOverlays();
@@ -76,7 +77,11 @@ export const writeArticleDraftToPage = async (
     report("正在应用正文格式…");
     await applyStructuralFormatting(editor, parseResult, report);
     await fillTitle(parseResult.title);
-    await waitForWrittenDraft(parseResult.title, editor);
+    if (parseResult.html.trim().length > 0) {
+      await waitForWrittenDraft(parseResult.title, editor);
+    } else {
+      await waitForWrittenTitle(parseResult.title);
+    }
     report("正文格式已完成，正在处理封面…");
 
     if (parseResult.coverImage !== null) {
@@ -98,24 +103,65 @@ export const writeArticleDraftToPage = async (
       }
     }
 
-    if (manualContentMedia.length > 0) {
-      report("正文图片/视频暂不自动插入，请在导入后手动补充…");
+    const contentImages = [...parseResult.contentImages].sort((a, b) => b.blockIndex - a.blockIndex);
+    for (let index = 0; index < contentImages.length; index += 1) {
+      const image = contentImages[index]!;
+      const imageFile = resolveUploadFile(prepared, image.path);
+      if (imageFile === undefined) {
+        lastMediaError = `Content image is not authorized: ${image.path}`;
+        skippedMedia.push(image.path);
+        continue;
+      }
+      report(formatIndexedStep("正在插入正文图片", index + 1, contentImages.length));
+      try {
+        await insertContentMedia(imageFile, {
+          editor,
+          afterText: image.afterText,
+          blockIndex: image.blockIndex,
+          totalBlocks: parseResult.totalBlocks,
+          appendAtEnd: parseResult.totalBlocks === 0,
+        });
+        dismissOpenOverlays();
+        await wait(350);
+      } catch (err: unknown) {
+        lastMediaError = err instanceof Error ? err.message : "Unknown content image upload error";
+        skippedMedia.push(image.path);
+        dismissOpenOverlays();
+        if (parseResult.html.trim().length > 0 && !editorRetainsExpectedBody(editor, parseResult.html)) {
+          report("检测到图片插入失败后正文丢失，正在恢复正文…");
+          await restoreBaseBodyAfterStructuralDamage(editor, parseResult);
+        }
+      }
+      await fillTitle(parseResult.title);
+    }
+
+    if (filteredVideos.length > 0) {
+      report("已过滤正文视频，仅导入文字和图片…");
     }
 
     await fillTitle(parseResult.title);
-    await waitForWrittenDraft(parseResult.title, editor);
+    if (parseResult.html.trim().length > 0) {
+      await waitForWrittenDraft(parseResult.title, editor);
+    } else {
+      await waitForWrittenTitle(parseResult.title);
+    }
 
     report("正在等待草稿自动保存…");
     await waitForMediaUploadComplete(6_000);
     await wait(1_200);
-    await waitForWrittenDraft(parseResult.title, editor);
+    if (parseResult.html.trim().length > 0) {
+      await waitForWrittenDraft(parseResult.title, editor);
+    } else {
+      await waitForWrittenTitle(parseResult.title);
+    }
     dismissOpenOverlays();
     return {
       skippedDividers,
       skippedPromptCodeBlocks,
       skippedMedia,
       lastMediaError,
-      manualContentMedia,
+      manualContentMedia: [],
+      filteredVideos,
     };
   } finally {
     dismissOpenOverlays();
@@ -234,7 +280,7 @@ const editorPlainText = (editor: HTMLElement): string => {
 };
 
 const editorHasMeaningfulContent = (editor: HTMLElement, minLength = 24): boolean => {
-  const threshold = isDraftBodyEditor(editor) ? 8 : minLength;
+  const threshold = Math.max(1, Math.min(isDraftBodyEditor(editor) ? 8 : minLength, minLength));
   if (editorPlainText(editor).length < threshold) return false;
   if (!isDraftBodyEditor(editor)) return true;
   const activeEditor = liveArticleEditor(editor);
@@ -276,14 +322,14 @@ const waitForEditorSettled = async (
   while (Date.now() < deadline) {
     const text = editorPlainText(editor);
     if (
-      editorHasMeaningfulContent(editor) &&
+      editorHasMeaningfulContent(editor, expectedPlain.length) &&
       (needle.length === 0 || text.includes(needle.slice(0, 12)))
     ) {
       return true;
     }
     await wait(120);
   }
-  return editorHasMeaningfulContent(editor);
+  return editorHasMeaningfulContent(editor, expectedPlain.length);
 };
 
 const titleLooksWritten = (expectedTitle: string, field: HTMLElement): boolean => {
@@ -313,6 +359,15 @@ const waitForWrittenDraft = async (expectedTitle: string, editor: HTMLElement): 
   if (!bodyOk) {
     throw new Error("X Articles body did not finish writing before media upload.");
   }
+};
+
+const waitForWrittenTitle = async (expectedTitle: string): Promise<void> => {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (titleLooksWritten(expectedTitle, findTitleField())) return;
+    await wait(120);
+  }
+  throw new Error("X Articles title did not finish writing before media upload.");
 };
 
 const fillTitle = async (title: string): Promise<void> => {

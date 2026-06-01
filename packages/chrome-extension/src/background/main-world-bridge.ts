@@ -8,6 +8,12 @@ import {
   type TriggerFileUploadMainWorldRequest,
   type TriggerFileUploadMainWorldResponse,
 } from "../dom/file-input.js";
+import { INJECT_DRAFT_WRITER_MESSAGE } from "../shared/main-world-messages.js";
+
+const isInjectDraftWriterRequest = (message: unknown): message is { type: typeof INJECT_DRAFT_WRITER_MESSAGE } =>
+  typeof message === "object" &&
+  message !== null &&
+  (message as { type?: string }).type === INJECT_DRAFT_WRITER_MESSAGE;
 
 const isAssignFileRequest = (message: unknown): message is AssignFileMainWorldRequest => {
   if (typeof message !== "object" || message === null) return false;
@@ -34,6 +40,28 @@ const isTriggerFileUploadRequest = (message: unknown): message is TriggerFileUpl
 };
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
+  if (isInjectDraftWriterRequest(message)) {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) {
+      sendResponse({ ok: false, error: "Could not resolve the X Articles browser tab for MAIN world import." });
+      return false;
+    }
+    void chrome.scripting
+      .executeScript({
+        target: { tabId },
+        world: "MAIN",
+        files: ["main-world/draft-writer.js"],
+      })
+      .then(() => sendResponse({ ok: true }))
+      .catch((error: unknown) => {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return true;
+  }
+
   if (!isAssignFileRequest(message) && !isTriggerFileUploadRequest(message)) return false;
 
   const tabId = sender.tab?.id;

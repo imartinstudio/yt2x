@@ -3,7 +3,7 @@ import { prepareArticleImport, resolveUploadFile } from "./prepare-import.js";
 import type { MediaRegistry } from "./local-media.js";
 
 describe("prepareArticleImport", () => {
-  it("pastes code blocks directly while omitting dividers and native structural inserts", async () => {
+  it("maps code blocks and dividers to native X editor operations", async () => {
     const mediaRegistry = {
       missingSources: [],
       resolveMediaPath: (source: string) => source,
@@ -16,8 +16,8 @@ describe("prepareArticleImport", () => {
         "",
         "正文内容。",
         "",
-        "```text",
-        "Create a new GitHub repository for this project.",
+        "```bash",
+        "pnpm test",
         "```",
         "",
         "---",
@@ -28,9 +28,14 @@ describe("prepareArticleImport", () => {
       mediaRegistry,
     });
 
-    expect(prepared.parseResult.contentCodeBlocks).toEqual([]);
-    expect(prepared.parseResult.dividers).toEqual([]);
-    expect(prepared.parseResult.html).toContain("<pre><code>Create a new GitHub repository");
+    expect(prepared.parseResult.contentCodeBlocks).toEqual([
+      expect.objectContaining({
+        code: "pnpm test",
+        language: "bash",
+      }),
+    ]);
+    expect(prepared.parseResult.dividers.length).toBeGreaterThan(0);
+    expect(prepared.parseResult.html).not.toContain("<pre><code>");
     expect(prepared.parseResult.html).not.toContain("<hr>");
   });
 

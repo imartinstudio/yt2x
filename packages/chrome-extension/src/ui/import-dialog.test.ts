@@ -23,7 +23,7 @@ describe("X Articles import media policy", () => {
     vi.clearAllMocks();
   });
 
-  it("does not block confirmation for unresolved body media", () => {
+  it("requires unresolved body images before confirmation and ignores videos", () => {
     const registry = {
       missingSources: ["images/scene.png", "media/clip.mp4"],
       resolveMediaPath: (source: string) => source,
@@ -48,16 +48,19 @@ describe("X Articles import media policy", () => {
 
     expect(preview.contentImageCount).toBe(1);
     expect(preview.contentVideoCount).toBe(1);
-    expect(preview.missingSources).toEqual([]);
+    expect(preview.missingSources).toEqual(["images/scene.png"]);
   });
 
-  it("tells the user to insert deferred content media manually", () => {
+  it("reports skipped content images and filtered videos", () => {
     vi.useFakeTimers();
-    showImportSuccessToast({ manualContentMedia: ["images/scene.png", "media/clip.mp4"] });
+    showImportSuccessToast({
+      manualContentMedia: ["images/scene.png"],
+      filteredVideos: ["media/clip.mp4"],
+    });
 
-    expect(document.querySelector("[data-yt2x-import-toast]")?.textContent).toContain(
-      "2 个正文图片/视频未自动插入，请手动补充",
-    );
+    const text = document.querySelector("[data-yt2x-import-toast]")?.textContent ?? "";
+    expect(text).toContain("1 个正文图片未自动插入，请手动补充");
+    expect(text).toContain("1 个视频已过滤");
     vi.runAllTimers();
     expect(document.querySelector("[data-yt2x-import-toast]")).toBeNull();
   });
@@ -73,18 +76,17 @@ describe("X Articles import media policy", () => {
 
     const text = document.querySelector("[data-yt2x-import-toast]")?.textContent ?? "";
     expect(text).toContain("2 处分割线未插入");
-    expect(text).toContain("1 个封面上传失败，正文格式已保留：upload failed");
+    expect(text).toContain("1 个素材上传失败，正文格式已保留：upload failed");
     expect(text).toContain("1 段英文 prompt 代码块已跳过");
     vi.runAllTimers();
     expect(document.querySelector("[data-yt2x-import-toast]")).toBeNull();
   });
 
-  it("builds preview state from a prepared import and checks only missing cover sources", () => {
+  it("builds preview state from a prepared import and checks missing cover and image sources", () => {
     const registry = {
       missingSources: ["cover.png", "images/body.png"],
       resolveMediaPath: (source: string) => source,
-      getUploadable: (path: string) =>
-        path === "images/body.png" ? new File(["body"], "body.png") : undefined,
+      getUploadable: () => undefined,
     } as unknown as MediaRegistry;
 
     const preview = buildImportPreview({
@@ -105,11 +107,11 @@ describe("X Articles import media policy", () => {
       coverImage: "cover.png",
       contentImageCount: 1,
       contentVideoCount: 0,
-      missingSources: ["cover.png"],
+      missingSources: ["cover.png", "images/body.png"],
     });
   });
 
-  it("blocks confirmation until missing cover media is authorized", async () => {
+  it("blocks confirmation until missing cover and body image media is authorized", async () => {
     runtimeMocks.saveSubscriptionTier.mockResolvedValue(undefined);
     const result = showImportPreviewDialog({
       title: "A <title>",
@@ -118,12 +120,12 @@ describe("X Articles import media policy", () => {
       contentVideoCount: 1,
       adaptations: [{ kind: "premium-image", message: "Use <image>" }],
       warnings: ["Careful <warning>"],
-      missingSources: ["cover.png"],
+      missingSources: ["cover.png", "images/body.png"],
     });
     const host = document.querySelector("[data-yt2x-import-dialog]") as HTMLElement;
     const shadow = host.shadowRoot!;
 
-    expect(shadow.textContent).toContain("仍缺少封面素材：cover.png");
+    expect(shadow.textContent).toContain("仍缺少封面或正文图片素材：cover.png, images/body.png");
     shadow.querySelector<HTMLButtonElement>("[data-action='confirm']")!.click();
     await Promise.resolve();
     expect(host.isConnected).toBe(true);

@@ -66,7 +66,7 @@ export const readFileAsText = (file: File): Promise<string> =>
   });
 
 export const pickMarkdownFile = (): Promise<File | null> =>
-  pickFiles({ accept: ".md,text/markdown", multiple: false }).then((files) => files[0] ?? null);
+  pickFiles({ accept: "", multiple: false }).then((files) => files[0] ?? null);
 
 export const pickSupplementalMedia = (): Promise<File[]> =>
   pickFiles({ accept: "image/*,video/*", multiple: true });

@@ -67,7 +67,8 @@ export const prepareArticleImport = async (input: {
   const parseResult = parseArticleDraftFromMarkdown(adapted.markdown, {
     resolveMediaPath: (source) => input.mediaRegistry.resolveMediaPath(source),
     preserveSourceContent: true,
-    omitDividers: true,
+    useNativeEditorBlocks: true,
+    omitDividers: false,
   });
   const missingCoverSources =
     parseResult.coverImage === null || input.mediaRegistry.getUploadable(parseResult.coverImage) !== undefined

@@ -7,10 +7,12 @@ export const IMAGE_MARKDOWN_RE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])
 export const VIDEO_MARKDOWN_RE =
   /^<video\b[^>]*\bsrc=["']([^"']+)["'][^>]*>(?:<\/video>)?$/iu;
 
-type DraftBlock = {
+export type ArticleDraftSplitBlock = {
   kind: "markdown" | "image" | "video" | "code" | "divider";
   source: string;
 };
+
+type DraftBlock = ArticleDraftSplitBlock;
 
 export type ParseArticleDraftOptions = {
   resolveMediaPath: (source: string) => string;
@@ -412,6 +414,19 @@ const classifyBlock = (source: string): DraftBlock["kind"] => {
   if (VIDEO_MARKDOWN_RE.test(source)) return "video";
   return "markdown";
 };
+
+export const splitArticleDraftBlocks = (
+  markdown: string,
+  options: { preserveSourceContent?: boolean } = {},
+): ArticleDraftSplitBlock[] => {
+  const { body } = extractArticleTitle(markdown, {
+    preserveSourceContent: options.preserveSourceContent === true,
+  });
+  return splitDraftBlocks(body);
+};
+
+export const parseFencedCodeBlock = (source: string): { code: string; language: string } =>
+  parseCodeBlock(source);
 
 const parseCodeBlock = (source: string): { code: string; language: string } => {
   const opener = /^```([^\n]*)\n?/u.exec(source);

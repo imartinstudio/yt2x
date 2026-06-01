@@ -4,10 +4,6 @@ import type { PreparedArticleImport } from "../files/prepare-import.js";
 
 const actionMocks = vi.hoisted(() => ({
   dismissOpenOverlays: vi.fn(),
-  insertCodeBlock: vi.fn(),
-  insertContentMedia: vi.fn(),
-  insertDivider: vi.fn(),
-  resetInsertButtonCache: vi.fn(),
   waitForMediaUploadComplete: vi.fn(),
 }));
 
@@ -18,29 +14,35 @@ const locatorMocks = vi.hoisted(() => ({
   waitForArticleDraftReady: vi.fn(),
 }));
 
-const anchorMocks = vi.hoisted(() => ({
-  focusInsertionAnchor: vi.fn(),
-}));
-
 const coverMocks = vi.hoisted(() => ({
   uploadCoverImage: vi.fn(),
 }));
 
+const payloadMocks = vi.hoisted(() => ({
+  buildMainWorldWritePayload: vi.fn(),
+}));
+
+const mainWorldMocks = vi.hoisted(() => ({
+  runMainWorldImport: vi.fn(),
+}));
+
 vi.mock("./x-insert-actions.js", () => actionMocks);
 vi.mock("./locators.js", () => locatorMocks);
-vi.mock("./insertion-anchor.js", () => anchorMocks);
 vi.mock("./cover-upload.js", () => coverMocks);
+vi.mock("../import/markdown-to-draft-payload.js", () => payloadMocks);
+vi.mock("./main-world-import.js", () => mainWorldMocks);
 
 describe("writeArticleDraftToPage", () => {
   let editor: HTMLElement;
   let title: HTMLElement;
-  let clipboardHtml = "";
 
   beforeEach(() => {
     document.body.innerHTML = `
       <div contenteditable="true" id="title"></div>
       <div class="DraftEditor-root">
-        <div class="public-DraftEditor-content" contenteditable="true" id="editor"></div>
+        <div class="public-DraftEditor-content" contenteditable="true" id="editor">
+          <div data-block="true"><div>Imported body content long enough for verification.</div></div>
+        </div>
       </div>
     `;
     editor = document.querySelector("#editor") as HTMLElement;
@@ -49,41 +51,30 @@ describe("writeArticleDraftToPage", () => {
     locatorMocks.findTitleField.mockReturnValue(title);
     locatorMocks.readTitleFieldText.mockImplementation((field: HTMLElement) => field.textContent ?? "");
     locatorMocks.waitForArticleDraftReady.mockResolvedValue({ editor });
-    actionMocks.insertDivider.mockResolvedValue(true);
-    actionMocks.insertCodeBlock.mockResolvedValue(undefined);
-    actionMocks.insertContentMedia.mockResolvedValue(undefined);
     actionMocks.waitForMediaUploadComplete.mockResolvedValue(undefined);
     coverMocks.uploadCoverImage.mockResolvedValue(undefined);
-
-    vi.stubGlobal(
-      "ClipboardItem",
-      class {
-        readonly entries: Record<string, Blob>;
-        constructor(entries: Record<string, Blob>) {
-          this.entries = entries;
-        }
-      },
-    );
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: {
-        write: vi.fn().mockResolvedValue(undefined),
-        writeText: vi.fn().mockRejectedValue(new Error("plain clipboard denied")),
+    payloadMocks.buildMainWorldWritePayload.mockResolvedValue({
+      title: "Title",
+      blocks: [{ type: "unstyled", text: "Body", inlineStyleRanges: [], links: [] }],
+      plan: [],
+      html: "<p>Body</p>",
+      plain: "Body",
+      markerPrefix: "__YT2X_test_",
+      imageFiles: [],
+    });
+    mainWorldMocks.runMainWorldImport.mockResolvedValue({
+      summary: {
+        atomicOk: 1,
+        atomicFail: 0,
+        imgOk: 1,
+        imgFail: 0,
+        imageErrors: [],
+        markersCleaned: 1,
       },
     });
     document.execCommand = vi.fn((command: string, _showUi?: boolean, value?: string) => {
-      if (command === "delete") {
-        if (document.activeElement === editor) editor.innerHTML = "";
-        else title.textContent = "";
-        return true;
-      }
-      if (command === "paste") {
-        editor.innerHTML = `<div data-block="true">${clipboardHtml}</div>`;
-        return true;
-      }
-      if (command === "insertText") {
-        if (document.activeElement === title) title.textContent = value ?? "";
-        else editor.innerHTML = `<div data-block="true">${value ?? ""}</div>`;
+      if (command === "insertText" && document.activeElement === title) {
+        title.textContent = value ?? "";
         return true;
       }
       return true;
@@ -92,313 +83,73 @@ describe("writeArticleDraftToPage", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    document.body.innerHTML = "";
   });
 
-  it("uploads the cover, inserts content images, and filters videos", async () => {
-    const events: string[] = [];
-    actionMocks.insertCodeBlock.mockImplementation(async () => {
-      events.push("code");
-    });
-    actionMocks.insertDivider.mockImplementation(async () => {
-      events.push("divider");
-      return true;
-    });
-    actionMocks.insertContentMedia.mockImplementation(async () => {
-      events.push("image");
-    });
-    coverMocks.uploadCoverImage.mockImplementation(async () => {
-      events.push("cover");
-      throw new Error("cover failed");
-    });
-    const file = new File(["asset"], "asset.bin");
-    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
+  it("uses the MAIN world import pipeline for body, code blocks, and images", async () => {
     const prepared = {
       parseResult: {
         title: "Title",
-        coverImage: "cover.jpg",
-        contentImages: [{ path: "shot.png", alt: "", blockIndex: 1, afterText: "Intro" }],
-        contentVideos: [{ path: "clip.mp4", alt: "", blockIndex: 1, afterText: "Tail" }],
-        contentCodeBlocks: [
-          { code: "code", language: "text", blockIndex: 1, afterText: "Intro" },
-        ],
-        dividers: [{ blockIndex: 1, afterText: "Intro" }],
-        html: clipboardHtml,
-        htmlBlocks: ["<p>Intro content long enough.</p>", "<p>Tail content remains here.</p>"],
-        totalBlocks: 2,
+        coverImage: null,
+        contentImages: [{ path: "images/scene.png", alt: "scene", blockIndex: 1, afterText: "Body" }],
+        contentVideos: [],
+        contentCodeBlocks: [{ code: "pnpm test", language: "bash", blockIndex: 0, afterText: "" }],
+        dividers: [],
+        html: "<p>Body</p>",
+        htmlBlocks: ["<p>Body</p>"],
+        totalBlocks: 1,
       },
-      mediaRegistry: {
-        getUploadable: () => file,
-      },
+      adapted: { markdown: "# Title\n\nBody", adaptations: [], warnings: [] },
+      mediaRegistry: { getUploadable: vi.fn(), resolveMediaPath: (source: string) => source },
       generatedBlobs: new Map(),
     } as unknown as PreparedArticleImport;
 
     const result = await writeArticleDraftToPage(prepared);
 
-    expect(events).toEqual(["cover", "code", "divider", "image"]);
-    expect(result.skippedMedia).toEqual(["cover.jpg"]);
-    expect(result.lastMediaError).toBe("cover failed");
-    expect(result.manualContentMedia).toEqual([]);
-    expect(result.filteredVideos).toEqual(["clip.mp4"]);
-    expect(actionMocks.insertContentMedia).toHaveBeenCalledWith(
-      file,
-      expect.objectContaining({ afterText: "Intro", blockIndex: 1 }),
-    );
-    expect(editor.textContent).toContain("Tail content remains here.");
-  });
-
-  it("uploads the cover before structural formatting fails", async () => {
-    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
-    actionMocks.insertDivider.mockResolvedValue(false);
-    const prepared = {
-      parseResult: {
-        title: "Title",
-        coverImage: "cover.jpg",
-        contentImages: [],
-        contentVideos: [],
-        contentCodeBlocks: [],
-        dividers: [{ blockIndex: 1, afterText: "Intro" }],
-        html: clipboardHtml,
-        htmlBlocks: [clipboardHtml],
-        totalBlocks: 2,
-      },
-      mediaRegistry: {
-        getUploadable: () => new File(["cover"], "cover.jpg"),
-      },
-      generatedBlobs: new Map(),
-    } as unknown as PreparedArticleImport;
-
-    await expect(writeArticleDraftToPage(prepared)).rejects.toThrow("X Articles 分割线无法插入");
-    expect(coverMocks.uploadCoverImage).toHaveBeenCalledWith(expect.any(File));
-    expect(actionMocks.insertContentMedia).not.toHaveBeenCalled();
-  });
-
-  it("restores the pasted body and stops when a legacy structural insert replaces it", async () => {
-    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
-    actionMocks.insertCodeBlock.mockImplementation(async () => {
-      editor.innerHTML = "<pre><code>Only inserted code remains.</code></pre>";
-    });
-    const prepared = {
-      parseResult: {
-        title: "Title",
-        coverImage: "cover.jpg",
-        contentImages: [],
-        contentVideos: [],
-        contentCodeBlocks: [
-          { code: "Only inserted code remains.", language: "text", blockIndex: 1, afterText: "Intro" },
-        ],
-        dividers: [],
-        html: clipboardHtml,
-        htmlBlocks: [clipboardHtml],
-        totalBlocks: 2,
-      },
-      mediaRegistry: {
-        getUploadable: () => new File(["cover"], "cover.jpg"),
-      },
-      generatedBlobs: new Map(),
-    } as unknown as PreparedArticleImport;
-
-    await expect(writeArticleDraftToPage(prepared)).rejects.toThrow(
-      "X Articles code insertion replaced the article body",
-    );
-    expect(editor.textContent).toContain("Tail content remains here.");
-    expect(coverMocks.uploadCoverImage).toHaveBeenCalledWith(expect.any(File));
-  });
-
-  it("falls back to persistent text editing without using raw DOM HTML insertion", async () => {
-    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
-    vi.mocked(document.execCommand).mockImplementation(
-      (command: string, _showUi?: boolean, value?: string) => {
-        if (command === "delete") {
-          if (document.activeElement === editor) editor.innerHTML = "";
-          else title.textContent = "";
-          return true;
-        }
-        if (command === "paste") return false;
-        if (command === "insertText") {
-          if (document.activeElement === title) title.textContent = value ?? "";
-          else editor.innerHTML = `<div data-block="true">${value ?? ""}</div>`;
-          return true;
-        }
-        return false;
-      },
-    );
-    const prepared = {
-      parseResult: {
-        title: "Title",
-        coverImage: null,
-        contentImages: [],
-        contentVideos: [],
-        contentCodeBlocks: [],
-        dividers: [],
-        html: clipboardHtml,
-        htmlBlocks: [clipboardHtml],
-        totalBlocks: 2,
-      },
-      mediaRegistry: { getUploadable: () => undefined },
-      generatedBlobs: new Map(),
-    } as unknown as PreparedArticleImport;
-
-    await expect(writeArticleDraftToPage(prepared)).resolves.toEqual(
-      expect.objectContaining({ skippedMedia: [] }),
-    );
-    expect(editor.textContent).toContain("Tail content remains here.");
-    expect(document.execCommand).not.toHaveBeenCalledWith("insertHTML", false, expect.anything());
-  });
-
-  it("falls back to plain clipboard paste when X rejects pasted HTML", async () => {
-    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
-    let plainClipboard = "";
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: {
-        write: vi.fn().mockResolvedValue(undefined),
-        writeText: vi.fn(async (value: string) => {
-          plainClipboard = value;
-        }),
-      },
-    });
-    vi.mocked(document.execCommand).mockImplementation(
-      (command: string, _showUi?: boolean, value?: string) => {
-        if (command === "delete") {
-          if (document.activeElement === editor) editor.innerHTML = "";
-          else title.textContent = "";
-          return true;
-        }
-        if (command === "paste") {
-          if (plainClipboard.length === 0) return false;
-          editor.innerHTML = `<div data-block="true">${plainClipboard}</div>`;
-          return true;
-        }
-        if (command === "insertText") {
-          if (document.activeElement === title) title.textContent = value ?? "";
-          else editor.innerHTML = `<div data-block="true">${value ?? ""}</div>`;
-          return true;
-        }
-        return false;
-      },
-    );
-    const prepared = {
-      parseResult: {
-        title: "Title",
-        coverImage: null,
-        contentImages: [],
-        contentVideos: [],
-        contentCodeBlocks: [],
-        dividers: [],
-        html: clipboardHtml,
-        htmlBlocks: [clipboardHtml],
-        totalBlocks: 2,
-      },
-      mediaRegistry: { getUploadable: () => undefined },
-      generatedBlobs: new Map(),
-    } as unknown as PreparedArticleImport;
-
-    await expect(writeArticleDraftToPage(prepared)).resolves.toEqual(
-      expect.objectContaining({ skippedMedia: [] }),
-    );
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      "Intro content long enough.\n\nTail content remains here.",
-    );
-    expect(editor.textContent).toContain("Tail content remains here.");
-  });
-
-  it("renders visible Draft blocks when paste and typed insertion are rejected", async () => {
-    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
-    vi.mocked(document.execCommand).mockImplementation(
-      (command: string, _showUi?: boolean, value?: string) => {
-        if (command === "delete") {
-          if (document.activeElement === editor) editor.innerHTML = "";
-          else title.textContent = "";
-          return true;
-        }
-        if (command === "insertText" && document.activeElement === title) {
-          title.textContent = value ?? "";
-          return true;
-        }
-        return false;
-      },
-    );
-    const prepared = {
-      parseResult: {
-        title: "Title",
-        coverImage: null,
-        contentImages: [],
-        contentVideos: [],
-        contentCodeBlocks: [],
-        dividers: [],
-        html: clipboardHtml,
-        htmlBlocks: [clipboardHtml],
-        totalBlocks: 2,
-      },
-      mediaRegistry: { getUploadable: () => undefined },
-      generatedBlobs: new Map(),
-    } as unknown as PreparedArticleImport;
-
-    await expect(writeArticleDraftToPage(prepared)).resolves.toEqual(
-      expect.objectContaining({ skippedMedia: [] }),
-    );
-    expect(editor.querySelectorAll("[data-block='true']")).toHaveLength(2);
-    expect(editor.textContent).toContain("Tail content remains here.");
-  });
-
-  it("keeps the body when content image insertion fails", async () => {
-    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
-    actionMocks.insertContentMedia.mockImplementation(async () => {
-      editor.innerHTML = "";
-      throw new Error("media picker failed");
-    });
-    const prepared = {
-      parseResult: {
-        title: "Title",
-        coverImage: null,
-        contentImages: [{ path: "shot.png", alt: "", blockIndex: 1, afterText: "Intro" }],
-        contentVideos: [],
-        contentCodeBlocks: [],
-        dividers: [],
-        html: clipboardHtml,
-        htmlBlocks: [clipboardHtml],
-        totalBlocks: 2,
-      },
-      mediaRegistry: { getUploadable: () => new File(["shot"], "shot.png") },
-      generatedBlobs: new Map(),
-    } as unknown as PreparedArticleImport;
-
-    const result = await writeArticleDraftToPage(prepared);
-
-    expect(result.lastMediaError).toBe("media picker failed");
-    expect(result.manualContentMedia).toEqual([]);
-    expect(result.skippedMedia).toEqual(["shot.png"]);
-    expect(actionMocks.insertContentMedia).toHaveBeenCalled();
-    expect(editor.textContent).toContain("Tail content remains here.");
-  });
-
-  it("allows image-only drafts to insert media without requiring body text first", async () => {
-    const file = new File(["shot"], "shot.png", { type: "image/png" });
-    clipboardHtml = "";
-    const prepared = {
-      parseResult: {
-        title: "Title",
-        coverImage: null,
-        contentImages: [{ path: "shot.png", alt: "", blockIndex: 0, afterText: "" }],
-        contentVideos: [],
-        contentCodeBlocks: [],
-        dividers: [],
-        html: "",
-        htmlBlocks: [],
-        totalBlocks: 0,
-      },
-      mediaRegistry: { getUploadable: () => file },
-      generatedBlobs: new Map(),
-    } as unknown as PreparedArticleImport;
-
-    const result = await writeArticleDraftToPage(prepared);
-
+    expect(payloadMocks.buildMainWorldWritePayload).toHaveBeenCalledWith(prepared);
+    expect(mainWorldMocks.runMainWorldImport).toHaveBeenCalled();
     expect(result.skippedMedia).toEqual([]);
-    expect(actionMocks.insertContentMedia).toHaveBeenCalledWith(
-      file,
-      expect.objectContaining({ appendAtEnd: true, blockIndex: 0 }),
-    );
+    expect(result.manualContentMedia).toEqual([]);
+  });
+
+  it("reports image upload failures from the MAIN world summary", async () => {
+    mainWorldMocks.runMainWorldImport.mockResolvedValue({
+      summary: {
+        atomicOk: 0,
+        atomicFail: 0,
+        imgOk: 0,
+        imgFail: 1,
+        imageErrors: [
+          {
+            index: 1,
+            marker: "__YT2X_test_IMAGE_0__",
+            source: "images/scene.png",
+            error: "Image upload failed",
+          },
+        ],
+        markersCleaned: 0,
+      },
+    });
+
+    const prepared = {
+      parseResult: {
+        title: "Title",
+        coverImage: null,
+        contentImages: [],
+        contentVideos: [],
+        contentCodeBlocks: [],
+        dividers: [],
+        html: "<p>Body</p>",
+        htmlBlocks: ["<p>Body</p>"],
+        totalBlocks: 1,
+      },
+      adapted: { markdown: "# Title\n\nBody", adaptations: [], warnings: [] },
+      mediaRegistry: { getUploadable: vi.fn(), resolveMediaPath: (source: string) => source },
+      generatedBlobs: new Map(),
+    } as unknown as PreparedArticleImport;
+
+    const result = await writeArticleDraftToPage(prepared);
+
+    expect(result.skippedMedia).toEqual(["images/scene.png"]);
+    expect(result.lastMediaError).toBe("Image upload failed");
   });
 });

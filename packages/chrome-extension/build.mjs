@@ -14,6 +14,7 @@ await esbuild.build({
   entryPoints: {
     "content/x-articles": join(root, "src/content/x-articles.ts"),
     "background/main-world-bridge": join(root, "src/background/main-world-bridge.ts"),
+    "main-world/draft-writer": join(root, "src/main-world/draft-writer.ts"),
   },
   bundle: true,
   format: "iife",

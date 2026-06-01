@@ -1,4 +1,3 @@
-/* eslint-env node */
 /**
  * Smoke test: load unpacked yt2x extension and verify MAIN world draft writer injection.
  */

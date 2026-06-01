@@ -483,8 +483,16 @@ const writeHtmlToEditor = async (editor: HTMLElement, html: string): Promise<voi
     } catch {
       continue;
     }
-    if (await waitForEditorSettled(editor, plain, draft ? 2_000 : 1_000)) return;
+    if (
+      (await waitForEditorSettled(editor, plain, draft ? 2_000 : 1_000)) ||
+      editorRetainsExpectedBody(editor, html)
+    ) {
+      return;
+    }
   }
+
+  await wait(draft ? 2_500 : 1_000);
+  if (editorRetainsExpectedBody(editor, html) || editorHasMeaningfulContent(editor)) return;
 
   throw new Error("X Articles body editor did not accept pasted HTML content.");
 };

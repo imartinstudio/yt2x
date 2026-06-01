@@ -470,6 +470,9 @@ const writeHtmlToEditor = async (editor: HTMLElement, html: string): Promise<voi
         throw new Error("X Articles body editor rejected persistent text insertion.");
       }
     },
+    async () => {
+      writeDomFallbackToEditor(editor, plain);
+    },
   ];
 
   for (const attempt of attempts) {
@@ -484,4 +487,25 @@ const writeHtmlToEditor = async (editor: HTMLElement, html: string): Promise<voi
   }
 
   throw new Error("X Articles body editor did not accept pasted HTML content.");
+};
+
+const writeDomFallbackToEditor = (editor: HTMLElement, plain: string): void => {
+  const activeEditor = liveArticleEditor(editor);
+  const blocks = plain
+    .split(/\n{2,}/u)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  const renderedBlocks = blocks.length > 0 ? blocks : [plain.trim()].filter(Boolean);
+  activeEditor.replaceChildren(
+    ...renderedBlocks.map((block) => {
+      const outer = document.createElement("div");
+      outer.setAttribute("data-block", "true");
+      const inner = document.createElement("div");
+      inner.textContent = block;
+      outer.appendChild(inner);
+      return outer;
+    }),
+  );
+  activeEditor.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: plain }));
+  activeEditor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: plain }));
 };

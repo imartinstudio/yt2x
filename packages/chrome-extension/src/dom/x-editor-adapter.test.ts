@@ -304,6 +304,45 @@ describe("writeArticleDraftToPage", () => {
     expect(editor.textContent).toContain("Tail content remains here.");
   });
 
+  it("renders visible Draft blocks when paste and typed insertion are rejected", async () => {
+    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
+    vi.mocked(document.execCommand).mockImplementation(
+      (command: string, _showUi?: boolean, value?: string) => {
+        if (command === "delete") {
+          if (document.activeElement === editor) editor.innerHTML = "";
+          else title.textContent = "";
+          return true;
+        }
+        if (command === "insertText" && document.activeElement === title) {
+          title.textContent = value ?? "";
+          return true;
+        }
+        return false;
+      },
+    );
+    const prepared = {
+      parseResult: {
+        title: "Title",
+        coverImage: null,
+        contentImages: [],
+        contentVideos: [],
+        contentCodeBlocks: [],
+        dividers: [],
+        html: clipboardHtml,
+        htmlBlocks: [clipboardHtml],
+        totalBlocks: 2,
+      },
+      mediaRegistry: { getUploadable: () => undefined },
+      generatedBlobs: new Map(),
+    } as unknown as PreparedArticleImport;
+
+    await expect(writeArticleDraftToPage(prepared)).resolves.toEqual(
+      expect.objectContaining({ skippedMedia: [] }),
+    );
+    expect(editor.querySelectorAll("[data-block='true']")).toHaveLength(2);
+    expect(editor.textContent).toContain("Tail content remains here.");
+  });
+
   it("keeps the body when content image insertion fails", async () => {
     clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
     actionMocks.insertContentMedia.mockImplementation(async () => {

@@ -44,7 +44,7 @@ export const buildImportPreviewState = (input: {
     preserveSourceContent: true,
     omitDividers: true,
   });
-  const missingSources = missingCoverSources(parseResult.coverImage, input.mediaRegistry);
+  const missingSources = missingUploadSources(parseResult, input.mediaRegistry);
   return {
     title: parseResult.title,
     coverImage: parseResult.coverImage,
@@ -105,10 +105,7 @@ export const buildImportPreview = (input: {
   contentVideoCount: input.prepared.parseResult.contentVideos.length,
   adaptations: input.prepared.adapted.adaptations,
   warnings: input.prepared.adapted.warnings,
-  missingSources: missingCoverSources(
-    input.prepared.parseResult.coverImage,
-    input.prepared.mediaRegistry,
-  ),
+  missingSources: missingUploadSources(input.prepared.parseResult, input.prepared.mediaRegistry),
 });
 
 export const showImportSuccessToast = (input: {
@@ -117,12 +114,14 @@ export const showImportSuccessToast = (input: {
   skippedMedia?: string[];
   lastMediaError?: string | null;
   manualContentMedia?: string[];
+  filteredVideos?: string[];
 } = {}): void => {
   const skippedDividers = input.skippedDividers ?? [];
   const skippedPromptCodeBlocks = input.skippedPromptCodeBlocks ?? 0;
   const skippedMedia = input.skippedMedia ?? [];
   const lastMediaError = input.lastMediaError ?? null;
   const manualContentMedia = input.manualContentMedia ?? [];
+  const filteredVideos = input.filteredVideos ?? [];
   const toast = document.createElement("div");
   toast.setAttribute("data-yt2x-import-toast", "true");
   const notes: string[] = [];
@@ -132,10 +131,13 @@ export const showImportSuccessToast = (input: {
   if (skippedMedia.length > 0) {
     const detail =
       lastMediaError !== null && lastMediaError.length > 0 ? `：${lastMediaError}` : "";
-    notes.push(`${skippedMedia.length} 个封面上传失败，正文格式已保留${detail}`);
+    notes.push(`${skippedMedia.length} 个素材上传失败，正文格式已保留${detail}`);
   }
   if (manualContentMedia.length > 0) {
-    notes.push(`${manualContentMedia.length} 个正文图片/视频未自动插入，请手动补充`);
+    notes.push(`${manualContentMedia.length} 个正文图片未自动插入，请手动补充`);
+  }
+  if (filteredVideos.length > 0) {
+    notes.push(`${filteredVideos.length} 个视频已过滤`);
   }
   if (skippedPromptCodeBlocks > 0) {
     notes.push(`${skippedPromptCodeBlocks} 段英文 prompt 代码块已跳过（非正文内容）`);
@@ -147,7 +149,7 @@ export const showImportSuccessToast = (input: {
   document.body.appendChild(toast);
   window.setTimeout(
     () => toast.remove(),
-    skippedMedia.length > 0 || manualContentMedia.length > 0 ? 15_000 : 6_000,
+    skippedMedia.length > 0 || manualContentMedia.length > 0 || filteredVideos.length > 0 ? 15_000 : 6_000,
   );
 };
 
@@ -172,8 +174,8 @@ const renderDialogHtml = (preview: ImportPreview): string => {
       : `<section><h3>警告</h3><ul>${preview.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul></section>`;
   const missingLines =
     preview.missingSources.length === 0
-      ? "<p>封面素材已齐全；正文图片/视频需在导入后手动插入。</p>"
-      : `<p class="error">仍缺少封面素材：${preview.missingSources.map(escapeHtml).join(", ")}</p>`;
+      ? "<p>封面和正文图片素材已齐全；正文视频会在导入时自动过滤。</p>"
+      : `<p class="error">仍缺少封面或正文图片素材：${preview.missingSources.map(escapeHtml).join(", ")}</p>`;
   const mediaActions =
     preview.missingSources.length === 0
       ? ""
@@ -181,7 +183,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
       <button type="button" data-action="pick-directory">选择文章目录</button>
       <button type="button" data-action="pick-files">选择素材文件</button>
     </div>
-    <p class="meta">请在确认导入前授权封面文件；正文图片/视频暂不自动插入。</p>`;
+    <p class="meta">请在确认导入前授权封面和正文图片文件；正文视频会自动过滤。</p>`;
 
   return `
 <style>
@@ -216,7 +218,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     <h2>导入 Markdown 预览</h2>
     <p class="meta"><strong>标题：</strong>${escapeHtml(preview.title)}</p>
     <p class="meta"><strong>封面：</strong>${escapeHtml(preview.coverImage ?? "（无）")}</p>
-    <p class="meta"><strong>正文素材：</strong>${preview.contentImageCount} 张图片，${preview.contentVideoCount} 个视频（不含封面，导入后请手动插入）</p>
+    <p class="meta"><strong>正文素材：</strong>${preview.contentImageCount} 张图片将自动插入，${preview.contentVideoCount} 个视频将过滤（不含封面）</p>
     <label>订阅档位
       <select name="subscription-tier">
         <option value="premium">X Premium</option>
@@ -245,9 +247,19 @@ const escapeHtml = (value: string): string =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 
-const missingCoverSources = (coverImage: string | null, registry: MediaRegistry): string[] => {
-  if (coverImage === null || registry.getUploadable(coverImage) !== undefined) return [];
-  return registry.missingSources.filter(
-    (source) => registry.resolveMediaPath(source) === coverImage,
+const missingUploadSources = (
+  parseResult: Pick<PreparedArticleImport["parseResult"], "coverImage" | "contentImages">,
+  registry: MediaRegistry,
+): string[] => {
+  const required = [
+    ...(parseResult.coverImage === null ? [] : [parseResult.coverImage]),
+    ...parseResult.contentImages.map((image) => image.path),
+  ];
+  return [
+    ...new Set(
+      required.filter((path) => registry.getUploadable(path) === undefined),
+    ),
+  ].flatMap((path) =>
+    registry.missingSources.filter((source) => registry.resolveMediaPath(source) === path),
   );
 };

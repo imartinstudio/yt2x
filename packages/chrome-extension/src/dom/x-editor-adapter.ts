@@ -61,6 +61,26 @@ export const writeArticleDraftToPage = async (
     report("正在写入标题…");
     await fillTitle(parseResult.title);
     const filteredVideos = parseResult.contentVideos.map((media) => media.path);
+
+    if (parseResult.coverImage !== null) {
+      const coverFile = resolveUploadFile(prepared, parseResult.coverImage);
+      if (coverFile === undefined) {
+        lastMediaError = `Cover image is not authorized: ${parseResult.coverImage}`;
+        skippedMedia.push(parseResult.coverImage);
+      } else {
+        report("正在上传封面…");
+        try {
+          await uploadCoverImage(coverFile);
+          dismissOpenOverlays();
+          await wait(350);
+        } catch (err: unknown) {
+          lastMediaError = err instanceof Error ? err.message : "Unknown cover upload error";
+          skippedMedia.push(parseResult.coverImage);
+          dismissOpenOverlays();
+        }
+      }
+    }
+
     report("正在写入正文…");
     await writeHtmlToEditor(editor, parseResult.html);
     report("正在确认标题与正文…");
@@ -82,26 +102,7 @@ export const writeArticleDraftToPage = async (
     } else {
       await waitForWrittenTitle(parseResult.title);
     }
-    report("正文格式已完成，正在处理封面…");
-
-    if (parseResult.coverImage !== null) {
-      const coverFile = resolveUploadFile(prepared, parseResult.coverImage);
-      if (coverFile === undefined) {
-        lastMediaError = `Cover image is not authorized: ${parseResult.coverImage}`;
-        skippedMedia.push(parseResult.coverImage);
-      } else {
-        report("正在上传封面…");
-        try {
-          await uploadCoverImage(coverFile);
-          dismissOpenOverlays();
-          await wait(350);
-        } catch (err: unknown) {
-          lastMediaError = err instanceof Error ? err.message : "Unknown cover upload error";
-          skippedMedia.push(parseResult.coverImage);
-          dismissOpenOverlays();
-        }
-      }
-    }
+    report("正文格式已完成，正在处理图片…");
 
     const contentImages = [...parseResult.contentImages].sort((a, b) => b.blockIndex - a.blockIndex);
     for (let index = 0; index < contentImages.length; index += 1) {
@@ -417,6 +418,18 @@ const pasteViaClipboard = async (html: string, plain: string): Promise<boolean> 
   return document.execCommand("paste");
 };
 
+const pastePlainViaClipboard = async (editor: HTMLElement, plain: string): Promise<boolean> => {
+  try {
+    await navigator.clipboard.writeText(plain);
+  } catch {
+    return false;
+  }
+  editor.focus();
+  if (document.execCommand("paste")) return true;
+  dispatchSyntheticPaste(editor, "", plain);
+  return true;
+};
+
 const dispatchSyntheticPaste = (editor: HTMLElement, html: string, plain: string): void => {
   if (typeof DataTransfer !== "function" || typeof ClipboardEvent !== "function") return;
   const transfer = new DataTransfer();
@@ -447,6 +460,11 @@ const writeHtmlToEditor = async (editor: HTMLElement, html: string): Promise<voi
       }
     },
     async () => {
+      if (!(await pastePlainViaClipboard(editor, plain))) {
+        throw new Error("X Articles body editor rejected plain clipboard insertion.");
+      }
+    },
+    async () => {
       editor.focus();
       if (!document.execCommand("insertText", false, plain)) {
         throw new Error("X Articles body editor rejected persistent text insertion.");
@@ -457,7 +475,11 @@ const writeHtmlToEditor = async (editor: HTMLElement, html: string): Promise<voi
   for (const attempt of attempts) {
     clearEditorContent(editor);
     await wait(120);
-    await attempt();
+    try {
+      await attempt();
+    } catch {
+      continue;
+    }
     if (await waitForEditorSettled(editor, plain, draft ? 2_000 : 1_000)) return;
   }
 

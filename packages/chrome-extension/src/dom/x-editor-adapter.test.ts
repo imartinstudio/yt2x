@@ -68,7 +68,7 @@ describe("writeArticleDraftToPage", () => {
       configurable: true,
       value: {
         write: vi.fn().mockResolvedValue(undefined),
-        writeText: vi.fn(),
+        writeText: vi.fn().mockRejectedValue(new Error("plain clipboard denied")),
       },
     });
     document.execCommand = vi.fn((command: string, _showUi?: boolean, value?: string) => {
@@ -136,7 +136,7 @@ describe("writeArticleDraftToPage", () => {
 
     const result = await writeArticleDraftToPage(prepared);
 
-    expect(events).toEqual(["code", "divider", "cover", "image"]);
+    expect(events).toEqual(["cover", "code", "divider", "image"]);
     expect(result.skippedMedia).toEqual(["cover.jpg"]);
     expect(result.lastMediaError).toBe("cover failed");
     expect(result.manualContentMedia).toEqual([]);
@@ -148,7 +148,7 @@ describe("writeArticleDraftToPage", () => {
     expect(editor.textContent).toContain("Tail content remains here.");
   });
 
-  it("does not begin media uploads when structural formatting fails", async () => {
+  it("uploads the cover before structural formatting fails", async () => {
     clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
     actionMocks.insertDivider.mockResolvedValue(false);
     const prepared = {
@@ -170,7 +170,7 @@ describe("writeArticleDraftToPage", () => {
     } as unknown as PreparedArticleImport;
 
     await expect(writeArticleDraftToPage(prepared)).rejects.toThrow("X Articles 分割线无法插入");
-    expect(coverMocks.uploadCoverImage).not.toHaveBeenCalled();
+    expect(coverMocks.uploadCoverImage).toHaveBeenCalledWith(expect.any(File));
     expect(actionMocks.insertContentMedia).not.toHaveBeenCalled();
   });
 
@@ -203,7 +203,7 @@ describe("writeArticleDraftToPage", () => {
       "X Articles code insertion replaced the article body",
     );
     expect(editor.textContent).toContain("Tail content remains here.");
-    expect(coverMocks.uploadCoverImage).not.toHaveBeenCalled();
+    expect(coverMocks.uploadCoverImage).toHaveBeenCalledWith(expect.any(File));
   });
 
   it("falls back to persistent text editing without using raw DOM HTML insertion", async () => {
@@ -245,6 +245,63 @@ describe("writeArticleDraftToPage", () => {
     );
     expect(editor.textContent).toContain("Tail content remains here.");
     expect(document.execCommand).not.toHaveBeenCalledWith("insertHTML", false, expect.anything());
+  });
+
+  it("falls back to plain clipboard paste when X rejects pasted HTML", async () => {
+    clipboardHtml = "<p>Intro content long enough.</p><p>Tail content remains here.</p>";
+    let plainClipboard = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        write: vi.fn().mockResolvedValue(undefined),
+        writeText: vi.fn(async (value: string) => {
+          plainClipboard = value;
+        }),
+      },
+    });
+    vi.mocked(document.execCommand).mockImplementation(
+      (command: string, _showUi?: boolean, value?: string) => {
+        if (command === "delete") {
+          if (document.activeElement === editor) editor.innerHTML = "";
+          else title.textContent = "";
+          return true;
+        }
+        if (command === "paste") {
+          if (plainClipboard.length === 0) return false;
+          editor.innerHTML = `<div data-block="true">${plainClipboard}</div>`;
+          return true;
+        }
+        if (command === "insertText") {
+          if (document.activeElement === title) title.textContent = value ?? "";
+          else editor.innerHTML = `<div data-block="true">${value ?? ""}</div>`;
+          return true;
+        }
+        return false;
+      },
+    );
+    const prepared = {
+      parseResult: {
+        title: "Title",
+        coverImage: null,
+        contentImages: [],
+        contentVideos: [],
+        contentCodeBlocks: [],
+        dividers: [],
+        html: clipboardHtml,
+        htmlBlocks: [clipboardHtml],
+        totalBlocks: 2,
+      },
+      mediaRegistry: { getUploadable: () => undefined },
+      generatedBlobs: new Map(),
+    } as unknown as PreparedArticleImport;
+
+    await expect(writeArticleDraftToPage(prepared)).resolves.toEqual(
+      expect.objectContaining({ skippedMedia: [] }),
+    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      "Intro content long enough.\n\nTail content remains here.",
+    );
+    expect(editor.textContent).toContain("Tail content remains here.");
   });
 
   it("keeps the body when content image insertion fails", async () => {

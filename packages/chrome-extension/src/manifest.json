@@ -4,7 +4,10 @@
   "version": "0.2.0",
   "description": "Import local Markdown into the current X Articles draft editor.",
   "icons": {
-    "128": "icons/icon.svg"
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
   },
   "permissions": ["storage", "scripting", "clipboardWrite", "clipboardRead"],
   "host_permissions": ["https://x.com/*"],

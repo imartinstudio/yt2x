@@ -14,10 +14,7 @@ const context = await chromium.launchPersistentContext(profileDir, {
   // MV3 extensions are unreliable in headless Chromium.
   headless: false,
   timeout: 60_000,
-  args: [
-    `--disable-extensions-except=${extensionDir}`,
-    `--load-extension=${extensionDir}`,
-  ],
+  args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`],
 });
 
 const fail = async (message) => {
@@ -84,9 +81,9 @@ try {
   }
 
   const url = page.url();
-  const importButtonCount = await page.locator(
-    "#yt2x-import-markdown-icon-btn, #yt2x-import-markdown-text-btn",
-  ).count();
+  const importButtonCount = await page
+    .locator("#yt2x-import-markdown-icon-btn, #yt2x-import-markdown-text-btn")
+    .count();
   if (importButtonCount === 0) {
     if (!/compose\/articles/iu.test(url)) {
       console.warn(

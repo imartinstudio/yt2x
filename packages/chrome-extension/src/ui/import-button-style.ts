@@ -19,8 +19,8 @@ const applyInteractivePolish = (button: HTMLButtonElement, hoverBackground: stri
     button.style.backgroundColor = button.dataset.yt2xBaseBackground ?? "";
   });
   button.addEventListener("focus", () => {
-    button.style.outline = "2px solid rgba(29,155,240,0.75)";
-    button.style.outlineOffset = "3px";
+    button.style.outline = "";
+    button.style.outlineOffset = "";
   });
   button.addEventListener("blur", () => {
     button.style.outline = "";
@@ -37,7 +37,7 @@ export const styleImportButton = (
     if (anchor instanceof HTMLButtonElement) button.className = anchor.className;
     button.dataset.yt2xBaseBackground = "transparent";
     button.style.cssText =
-      "box-sizing:border-box;margin:0;width:36px;height:36px;min-width:36px;min-height:36px;padding:0;border:0;border-radius:999px;background:transparent;color:rgb(231,233,234);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;line-height:1;transition:background-color 120ms ease,transform 120ms ease";
+      "box-sizing:border-box;margin:0;width:36px;height:36px;min-width:36px;min-height:36px;padding:0;border:0;border-radius:999px;background:transparent;color:rgb(231,233,234);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;line-height:1;outline:none;box-shadow:none;transition:background-color 120ms ease,transform 120ms ease";
     button.style.setProperty("-webkit-tap-highlight-color", "transparent");
     applyInteractivePolish(button, "rgba(239,243,244,0.12)");
     return;
@@ -46,7 +46,7 @@ export const styleImportButton = (
   if (anchor instanceof HTMLButtonElement) button.className = anchor.className;
   button.dataset.yt2xBaseBackground = "rgb(255,255,255)";
   button.style.cssText =
-    "box-sizing:border-box;margin:0;min-height:52px;height:52px;padding:0 28px;border:0;border-radius:9999px;background:rgb(255,255,255);color:rgb(15,20,25);font:800 17px system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;letter-spacing:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;vertical-align:middle;box-shadow:none;line-height:20px;transition:background-color 120ms ease,transform 120ms ease";
+    "box-sizing:border-box;margin:0;min-height:52px;height:52px;padding:0 28px;border:0;border-radius:9999px;background:rgb(255,255,255);color:rgb(15,20,25);font:800 17px system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;letter-spacing:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;vertical-align:middle;outline:none;box-shadow:none;line-height:20px;transition:background-color 120ms ease,transform 120ms ease";
   applyInteractivePolish(button, "rgb(230,230,230)");
 };
 

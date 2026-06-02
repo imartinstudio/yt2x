@@ -16,7 +16,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://x.com/compose/articles*"],
+      "matches": ["https://x.com/*"],
       "js": ["content/x-articles.js"],
       "run_at": "document_idle"
     }

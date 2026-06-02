@@ -46,7 +46,7 @@ BREAK_SCORE = {
 BREAK_BEFORE = set("的但而和与也就又却所以因此然后不过然而但是并且而且")
 
 # Characters that should NOT start a line (closing brackets, etc.)
-NO_LINE_START = set("》」』】）)。，、；：,;:）")
+NO_LINE_START = set("》」』】）)。，、；：,;:）！？!?.")
 
 
 def parse_srt(srt_path: str) -> list[dict]:
@@ -217,13 +217,6 @@ def _wrap_cjk(
     2. Try balanced 2-line split at semantic break points.
     3. If 2 balanced lines won't fit → greedy multi-line fallback.
     """
-    # Handle explicit newlines
-    if "\n" in text:
-        lines: list[str] = []
-        for part in text.split("\n"):
-            lines.extend(_wrap_cjk(part, font, draw, max_text_w))
-        return lines
-
     text = text.strip()
     if not text:
         return []
@@ -271,6 +264,46 @@ def _load_font(font_size: int) -> ImageFont.FreeTypeFont | None:
     return None
 
 
+def _normalize_text(text: str) -> str:
+    """Normalize subtitle text for re-wrapping.
+
+    Source SRT files often contain pre-wrapped line breaks (~15-20 chars/line
+    from Whisper/YouTube). These narrow breaks are artifacts of the original
+    transcription, not semantic breaks. Join all text and let our wrapper
+    determine the optimal line breaks at the target width (~30 CJK chars/line).
+
+    Also removes spaces between CJK characters (artifacts of Whisper wrapping)
+    while preserving spaces around Latin/English words.
+    """
+    # Replace newlines with spaces, then collapse
+    collapsed = " ".join(text.replace("\n", " ").split())
+    # Remove spaces between two CJK characters: "一。 如果" → "一。如果"
+    result = []
+    for i, ch in enumerate(collapsed):
+        if ch == " " and i > 0 and i < len(collapsed) - 1:
+            prev_ok = _is_cjk(collapsed[i - 1])
+            next_ok = _is_cjk(collapsed[i + 1])
+            # Keep space only if one side is non-CJK (Latin/num)
+            if not (prev_ok and next_ok):
+                result.append(ch)
+            # else: drop the space between two CJK characters
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def _is_cjk(ch: str) -> bool:
+    """Check if a character is CJK (Chinese/Japanese/Korean) or CJK punctuation."""
+    cp = ord(ch)
+    return (
+        0x4E00 <= cp <= 0x9FFF  # CJK Unified
+        or 0x3400 <= cp <= 0x4DBF  # CJK Extension A
+        or 0x3000 <= cp <= 0x303F  # CJK punctuation (。、， etc.)
+        or 0xFF00 <= cp <= 0xFFEF  # Fullwidth forms
+        or 0x2000 <= cp <= 0x206F  # General punctuation
+    )
+
+
 def render_subtitle(text: str, _font: ImageFont.FreeTypeFont) -> Image.Image:
     """Render white text on dark rounded background. No stroke, no shadow.
 
@@ -286,6 +319,10 @@ def render_subtitle(text: str, _font: ImageFont.FreeTypeFont) -> Image.Image:
     font = _load_font(FONT_SIZE)
     if font is None:
         raise RuntimeError("No usable CJK font found")
+
+    # Normalize: join source SRT's pre-wrapped lines into a single string
+    # so our wrapper can re-break at the proper width (~30 CJK chars/line).
+    text = _normalize_text(text)
 
     max_text_w_default = int(VIDEO_WIDTH * WIDTH_FRAC_DEFAULT) - int(FONT_SIZE * BG_PAD_X_RATIO) * 2
     max_text_w_wide = int(VIDEO_WIDTH * WIDTH_FRAC_MAX) - int(FONT_SIZE * BG_PAD_X_RATIO) * 2

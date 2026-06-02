@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { LlmPort } from "@yt2x/core";
 import type { ProcessRunner } from "../process/index.js";
-import { burnSubtitles } from "./burn-subtitles.js";
+import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
 import { translateSrt } from "./srt-translator.js";
 
 export type SubtitleSourceMode = "auto" | "youtube" | "transcribe" | "file";
@@ -247,6 +247,48 @@ export const convertSubtitleTextToSrt = (raw: string): string => {
   return serializeSrtBlocks(cues);
 };
 
+/**
+ * Detect the likely language of subtitle content by sampling text cues.
+ * Returns "zh" if CJK characters dominate, "en" if Latin dominates, or undefined if indeterminate.
+ *
+ * This is a lightweight heuristic — it does NOT use an NLP library.
+ * Used to verify that the declared source_language matches actual content,
+ * preventing translation from being skipped when language metadata is wrong.
+ */
+export const detectSubtitleLanguage = (srtContent: string): "zh" | "en" | undefined => {
+  const cues = parseSubtitleBlocks(srtContent);
+  const sampleText = cues
+    .flatMap((c) => c.text)
+    .join(" ")
+    .slice(0, 4_000); // first 4k chars is enough
+
+  let cjk = 0;
+  let latin = 0;
+
+  for (const ch of sampleText) {
+    const cp = ch.codePointAt(0)!;
+    // CJK Unified Ideographs + Extensions + Compatibility + Radicals
+    if (
+      (cp >= 0x4e00 && cp <= 0x9fff) || // CJK Unified
+      (cp >= 0x3400 && cp <= 0x4dbf) || // CJK Extension A
+      (cp >= 0x20000 && cp <= 0x2a6df) || // CJK Extension B
+      (cp >= 0xf900 && cp <= 0xfaff) || // CJK Compatibility
+      (cp >= 0x2f800 && cp <= 0x2fa1f) // CJK Compatibility Supplement
+    ) {
+      cjk++;
+    } else if (
+      (cp >= 0x41 && cp <= 0x5a) || // A-Z
+      (cp >= 0x61 && cp <= 0x7a) // a-z
+    ) {
+      latin++;
+    }
+  }
+
+  if (cjk > 5 && cjk > latin) return "zh";
+  if (latin > 5 && latin > cjk) return "en";
+  return undefined;
+};
+
 const writeManifest = async (videoDir: string, manifest: SubtitleManifest): Promise<void> => {
   await mkdir(path.join(videoDir, "video"), { recursive: true });
   await writeFile(subtitleManifestPath(videoDir), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -342,6 +384,20 @@ export const prepareSourceSubtitle = async (
       // 清理临时 WAV
       await rm(wavPath).catch(() => {});
       method = "local_transcription";
+
+      // Detect actual language from transcription output and correct manifest.
+      // The user-declared sourceLang may not match the audio (e.g. --subtitle-source-lang zh
+      // on an English video). Trusting the declared language blindly causes the translation
+      // step to be skipped — burned "Chinese" subtitles end up in English.
+      try {
+        const transcribedText = await readFile(sourceFile, "utf8");
+        const detected = detectSubtitleLanguage(transcribedText);
+        if (detected !== undefined && detected !== manifest.source_language) {
+          manifest.source_language = detected;
+        }
+      } catch {
+        // Keep declared source_language if detection fails
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       warnings.push(`local transcription failed: ${message}`);
@@ -420,6 +476,10 @@ export type RunSubtitlePipelineOptions = {
   /** When set, burned video is written to this root dir instead of videoDir.
    *  E.g. "files/articles" → "files/articles/<videoId>/video/full.zh-burned.mp4" */
   burnedVideoOutDir?: string;
+  /** 原片已有中文硬字幕时跳过烧录（默认 true） */
+  skipBurnIfChineseBurned?: boolean;
+  /** 强制重新烧录，覆盖已有 burnt video 并跳过硬字幕检测 */
+  force?: boolean;
 };
 
 export type RunSubtitlePipelineResult = {
@@ -467,12 +527,32 @@ export const runSubtitlePipeline = async (
   }
 
   const hasLlm = opts.llm !== undefined && opts.llmModel !== undefined;
-  const sourceIsTargetLang = manifest.source_language === subtitle.targetLang ||
+  const sourceLangCodeMatchesTarget =
+    manifest.source_language === subtitle.targetLang ||
     // 宽松匹配：zh-CN / zh-Hans / zh 都算中文
     (manifest.source_language.startsWith("zh") && subtitle.targetLang.startsWith("zh"));
 
-  // 如果源字幕已经是目标语言，直接复制，无需翻译
-  if (!hasZhSrt && sourceIsTargetLang) {
+  // Verify that the source subtitle content actually matches the declared language.
+  // Prevents skipping translation when language metadata is wrong (e.g. source_language
+  // is "zh" but the SRT file contains English text from a misconfigured transcription).
+  let contentMatchesTargetLang = sourceLangCodeMatchesTarget;
+  if (sourceLangCodeMatchesTarget && subResult.sourceSubtitle !== undefined) {
+    try {
+      const sampleText = await readFile(subResult.sourceSubtitle, "utf8");
+      const detected = detectSubtitleLanguage(sampleText);
+      if (detected !== undefined && subtitle.targetLang.startsWith("zh") && detected !== "zh") {
+        contentMatchesTargetLang = false;
+        warnings.push(
+          `source_language is ${manifest.source_language} but content detected as ${detected}; will translate`,
+        );
+      }
+    } catch {
+      // If we can't read the file, trust the language code
+    }
+  }
+
+  // 如果源字幕已经是目标语言（语言码匹配 + 内容验证通过），直接复制，无需翻译
+  if (!hasZhSrt && contentMatchesTargetLang) {
     await copyFile(subResult.sourceSubtitle, zhSrtPath);
     hasZhSrt = true;
     manifest = {
@@ -483,7 +563,7 @@ export const runSubtitlePipeline = async (
   }
 
   // Only translate if zh.srt doesn't already exist and source is NOT target language
-  if (!hasZhSrt && !sourceIsTargetLang && hasLlm) {
+  if (!hasZhSrt && !contentMatchesTargetLang && hasLlm) {
     try {
       const enSrt = await readFile(subResult.sourceSubtitle, "utf8");
       const zhSrt = await translateSrt(enSrt, {
@@ -514,45 +594,28 @@ export const runSubtitlePipeline = async (
   }
 
   if ((mode === "burned" || mode === "both") && hasZhSrt) {
-    const videoSubdir = path.join(videoDir, "video");
-    const names = await readdir(videoSubdir).catch(() => [] as string[]);
-    const mp4File = names.find((n) => /\.mp4$/i.test(n));
-    if (mp4File !== undefined) {
-      const videoId = path.basename(videoDir);
-      const videoPath = path.join(videoSubdir, mp4File);
+    const burnResult = await burnZhSubtitlesForVideo({
+      videoDir,
+      runner: opts.runner,
+      ...(opts.burnedVideoOutDir !== undefined ? { burnedVideoOutDir: opts.burnedVideoOutDir } : {}),
+      ...(opts.skipBurnIfChineseBurned !== undefined
+        ? { skipIfChineseBurned: opts.skipBurnIfChineseBurned }
+        : {}),
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      ...(opts.force !== undefined ? { force: opts.force } : {}),
+    });
 
-      // Route burned output: if burnedVideoOutDir is set, write to articles/
-      // instead of downloads/. Original video stays in downloads.
-      const burnedSubdir =
-        opts.burnedVideoOutDir !== undefined
-          ? path.join(opts.burnedVideoOutDir, videoId, "video")
-          : videoSubdir;
-      const burnedPath = path.join(burnedSubdir, "full.zh-burned.mp4");
+    if (burnResult.burnedPath !== undefined) {
+      manifest = { ...manifest, burned_video: burnResult.burnedPath };
+    }
 
-      // 如果已烧录的中文字幕视频文件已存在，跳过烧录
-      let burnedExists = false;
-      try {
-        await access(burnedPath);
-        burnedExists = true;
-      } catch {
-        burnedExists = false;
-      }
-
-      if (burnedExists) {
-        manifest = { ...manifest, burned_video: burnedPath };
-        warnings.push("burned video already exists, skipping burn step");
-      } else {
-        await mkdir(burnedSubdir, { recursive: true });
-        await burnSubtitles({
-        videoPath,
-        srtPath: zhSrtPath,
-        outputPath: burnedPath,
-        runner: opts.runner,
-        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-      });
-      manifest = { ...manifest, burned_video: burnedPath };
-      }
-    } else {
+    if (burnResult.skipReason === "already_exists") {
+      warnings.push("burned video already exists, skipping burn step");
+    } else if (burnResult.skipReason === "chinese_burned_detected") {
+      warnings.push(
+        "original video already has burned Chinese subtitles (detected), skipping re-burn",
+      );
+    } else if (burnResult.skipReason === "missing_mp4") {
       warnings.push("no MP4 video file found for subtitle burning");
     }
   }

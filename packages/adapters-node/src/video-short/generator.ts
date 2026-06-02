@@ -6,6 +6,7 @@ import {
   type LlmPort,
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
+import { parseJsonWithRepairs, salvageLooseJsonTextField, stripJsonFenceWrapper } from "../llm/parse-json.js";
 
 export type GenerateXVideoShortInput = {
   llm: LlmPort;
@@ -30,46 +31,21 @@ const GeneratedVideoShortPostSchema = z.object({
   text: z.string().min(1),
 });
 
-const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
-const stripJsonFenceWrapper = (s: string): string => {
-  const m = s.match(JSON_FENCE_RE);
-  return m !== null && m[1] !== undefined ? m[1].trim() : s;
-};
-
-/**
- * 修复 LLM 输出的 JSON 中 text 字段内未转义的控制字符。
- * LLM 有时会在 JSON 字符串值中直接插入真实换行，导致 JSON.parse 失败。
- */
-const repairTextControlChars = (s: string): string => {
-  // 匹配 JSON 字符串值内的控制字符并转义
-  // 策略：找到所有 JSON string literal（"..."），对其内部的控制字符进行转义
-  return s.replace(/"((?:[^"\\]|\\.)*)"/g, (_match, content: string) => {
-    // eslint-disable-next-line no-control-regex
-    const escaped = content.replace(/[\x00-\x1F]/g, (ch) => {
-      switch (ch) {
-        case "\n": return "\\n";
-        case "\r": return "\\r";
-        case "\t": return "\\t";
-        default: return " ";
-      }
-    });
-    return `"${escaped}"`;
-  });
-};
+const JSON_REPAIR_USER_PROMPT =
+  'Your previous reply was not valid JSON. Reply again with strict JSON only in the shape {"text":"..."}. Escape every double quote and newline inside the text field. Do not add markdown fences or commentary.';
 
 export const parseGeneratedVideoShortPostJson = (jsonText: string): GeneratedVideoShortPost => {
+  const raw = stripJsonFenceWrapper(jsonText);
   let parsed: unknown;
-  const raw = stripJsonFenceWrapper(jsonText.trim());
   try {
-    parsed = JSON.parse(raw);
-  } catch {
-    // 如果首次解析失败，尝试修复字符串内的控制字符后重试
-    try {
-      parsed = JSON.parse(repairTextControlChars(raw));
-    } catch (err: unknown) {
+    parsed = parseJsonWithRepairs(raw);
+  } catch (err: unknown) {
+    const salvaged = salvageLooseJsonTextField(raw, "text");
+    if (salvaged === null || salvaged.trim().length === 0) {
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`Video short LLM response is not valid JSON: ${message}`);
     }
+    parsed = { text: salvaged };
   }
 
   const result = GeneratedVideoShortPostSchema.safeParse(parsed);
@@ -77,6 +53,25 @@ export const parseGeneratedVideoShortPostJson = (jsonText: string): GeneratedVid
     throw new Error(`Video short LLM response does not match expected schema: ${result.error.message}`);
   }
   return { text: result.data.text };
+};
+
+const chatVideoShort = async (
+  input: GenerateXVideoShortInput,
+  userPrompt: string,
+  temperature: number,
+  maxTokens: number,
+): Promise<{ content: string; model: string; finishReason: string; usage?: GenerateXVideoShortResult["usage"] }> => {
+  const resp = await input.llm.chat({
+    model: input.model,
+    messages: [
+      { role: "system", content: VIDEO_SHORT_X_SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    temperature,
+    maxTokens,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  return resp;
 };
 
 export const generateXVideoShortContent = async (
@@ -91,18 +86,29 @@ export const generateXVideoShortContent = async (
   );
 
   const t0 = Date.now();
-  const resp = await input.llm.chat({
-    model: input.model,
-    messages: [
-      { role: "system", content: VIDEO_SHORT_X_SYSTEM_PROMPT },
-      { role: "user", content: userPrompt },
-    ],
-    temperature: input.temperature ?? 0.6,
-    maxTokens: input.maxTokens ?? 256,
-    ...(input.signal !== undefined ? { signal: input.signal } : {}),
-  });
+  const maxTokens = input.maxTokens ?? 768;
+  const temperature = input.temperature ?? 0.6;
 
-  const videoShortPost = parseGeneratedVideoShortPostJson(resp.content);
+  let resp = await chatVideoShort(input, userPrompt, temperature, maxTokens);
+  let videoShortPost: GeneratedVideoShortPost;
+  try {
+    videoShortPost = parseGeneratedVideoShortPostJson(resp.content);
+  } catch {
+    const repairResp = await input.llm.chat({
+      model: input.model,
+      messages: [
+        { role: "system", content: VIDEO_SHORT_X_SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+        { role: "assistant", content: resp.content },
+        { role: "user", content: JSON_REPAIR_USER_PROMPT },
+      ],
+      temperature: 0.2,
+      maxTokens,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    });
+    resp = repairResp;
+    videoShortPost = parseGeneratedVideoShortPostJson(repairResp.content);
+  }
 
   const result: GenerateXVideoShortResult = {
     videoShortPost,

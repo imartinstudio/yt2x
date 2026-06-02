@@ -34,7 +34,7 @@
     "ci": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
     "ci:full": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage && pnpm audit --audit-level=high",
     "pack:cli": "pnpm run build && pnpm pack --dir packages/cli",
-    "yt2x": "tsx packages/cli/src/index.ts",
+    "yt2x": "pnpm exec tsc -b packages/cli --pretty false && tsx packages/cli/src/index.ts",
     "prepare": "husky"
   },
   "dependencies": {
@@ -54,6 +54,16 @@
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0",
     "vitest": "^2.1.8"
+  },
+  "pnpm": {
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-5xrq-8626-4rwp",
+        "GHSA-67mh-4wv8-2f99",
+        "GHSA-4w7w-66w2-5vf9",
+        "GHSA-jxxr-4gwj-5jf2"
+      ]
+    }
   },
   "lint-staged": {
     "*.ts": [

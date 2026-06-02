@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   cleanupSrt,
   convertSubtitleTextToSrt,
+  detectSubtitleLanguage,
   parseSubtitleBlocks,
   prepareSourceSubtitle,
 } from "./video-subtitles.js";
@@ -250,5 +251,73 @@ about the tools you use
 
   it("handles empty input gracefully", () => {
     expect(cleanupSrt("")).toBe("");
+  });
+});
+
+describe("detectSubtitleLanguage", () => {
+  it("detects Chinese from CJK-dominant content", () => {
+    const srt = `1
+00:00:01,000 --> 00:00:03,000
+本周，Anthropic 发布了 Opus 4.8 模型
+
+2
+00:00:03,000 --> 00:00:06,000
+他们称这是世界上最先进的人工智能模型
+`;
+    expect(detectSubtitleLanguage(srt)).toBe("zh");
+  });
+
+  it("detects English from Latin-dominant content", () => {
+    const srt = `1
+00:00:01,000 --> 00:00:03,000
+This Week Anthropic Released Opus 4.8
+
+2
+00:00:03,000 --> 00:00:06,000
+which they say is the most advanced AI model
+`;
+    expect(detectSubtitleLanguage(srt)).toBe("en");
+  });
+
+  it("returns undefined for content without enough text", () => {
+    const srt = `1
+00:00:01,000 --> 00:00:02,000
+  - -
+`;
+    expect(detectSubtitleLanguage(srt)).toBeUndefined();
+  });
+
+  it("detects Chinese even with mixed English technical terms", () => {
+    // Common scenario: Chinese subtitles with English AI/product names
+    const srt = `1
+00:00:01,000 --> 00:00:05,000
+本周 OpenAI 发布了 Codex 超级应用的重大更新
+
+2
+00:00:05,000 --> 00:00:09,000
+其中一些更新他们甚至没有在公开场合宣布
+`;
+    expect(detectSubtitleLanguage(srt)).toBe("zh");
+  });
+
+  it("detects English from real-world transcription output", () => {
+    // Simulates the actual bug scenario: whisper output labeled as "zh"
+    const srt = `1
+00:00:00,000 --> 00:00:03,080
+This Week and Thropic Released Opus 4.8
+
+2
+00:00:03,080 --> 00:00:06,820
+which they say is the most advanced AI model in the world
+
+3
+00:00:06,820 --> 00:00:11,160
+However, others are saying that we've entered the iPhone era of AI models
+
+4
+00:00:11,160 --> 00:00:14,600
+where you can't even tell the difference between each model upgrade
+`;
+    expect(detectSubtitleLanguage(srt)).toBe("en");
   });
 });

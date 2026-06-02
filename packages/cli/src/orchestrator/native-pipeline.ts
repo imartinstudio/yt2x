@@ -1,13 +1,12 @@
-import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
-  burnSubtitles,
+  burnZhSubtitlesForVideo,
   collectNativePipelineVideoIds,
   DEFAULT_ARTICLE_OUT_DIR,
   DEFAULT_OUT_DIR,
   defaultProcessRunner,
-  detectBurnedSubtitles,
   executeNativeAcquire,
   extractVideoId,
   listBatchVideosFromOutRoot,
@@ -87,60 +86,36 @@ const burnSubtitlesForVideo = async (
   outRoot: string,
   articleOutRoot: string,
   videoId: string,
+  force: boolean,
 ): Promise<void> => {
-  const videoDir = path.join(outRoot, videoId, "video");
-  const zhSrtPath = path.join(videoDir, "full.zh.srt");
-
-  // 必须有 full.zh.srt 才能烧录
-  try {
-    await access(zhSrtPath);
-  } catch {
-    return;
-  }
-
-  // 找到 MP4 文件
-  const names = await readdir(videoDir).catch(() => [] as string[]);
-  const mp4File = names.find((n) => /\.mp4$/i.test(n));
-  if (mp4File === undefined) return;
-
-  // 输出路径
-  const burnedSubdir = path.join(articleOutRoot, videoId, "video");
-  const burnedPath = path.join(burnedSubdir, "full.zh-burned.mp4");
-
-  // 已烧录则跳过
-  try {
-    await access(burnedPath);
-    return;
-  } catch {
-    /* 不存在，继续 */
-  }
-
-  // 检测原视频是否已有硬字幕（硬编码到画面中的字幕）
-  const detectResult = await detectBurnedSubtitles(
-    path.join(videoDir, mp4File),
-    defaultProcessRunner,
-  );
-  if (detectResult.hasBurnedSubtitles) {
-    logger.info({ videoId }, "original video already has burned subtitles, skipping");
-    return;
-  }
-
-  await mkdir(burnedSubdir, { recursive: true });
-  await burnSubtitles({
-    videoPath: path.join(videoDir, mp4File),
-    srtPath: zhSrtPath,
-    outputPath: burnedPath,
+  const result = await burnZhSubtitlesForVideo({
+    videoDir: path.join(outRoot, videoId),
+    burnedVideoOutDir: articleOutRoot,
     runner: defaultProcessRunner,
+    skipIfChineseBurned: true,
+    ...(force ? { force } : {}),
   });
 
-  // 更新 subtitle-manifest.json
-  const manifestPath = path.join(outRoot, videoId, "video", "subtitle-manifest.json");
-  try {
-    const existing = JSON.parse(await readFile(manifestPath, "utf8"));
-    existing.burned_video = burnedPath;
-    await writeFile(manifestPath, JSON.stringify(existing, null, 2) + "\n", "utf8");
-  } catch {
-    /* manifest 可能不存在 */
+  if (result.skipReason === "chinese_burned_detected") {
+    logger.info(
+      { videoId, detect: result.detect },
+      "original video already has burned Chinese subtitles, skipping re-burn",
+    );
+    return;
+  }
+
+  if (
+    result.detect?.hasBurnedSubtitles === true &&
+    result.detect.hasChineseBurnedSubtitles === false
+  ) {
+    logger.info(
+      { videoId, detect: result.detect },
+      "bottom overlay detected but not confirmed as Chinese burned subs; will still burn zh subtitles",
+    );
+  }
+
+  if (result.burned) {
+    logger.info({ videoId, burnedPath: result.burnedPath }, "subtitle burn complete");
   }
 };
 
@@ -512,7 +487,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         progress.setActive(`subtitle-burn · ${id}`);
         const t0 = performance.now();
         try {
-          await burnSubtitlesForVideo(outRoot, articleOutRoot, id);
+          await burnSubtitlesForVideo(outRoot, articleOutRoot, id, args.control.force);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           logger.error({ videoId: id, err: message }, "subtitle burn failed");

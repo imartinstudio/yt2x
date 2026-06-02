@@ -36,6 +36,8 @@ export type PrepareYoutubeVideoOptions = {
   signal?: AbortSignal;
   verbose?: boolean;
   progress?: AcquireProgressCallbacks;
+  /** 强制重新烧录字幕 */
+  force?: boolean;
   llm?: LlmPort;
   llmModel?: string;
 };
@@ -272,6 +274,7 @@ export const prepareYoutubeVideo = async (
           runner: opts.runner,
           ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
           ...(opts.burnedVideoOutDir !== undefined ? { burnedVideoOutDir: opts.burnedVideoOutDir } : {}),
+          ...(opts.force !== undefined ? { force: opts.force } : {}),
         });
         result.warnings.push(...warnings);
       });

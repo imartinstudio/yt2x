@@ -296,7 +296,8 @@ Divider 推导和 HTML 渲染抽到 `packages/core` 的浏览器安全模块，N
 
 ### Task 6: 安全、回归测试与真实手测
 
-状态：部分完成（单测与 DOM fixture 已落地；真实 X Premium 手测待你在目标页面执行）
+状态：部分完成（单测与 DOM fixture 已落地；2026-06-02 已在真实 X Premium
+Articles 页面完成页面漂移检查，文件导入因 Codex Chrome Extension 文件上传权限阻塞，待开启权限后复测）
 
 范围：
 
@@ -308,6 +309,21 @@ Divider 推导和 HTML 渲染抽到 `packages/core` 的浏览器安全模块，N
 
 - 样例包含 H1、H2/H3、封面、正文图、表格、Mermaid、代码块和 `---`。
 - 完成导入后内容保存在草稿页，人工检查发布按钮未被自动触发。
+
+手测记录（2026-06-02，Asia/Shanghai）：
+
+- 环境：真实 Chrome 用户会话，X 已登录账号 `@php_martin`，页面 URL
+  `https://x.com/compose/articles`，页面语言为中文。
+- 页面状态：扩展按钮已成功挂载，检测到侧栏图标入口
+  `#yt2x-import-markdown-icon-btn` 与空状态文本入口
+  `#yt2x-import-markdown-text-btn`；X 页面包含 `文章 / 草稿 / 已发布` 与空状态
+  `撰写` 文案，未发现注入按钮定位漂移。
+- 样例输入：临时 Markdown fixture 覆盖 H1、H2、H3、本地图片、表格、Mermaid、
+  `---` 分割线、粗体、斜体和链接；本地图片使用仓库扩展图标复制到临时目录作为 fixture。
+- 阻塞点：点击导入按钮后文件选择器可打开，但 Codex Chrome Extension 的
+  `fileChooser.setFiles` 返回 `Not allowed`，无法在当前权限下自动选择本地 `.md` 文件。
+- 结论：真实页面按钮注入与入口定位通过；完整 Markdown 导入、草稿内容保存、图片上传、
+  表格/Mermaid PNG 插入和发布按钮未触发仍待开启 Chrome 插件文件上传权限后复测。
 
 ## 建议排期
 

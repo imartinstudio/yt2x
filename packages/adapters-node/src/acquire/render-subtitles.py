@@ -127,12 +127,11 @@ def _find_balanced_split(
 ) -> int | None:
     """Find the best position to split text into 2 balanced lines.
 
-    Searches the middle 60% of the text for break positions,
-    scores each by semantic quality and line balance.
+    Searches for break positions with good semantic quality.
+    Prefers filling the available width over forcing equal line lengths.
     Returns the split position (index where line 2 starts), or None.
     """
     full_w = _text_width(text, font, draw)
-    target_w = full_w / 2
 
     # Find all candidate break positions
     candidates: list[tuple[int, float]] = []
@@ -149,21 +148,21 @@ def _find_balanced_split(
         if first_w > max_text_w or second_w > max_text_w:
             continue
 
-        # Search range: 25%-75% of full width (wider for better balance)
+        # Search range: 15%-85% of full width (wider range, less strict balance)
         first_ratio = first_w / full_w if full_w > 0 else 0
-        if first_ratio < 0.22 or first_ratio > 0.78:
+        if first_ratio < 0.15 or first_ratio > 0.85:
             continue
 
         sem_score = _break_score(ch, next_ch)
         if sem_score < 0.15:
             continue  # skip terrible break points only
 
-        # Balance score: closer to 50/50 is better
-        balance = 1.0 - abs(0.5 - first_ratio) * 2.0
+        # Fill score: prefer filling the available width.
+        # A split where line 1 fills 80% of max_w scores higher than 50%.
+        fill = first_w / max_text_w if max_text_w > 0 else 0
 
-        # Balance is weighted higher — readability depends more on
-        # equal line lengths than perfect semantic breaks
-        score = balance * 0.6 + sem_score * 0.4
+        # Semantic quality is the primary factor. Fill is a tiebreaker.
+        score = sem_score * 0.55 + fill * 0.3 + (1.0 - abs(0.5 - first_ratio)) * 0.15
         candidates.append((i, score))
 
     if not candidates:
@@ -179,7 +178,10 @@ def _find_break_for_line(
     draw: ImageDraw.Draw,
     max_text_w: int,
 ) -> int:
-    """Find where to break a single line that exceeds max_text_w."""
+    """Find where to break a single line that exceeds max_text_w.
+
+    Never leaves punctuation at the start of the next line.
+    """
     lo, hi = 1, len(text)
     best = 1
     while lo <= hi:
@@ -189,19 +191,27 @@ def _find_break_for_line(
             lo = mid + 1
         else:
             hi = mid - 1
+
     # Search backward from best for a semantic break
-    for ch_set, min_score in [
-        (set("。！？!?\n"), 1.0),
-        (set("；：;:"), 0.9),
-        (set("，,、"), 0.7),
+    for ch_set in [
+        set("。！？!?"),
+        set("；：;:"),
+        set("，,、"),
     ]:
-        for i in range(best, max(1, int(best * 0.7)), -1):
+        for i in range(best, max(1, int(best * 0.65)), -1):
             if text[i - 1] in ch_set:
-                return i
-    for i in range(best, max(1, int(best * 0.7)), -1):
-        if text[i - 1] == " ":
-            return i
-    return best
+                # Found punctuation — break AFTER it so it ends line 1.
+                # Check that the next char (if any) is NOT also punctuation.
+                pos = i
+                while pos < len(text) and text[pos] in NO_LINE_START:
+                    pos += 1
+                return pos
+
+    # No semantic break found — use best, but never split before punctuation
+    pos = best
+    while pos < len(text) and text[pos] in NO_LINE_START:
+        pos += 1
+    return pos
 
 
 def _wrap_cjk(

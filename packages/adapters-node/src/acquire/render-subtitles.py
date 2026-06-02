@@ -19,8 +19,6 @@ FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
 ]
 FONT_SIZE = 32
-FONT_SIZE_MIN = 24        # 最小字体：超长文本优先缩字
-FONT_SIZE_STEP = 2        # 每次缩小 2px
 
 LINE_SPACING_RATIO = 0.55  # 行距 / 字体大小
 BG_PAD_X_RATIO = 0.8       # 水平内边距 / 字体大小
@@ -259,86 +257,56 @@ def _wrap_cjk(
     return lines
 
 
-def _try_render(
-    text: str,
-    font_size: int,
-    draw: ImageDraw.Draw,
-    max_text_w: int,
-) -> tuple[list[str], ImageFont.FreeTypeFont] | None:
-    """Try to wrap text at given font size. Returns (lines, font) or None if >3 lines."""
-    # Load font at this size
-    font = None
+def _load_font(font_size: int) -> ImageFont.FreeTypeFont | None:
+    """Load a CJK font at the given size. Returns None if no font found."""
     for fp in FONT_CANDIDATES:
         try:
             for idx in (3, 2, 1, 0):
                 try:
-                    font = ImageFont.truetype(fp, font_size, index=idx)
-                    break
+                    return ImageFont.truetype(fp, font_size, index=idx)
                 except (OSError, TypeError):
                     continue
-            if font:
-                break
         except OSError:
             continue
-    if font is None:
-        return None
-
-    lines = _wrap_cjk(text, font, draw, max_text_w)
-    if len(lines) <= 3:
-        return (lines, font)
     return None
 
 
-def render_subtitle(text: str, font: ImageFont.FreeTypeFont) -> Image.Image:
+def render_subtitle(text: str, _font: ImageFont.FreeTypeFont) -> Image.Image:
     """Render white text on dark rounded background. No stroke, no shadow.
 
-    Uses adaptive strategy for long text:
-    1. Try 2 balanced lines at default font size and 80% width
-    2. If >2 lines: try shrinking font (down to FONT_SIZE_MIN)
-    3. If still >2: expand width to 85%
-    4. If still >2 at min font + max width: allow 3 lines
+    Consistent font size strategy (avoids size jitter across cues):
+    1. Always use FONT_SIZE (32px) — never shrink individual cues.
+    2. Try 80% width for 2 balanced lines.
+    3. Expand to 85% width if needed.
+    4. Only if text is extremely long: allow 3 lines at 32px.
     """
     dummy = Image.new("RGBA", (1, 1))
     dd = ImageDraw.Draw(dummy)
 
-    # Determine max_text_w and font size adaptively
+    font = _load_font(FONT_SIZE)
+    if font is None:
+        raise RuntimeError("No usable CJK font found")
+
     max_text_w_default = int(VIDEO_WIDTH * WIDTH_FRAC_DEFAULT) - int(FONT_SIZE * BG_PAD_X_RATIO) * 2
     max_text_w_wide = int(VIDEO_WIDTH * WIDTH_FRAC_MAX) - int(FONT_SIZE * BG_PAD_X_RATIO) * 2
 
-    # Step 1: Try default font, default width
-    result = _try_render(text, FONT_SIZE, dd, max_text_w_default)
+    # Try default width, then wide width
+    for max_w in (max_text_w_default, max_text_w_wide):
+        lines = _wrap_cjk(text, font, dd, max_w)
+        if len(lines) <= 2:
+            break
 
-    # Step 2: If >2 lines, try shrinking font with default width
-    if result is None or len(result[0]) > 2:
-        for fs in range(FONT_SIZE - FONT_SIZE_STEP, FONT_SIZE_MIN - 1, -FONT_SIZE_STEP):
-            result = _try_render(text, fs, dd, max_text_w_default)
-            if result is not None and len(result[0]) <= 2:
-                break
+    # Fallback: allow 3 lines for extreme cases (very long text)
+    if len(lines) > 3:
+        lines = _wrap_cjk(text, font, dd, max_text_w_wide)
+    if len(lines) > 3:
+        lines = lines[:3]  # clamp to 3 lines max
 
-    # Step 3: If still >2 lines, try min font with wide width
-    if result is None or len(result[0]) > 2:
-        for fs in range(FONT_SIZE, FONT_SIZE_MIN - 1, -FONT_SIZE_STEP):
-            result = _try_render(text, fs, dd, max_text_w_wide)
-            if result is not None and len(result[0]) <= 2:
-                break
-
-    # Step 4: Allow 3 lines at default font as last resort
-    if result is None or len(result[0]) > 3:
-        result = _try_render(text, FONT_SIZE, dd, max_text_w_default)
-
-    if result is None:
-        # Ultimate fallback: min font, wide width
-        result = _try_render(text, FONT_SIZE_MIN, dd, max_text_w_wide)
-        if result is None:
-            result = ([text], font)  # desperate fallback
-
-    lines, render_font = result
     wrapped_text = "\n".join(lines)
-    used_font_size = render_font.size if hasattr(render_font, 'size') else FONT_SIZE
-    ls, bg_pad_x, bg_pad_y, bg_radius = _line_params(used_font_size)
+    ls, bg_pad_x, bg_pad_y, bg_radius = _line_params(FONT_SIZE)
 
     # Measure
-    bbox = dd.multiline_textbbox((0, 0), wrapped_text, font=render_font, spacing=ls)
+    bbox = dd.multiline_textbbox((0, 0), wrapped_text, font=font, spacing=ls)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
     # Clamp width: if text is very short, bg is centered at text width
@@ -363,7 +331,7 @@ def render_subtitle(text: str, font: ImageFont.FreeTypeFont) -> Image.Image:
     draw.multiline_text(
         (tx, ty),
         wrapped_text,
-        font=render_font,
+        font=font,
         fill=TEXT_COLOR,
         spacing=ls,
     )

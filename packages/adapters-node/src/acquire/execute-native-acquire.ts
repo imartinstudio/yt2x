@@ -278,6 +278,7 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
         ...(opts.llm !== undefined ? { llm: opts.llm } : {}),
         ...(opts.llmModel !== undefined ? { llmModel: opts.llmModel } : {}),
         ...(opts.articleOutDir !== undefined ? { burnedVideoOutDir: opts.articleOutDir } : {}),
+        ...(opts.control.force !== undefined ? { force: opts.control.force } : {}),
         runner,
         timeoutMs,
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),

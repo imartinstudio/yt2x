@@ -23,6 +23,7 @@ export { sanitizeVideoId } from "./video-id-from-url.js";
 export {
   runSubtitlePipeline,
   prepareSourceSubtitle,
+  detectSubtitleLanguage,
   type RunSubtitlePipelineOptions,
   type RunSubtitlePipelineResult,
   type VideoSubtitleOptions,
@@ -41,3 +42,9 @@ export {
   type VerificationResult,
 } from "./burn-subtitles.js";
 export { detectBurnedSubtitles, type DetectBurnedSubtitlesResult } from "./detect-burned-subs.js";
+export {
+  burnZhSubtitlesForVideo,
+  type BurnZhSubtitlesForVideoOptions,
+  type BurnZhSubtitlesForVideoResult,
+  type BurnZhSubtitlesSkipReason,
+} from "./burn-zh-subtitles-for-video.js";

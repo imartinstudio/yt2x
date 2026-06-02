@@ -34,7 +34,7 @@
     "ci": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
     "ci:full": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage && pnpm audit --audit-level=high",
     "pack:cli": "pnpm run build && pnpm pack --dir packages/cli",
-    "yt2x": "tsx packages/cli/src/index.ts",
+    "yt2x": "pnpm exec tsc -b packages/cli --pretty false && tsx packages/cli/src/index.ts",
     "prepare": "husky"
   },
   "dependencies": {

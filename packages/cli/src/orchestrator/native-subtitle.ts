@@ -19,7 +19,10 @@ export type SubtitleFlags = NativeLlmCliFlags & {
   subtitleSource?: string;
   subtitleFile?: string;
   articleOutDir?: string;
+  /** Commander sets this when --no-skip-burn-if-chinese-burned is passed */
+  noSkipBurnIfChineseBurned?: boolean;
   verbose?: boolean;
+  force?: boolean;
 };
 
 /** 退出码常亮 */
@@ -52,8 +55,20 @@ export const executeNativeSubtitle = async (flags: SubtitleFlags): Promise<numbe
     ...(flags.subtitleFile !== undefined ? { file: flags.subtitleFile } : {}),
   };
 
+  const skipBurnIfChineseBurned = flags.noSkipBurnIfChineseBurned !== true;
+  const articleOutDir =
+    flags.articleOutDir !== undefined
+      ? path.resolve(flags.articleOutDir)
+      : path.resolve("files/articles");
+
   logger.info(
-    { videoDir, mode: subtitle.mode, source: subtitle.source },
+    {
+      videoDir,
+      mode: subtitle.mode,
+      source: subtitle.source,
+      skipBurnIfChineseBurned,
+      articleOutDir,
+    },
     "yt2x subtitle: running pipeline",
   );
 
@@ -64,13 +79,24 @@ export const executeNativeSubtitle = async (flags: SubtitleFlags): Promise<numbe
       llm: llm.adapter,
       llmModel: llm.model,
       runner: defaultProcessRunner,
-      ...(flags.articleOutDir !== undefined
-        ? { burnedVideoOutDir: path.resolve(flags.articleOutDir) }
-        : {}),
+      burnedVideoOutDir: articleOutDir,
+      skipBurnIfChineseBurned,
+      ...(flags.force !== undefined ? { force: flags.force } : {}),
     });
 
     for (const w of warnings) {
       logger.warn({ videoDir }, w);
+    }
+
+    if (
+      warnings.some((w) =>
+        w.includes("burned Chinese subtitles"),
+      )
+    ) {
+      logger.info(
+        { videoDir, detectSkippedBurn: true },
+        "yt2x subtitle: skipped burn because original video has Chinese hard subs (use --no-skip-burn-if-chinese-burned to force)",
+      );
     }
 
     logger.info(

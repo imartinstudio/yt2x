@@ -38,7 +38,7 @@ describe("import button style", () => {
     expect(button.nextElementSibling).toBe(anchor);
   });
 
-  it("applies hover and focus affordances to the icon button", () => {
+  it("applies hover without adding a focus outline to the icon button", () => {
     const anchor = document.createElement("button");
     const button = document.createElement("button");
     styleImportButton(button, anchor, "icon");
@@ -50,7 +50,8 @@ describe("import button style", () => {
     expect(button.style.backgroundColor).toBe("transparent");
 
     button.dispatchEvent(new FocusEvent("focus"));
-    expect(button.style.outline).toBe("2px solid rgba(29,155,240,0.75)");
+    expect(button.style.outline).toBe("");
+    expect(button.style.outlineOffset).toBe("");
 
     button.dispatchEvent(new FocusEvent("blur"));
     expect(button.style.outline).toBe("");
@@ -79,6 +80,9 @@ describe("import button style", () => {
     expect(button.style.background).toBe("rgb(255, 255, 255)");
     expect(button.style.color).toBe("rgb(15, 20, 25)");
     expect(button.style.borderRadius).toBe("9999px");
+    expect(button.style.outline).toBe("none");
+    button.dispatchEvent(new FocusEvent("focus"));
+    expect(button.style.outline).toBe("");
     expect(button.textContent).toBe("导入");
   });
 });

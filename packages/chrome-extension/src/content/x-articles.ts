@@ -40,6 +40,7 @@ import {
 } from "../ui/import-button-style.js";
 
 const MOUNT_ATTR = "data-yt2x-import-mounted";
+const ARTICLE_PATH_PREFIX = "/compose/articles";
 
 type ImportMode = "new-draft" | "current-draft";
 
@@ -73,6 +74,16 @@ const buttonConfigs: ImportButtonConfig[] = [
     findAnchor: findImportTextButtonAnchor,
   },
 ];
+
+const isArticleComposePage = (): boolean =>
+  location.hostname === "x.com" && location.pathname.startsWith(ARTICLE_PATH_PREFIX);
+
+const removeImportButtons = (): void => {
+  for (const config of buttonConfigs) {
+    document.getElementById(config.id)?.remove();
+  }
+  document.documentElement.removeAttribute(MOUNT_ATTR);
+};
 
 const mountImportButton = (config: ImportButtonConfig): void => {
   const anchor = config.findAnchor();
@@ -114,6 +125,10 @@ const mountImportButton = (config: ImportButtonConfig): void => {
 };
 
 const mountImportButtons = (): void => {
+  if (!isArticleComposePage()) {
+    removeImportButtons();
+    return;
+  }
   for (const config of buttonConfigs) {
     mountImportButton(config);
   }
@@ -127,6 +142,33 @@ const scheduleMountImportButtons = (): void => {
     mountTimer = 0;
     mountImportButtons();
   }, 350);
+};
+
+const startMountRetryWindow = (): void => {
+  let attempts = 0;
+  const retry = window.setInterval(() => {
+    attempts += 1;
+    scheduleMountImportButtons();
+    if (attempts >= 20 || document.documentElement.hasAttribute(MOUNT_ATTR)) {
+      window.clearInterval(retry);
+    }
+  }, 500);
+};
+
+const patchHistoryNavigation = (): void => {
+  const notifyRouteChange = (): void => {
+    scheduleMountImportButtons();
+    startMountRetryWindow();
+  };
+  for (const method of ["pushState", "replaceState"] as const) {
+    const original = history[method];
+    history[method] = function patchedHistoryMethod(...args) {
+      const result = original.apply(this, args);
+      notifyRouteChange();
+      return result;
+    };
+  }
+  window.addEventListener("popstate", notifyRouteChange);
 };
 
 const handleImportClick = async (mode: ImportMode): Promise<void> => {
@@ -218,4 +260,6 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
 const observer = new MutationObserver(scheduleMountImportButtons);
 
 observer.observe(document.documentElement, { childList: true, subtree: true });
+patchHistoryNavigation();
 scheduleMountImportButtons();
+startMountRetryWindow();

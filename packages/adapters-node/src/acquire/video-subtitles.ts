@@ -566,7 +566,7 @@ export const runSubtitlePipeline = async (
   if (!hasZhSrt && !contentMatchesTargetLang && hasLlm) {
     try {
       const enSrt = await readFile(subResult.sourceSubtitle, "utf8");
-      const zhSrt = await translateSrt(enSrt, {
+      const { srt: zhSrt, warnings: translationWarnings } = await translateSrt(enSrt, {
         llm: opts.llm!,
         model: opts.llmModel!,
         sourceLang: subtitle.sourceLang,
@@ -580,6 +580,7 @@ export const runSubtitlePipeline = async (
         target_subtitle: "video/full.zh.srt",
         translation_method: "llm",
       };
+      warnings.push(...translationWarnings);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       if (mustHaveSubtitles) {

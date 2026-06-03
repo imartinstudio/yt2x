@@ -34,7 +34,7 @@ describe("translateSrt", () => {
       ]),
     );
 
-    const result = await translateSrt(sampleSrt, {
+    const { srt: result } = await translateSrt(sampleSrt, {
       llm,
       model: "test",
       sourceLang: "en",
@@ -74,7 +74,7 @@ describe("translateSrt", () => {
         sourceLang: "en",
         targetLang: "zh-CN",
       }),
-    ).rejects.toThrow(/not a JSON array/);
+    ).rejects.toThrow(/translation returned 0/);
   });
 
   it("throws on empty SRT input", async () => {
@@ -111,7 +111,7 @@ describe("translateSrt", () => {
       },
     };
 
-    const result = await translateSrt(sampleSrt, {
+    const { srt: result } = await translateSrt(sampleSrt, {
       llm,
       model: "test",
       sourceLang: "en",
@@ -144,7 +144,7 @@ describe("translateSrt", () => {
       },
     };
 
-    const result = await translateSrt(sampleSrt, {
+    const { srt: result } = await translateSrt(sampleSrt, {
       llm,
       model: "test",
       sourceLang: "en",
@@ -153,5 +153,107 @@ describe("translateSrt", () => {
 
     expect(calls).toBe(2);
     expect(result).toContain("你好世界");
+  });
+
+  it("survives a truncated JSON array by salvaging complete objects", async () => {
+    // Simulates the actual bug: LLM returns truncated JSON array.
+    // salvagePartialJsonArray recovers 1 complete object from the truncation.
+    // Phase 2 repair fills the remaining 2 missing blocks.
+    const trunc = `[
+      {"index":1,"text":"你好世界"},
+      {"index":2,"text":"你今天`; // truncated mid-object
+
+    let callCount = 0;
+    const repairingLlm: LlmPort = {
+      chat: async (req: ChatRequest): Promise<ChatResponse> => {
+        callCount++;
+        if (callCount === 1) {
+          // Phase 1 batch: truncated response — only 1 complete object salvageable
+          return { content: trunc, model: "test", finishReason: "stop" };
+        }
+        // Phase 2/3 repair: return blocks for whatever indices were requested
+        const requested = JSON.parse(req.messages[1]!.content) as Array<{ index: number }>;
+        return {
+          content: JSON.stringify(
+            requested.map((b) => ({ index: b.index, text: `修复${b.index}` })),
+          ),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const { srt: result, warnings } = await translateSrt(sampleSrt, {
+      llm: repairingLlm,
+      model: "test",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+    });
+
+    expect(result).toContain("你好世界");
+    expect(result).toContain("修复2");
+    expect(result).toContain("修复3");
+    // Should have warned about the partial batch
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it("warns on partial batch results instead of throwing", async () => {
+    // Second batch returns only 1 block → repair fills the gap
+    const longSrt = `1
+00:00:01,000 --> 00:00:03,500
+Block one
+
+2
+00:00:04,000 --> 00:00:06,000
+Block two
+
+3
+00:00:07,000 --> 00:00:09,500
+Block three
+
+4
+00:00:10,000 --> 00:00:12,500
+Block four
+`;
+
+    // BATCH_SIZE is 30, so all 4 blocks go in one batch.
+    // First call returns partial, second (repair) fills missing.
+    let callCount = 0;
+    const llm: LlmPort = {
+      chat: async (_req: ChatRequest): Promise<ChatResponse> => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            content: JSON.stringify([
+              { index: 1, text: "区块1" },
+              { index: 4, text: "区块4" },
+            ]),
+            model: "test",
+            finishReason: "stop",
+          };
+        }
+        return {
+          content: JSON.stringify([
+            { index: 2, text: "修复2" },
+            { index: 3, text: "修复3" },
+          ]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const { srt: result } = await translateSrt(longSrt, {
+      llm,
+      model: "test",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+    });
+
+    expect(result).toContain("区块1");
+    expect(result).toContain("修复2");
+    expect(result).toContain("修复3");
+    expect(result).toContain("区块4");
+    expect(callCount).toBe(2);
   });
 });

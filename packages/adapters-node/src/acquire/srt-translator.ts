@@ -1,4 +1,5 @@
 import type { LlmPort } from "@yt2x/core";
+import { parseJsonWithRepairs, salvagePartialJsonArray } from "../llm/parse-json.js";
 import { parseSubtitleBlocks, serializeSrtBlocks } from "./video-subtitles.js";
 
 export type SrtTranslatorOptions = {
@@ -64,51 +65,79 @@ const translateBatch = async (
   });
 
   const content = resp.content.trim();
-  const parsed = JSON.parse(content) as unknown[];
+
+  // Resilient parse: try repaired JSON first, then salvage partial array
+  // Note: parseJsonWithRepairs may extract a single JSON object from a truncated
+  // array (via extractJsonObjectSlice). Always fall back to salvage when the
+  // result is not an array so we recover as many complete objects as possible.
+  let parsed: unknown;
+  try {
+    parsed = parseJsonWithRepairs(content);
+  } catch {
+    parsed = null;
+  }
 
   if (!Array.isArray(parsed)) {
+    parsed = salvagePartialJsonArray(content);
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new Error("translation response is not a JSON array");
   }
 
-  return parsed.map((item: unknown) => {
+  const results: TextBlock[] = [];
+  for (const item of parsed) {
     const obj = item as Record<string, unknown>;
-    if (typeof obj.index !== "number" || typeof obj.text !== "string") {
-      throw new Error(`invalid translation block: ${JSON.stringify(item)}`);
+    if (typeof obj.index === "number" && typeof obj.text === "string") {
+      results.push({ index: obj.index, text: obj.text });
     }
-    return { index: obj.index, text: obj.text };
-  });
+    // Silently skip malformed items — repair phase will fill gaps
+  }
+
+  if (results.length === 0) {
+    throw new Error("translation response contains no valid blocks");
+  }
+
+  return results;
 };
 
 const batchTranslateAll = async (
   blocks: TextBlock[],
   opts: SrtTranslatorOptions,
-): Promise<TextBlock[]> => {
+): Promise<{ translated: TextBlock[]; warnings: string[] }> => {
   const results: TextBlock[] = [];
+  const warnings: string[] = [];
 
   for (let i = 0; i < blocks.length; i += BATCH_SIZE) {
     const batch = blocks.slice(i, i + BATCH_SIZE);
 
-    let lastError: unknown;
+    let batchTranslated = false;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const result = await translateBatch(batch, opts);
         results.push(...result);
-        lastError = undefined;
+        batchTranslated = true;
         break;
       } catch (err: unknown) {
-        lastError = err;
-        if (attempt === 0) continue;
+        if (attempt === 1) {
+          const message = err instanceof Error ? err.message : String(err);
+          warnings.push(
+            `batch ${batch[0]!.index}-${batch[batch.length - 1]!.index} failed: ${message}`,
+          );
+        }
       }
     }
 
-    if (lastError !== undefined) {
-      throw new Error(
-        `translation failed for blocks ${batch[0]!.index}-${batch[batch.length - 1]!.index}: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    // Even if the batch failed completely, continue — repair phases will fill gaps.
+    // Log a warning so callers can surface which ranges needed repair.
+    if (!batchTranslated) {
+      warnings.push(
+        `batch ${batch[0]!.index}-${batch[batch.length - 1]!.index} completely failed, will repair`,
       );
     }
   }
 
-  return results;
+  return { translated: results, warnings };
 };
 
 const buildFinalSrt = (cues: ReturnType<typeof parseSubtitleBlocks>, translated: TextBlock[]): string => {
@@ -125,7 +154,7 @@ const buildFinalSrt = (cues: ReturnType<typeof parseSubtitleBlocks>, translated:
 export const translateSrt = async (
   srtContent: string,
   opts: SrtTranslatorOptions,
-): Promise<string> => {
+): Promise<{ srt: string; warnings: string[] }> => {
   const cues = parseSubtitleBlocks(srtContent);
   if (cues.length === 0) {
     throw new Error("no subtitle blocks to translate");
@@ -136,8 +165,8 @@ export const translateSrt = async (
     text: cue.text.join(" "),
   }));
 
-  // Phase 1: batch translate all blocks
-  let translated = await batchTranslateAll(blocks, opts);
+  // Phase 1: batch translate all blocks (resilient — partial results OK)
+  const { translated, warnings } = await batchTranslateAll(blocks, opts);
 
   // Phase 2: repair missing blocks if count doesn't match
   if (translated.length !== blocks.length) {
@@ -147,16 +176,18 @@ export const translateSrt = async (
     if (missing.length > 0) {
       try {
         const repaired = await translateBatch(missing, opts, true);
-        // merge: only add blocks whose indices were actually missing
         const deduped = translated.filter((b) => translatedIndices.has(b.index));
         for (const r of repaired) {
           if (!translatedIndices.has(r.index)) {
             deduped.push(r);
           }
         }
-        translated = deduped;
-      } catch {
-        // repair failed, keep original partial result
+        translated.length = 0;
+        translated.push(...deduped);
+        warnings.push(`repaired ${repaired.length}/${missing.length} missing blocks in phase 2`);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        warnings.push(`phase 2 repair failed: ${message}`);
       }
     }
   }
@@ -175,9 +206,12 @@ export const translateSrt = async (
             deduped.push(r);
           }
         }
-        translated = deduped;
-      } catch {
-        // second repair also failed
+        translated.length = 0;
+        translated.push(...deduped);
+        warnings.push(`repaired ${repaired.length}/${missing.length} missing blocks in phase 3`);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        warnings.push(`phase 3 repair failed: ${message}`);
       }
     }
   }
@@ -188,5 +222,5 @@ export const translateSrt = async (
     );
   }
 
-  return buildFinalSrt(cues, translated);
+  return { srt: buildFinalSrt(cues, translated), warnings };
 };

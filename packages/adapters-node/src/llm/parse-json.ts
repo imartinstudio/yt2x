@@ -120,3 +120,66 @@ export const parseJsonWithRepairs = (raw: string): unknown => {
   }
   throw lastError ?? new Error("Invalid JSON");
 };
+
+/**
+ * Attempt to recover complete JSON objects from a partial/truncated array.
+ * When the LLM response is cut off mid-array (e.g. truncated JSON),
+ * this extracts every complete `{...}` object that can be parsed.
+ *
+ * Example input: `[{"index":1,"text":"Hello"},{"index":2,"text":"Wor`
+ * Returns: `[{index: 1, text: "Hello"}]`
+ */
+export const salvagePartialJsonArray = (raw: string): unknown[] => {
+  const s = stripJsonFenceWrapper(raw).trim();
+  const start = s.indexOf("[");
+  if (start < 0) return [];
+
+  const items: unknown[] = [];
+  let pos = start + 1;
+
+  while (pos < s.length) {
+    // Skip whitespace and commas between array elements
+    while (pos < s.length && /[\s,]/.test(s[pos]!)) pos += 1;
+    if (pos >= s.length) break;
+    if (s[pos] === "]") break;
+
+    // Expect an object — anything else means malformed input, stop scanning
+    if (s[pos] !== "{") break;
+
+    const objStart = pos;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    while (pos < s.length) {
+      const ch = s[pos]!;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\" && inString) {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = !inString;
+      } else if (!inString) {
+        if (ch === "{") depth += 1;
+        else if (ch === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            pos += 1; // include the closing brace
+            try {
+              items.push(JSON.parse(s.slice(objStart, pos)));
+            } catch {
+              // Skip malformed object, keep scanning
+            }
+            break;
+          }
+        }
+      }
+      pos += 1;
+    }
+
+    // If depth !== 0 the last object was truncated — stop
+    if (depth !== 0) break;
+  }
+
+  return items;
+};

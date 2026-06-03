@@ -19,8 +19,6 @@ FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
 ]
 FONT_SIZE = 32
-FONT_SIZE_MIN = 24        # 最小字体：超长文本优先缩字
-FONT_SIZE_STEP = 2        # 每次缩小 2px
 
 LINE_SPACING_RATIO = 0.55  # 行距 / 字体大小
 BG_PAD_X_RATIO = 0.8       # 水平内边距 / 字体大小
@@ -48,7 +46,7 @@ BREAK_SCORE = {
 BREAK_BEFORE = set("的但而和与也就又却所以因此然后不过然而但是并且而且")
 
 # Characters that should NOT start a line (closing brackets, etc.)
-NO_LINE_START = set("》」』】）)。，、；：,;:）")
+NO_LINE_START = set("》」』】）)。，、；：,;:）！？!?.")
 
 
 def parse_srt(srt_path: str) -> list[dict]:
@@ -129,12 +127,11 @@ def _find_balanced_split(
 ) -> int | None:
     """Find the best position to split text into 2 balanced lines.
 
-    Searches the middle 60% of the text for break positions,
-    scores each by semantic quality and line balance.
+    Searches for break positions with good semantic quality.
+    Prefers filling the available width over forcing equal line lengths.
     Returns the split position (index where line 2 starts), or None.
     """
     full_w = _text_width(text, font, draw)
-    target_w = full_w / 2
 
     # Find all candidate break positions
     candidates: list[tuple[int, float]] = []
@@ -151,21 +148,21 @@ def _find_balanced_split(
         if first_w > max_text_w or second_w > max_text_w:
             continue
 
-        # Search range: 25%-75% of full width (wider for better balance)
+        # Search range: 15%-85% of full width (wider range, less strict balance)
         first_ratio = first_w / full_w if full_w > 0 else 0
-        if first_ratio < 0.22 or first_ratio > 0.78:
+        if first_ratio < 0.15 or first_ratio > 0.85:
             continue
 
         sem_score = _break_score(ch, next_ch)
         if sem_score < 0.15:
             continue  # skip terrible break points only
 
-        # Balance score: closer to 50/50 is better
-        balance = 1.0 - abs(0.5 - first_ratio) * 2.0
+        # Fill score: prefer filling the available width.
+        # A split where line 1 fills 80% of max_w scores higher than 50%.
+        fill = first_w / max_text_w if max_text_w > 0 else 0
 
-        # Balance is weighted higher — readability depends more on
-        # equal line lengths than perfect semantic breaks
-        score = balance * 0.6 + sem_score * 0.4
+        # Semantic quality is the primary factor. Fill is a tiebreaker.
+        score = sem_score * 0.55 + fill * 0.3 + (1.0 - abs(0.5 - first_ratio)) * 0.15
         candidates.append((i, score))
 
     if not candidates:
@@ -181,7 +178,10 @@ def _find_break_for_line(
     draw: ImageDraw.Draw,
     max_text_w: int,
 ) -> int:
-    """Find where to break a single line that exceeds max_text_w."""
+    """Find where to break a single line that exceeds max_text_w.
+
+    Never leaves punctuation at the start of the next line.
+    """
     lo, hi = 1, len(text)
     best = 1
     while lo <= hi:
@@ -191,19 +191,27 @@ def _find_break_for_line(
             lo = mid + 1
         else:
             hi = mid - 1
+
     # Search backward from best for a semantic break
-    for ch_set, min_score in [
-        (set("。！？!?\n"), 1.0),
-        (set("；：;:"), 0.9),
-        (set("，,、"), 0.7),
+    for ch_set in [
+        set("。！？!?"),
+        set("；：;:"),
+        set("，,、"),
     ]:
-        for i in range(best, max(1, int(best * 0.7)), -1):
+        for i in range(best, max(1, int(best * 0.65)), -1):
             if text[i - 1] in ch_set:
-                return i
-    for i in range(best, max(1, int(best * 0.7)), -1):
-        if text[i - 1] == " ":
-            return i
-    return best
+                # Found punctuation — break AFTER it so it ends line 1.
+                # Check that the next char (if any) is NOT also punctuation.
+                pos = i
+                while pos < len(text) and text[pos] in NO_LINE_START:
+                    pos += 1
+                return pos
+
+    # No semantic break found — use best, but never split before punctuation
+    pos = best
+    while pos < len(text) and text[pos] in NO_LINE_START:
+        pos += 1
+    return pos
 
 
 def _wrap_cjk(
@@ -219,13 +227,6 @@ def _wrap_cjk(
     2. Try balanced 2-line split at semantic break points.
     3. If 2 balanced lines won't fit → greedy multi-line fallback.
     """
-    # Handle explicit newlines
-    if "\n" in text:
-        lines: list[str] = []
-        for part in text.split("\n"):
-            lines.extend(_wrap_cjk(part, font, draw, max_text_w))
-        return lines
-
     text = text.strip()
     if not text:
         return []
@@ -259,86 +260,100 @@ def _wrap_cjk(
     return lines
 
 
-def _try_render(
-    text: str,
-    font_size: int,
-    draw: ImageDraw.Draw,
-    max_text_w: int,
-) -> tuple[list[str], ImageFont.FreeTypeFont] | None:
-    """Try to wrap text at given font size. Returns (lines, font) or None if >3 lines."""
-    # Load font at this size
-    font = None
+def _load_font(font_size: int) -> ImageFont.FreeTypeFont | None:
+    """Load a CJK font at the given size. Returns None if no font found."""
     for fp in FONT_CANDIDATES:
         try:
             for idx in (3, 2, 1, 0):
                 try:
-                    font = ImageFont.truetype(fp, font_size, index=idx)
-                    break
+                    return ImageFont.truetype(fp, font_size, index=idx)
                 except (OSError, TypeError):
                     continue
-            if font:
-                break
         except OSError:
             continue
-    if font is None:
-        return None
-
-    lines = _wrap_cjk(text, font, draw, max_text_w)
-    if len(lines) <= 3:
-        return (lines, font)
     return None
 
 
-def render_subtitle(text: str, font: ImageFont.FreeTypeFont) -> Image.Image:
+def _normalize_text(text: str) -> str:
+    """Normalize subtitle text for re-wrapping.
+
+    Source SRT files often contain pre-wrapped line breaks (~15-20 chars/line
+    from Whisper/YouTube). These narrow breaks are artifacts of the original
+    transcription, not semantic breaks. Join all text and let our wrapper
+    determine the optimal line breaks at the target width (~30 CJK chars/line).
+
+    Also removes spaces between CJK characters (artifacts of Whisper wrapping)
+    while preserving spaces around Latin/English words.
+    """
+    # Replace newlines with spaces, then collapse
+    collapsed = " ".join(text.replace("\n", " ").split())
+    # Remove spaces between two CJK characters: "一。 如果" → "一。如果"
+    result = []
+    for i, ch in enumerate(collapsed):
+        if ch == " " and i > 0 and i < len(collapsed) - 1:
+            prev_ok = _is_cjk(collapsed[i - 1])
+            next_ok = _is_cjk(collapsed[i + 1])
+            # Keep space only if one side is non-CJK (Latin/num)
+            if not (prev_ok and next_ok):
+                result.append(ch)
+            # else: drop the space between two CJK characters
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def _is_cjk(ch: str) -> bool:
+    """Check if a character is CJK (Chinese/Japanese/Korean) or CJK punctuation."""
+    cp = ord(ch)
+    return (
+        0x4E00 <= cp <= 0x9FFF  # CJK Unified
+        or 0x3400 <= cp <= 0x4DBF  # CJK Extension A
+        or 0x3000 <= cp <= 0x303F  # CJK punctuation (。、， etc.)
+        or 0xFF00 <= cp <= 0xFFEF  # Fullwidth forms
+        or 0x2000 <= cp <= 0x206F  # General punctuation
+    )
+
+
+def render_subtitle(text: str, _font: ImageFont.FreeTypeFont) -> Image.Image:
     """Render white text on dark rounded background. No stroke, no shadow.
 
-    Uses adaptive strategy for long text:
-    1. Try 2 balanced lines at default font size and 80% width
-    2. If >2 lines: try shrinking font (down to FONT_SIZE_MIN)
-    3. If still >2: expand width to 85%
-    4. If still >2 at min font + max width: allow 3 lines
+    Consistent font size strategy (avoids size jitter across cues):
+    1. Always use FONT_SIZE (32px) — never shrink individual cues.
+    2. Try 80% width for 2 balanced lines.
+    3. Expand to 85% width if needed.
+    4. Only if text is extremely long: allow 3 lines at 32px.
     """
     dummy = Image.new("RGBA", (1, 1))
     dd = ImageDraw.Draw(dummy)
 
-    # Determine max_text_w and font size adaptively
+    font = _load_font(FONT_SIZE)
+    if font is None:
+        raise RuntimeError("No usable CJK font found")
+
+    # Normalize: join source SRT's pre-wrapped lines into a single string
+    # so our wrapper can re-break at the proper width (~30 CJK chars/line).
+    text = _normalize_text(text)
+
     max_text_w_default = int(VIDEO_WIDTH * WIDTH_FRAC_DEFAULT) - int(FONT_SIZE * BG_PAD_X_RATIO) * 2
     max_text_w_wide = int(VIDEO_WIDTH * WIDTH_FRAC_MAX) - int(FONT_SIZE * BG_PAD_X_RATIO) * 2
 
-    # Step 1: Try default font, default width
-    result = _try_render(text, FONT_SIZE, dd, max_text_w_default)
+    # Try default width, then wide width
+    for max_w in (max_text_w_default, max_text_w_wide):
+        lines = _wrap_cjk(text, font, dd, max_w)
+        if len(lines) <= 2:
+            break
 
-    # Step 2: If >2 lines, try shrinking font with default width
-    if result is None or len(result[0]) > 2:
-        for fs in range(FONT_SIZE - FONT_SIZE_STEP, FONT_SIZE_MIN - 1, -FONT_SIZE_STEP):
-            result = _try_render(text, fs, dd, max_text_w_default)
-            if result is not None and len(result[0]) <= 2:
-                break
+    # Fallback: allow 3 lines for extreme cases (very long text)
+    if len(lines) > 3:
+        lines = _wrap_cjk(text, font, dd, max_text_w_wide)
+    if len(lines) > 3:
+        lines = lines[:3]  # clamp to 3 lines max
 
-    # Step 3: If still >2 lines, try min font with wide width
-    if result is None or len(result[0]) > 2:
-        for fs in range(FONT_SIZE, FONT_SIZE_MIN - 1, -FONT_SIZE_STEP):
-            result = _try_render(text, fs, dd, max_text_w_wide)
-            if result is not None and len(result[0]) <= 2:
-                break
-
-    # Step 4: Allow 3 lines at default font as last resort
-    if result is None or len(result[0]) > 3:
-        result = _try_render(text, FONT_SIZE, dd, max_text_w_default)
-
-    if result is None:
-        # Ultimate fallback: min font, wide width
-        result = _try_render(text, FONT_SIZE_MIN, dd, max_text_w_wide)
-        if result is None:
-            result = ([text], font)  # desperate fallback
-
-    lines, render_font = result
     wrapped_text = "\n".join(lines)
-    used_font_size = render_font.size if hasattr(render_font, 'size') else FONT_SIZE
-    ls, bg_pad_x, bg_pad_y, bg_radius = _line_params(used_font_size)
+    ls, bg_pad_x, bg_pad_y, bg_radius = _line_params(FONT_SIZE)
 
     # Measure
-    bbox = dd.multiline_textbbox((0, 0), wrapped_text, font=render_font, spacing=ls)
+    bbox = dd.multiline_textbbox((0, 0), wrapped_text, font=font, spacing=ls)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
     # Clamp width: if text is very short, bg is centered at text width
@@ -363,7 +378,7 @@ def render_subtitle(text: str, font: ImageFont.FreeTypeFont) -> Image.Image:
     draw.multiline_text(
         (tx, ty),
         wrapped_text,
-        font=render_font,
+        font=font,
         fill=TEXT_COLOR,
         spacing=ls,
     )

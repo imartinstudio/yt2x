@@ -27,6 +27,19 @@ describe("THREAD_X_SYSTEM_PROMPT", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不按 Markdown 段落切片/);
   });
 
+  it("requires Simplified Chinese output and Traditional Chinese conversion", () => {
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/简体中文/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/zh-CN/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/繁体中文/);
+
+    const prompt = buildThreadUserPrompt({
+      metadata: { id: "video-id" },
+      structuredNotesMd: "# Notes",
+    });
+    expect(prompt).toMatch(/Simplified Chinese \(zh-CN\)/);
+    expect(prompt).toMatch(/Translate Traditional Chinese/);
+  });
+
   it("requires labeled tweet structure and content-derived length", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/后续 tweet 数量取决于视频内容中的真实观点密度/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/内容本身提炼出的短标题/);

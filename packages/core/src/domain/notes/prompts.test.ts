@@ -18,8 +18,9 @@ const baseInput: NotesPromptInput = {
 describe("getNotesSystemPrompt", () => {
   it("defaults to Chinese output language", () => {
     const prompt = getNotesSystemPrompt();
-    expect(prompt).toMatch(/Output language: Chinese/);
-    expect(prompt).toMatch(/into Chinese/);
+    expect(prompt).toMatch(/Output language: Simplified Chinese/);
+    expect(prompt).toMatch(/zh-CN/);
+    expect(prompt).toMatch(/Traditional Chinese source text to Simplified Chinese/);
     expect(prompt).not.toMatch(/Output language: English/);
   });
 
@@ -146,6 +147,8 @@ describe("buildNotesUserPrompt", () => {
   it("defaults to Chinese output instruction", () => {
     const prompt = buildNotesUserPrompt(baseInput);
     expect(prompt).not.toMatch(/Output in English/);
+    expect(prompt).toMatch(/Output in Simplified Chinese \(zh-CN\)/);
+    expect(prompt).toMatch(/Translate Traditional Chinese/);
   });
 
   it("includes English output instruction when outputLanguage is 'en'", () => {

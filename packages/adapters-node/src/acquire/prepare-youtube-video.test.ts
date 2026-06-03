@@ -182,6 +182,37 @@ describe("prepareYoutubeVideo (integration, mocked yt-dlp)", () => {
     expect(args[args.indexOf("--sub-langs") + 1]).toBe("zh-Hans,zh");
   });
 
+  it("defaults manual subtitle language order to Simplified Chinese first", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-default-sublang-"));
+    const calls: ProcessSpec[] = [];
+    const runner = createMockRunner({
+      onRun: (spec) => {
+        calls.push(spec);
+      },
+    });
+
+    await prepareYoutubeVideo({
+      url: "https://www.youtube.com/watch?v=testVideo12",
+      outDir,
+      maxWords: 900,
+      keyframes: 0,
+      sceneThreshold: 0.35,
+      sceneMinGap: 12,
+      runner,
+      timeoutMs: 60_000,
+    });
+
+    const manualPass = calls.find(
+      (c) =>
+        c.command === "yt-dlp" &&
+        (c.args ?? []).includes("--write-subs") &&
+        (c.args ?? []).includes("--sub-langs"),
+    );
+    expect(manualPass).toBeDefined();
+    const args = manualPass!.args ?? [];
+    expect(args[args.indexOf("--sub-langs") + 1]).toBe("zh-CN,zh-Hans,zh,zh-Hant,zh-TW,en");
+  });
+
   it("passes --proxy and --cookies-from-browser to yt-dlp", async () => {
     const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-proxy-"));
     const calls: ProcessSpec[] = [];

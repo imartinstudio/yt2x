@@ -2,12 +2,14 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
 import {
   cleanupSrt,
   convertSubtitleTextToSrt,
   detectSubtitleLanguage,
   parseSubtitleBlocks,
   prepareSourceSubtitle,
+  runSubtitlePipeline,
 } from "./video-subtitles.js";
 
 describe("video subtitle SRT conversion", () => {
@@ -89,6 +91,52 @@ describe("prepareSourceSubtitle", () => {
     );
   });
 
+  it("records the actual Chinese script variant from the YouTube subtitle filename", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-hant-"));
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      path.join(root, "Demo.video123.zh-Hant.vtt"),
+      "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n這是一段繁體字幕\n",
+      "utf8",
+    );
+
+    const result = await prepareSourceSubtitle({
+      videoDir: root,
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      source: "youtube",
+    });
+
+    expect(result.manifest.source_language).toBe("zh-Hant");
+  });
+
+  it("prefers Simplified Chinese subtitle files when multiple Chinese variants exist", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-zh-priority-"));
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      path.join(root, "Demo.video123.zh-Hant.srt"),
+      "1\n00:00:01,000 --> 00:00:02,000\n這是繁體\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, "Demo.video123.zh-CN.srt"),
+      "1\n00:00:01,000 --> 00:00:02,000\n这是简体\n",
+      "utf8",
+    );
+
+    const result = await prepareSourceSubtitle({
+      videoDir: root,
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      source: "youtube",
+    });
+
+    expect(result.manifest.source_language).toBe("zh-CN");
+    await expect(readFile(path.join(root, "video", "full.en.srt"), "utf8")).resolves.toContain(
+      "这是简体",
+    );
+  });
+
   it("writes a warning manifest when subtitles are missing", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-missing-"));
 
@@ -104,6 +152,66 @@ describe("prepareSourceSubtitle", () => {
     await expect(readFile(path.join(root, "video", "subtitle-manifest.json"), "utf8")).resolves.toContain(
       "no YouTube subtitle file found (tried: zh-CN, en)",
     );
+  });
+});
+
+describe("runSubtitlePipeline", () => {
+  it("translates Traditional Chinese subtitles to Simplified Chinese before marking full.zh.srt ready", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-hant-"));
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      path.join(root, "Demo.video123.zh-Hant.srt"),
+      `1
+00:00:01,000 --> 00:00:02,000
+這是一段繁體字幕
+`,
+      "utf8",
+    );
+
+    const seenSystemPrompts: string[] = [];
+    const llm: LlmPort = {
+      chat: async (req: ChatRequest): Promise<ChatResponse> => {
+        seenSystemPrompts.push(req.messages[0]!.content);
+        return {
+          content: JSON.stringify([{ index: 1, text: "这是一段简体字幕" }]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const result = await runSubtitlePipeline({
+      videoDir: root,
+      subtitle: {
+        mode: "srt",
+        sourceLang: "en",
+        targetLang: "zh-CN",
+        source: "youtube",
+      },
+      llm,
+      llmModel: "test",
+      runner: {
+        run: async (spec) => ({
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 0,
+          command: spec.command,
+          args: spec.args ?? [],
+        }),
+      },
+    });
+
+    await expect(readFile(path.join(root, "video", "full.zh.srt"), "utf8")).resolves.toContain(
+      "这是一段简体字幕",
+    );
+    expect(result.manifest.source_language).toBe("zh-Hant");
+    expect(result.manifest.translation_method).toBe("llm");
+    expect(seenSystemPrompts[0]).toMatch(/Simplified Chinese/);
+    expect(seenSystemPrompts[0]).toMatch(/Convert Traditional Chinese/);
   });
 });
 

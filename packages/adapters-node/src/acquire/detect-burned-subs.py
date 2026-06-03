@@ -15,7 +15,7 @@
   仅当「画面底部已有硬字幕」且「OCR 判定为中文」时才 shouldSkipBurn=true。
   仅有英文硬字幕、UI 条、进度条等误判，或无法 OCR 时，不跳过烧录。
 
-依赖：PIL、ffmpeg、ffprobe；中文 OCR 可选 tesseract（chi_sim+eng）。
+依赖：PIL、ffmpeg、ffprobe；中文 OCR 可选 tesseract（优先 chi_sim+chi_tra+eng）。
 """
 
 import json
@@ -69,6 +69,52 @@ def looks_like_chinese_subtitle(text: str) -> bool:
     return cjk / len(cleaned) >= 0.35
 
 
+def available_tesseract_languages() -> set[str]:
+    try:
+        result = subprocess.run(
+            ["tesseract", "--list-langs"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return set()
+    if result.returncode != 0:
+        return set()
+    return {
+        line.strip()
+        for line in (result.stdout or "").splitlines()
+        if line.strip() and not line.lower().startswith("list of available")
+    }
+
+
+def ocr_language_candidates() -> list[str]:
+    langs = available_tesseract_languages()
+    if not langs:
+        return ["chi_sim+chi_tra+eng", "chi_tra+eng", "chi_sim+eng", "eng"]
+
+    has_sim = "chi_sim" in langs
+    has_tra = "chi_tra" in langs
+    has_eng = "eng" in langs
+
+    candidates: list[str] = []
+    if has_sim and has_tra and has_eng:
+        candidates.append("chi_sim+chi_tra+eng")
+    if has_sim and has_tra:
+        candidates.append("chi_sim+chi_tra")
+    if has_tra and has_eng:
+        candidates.append("chi_tra+eng")
+    if has_sim and has_eng:
+        candidates.append("chi_sim+eng")
+    if has_tra:
+        candidates.append("chi_tra")
+    if has_sim:
+        candidates.append("chi_sim")
+    if has_eng:
+        candidates.append("eng")
+    return candidates
+
+
 def ocr_bottom_region(image_path: str) -> str:
     """对帧底部 20% 做 OCR；无 tesseract 时返回空字符串。"""
     if shutil.which("tesseract") is None:
@@ -87,25 +133,26 @@ def ocr_bottom_region(image_path: str) -> str:
         ocr_path = tmp.name
     try:
         bottom.save(ocr_path)
-        result = subprocess.run(
-            [
-                "tesseract",
-                ocr_path,
-                "stdout",
-                "-l",
-                "chi_sim+eng",
-                "--psm",
-                "6",
-                "--oem",
-                "1",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        if result.returncode != 0:
-            return ""
-        return (result.stdout or "").strip()
+        for languages in ocr_language_candidates():
+            result = subprocess.run(
+                [
+                    "tesseract",
+                    ocr_path,
+                    "stdout",
+                    "-l",
+                    languages,
+                    "--psm",
+                    "6",
+                    "--oem",
+                    "1",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            if result.returncode == 0 and (result.stdout or "").strip():
+                return (result.stdout or "").strip()
+        return ""
     finally:
         try:
             os.remove(ocr_path)

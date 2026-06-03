@@ -27,6 +27,19 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/没有编号 list 的 text 视为不合格/);
   });
 
+  it("requires Simplified Chinese output and Traditional Chinese conversion", () => {
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/简体中文/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/zh-CN/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/繁体中文/);
+
+    const prompt = buildShortUserPrompt({
+      metadata: { id: "video-id" },
+      structuredNotesMd: "# Notes",
+    });
+    expect(prompt).toMatch(/Simplified Chinese \(zh-CN\)/);
+    expect(prompt).toMatch(/Translate Traditional Chinese/);
+  });
+
   it("requires plain-text post formatting shared with thread posts", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/Post 文本格式规则必须和串推保持一致/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要使用 Markdown 加粗、行内代码、代码块、有序列表、无序列表/);

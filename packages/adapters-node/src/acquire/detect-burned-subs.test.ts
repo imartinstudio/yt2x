@@ -23,6 +23,23 @@ describe("detectBurnedSubtitles", () => {
     expect(result.hasChineseBurnedSubtitles).toBe(true);
   });
 
+  it("treats Chinese burned subs as script-neutral at the TypeScript boundary", async () => {
+    const result = await detectBurnedSubtitles(
+      "/tmp/video.mp4",
+      runnerWithStdout(
+        JSON.stringify({
+          hasBurnedSubtitles: true,
+          hasChineseBurnedSubtitles: true,
+          shouldSkipBurn: true,
+          ocrSamples: ["這是繁體中文字幕"],
+        }),
+      ),
+    );
+
+    expect(result.shouldSkipBurn).toBe(true);
+    expect(result.hasChineseBurnedSubtitles).toBe(true);
+  });
+
   it("does not skip when only generic burned overlay is detected", async () => {
     const result = await detectBurnedSubtitles(
       "/tmp/video.mp4",

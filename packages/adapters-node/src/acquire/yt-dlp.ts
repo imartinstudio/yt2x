@@ -115,9 +115,9 @@ export const downloadSubtitlesTwoPhase = async (
     return { manualOk: true, autoOk: false };
   }
 
-  // 自动字幕回退策略：优先尝试中文自动字幕，再回退视频语言和英文
+  // 自动字幕回退策略：优先尝试简体中文自动字幕，再回退繁体、视频语言和英文
   const autoFallbacks = [...new Set([
-    "zh-Hans", "zh-Hant", "zh-CN", "zh-TW", "zh",
+    "zh-CN", "zh-Hans", "zh", "zh-Hant", "zh-TW",
     primaryAutoLang, "en"
   ])];
 

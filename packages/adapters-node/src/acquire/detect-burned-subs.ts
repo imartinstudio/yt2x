@@ -5,9 +5,9 @@ import type { ProcessRunner } from "../process/index.js";
 export type DetectBurnedSubtitlesResult = {
   /** 底部多帧边缘密度偏高，可能已有硬字幕（含英文/UI 误判）。 */
   hasBurnedSubtitles: boolean;
-  /** OCR 判定底部硬字幕为中文。 */
+  /** OCR 判定底部硬字幕为中文（简体或繁体）。 */
   hasChineseBurnedSubtitles: boolean;
-  /** 仅当已有中文硬字幕时为 true，pipeline 据此跳过烧录。 */
+  /** 仅当已有中文硬字幕（简体或繁体）时为 true，pipeline 据此跳过烧录。 */
   shouldSkipBurn: boolean;
 };
 
@@ -31,7 +31,7 @@ const parseDetectResult = (stdout: string): DetectBurnedSubtitlesResult => {
 };
 
 /**
- * 检测原片是否已有烧录硬字幕；仅当判定为**中文**硬字幕时建议跳过烧录。
+ * 检测原片是否已有烧录硬字幕；仅当判定为**中文（简体或繁体）**硬字幕时建议跳过烧录。
  *
  * 检测失败（脚本/ffmpeg 不可用等）时保守返回全 false，不阻塞烧录流程。
  */

@@ -85,6 +85,13 @@ describe("buildArticleUserPrompt", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不要用/);
   });
 
+  it("requires Simplified Chinese output and Traditional Chinese conversion", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/简体中文/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/zh-CN/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/繁体中文/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/翻译或转写/);
+  });
+
   it("forbids trailing source attribution in generated articles", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不要在文末追加来源说明/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Source 行/);

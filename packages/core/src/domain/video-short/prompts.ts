@@ -21,7 +21,7 @@ export const VIDEO_SHORT_X_SYSTEM_PROMPT = `你是中文科技内容编辑，专
 
 必须在总结部分之后空一行，再追加单独一行「完整视频+中文字幕：👇」，此行之后不要加任何链接或其他内容
 只基于提供的 metadata 和 structured notes，不要编造事实或链接
-全文中文，技术词保留英文
+全文统一使用简体中文（zh-CN）；如果原始标题、字幕、笔记或引用材料是英文、繁体中文、日文等其他语言，必须翻译或转写为自然简体中文。技术词、品牌名和可复制英文 prompt 可保留英文
 禁止使用 emoji（除非必要语义）、禁止 Markdown、禁止列表、禁止多版本
 
 输出要求：
@@ -49,6 +49,8 @@ export const buildVideoShortUserPrompt = (
   sections.push("");
   sections.push(input.structuredNotesMd.trim());
   sections.push("");
-  sections.push("Generate the video short caption JSON in Chinese. Output strict JSON only.");
+  sections.push(
+    "Generate the video short caption JSON in Simplified Chinese (zh-CN). Translate Traditional Chinese and all non-Chinese source material into Simplified Chinese. Output strict JSON only.",
+  );
   return sections.join("\n");
 };

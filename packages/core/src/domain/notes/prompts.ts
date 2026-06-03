@@ -5,15 +5,15 @@ export const getNotesSystemPrompt = (options: NotesPromptOptions = {}): string =
   const langRule =
     lang === "en"
       ? "Output language: English"
-      : "Output language: Chinese (translate from the original if needed)";
+      : "Output language: Simplified Chinese (zh-CN). Translate from the original if needed, and convert Traditional Chinese source text to Simplified Chinese.";
   const h1Rule =
     lang === "en"
       ? "# <AI semantic translation of the video title into English; if the original title is already English, keep it; do NOT add marketing hooks, clickbait prefixes, or numeric promises>"
-      : "# <AI semantic translation of the video title; if the original title is not Chinese, produce a faithful semantic translation into Chinese; do NOT add marketing hooks, clickbait prefixes, or numeric promises>";
+      : "# <AI semantic translation of the video title; if the original title is not Simplified Chinese, produce a faithful semantic translation into Simplified Chinese; do NOT add marketing hooks, clickbait prefixes, or numeric promises>";
   const origTitleHint =
     lang === "en"
       ? "Original title: <original title, omit if already English>"
-      : "Original title: <original title, omit if already Chinese>";
+      : "Original title: <original title, omit if already Simplified Chinese>";
 
   return `You are a technical knowledge extractor. Given YouTube subtitle chunks, timestamped cues, metadata, and optional screenshot descriptions, produce a structured Markdown document.
 
@@ -151,7 +151,7 @@ export const buildNotesUserPrompt = (
   const langHint =
     lang === "en"
       ? "Generate the structured-notes.md document following the schema. Output in English. Output ONLY the markdown document — no wrapper text, no code fences around the output."
-      : "Generate the structured-notes.md document following the schema. Output ONLY the markdown document — no wrapper text, no code fences around the output.";
+      : "Generate the structured-notes.md document following the schema. Output in Simplified Chinese (zh-CN). Translate Traditional Chinese and all non-Chinese source material into Simplified Chinese. Output ONLY the markdown document — no wrapper text, no code fences around the output.";
 
   sections.push("");
   sections.push(langHint);

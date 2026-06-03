@@ -256,4 +256,32 @@ Block four
     expect(result).toContain("区块4");
     expect(callCount).toBe(2);
   });
+
+  it("instructs zh-CN translations to convert Traditional Chinese to Simplified Chinese", async () => {
+    let systemPrompt = "";
+    const llm: LlmPort = {
+      chat: async (req: ChatRequest): Promise<ChatResponse> => {
+        systemPrompt = req.messages[0]!.content;
+        return {
+          content: JSON.stringify([
+            { index: 1, text: "你好世界" },
+            { index: 2, text: "你今天好吗" },
+            { index: 3, text: "现在再见" },
+          ]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    await translateSrt(sampleSrt, {
+      llm,
+      model: "test",
+      sourceLang: "zh-Hant",
+      targetLang: "zh-CN",
+    });
+
+    expect(systemPrompt).toMatch(/Simplified Chinese/);
+    expect(systemPrompt).toMatch(/Convert Traditional Chinese/);
+  });
 });

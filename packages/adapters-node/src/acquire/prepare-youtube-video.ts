@@ -234,9 +234,9 @@ export const prepareYoutubeVideo = async (
   const subLangBase = youtubeSubLangBase(videoLanguage);
   let manualSubLangs = (opts.subLangs ?? "").trim();
   if (manualSubLangs.length === 0) {
-    // 优先尝试中文（zh-CN/zh-Hans/zh-Hant/zh-TW/zh），再回退视频语言和英文
+    // 优先尝试简体中文（zh-CN/zh-Hans/zh），再回退繁体、视频语言和英文
     const langs = [...new Set([
-      "zh-CN", "zh-Hans", "zh-Hant", "zh-TW", "zh",
+      "zh-CN", "zh-Hans", "zh", "zh-Hant", "zh-TW",
       subLangBase,
       "en"
     ])];

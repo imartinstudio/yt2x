@@ -17,7 +17,7 @@ export type BurnZhSubtitlesForVideoOptions = {
   runner: ProcessRunner;
   /** 烧录输出根目录；默认写入 videoDir/video/ */
   burnedVideoOutDir?: string;
-  /** 原片已有中文硬字幕时跳过烧录（默认 true） */
+  /** 原片已有中文（简体或繁体）硬字幕时跳过烧录（默认 true） */
   skipIfChineseBurned?: boolean;
   signal?: AbortSignal;
   /** 强制重新烧录，覆盖已有 burnt video 并跳过硬字幕检测 */
@@ -51,7 +51,7 @@ const updateBurnedVideoInManifest = async (
 
 /**
  * 将 full.zh.srt 烧录进 MP4，输出 full.zh-burned.mp4。
- * 可选检测原片是否已有中文硬字幕并跳过。
+ * 可选检测原片是否已有中文（简体或繁体）硬字幕并跳过。
  */
 export const burnZhSubtitlesForVideo = async (
   opts: BurnZhSubtitlesForVideoOptions,

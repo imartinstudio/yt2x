@@ -303,10 +303,24 @@ const sourceLangPattern = (sourceLang: string): RegExp => {
   return new RegExp(`\\.${escaped}(?:-orig)?\\.(?:srt|vtt)$`, "iu");
 };
 
+const inferSubtitleLanguageFromName = (name: string, fallback: string): string => {
+  const match = /\.(zh(?:[-_](?:CN|Hans|Hant|TW|SG|HK|MO))?|[a-z]{2,3}(?:[-_][a-z0-9]+)?)(?:-orig)?\.(?:srt|vtt)$/iu.exec(name);
+  return match?.[1]?.replace("_", "-") ?? fallback;
+};
+
+const subtitleLanguagePriority = (name: string, requestedLang: string): number => {
+  const lang = inferSubtitleLanguageFromName(name, requestedLang);
+  if (/^zh[-_]CN$/iu.test(lang)) return 0;
+  if (/^zh[-_]Hans$/iu.test(lang)) return 1;
+  if (/^zh$/iu.test(lang)) return 2;
+  if (/^zh[-_](?:Hant|TW|HK|MO)$/iu.test(lang)) return 3;
+  return 4;
+};
+
 const findYoutubeSubtitle = async (
   videoDir: string,
   sourceLang: string,
-): Promise<{ file: string; method: SubtitleSourceMethod } | null> => {
+): Promise<{ file: string; method: SubtitleSourceMethod; language: string } | null> => {
   const names = await readdir(videoDir).catch(() => []);
   const langRe = sourceLangPattern(sourceLang);
   const candidates = names
@@ -315,14 +329,38 @@ const findYoutubeSubtitle = async (
     .sort((a, b) => {
       const autoA = a.includes("-orig.") ? 1 : 0;
       const autoB = b.includes("-orig.") ? 1 : 0;
-      return autoA - autoB || a.localeCompare(b);
+      return (
+        autoA - autoB ||
+        subtitleLanguagePriority(a, sourceLang) - subtitleLanguagePriority(b, sourceLang) ||
+        a.localeCompare(b)
+      );
     });
   const first = candidates[0];
   if (first === undefined) return null;
   return {
     file: path.join(videoDir, first),
     method: first.includes("-orig.") ? "youtube_auto_subtitles" : "youtube_subtitles",
+    language: inferSubtitleLanguageFromName(first, sourceLang),
   };
+};
+
+const isChineseLanguageCode = (lang: string): boolean => /^zh(?:[-_][a-z0-9]+)?$/iu.test(lang);
+
+const isTraditionalChineseCode = (lang: string): boolean =>
+  /^zh[-_](?:Hant|TW|HK|MO)$/iu.test(lang);
+
+const isSimplifiedChineseCode = (lang: string): boolean =>
+  /^zh(?:[-_](?:CN|Hans|SG))?$/iu.test(lang);
+
+const isAlreadyTargetLanguage = (sourceLang: string, targetLang: string): boolean => {
+  if (sourceLang === targetLang) return true;
+  if (!isChineseLanguageCode(sourceLang) || !isChineseLanguageCode(targetLang)) return false;
+
+  if (isSimplifiedChineseCode(targetLang)) {
+    return isSimplifiedChineseCode(sourceLang) && !isTraditionalChineseCode(sourceLang);
+  }
+
+  return true;
 };
 
 export const prepareSourceSubtitle = async (
@@ -413,7 +451,7 @@ export const prepareSourceSubtitle = async (
       if (found !== null) {
         sourceFile = found.file;
         method = found.method;
-        actualLang = lang;
+        actualLang = found.language;
         break;
       }
     }
@@ -527,10 +565,10 @@ export const runSubtitlePipeline = async (
   }
 
   const hasLlm = opts.llm !== undefined && opts.llmModel !== undefined;
-  const sourceLangCodeMatchesTarget =
-    manifest.source_language === subtitle.targetLang ||
-    // 宽松匹配：zh-CN / zh-Hans / zh 都算中文
-    (manifest.source_language.startsWith("zh") && subtitle.targetLang.startsWith("zh"));
+  const sourceLangCodeMatchesTarget = isAlreadyTargetLanguage(
+    manifest.source_language,
+    subtitle.targetLang,
+  );
 
   // Verify that the source subtitle content actually matches the declared language.
   // Prevents skipping translation when language metadata is wrong (e.g. source_language
@@ -551,7 +589,8 @@ export const runSubtitlePipeline = async (
     }
   }
 
-  // 如果源字幕已经是目标语言（语言码匹配 + 内容验证通过），直接复制，无需翻译
+  // 如果源字幕已经是目标语言（语言码匹配 + 内容验证通过），直接复制，无需翻译。
+  // zh-Hant / zh-TW / zh-HK 不能在 zh-CN 目标下跳过，否则硬字幕会烧录繁体。
   if (!hasZhSrt && contentMatchesTargetLang) {
     await copyFile(subResult.sourceSubtitle, zhSrtPath);
     hasZhSrt = true;

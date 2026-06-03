@@ -28,7 +28,7 @@ export const SHORT_X_SYSTEM_PROMPT = `你是中文科技内容编辑，擅长把
 - 禁止在短帖中使用 Markdown 表格或竖线分列表格，例如 \`| A | B |\`、\`| --- | --- |\`；如需表达对比、参数或步骤，改写成纯文本短行，并遵守冒号后换行、序号后换行规则。
 - 不要廉价标题党，不要夸大原材料没有支持的结论。
 - 不要出现「视频作者」字样。
-- 全文使用中文，技术专有名词、命令、API 名可保留英文。
+- 全文统一使用简体中文（zh-CN）；如果原始标题、字幕、笔记或引用材料是英文、繁体中文、日文等其他语言，必须翻译或转写为自然简体中文。技术专有名词、命令、API 名、品牌名和可复制英文 prompt 可保留英文。
 - 短帖正文 text 的最末尾必须换行追加两行固定内容：「完整视频+中文字幕：👇」然后下一行是 metadata.webpage_url 提供的完整 YouTube 链接（不得省略、不得编造、不得用占位符）。
 - 短帖里的标题、段落标签、要点标签或小标题式前缀如果是 \`xxxx:\` / \`xxxx：\` 这种冒号结构，冒号后必须换行，写成两行：第一行 \`关键判断：\`，第二行正文；不要加粗，不要把标题和正文写在同一行。
 - 短帖里的要点必须规范：使用纯文本序号单独占一行，内容从下一行开始；不要混用串推编号 \`1/\`、\`2/\`，不要使用 Markdown list marker。
@@ -108,9 +108,13 @@ export const buildShortUserPrompt = (
   sections.push(input.structuredNotesMd.trim());
   sections.push("");
   if (options.outputLanguage === "en") {
-    sections.push("Generate the short post JSON in English. Output strict JSON only.");
+    sections.push(
+      "Generate the short post JSON in English only if explicitly required by the caller; otherwise all production X short outputs must be Simplified Chinese (zh-CN). Output strict JSON only.",
+    );
   } else {
-    sections.push("Generate the short post JSON in Chinese. Output strict JSON only.");
+    sections.push(
+      "Generate the short post JSON in Simplified Chinese (zh-CN). Translate Traditional Chinese and all non-Chinese source material into Simplified Chinese. Output strict JSON only.",
+    );
   }
   return sections.join("\n");
 };

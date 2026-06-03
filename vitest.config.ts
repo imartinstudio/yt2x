@@ -4,7 +4,10 @@ export default defineConfig({
   test: {
     globals: false,
     environment: "node",
-    environmentMatchGlobs: [["packages/chrome-extension/**/*.test.ts", "jsdom"]],
+    environmentMatchGlobs: [
+      ["packages/x-article-extension/**/*.test.ts", "jsdom"],
+      ["packages/x-following-extension/**/*.test.ts", "jsdom"],
+    ],
     include: ["packages/**/*.{test,spec}.ts", "tests/**/*.{test,spec}.ts"],
     exclude: ["**/node_modules/**", "**/dist/**"],
     coverage: {
@@ -31,8 +34,8 @@ export default defineConfig({
       "@yt2x/core": new URL("./packages/core/src/index.ts", import.meta.url).pathname,
       "@yt2x/adapters-node": new URL("./packages/adapters-node/src/index.ts", import.meta.url)
         .pathname,
-      "@yt2x/chrome-extension": new URL(
-        "./packages/chrome-extension/src/content/x-articles.ts",
+      "@x-article/extension": new URL(
+        "./packages/x-article-extension/src/content/x-articles.ts",
         import.meta.url,
       ).pathname,
     },

@@ -14,6 +14,9 @@ type TextBlock = { index: number; text: string };
 
 const BATCH_SIZE = 30;
 
+const isSimplifiedChineseTarget = (targetLang: string): boolean =>
+  /^zh(?:[-_](?:CN|Hans|SG))?$/iu.test(targetLang);
+
 const buildSystemPrompt = (sourceLang: string, targetLang: string): string =>
   [
     `You are a professional subtitle translator. Translate from ${sourceLang} to ${targetLang}.`,
@@ -22,7 +25,13 @@ const buildSystemPrompt = (sourceLang: string, targetLang: string): string =>
     "2. Translate the text naturally for subtitles — keep it concise and readable.",
     "3. Preserve the exact index for each block.",
     "4. Return the SAME number of blocks you receive. No merging or splitting.",
-    "5. Do not add explanations, notes, or any text outside the JSON array.",
+    ...(isSimplifiedChineseTarget(targetLang)
+      ? [
+          "5. The final subtitle text MUST be Simplified Chinese (zh-CN). Convert Traditional Chinese to Simplified Chinese.",
+          "6. Keep technical terms, product names, commands, and API names in English when that is more natural.",
+          "7. Do not add explanations, notes, or any text outside the JSON array.",
+        ]
+      : ["5. Do not add explanations, notes, or any text outside the JSON array."]),
   ].join("\n");
 
 const buildRepairPrompt = (sourceLang: string, targetLang: string, missingIndices: number[]): string =>
@@ -33,7 +42,12 @@ const buildRepairPrompt = (sourceLang: string, targetLang: string, missingIndice
     "1. Return ONLY a JSON array of objects with \"index\" (number) and \"text\" (string).",
     "2. Each index MUST be one of: " + missingIndices.join(", ") + ".",
     "3. Do not skip any index. Do not add extra indices.",
-    "4. Do not add explanations or any text outside the JSON array.",
+    ...(isSimplifiedChineseTarget(targetLang)
+      ? [
+          "4. The final subtitle text MUST be Simplified Chinese (zh-CN). Convert Traditional Chinese to Simplified Chinese.",
+          "5. Do not add explanations or any text outside the JSON array.",
+        ]
+      : ["4. Do not add explanations or any text outside the JSON array."]),
   ].join("\n");
 
 const translateBatch = async (

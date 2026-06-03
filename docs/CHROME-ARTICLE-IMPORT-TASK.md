@@ -143,7 +143,7 @@ packages/core/
   src/domain/publish/article-draft.ts       # 已有：解析结果契约，扩展复用
   src/domain/publish/article-draft-parse.ts # 建议新增：移出的浏览器安全纯解析函数
 
-packages/chrome-extension/                  # 新增 MV3 workspace package
+packages/x-article-extension/                  # 新增 MV3 workspace package
   src/background/                            # 可选：扩展生命周期与消息路由
   src/content/x-articles.ts                  # 按钮注入、DOM 监听与编辑器适配器
   src/ui/import-dialog.ts                    # 文件选择、预览、订阅档位与确认界面
@@ -235,7 +235,7 @@ Divider 推导和 HTML 渲染抽到 `packages/core` 的浏览器安全模块，N
 
 范围：
 
-- 新增 `packages/chrome-extension` workspace package，沿用仓库 TypeScript、pnpm、
+- 新增 `packages/x-article-extension` workspace package，沿用仓库 TypeScript、pnpm、
   ESLint、Prettier 与 Vitest 工具链。
 - 选择与当前构建系统兼容的最小 MV3 bundling 方式；在实现 spike 后决定是否引入
   Vite 或轻量 bundler。

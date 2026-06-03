@@ -35,4 +35,4 @@ for (const icon of ["icon-16.png", "icon-32.png", "icon-48.png", "icon-128.png"]
   copyFileSync(join(root, "src/icons", icon), join(dist, "icons", icon));
 }
 
-process.stdout.write("Built Chrome extension at packages/chrome-extension/dist\n");
+process.stdout.write("Built Chrome extension at packages/x-article-extension/dist\n");

@@ -73,25 +73,6 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
 
-  packages/chrome-extension:
-    dependencies:
-      '@yt2x/core':
-        specifier: workspace:*
-        version: link:../core
-      mermaid:
-        specifier: ^11.6.0
-        version: 11.15.0
-    devDependencies:
-      '@types/chrome':
-        specifier: ^0.0.304
-        version: 0.0.304
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      typescript:
-        specifier: ^5.7.3
-        version: 5.9.3
-
   packages/cli:
     dependencies:
       '@yt2x/adapters-node':
@@ -122,6 +103,34 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+
+  packages/x-article-extension:
+    dependencies:
+      '@yt2x/core':
+        specifier: workspace:*
+        version: link:../core
+      mermaid:
+        specifier: ^11.6.0
+        version: 11.15.0
+    devDependencies:
+      '@types/chrome':
+        specifier: ^0.0.304
+        version: 0.0.304
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
+  packages/x-following-extension:
+    devDependencies:
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
 
 packages:
 

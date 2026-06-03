@@ -9,6 +9,6 @@
     { "path": "./packages/core" },
     { "path": "./packages/adapters-node" },
     { "path": "./packages/cli" },
-    { "path": "./packages/chrome-extension" }
+    { "path": "./packages/x-article-extension" }
   ]
 }

@@ -1,0 +1,258 @@
+import { extractUserCellHandle, shouldShowCheckboxOnCell, type FollowingFilterMode } from "./following-filter.js";
+
+export const CHECKBOX_INPUT_ATTR = "data-xfm-follow-select-input";
+export const CHECKBOX_HIT_ATTR = "data-xfm-follow-select-hit";
+export const CHECKBOX_PAD_ATTR = "data-xfm-follow-padded";
+export const CHECKBOX_ROW_ATTR = "data-xfm-follow-row";
+
+const HIT_ZONE_WIDTH_PX = 52;
+
+const hitZoneStyle = [
+  "position:absolute",
+  "left:0",
+  "top:0",
+  "bottom:0",
+  `width:${HIT_ZONE_WIDTH_PX}px`,
+  "margin:0",
+  "display:flex",
+  "align-items:center",
+  "justify-content:center",
+  "cursor:pointer",
+  "z-index:2",
+  "-webkit-tap-highlight-color:transparent",
+].join(";");
+
+const inputStyle =
+  "width:18px;height:18px;margin:0;flex-shrink:0;cursor:pointer;accent-color:rgb(29,155,240)";
+
+export type UserCellMount = {
+  mountEl: HTMLElement;
+  userCell: HTMLElement;
+};
+
+/** X 实页 UserCell 为 BUTTON：热区作为 button 的兄弟节点插入，避免被 React 清空 button 内部。 */
+export const resolveUserCellMount = (cell: HTMLElement): UserCellMount => {
+  if (cell.matches('[data-testid="UserCell"]') && cell.parentElement instanceof HTMLElement) {
+    return { mountEl: cell.parentElement, userCell: cell };
+  }
+  return { mountEl: cell, userCell: cell };
+};
+
+const findHitZone = (mount: UserCellMount): HTMLElement | null => {
+  const { mountEl, userCell } = mount;
+  const prev = userCell.previousElementSibling;
+  if (prev?.matches(`[${CHECKBOX_HIT_ATTR}]`)) return prev;
+  return mountEl.querySelector<HTMLElement>(`:scope > [${CHECKBOX_HIT_ATTR}]`);
+};
+
+const normalizeHandle = (handle: string | null): string | null =>
+  handle === null ? null : handle.toLowerCase();
+
+const findCheckboxInput = (mount: UserCellMount, handle: string | null): HTMLInputElement | null => {
+  const hit = findHitZone(mount);
+  if (hit === null) return null;
+  const input = hit.querySelector<HTMLInputElement>(`[${CHECKBOX_INPUT_ATTR}]`);
+  if (input === null) return null;
+  const normalized = normalizeHandle(handle);
+  if (normalized === null || input.dataset.xfmHandle === normalized) return input;
+  return null;
+};
+
+/** 复用行上已有热区并更正 handle，避免虚拟列表复用 DOM 时拆掉勾选框导致闪烁。 */
+export const findOrReuseCheckboxInput = (
+  mount: UserCellMount,
+  handle: string | null,
+): HTMLInputElement | null => {
+  const normalized = normalizeHandle(handle);
+  const matched = findCheckboxInput(mount, normalized);
+  if (matched !== null) return matched;
+
+  const hit = findHitZone(mount);
+  if (hit === null) return null;
+  const input = hit.querySelector<HTMLInputElement>(`[${CHECKBOX_INPUT_ATTR}]`);
+  if (input === null) return null;
+  if (normalized !== null) input.dataset.xfmHandle = normalized;
+  return input;
+};
+
+export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
+  const mount = resolveUserCellMount(cell);
+  const handle = normalizeHandle(extractUserCellHandle(mount.userCell));
+
+  const existingInput = findOrReuseCheckboxInput(mount, handle);
+  if (existingInput !== null) return existingInput;
+
+  findHitZone(mount)?.remove();
+
+  const computed = window.getComputedStyle(mount.mountEl);
+  if (mount.mountEl.getAttribute(CHECKBOX_PAD_ATTR) !== "true") {
+    const baseLeft = Number.parseFloat(computed.paddingLeft) || 0;
+    mount.mountEl.style.paddingLeft = `${baseLeft + HIT_ZONE_WIDTH_PX}px`;
+    if (computed.position === "static") mount.mountEl.style.position = "relative";
+    mount.mountEl.setAttribute(CHECKBOX_PAD_ATTR, "true");
+    mount.mountEl.setAttribute(CHECKBOX_ROW_ATTR, "true");
+  }
+
+  const hit = document.createElement("label");
+  hit.setAttribute(CHECKBOX_HIT_ATTR, "true");
+  hit.setAttribute("aria-label", "选择此用户");
+  hit.style.cssText = hitZoneStyle;
+
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.setAttribute(CHECKBOX_INPUT_ATTR, "true");
+  if (handle !== null) input.dataset.xfmHandle = handle;
+  input.style.cssText = inputStyle;
+
+  hit.append(input);
+  mount.mountEl.insertBefore(hit, mount.userCell);
+  return input;
+};
+
+export const removeUserCellCheckboxes = (root: ParentNode = document): void => {
+  for (const hit of root.querySelectorAll<HTMLElement>(`[${CHECKBOX_HIT_ATTR}]`)) {
+    hit.remove();
+  }
+  for (const row of root.querySelectorAll<HTMLElement>(`[${CHECKBOX_ROW_ATTR}]`)) {
+    if (row.getAttribute(CHECKBOX_PAD_ATTR) === "true") {
+      row.style.removeProperty("padding-left");
+      row.style.removeProperty("position");
+      row.removeAttribute(CHECKBOX_PAD_ATTR);
+      row.removeAttribute(CHECKBOX_ROW_ATTR);
+    }
+  }
+};
+
+export const cellHasCheckbox = (cell: HTMLElement): boolean => {
+  const mount = resolveUserCellMount(cell);
+  return findCheckboxInput(mount, extractUserCellHandle(mount.userCell)) !== null;
+};
+
+export const cellNeedsCheckboxAttach = (cell: HTMLElement): boolean => {
+  const mount = resolveUserCellMount(cell);
+  const handle = extractUserCellHandle(mount.userCell);
+  return findCheckboxInput(mount, handle) === null;
+};
+
+export const isUserCellInViewport = (cell: HTMLElement): boolean => {
+  const { userCell } = resolveUserCellMount(cell);
+  if (!userCell.isConnected) return false;
+  const rect = userCell.getBoundingClientRect();
+  if (rect.height < 8 || rect.width < 8) return false;
+  return rect.bottom > 0 && rect.top < window.innerHeight;
+};
+
+const listScope = (root: ParentNode): ParentNode =>
+  root.querySelector('[data-testid="primaryColumn"]') ?? root;
+
+/** 主栏时间线里已挂载到 DOM 的账号行（含滚出视口、尚未注入勾选框的行）。 */
+export const listLoadedUserCells = (
+  mode: FollowingFilterMode,
+  root: ParentNode = document,
+): HTMLElement[] => {
+  const scope = listScope(root);
+  return [...scope.querySelectorAll<HTMLElement>('[data-testid="UserCell"]')].filter((cell) =>
+    shouldShowCheckboxOnCell(cell, mode),
+  );
+};
+
+export const listViewportUserCells = (
+  mode: FollowingFilterMode,
+  root: ParentNode = document,
+): HTMLElement[] =>
+  listLoadedUserCells(mode, root).filter((cell) => isUserCellInViewport(cell));
+
+/** 视口内已勾选的 handle（仅 DOM 扫描；批量操作应以 selectedHandles Set 为准）。 */
+export const getCheckedHandlesInViewport = (
+  mode: FollowingFilterMode,
+  root: ParentNode = document,
+): string[] => {
+  const handles: string[] = [];
+  for (const cell of listViewportUserCells(mode, root)) {
+    const mount = resolveUserCellMount(cell);
+    const handle = extractUserCellHandle(mount.userCell);
+    const input = findCheckboxInput(mount, handle);
+    if (input?.checked !== true) continue;
+    if (handle !== null) handles.push(handle);
+  }
+  return handles;
+};
+
+/** @deprecated 使用 getCheckedHandlesInViewport 或传入的 selectedHandles Set */
+export const getSelectedHandles = getCheckedHandlesInViewport;
+
+export const applyCheckboxChangeToSelection = (
+  input: HTMLInputElement,
+  selectedHandles: Set<string>,
+): void => {
+  const handle = input.dataset.xfmHandle?.toLowerCase() ?? null;
+  if (handle === null || handle.length === 0) return;
+  if (input.checked) selectedHandles.add(handle);
+  else selectedHandles.delete(handle);
+};
+
+const setCellsChecked = (
+  cells: HTMLElement[],
+  checked: boolean,
+  selectedHandles?: Set<string>,
+): void => {
+  for (const cell of cells) {
+    const mount = resolveUserCellMount(cell);
+    const handle = normalizeHandle(extractUserCellHandle(mount.userCell));
+    const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
+    if (input.checked !== checked) input.checked = checked;
+    if (selectedHandles === undefined || handle === null) continue;
+    if (checked) selectedHandles.add(handle);
+    else selectedHandles.delete(handle);
+  }
+};
+
+export const setAllLoadedChecked = (
+  checked: boolean,
+  mode: FollowingFilterMode,
+  selectedHandles?: Set<string>,
+  root: ParentNode = document,
+): void => {
+  setCellsChecked(listLoadedUserCells(mode, root), checked, selectedHandles);
+};
+
+export const setAllVisibleChecked = (
+  checked: boolean,
+  mode: FollowingFilterMode,
+  selectedHandles?: Set<string>,
+  root: ParentNode = document,
+): void => {
+  setCellsChecked(listViewportUserCells(mode, root), checked, selectedHandles);
+};
+
+export const applySelectionToViewportCells = (
+  selectedHandles: ReadonlySet<string>,
+  mode: FollowingFilterMode,
+  root: ParentNode = document,
+): void => {
+  for (const cell of listViewportUserCells(mode, root)) {
+    if (!shouldShowCheckboxOnCell(cell, mode)) continue;
+    const mount = resolveUserCellMount(cell);
+    const handle = normalizeHandle(extractUserCellHandle(mount.userCell));
+    if (handle === null) continue;
+    const input = findOrReuseCheckboxInput(mount, handle);
+    if (input === null) continue;
+    const shouldCheck = selectedHandles.has(handle);
+    if (input.checked !== shouldCheck) input.checked = shouldCheck;
+  }
+};
+
+export const syncCheckboxOnCell = (
+  cell: HTMLElement,
+  selectedHandles: ReadonlySet<string>,
+  mode: FollowingFilterMode,
+): void => {
+  if (!shouldShowCheckboxOnCell(cell, mode)) return;
+  const mount = resolveUserCellMount(cell);
+  const handle = normalizeHandle(extractUserCellHandle(mount.userCell));
+  if (handle === null) return;
+  const shouldCheck = selectedHandles.has(handle);
+  const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
+  if (input.dataset.xfmHandle !== handle) input.dataset.xfmHandle = handle;
+  if (input.checked !== shouldCheck) input.checked = shouldCheck;
+};

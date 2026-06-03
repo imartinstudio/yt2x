@@ -1,16 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyFollowingListFilter,
   extractUserCellHandle,
   followingListUsername,
-  getSelectedHandles,
-  isFollowingListPage,
   isOwnFollowingListPage,
-  setAllVisibleChecked,
+  setFollowingFilterMode,
+  shouldShowCheckboxOnCell,
   shouldShowOneWayFollowCell,
-  shouldShowUserCell,
   userCellFollowsYou,
 } from "./following-filter.js";
+import { isFollowingListPage } from "./x-session.js";
 
 const buildUserCell = (followsYou: boolean, handle = "alice"): HTMLElement => {
   const cell = document.createElement("div");
@@ -74,30 +72,28 @@ describe("shouldShowOneWayFollowCell", () => {
   });
 });
 
-describe("shouldShowUserCell", () => {
-  it("shows every row in all mode", () => {
-    expect(shouldShowUserCell(buildUserCell(true), "all")).toBe(true);
-    expect(shouldShowUserCell(buildUserCell(false), "all")).toBe(true);
+describe("shouldShowCheckboxOnCell", () => {
+  it("shows checkbox targets for all mode", () => {
+    expect(shouldShowCheckboxOnCell(buildUserCell(true), "all")).toBe(true);
+    expect(shouldShowCheckboxOnCell(buildUserCell(false), "all")).toBe(true);
   });
 });
 
-describe("applyFollowingListFilter", () => {
-  it("hides mutual follows only in one-way mode", () => {
-    const root = document.createElement("div");
-    const mutual = buildUserCell(true, "mutual");
-    const oneWay = buildUserCell(false, "oneway");
-    root.append(mutual, oneWay);
-    document.body.append(root);
+describe("setFollowingFilterMode", () => {
+  it("uses html attribute and stylesheet without touching user cells", () => {
+    const cell = buildUserCell(true, "mutual");
+    document.body.append(cell);
 
-    applyFollowingListFilter("one-way", root);
-    expect(mutual.getAttribute("data-xfm-follow-filter")).toBe("hidden");
-    expect(oneWay.getAttribute("data-xfm-follow-filter")).toBe("shown");
+    setFollowingFilterMode("one-way");
+    expect(document.documentElement.getAttribute("data-xfm-filter")).toBe("one-way");
+    expect(cell.getAttribute("data-xfm-follow-filter")).toBeNull();
 
-    applyFollowingListFilter("all", root);
-    expect(mutual.getAttribute("data-xfm-follow-filter")).toBeNull();
-    expect(oneWay.getAttribute("data-xfm-follow-filter")).toBeNull();
+    setFollowingFilterMode("all");
+    expect(document.documentElement.getAttribute("data-xfm-filter")).toBeNull();
 
-    root.remove();
+    cell.remove();
+    document.getElementById("xfm-following-filter-style")?.remove();
+    document.documentElement.removeAttribute("data-xfm-filter");
   });
 });
 
@@ -105,19 +101,12 @@ describe("extractUserCellHandle", () => {
   it("reads profile handle from user link", () => {
     expect(extractUserCellHandle(buildUserCell(false, "Bob"))).toBe("bob");
   });
-});
 
-describe("selection helpers", () => {
-  it("tracks checked visible users", () => {
-    const root = document.createElement("div");
-    const cell = buildUserCell(false, "pickme");
-    root.append(cell);
-    document.body.append(root);
-
-    applyFollowingListFilter("all", root);
-    setAllVisibleChecked(true, root);
-    expect(getSelectedHandles(root)).toEqual(["pickme"]);
-
-    root.remove();
+  it("reads handle from @ prefixed profile links", () => {
+    const cell = buildUserCell(false, "ignored");
+    const link = document.createElement("a");
+    link.href = "/@PickMe";
+    cell.append(link);
+    expect(extractUserCellHandle(cell)).toBe("pickme");
   });
 });

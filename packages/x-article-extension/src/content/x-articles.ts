@@ -188,15 +188,23 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
 
+    // Auto-pick directory if media files are referenced but not yet authorized
+    const initialPreview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
+    if (initialPreview.coverImage || initialPreview.missingSources.length > 0) {
+      const dirFiles = await pickMediaDirectory();
+      if (dirFiles.length > 0) {
+        authorizedFiles = [...authorizedFiles, ...dirFiles];
+        registry = buildMediaRegistry({ markdown, authorizedFiles });
+      }
+    }
+
     let coverBlobUrl: string | undefined;
 
     const findCoverFile = (coverPath: string): File | undefined => {
-      // Try exact match through registry first
       const resolved = registry.resolveMediaPath(coverPath);
       const exact = registry.getUploadable(resolved);
       if (exact) return exact;
 
-      // Fallback: match by filename across all authorized files
       const targetName = coverPath.replaceAll("\\", "/").split("/").pop()?.toLowerCase();
       if (!targetName) return undefined;
       return authorizedFiles.find(

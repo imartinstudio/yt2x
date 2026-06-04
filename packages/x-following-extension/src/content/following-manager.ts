@@ -134,10 +134,18 @@ const takeOverManagerSlot = (): void => {
   };
 };
 
-const readCounts = (): { loadedCount: number; selectedCount: number } => ({
-  loadedCount: listLoadedUserCells(filterMode).length,
-  selectedCount: selectedHandles.size,
-});
+const readCounts = (): { loadedCount: number; selectedCount: number } => {
+  const cells = listLoadedUserCells(filterMode);
+  // 追踪所有已加载 cell 的 handle，不仅限于视口
+  for (const cell of cells) {
+    const handle = extractUserCellHandle(cell);
+    if (handle !== null) {
+      seenHandles.add(handle);
+      if (!userCellFollowsYou(cell)) seenOneWayHandles.add(handle);
+    }
+  }
+  return { loadedCount: cells.length, selectedCount: selectedHandles.size };
+};
 
 const buildToolbarState = (counts: { loadedCount: number; selectedCount: number }): FollowingToolbarState => ({
   filterMode,

@@ -656,7 +656,7 @@ const bootstrap = (): void => {
     startWatchdog();
     tryActivateFollowingPage();
   } catch (error) {
-    console.error("[xfm] 关注列表助手启动失败", error);
+    console.error("[xfm] X 清道夫启动失败", error);
   }
 };
 

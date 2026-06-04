@@ -102,13 +102,13 @@ describe("setFollowingFilterMode", () => {
     const host = document.createElement("div");
     host.setAttribute("data-xfm-following-toolbar-host", "true");
     const shadow = host.attachShadow({ mode: "open" });
-    shadow.innerHTML = '<div class="bar"><span class="title">关注列表助手</span></div>';
+    shadow.innerHTML = '<div class="bar"><span class="title">X 清道夫</span></div>';
     document.body.append(host);
 
     setFollowingFilterMode("one-way");
 
     const title = shadow.querySelector(".title");
-    expect(title?.textContent).toBe("关注列表助手");
+    expect(title?.textContent).toBe("X 清道夫");
     expect(title instanceof HTMLElement).toBe(true);
 
     host.remove();

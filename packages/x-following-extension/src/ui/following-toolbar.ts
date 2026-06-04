@@ -528,7 +528,7 @@ export const mountFollowingToolbar = (
   <div class="bar">
     <div class="header-row">
       <div class="title">
-        关注列表助手
+        X 清道夫
         <span class="badge">BETA</span>
       </div>
       <div class="stats">

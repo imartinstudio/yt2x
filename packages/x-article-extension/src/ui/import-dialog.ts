@@ -258,7 +258,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
 
   const adaptationText =
     preview.adaptations.length === 0
-      ? "无"
+      ? ""
       : preview.adaptations.map((a) => a.message).join("；");
 
   return `
@@ -432,7 +432,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
 
     <div class="meta-row">
       <span><span class="meta-label">素材</span> ${statLine}</span>
-      <span><span class="meta-label">转换</span> ${escapeHtml(adaptationText)}</span>
+      ${adaptationText ? `<span><span class="meta-label">转换</span> ${escapeHtml(adaptationText)}</span>` : ""}
     </div>
 
     ${preview.warnings.length > 0 ? `<div class="warning-block">${preview.warnings.map(escapeHtml).join("<br>")}</div>` : ""}

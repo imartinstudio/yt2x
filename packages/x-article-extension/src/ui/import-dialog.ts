@@ -40,6 +40,11 @@ export { loadSubscriptionTier, saveSubscriptionTier };
 const isDarkMode = (): boolean =>
   window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
 
+const isZh = (): boolean =>
+  document.documentElement.lang?.startsWith("zh") ?? false;
+
+const t = (zh: string, en: string): string => (isZh() ? zh : en);
+
 export const buildImportPreviewState = (input: {
   markdown: string;
   subscriptionTier: XArticleSubscriptionTier;
@@ -335,8 +340,10 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     color: ${c.muted}; line-height: 1.6;
     word-break: break-all;
   }
-  .media-dot {
-    width: 6px; height: 6px; border-radius: 50%;
+  .media-item::before {
+    content: '✓';
+    color: var(--c);
+    font-weight: 700;
     flex-shrink: 0;
   }
 
@@ -432,18 +439,18 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     <div class="panel-body">
       <h2 class="article-title">${escapeHtml(preview.title)}</h2>
 
-      ${mediaLines.length > 0 ? `<p class="section-label">Media</p><div class="media-list">${mediaLines.map((m) => `<div class="media-item"><span class="media-dot" style="background:${m.color}"></span><span>${escapeHtml(m.path)}</span></div>`).join("")}</div>` : ""}
+      ${mediaLines.length > 0 ? `<p class="section-label">${t("素材", "Media")}</p><div class="media-list">${mediaLines.map((m) => `<div class="media-item" style="--c:${m.color}"><span>${escapeHtml(m.path)}</span></div>`).join("")}</div>` : ""}
 
       ${hasMissing ? `<div class="missing-section">
-        <p class="missing-header">Missing</p>
+        <p class="missing-header">${t("缺少素材", "Missing")}</p>
         <div class="chip-list">${missingChips}</div>
-        <button class="batch-link" type="button" data-action="pick-directory">Match from directory…</button>
+        <button class="batch-link" type="button" data-action="pick-directory">${t("从目录匹配…", "Match from directory…")}</button>
       </div>` : ""}
 
       <hr class="divider" />
 
       <div class="tier-row">
-        <span>Subscription</span>
+        <span>${t("订阅档位", "Subscription")}</span>
         <div class="tier-seg">
           <label>
             <input type="radio" name="subscription-tier" value="premium" checked>
@@ -457,8 +464,8 @@ const renderDialogHtml = (preview: ImportPreview): string => {
       </div>
 
       <div class="actions">
-        <button class="btn-primary" type="button" data-action="confirm" ${hasMissing ? "disabled" : ""}>Publish</button>
-        <button class="btn-ghost" type="button" data-action="cancel">Cancel</button>
+        <button class="btn-primary" type="button" data-action="confirm" ${hasMissing ? "disabled" : ""}>${t("导入", "Publish")}</button>
+        <button class="btn-ghost" type="button" data-action="cancel">${t("取消", "Cancel")}</button>
       </div>
     </div>
 

@@ -214,6 +214,11 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
       );
       if (coverFile) rawCoverPath = coverFile.webkitRelativePath || coverFile.name;
     }
+
+    // Extract ALL image paths from raw markdown
+    const rawImagePaths = [...markdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)]
+      .map((m) => m[1]!)
+      .filter((p) => !/^https?:/i.test(p));
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
 
@@ -236,9 +241,13 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
       coverBlobUrl = undefined;
 
       const preview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
-      // Ensure coverImage is populated even when parser returns null
+      // Fallback: use raw markdown extraction when parser returns empty
       if (!preview.coverImage && rawCoverPath) preview.coverImage = rawCoverPath;
       const coverPath = preview.coverImage;
+      if (preview.contentImages.length === 0) {
+        preview.contentImages = rawImagePaths.filter((p) => p !== coverPath);
+        preview.contentImageCount = preview.contentImages.length;
+      }
       if (coverPath && !/^https?:/i.test(coverPath)) {
         const coverFile = findCoverFile(coverPath);
         if (coverFile) {

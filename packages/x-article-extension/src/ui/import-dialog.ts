@@ -241,25 +241,26 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     muted: dark ? "#8e8e93" : "#6e6e73",
     accent: dark ? "#3b82f6" : "#2563eb",
     accentHover: dark ? "#2563eb" : "#1d4ed8",
-    warn: dark ? "rgba(245,158,11,0.12)" : "rgba(245,158,11,0.1)",
+    warn: dark ? "rgba(245,158,11,0.08)" : "rgba(245,158,11,0.06)",
     warnText: dark ? "#fbbf24" : "#b45309",
-    success: dark ? "#34d399" : "#059669",
-    danger: dark ? "#f87171" : "#dc2626",
     border: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
     shadow: dark ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.15)",
   };
 
   const hasMissing = preview.missingSources.length > 0;
+  const hasCover = preview.coverImage !== null;
 
   const statParts: string[] = [];
-  if (preview.contentImageCount > 0) statParts.push(`${preview.contentImageCount} 张图片`);
-  if (preview.contentVideoCount > 0) statParts.push(`${preview.contentVideoCount} 个视频`);
-  const statLine = statParts.length > 0 ? statParts.join("、") : "无素材";
+  if (preview.contentImageCount > 0) statParts.push(`${preview.contentImageCount} images`);
+  if (preview.contentVideoCount > 0) statParts.push(`${preview.contentVideoCount} videos`);
+  if (preview.adaptations.length > 0) statParts.push(`${preview.adaptations.length} adaptations`);
 
-  const adaptationText =
-    preview.adaptations.length === 0
-      ? ""
-      : preview.adaptations.map((a) => a.message).join("；");
+  const missingChips = preview.missingSources
+    .map(
+      (src) =>
+        `<span class="chip">${escapeHtml(src)} <button class="chip-add" data-action="pick-files">+</button></span>`,
+    )
+    .join("");
 
   return `
 <style>
@@ -279,192 +280,182 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     max-height: calc(100vh - 48px);
     overflow-y: auto;
     background: ${c.bg};
-    border-radius: 16px;
-    padding: 28px 28px 24px;
-    box-shadow: 0 0 0 1px ${c.border}, 0 16px 48px ${c.shadow};
-    display: flex; flex-direction: column; gap: 22px;
-    animation: yt-enter 200ms cubic-bezier(0.22,1,0.36,1);
+    border-radius: 18px;
+    box-shadow: 0 0 0 1px ${c.border}, 0 20px 60px ${c.shadow};
+    animation: yt-enter 220ms cubic-bezier(0.22,1,0.36,1);
   }
   @keyframes yt-enter {
     from { opacity: 0; transform: scale(0.95) translateY(8px); }
     to { opacity: 1; transform: scale(1) translateY(0); }
   }
 
-  .panel-title {
-    margin: 0;
-    font-size: 13px; font-weight: 600;
+  /* ── Cover strip ─────────────────────────── */
+  .cover-strip {
+    aspect-ratio: 3/1;
+    background: ${hasCover ? c.surface : `linear-gradient(135deg, ${c.surface} 0%, ${c.surface} 40%, transparent 100%)`};
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  .cover-strip img {
+    width: 100%; height: 100%; object-fit: cover;
+  }
+  .cover-strip-empty {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
     color: ${c.muted};
-    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .cover-strip-empty svg { opacity: 0.3; }
+
+  /* ── Body ─────────────────────────────────── */
+  .body {
+    padding: 24px 28px 28px;
+    display: flex; flex-direction: column; gap: 20px;
   }
 
-  .title-block {
-    display: flex; flex-direction: column; gap: 6px;
-  }
+  /* ── Title section ────────────────────────── */
   .article-title {
     margin: 0;
-    font-size: 19px; font-weight: 700; line-height: 1.3;
+    font-size: 20px; font-weight: 700; line-height: 1.3;
     color: ${c.text};
     word-break: break-word;
   }
-  .cover-ref {
+
+  /* ── Meta line ────────────────────────────── */
+  .meta-line {
+    display: flex; gap: 16px; flex-wrap: wrap;
     font-size: 12px; color: ${c.muted};
-    display: flex; align-items: center; gap: 6px;
   }
-  .cover-ref::before {
-    content: ''; display: inline-block;
-    width: 14px; height: 14px;
-    background: ${c.surface}; border-radius: 3px;
+  .meta-line span + span::before {
+    content: '·'; margin-right: 16px; color: ${c.border};
   }
 
-  .meta-row {
-    display: flex; gap: 24px; flex-wrap: wrap;
-    font-size: 13px; color: ${c.muted};
-  }
-  .meta-label { font-weight: 500; color: ${c.text}; }
-
-  .adapt-block {
-    font-size: 12px; color: ${c.muted}; line-height: 1.5;
-    padding: 10px 14px;
-    background: ${c.surface}; border-radius: 10px;
+  /* ── Divider ──────────────────────────────── */
+  .divider {
+    height: 1px; background: ${c.border}; margin: 0;
+    border: none;
   }
 
-  .missing-block {
-    background: ${c.warn}; border-radius: 10px;
-    padding: 14px 16px;
+  /* ── Missing section ──────────────────────── */
+  .missing-section {
     display: ${hasMissing ? "flex" : "none"};
     flex-direction: column; gap: 10px;
   }
-  .missing-label {
-    font-size: 12px; font-weight: 600; color: ${c.warnText}; margin: 0;
+  .missing-header {
+    font-size: 11px; font-weight: 600; color: ${c.warnText};
+    text-transform: uppercase; letter-spacing: 0.04em; margin: 0;
   }
-  .missing-list {
-    font-size: 12px; color: ${c.muted};
-    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-    word-break: break-all; line-height: 1.6;
+  .chip-list {
+    display: flex; flex-wrap: wrap; gap: 6px;
   }
-  .media-actions {
-    display: flex; gap: 8px; flex-wrap: wrap;
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    color: ${c.muted};
+    background: ${c.warn}; border-radius: 5px;
+    padding: 3px 6px 3px 10px;
   }
+  .chip-add {
+    border: none; background: ${c.warnText}; color: ${c.bg};
+    width: 18px; height: 18px; border-radius: 4px;
+    font-size: 12px; font-weight: 700; line-height: 1;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .chip-add:hover { filter: brightness(1.2); }
+  .batch-link {
+    border: none; background: none;
+    color: ${c.muted}; cursor: pointer;
+    font-size: 11px; padding: 0; text-align: left; width: fit-content;
+    text-decoration: underline; text-underline-offset: 3px;
+    text-decoration-color: ${c.border};
+  }
+  .batch-link:hover { color: ${c.text}; text-decoration-color: ${c.muted}; }
 
+  /* ── Tier + Actions ───────────────────────── */
   .tier-row {
     display: flex; align-items: center; gap: 12px;
-    font-size: 13px; color: ${c.muted};
+    font-size: 12px; color: ${c.muted};
   }
-  .tier-label {
-    font-size: 13px; color: ${c.muted}; flex-shrink: 0;
-  }
+  .tier-label { flex-shrink: 0; }
   .tier-seg {
     display: inline-flex;
-    border: 1px solid ${c.border};
-    border-radius: 10px;
-    overflow: hidden;
+    border: 1px solid ${c.border}; border-radius: 8px; overflow: hidden;
   }
-  .tier-seg label {
-    cursor: pointer; position: relative;
-  }
-  .tier-seg input {
-    position: absolute; opacity: 0; width: 0; height: 0;
-  }
+  .tier-seg label { cursor: pointer; position: relative; }
+  .tier-seg input { position: absolute; opacity: 0; width: 0; height: 0; }
   .tier-seg span {
-    display: block;
-    padding: 7px 18px;
-    font-size: 13px; font-weight: 500;
-    color: ${c.muted};
+    display: block; padding: 6px 14px;
+    font-size: 12px; font-weight: 500; color: ${c.muted};
     background: transparent;
     transition: background 180ms ease, color 180ms ease;
     user-select: none;
   }
-  .tier-seg label:first-child span {
-    border-right: 1px solid ${c.border};
-  }
-  .tier-seg input:checked + span {
-    background: ${c.surface};
-    color: ${c.text};
-    font-weight: 600;
-  }
+  .tier-seg label:first-child span { border-right: 1px solid ${c.border}; }
+  .tier-seg input:checked + span { background: ${c.surface}; color: ${c.text}; font-weight: 600; }
 
   .actions {
     display: flex; gap: 10px; align-items: center;
   }
-
   .btn-primary {
     flex: 1;
     border: none; border-radius: 12px;
-    padding: 13px 20px;
+    padding: 14px 20px;
     font-size: 15px; font-weight: 600;
     background: ${c.accent}; color: #fff;
-    cursor: pointer;
-    transition: background 150ms;
+    cursor: pointer; transition: background 150ms;
   }
   .btn-primary:hover:not(:disabled) { background: ${c.accentHover}; }
-  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .btn-secondary {
-    border: 1px solid ${c.border}; border-radius: 10px;
-    padding: 9px 14px; font-size: 13px;
-    background: ${c.surface}; color: ${c.text}; cursor: pointer;
-    transition: background 120ms;
-  }
-  .btn-secondary:hover { background: ${c.border}; }
+  .btn-primary:disabled { opacity: 0.35; cursor: not-allowed; }
 
   .btn-ghost {
     border: none; background: none;
     color: ${c.muted}; cursor: pointer;
-    font-size: 13px; padding: 8px 12px; border-radius: 8px;
+    font-size: 13px; padding: 8px 14px; border-radius: 8px;
     transition: color 120ms, background 120ms;
   }
   .btn-ghost:hover { color: ${c.text}; background: ${c.surface}; }
-
-  .warning-block {
-    font-size: 12px; color: ${c.warnText}; line-height: 1.5;
-    padding: 10px 14px;
-    background: ${c.warn}; border-radius: 10px;
-  }
 </style>
 
-<div class="backdrop" role="dialog" aria-modal="true" aria-label="导入确认">
+<div class="backdrop" role="dialog" aria-modal="true" aria-label="Import">
   <div class="panel">
-    <p class="panel-title">导入 Markdown</p>
 
-    <div class="title-block">
+    <div class="cover-strip">
+      ${hasCover ? `<img src="${escapeHtml(preview.coverImage!)}" alt="" />` : `<div class="cover-strip-empty"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="${c.muted}" stroke-width="1.2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg><span style="font-size:11px">No cover</span></div>`}
+    </div>
+
+    <div class="body">
       <h2 class="article-title">${escapeHtml(preview.title)}</h2>
-      <div class="cover-ref">${escapeHtml(preview.coverImage ?? "无封面")}</div>
-    </div>
 
-    <div class="meta-row">
-      <span><span class="meta-label">素材</span> ${statLine}</span>
-      ${adaptationText ? `<span><span class="meta-label">转换</span> ${escapeHtml(adaptationText)}</span>` : ""}
-    </div>
+      ${statParts.length > 0 ? `<div class="meta-line">${statParts.map((s) => `<span>${s}</span>`).join("")}</div>` : ""}
 
-    ${preview.warnings.length > 0 ? `<div class="warning-block">${preview.warnings.map(escapeHtml).join("<br>")}</div>` : ""}
+      ${hasMissing ? `<hr class="divider" />
+      <div class="missing-section">
+        <p class="missing-header">Missing assets</p>
+        <div class="chip-list">${missingChips}</div>
+        <button class="batch-link" type="button" data-action="pick-directory">Match from directory…</button>
+      </div>` : ""}
 
-    <div class="missing-block">
-      <p class="missing-label">缺少素材文件</p>
-      <div class="missing-list">${preview.missingSources.map(escapeHtml).join("、")}</div>
-      <div class="media-actions">
-        <button class="btn-secondary" type="button" data-action="pick-directory">选择文章目录</button>
-        <button class="btn-secondary" type="button" data-action="pick-files">选择素材文件</button>
+      <hr class="divider" />
+
+      <div class="tier-row">
+        <span class="tier-label">Subscription</span>
+        <div class="tier-seg">
+          <label>
+            <input type="radio" name="subscription-tier" value="premium" checked>
+            <span>Premium</span>
+          </label>
+          <label>
+            <input type="radio" name="subscription-tier" value="premium-plus">
+            <span>Premium+</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn-primary" type="button" data-action="confirm" ${hasMissing ? "disabled" : ""}>Publish</button>
+        <button class="btn-ghost" type="button" data-action="cancel">Cancel</button>
       </div>
     </div>
 
-    <div class="tier-row">
-      <span class="tier-label">订阅档位</span>
-      <div class="tier-seg">
-        <label>
-          <input type="radio" name="subscription-tier" value="premium" checked>
-          <span>Premium</span>
-        </label>
-        <label>
-          <input type="radio" name="subscription-tier" value="premium-plus">
-          <span>Premium+</span>
-        </label>
-      </div>
-    </div>
-
-    <div class="actions">
-      <button class="btn-primary" type="button" data-action="confirm" ${hasMissing ? "disabled" : ""}>确认导入</button>
-      <button class="btn-ghost" type="button" data-action="cancel">取消</button>
-    </div>
   </div>
 </div>`;
 };

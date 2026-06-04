@@ -293,11 +293,14 @@ const stopCheckboxGuard = (): void => {
 const startCheckboxGuard = (): void => {
   const column = findPrimaryColumn();
   if (column === null || checkboxGuardObserver !== null) return;
-  // DOM 变更时不立即同步 checkbox（滚动中频繁触发会导致闪烁），
-  // 仅触发轻量 state 刷新；完整 checkbox 创建由 scroll/sync loop 驱动
+  // 轻量 state 刷新，用 rAF 限频为每帧一次（滚动中 DOM 变更可达 60+ 次/秒）
+  let stateSyncRaf = 0;
   checkboxGuardObserver = new MutationObserver(() => {
-    if (busy) return;
-    applySelectionToViewportCells(selectedHandles, filterMode);
+    if (busy || stateSyncRaf !== 0) return;
+    stateSyncRaf = requestAnimationFrame(() => {
+      stateSyncRaf = 0;
+      applySelectionToViewportCells(selectedHandles, filterMode);
+    });
   });
   checkboxGuardObserver.observe(column, { childList: true, subtree: true });
 };

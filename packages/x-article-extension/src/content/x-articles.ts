@@ -195,7 +195,7 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
     let authorizedFiles = dirFiles;
     let registry = buildMediaRegistry({ markdown, authorizedFiles });
 
-    // Extract cover from raw markdown: frontmatter, ![...cover...](path), first ![alt](path), or <img src>
+    // 1) Try regex on raw markdown
     const coverPatterns = [
       /^cover:\s*(\S+)/im,
       /!\[[^\]]*cover[^\]]*\]\(([^)\s]+)\)/i,
@@ -206,6 +206,13 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
     for (const re of coverPatterns) {
       const m = markdown.match(re);
       if (m?.[1]) { rawCoverPath = m[1]; break; }
+    }
+    // 2) Fallback: find any file with "cover" in its name
+    if (!rawCoverPath) {
+      const coverFile = authorizedFiles.find((f) =>
+        /cover\.(png|jpe?g|webp|gif|svg)$/i.test(f.webkitRelativePath || f.name),
+      );
+      if (coverFile) rawCoverPath = coverFile.webkitRelativePath || coverFile.name;
     }
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;

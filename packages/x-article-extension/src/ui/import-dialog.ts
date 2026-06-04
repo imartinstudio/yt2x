@@ -241,19 +241,19 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     muted: dark ? "#8e8e93" : "#6e6e73",
     accent: dark ? "#3b82f6" : "#2563eb",
     accentHover: dark ? "#2563eb" : "#1d4ed8",
-    warn: dark ? "rgba(245,158,11,0.08)" : "rgba(245,158,11,0.06)",
+    warnBg: dark ? "rgba(245,158,11,0.08)" : "rgba(245,158,11,0.06)",
     warnText: dark ? "#fbbf24" : "#b45309",
     border: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
     shadow: dark ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.15)",
   };
 
   const hasMissing = preview.missingSources.length > 0;
-  const hasCover = preview.coverImage !== null;
 
-  const statParts: string[] = [];
-  if (preview.contentImageCount > 0) statParts.push(`${preview.contentImageCount} images`);
-  if (preview.contentVideoCount > 0) statParts.push(`${preview.contentVideoCount} videos`);
-  if (preview.adaptations.length > 0) statParts.push(`${preview.adaptations.length} adaptations`);
+  const detailParts: string[] = [];
+  if (preview.coverImage) detailParts.push(`Cover: ${preview.coverImage}`);
+  if (preview.contentImageCount > 0) detailParts.push(`${preview.contentImageCount} images`);
+  if (preview.contentVideoCount > 0) detailParts.push(`${preview.contentVideoCount} videos`);
+  if (preview.adaptations.length > 0) detailParts.push(`${preview.adaptations.length} adaptations`);
 
   const missingChips = preview.missingSources
     .map(
@@ -276,12 +276,14 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   @keyframes yt-fade { from { opacity: 0; } to { opacity: 1; } }
 
   .panel {
-    width: min(440px, calc(100vw - 32px));
+    width: min(400px, calc(100vw - 32px));
     max-height: calc(100vh - 48px);
     overflow-y: auto;
     background: ${c.bg};
-    border-radius: 18px;
+    border-radius: 16px;
+    padding: 28px 28px 24px;
     box-shadow: 0 0 0 1px ${c.border}, 0 20px 60px ${c.shadow};
+    display: flex; flex-direction: column; gap: 20px;
     animation: yt-enter 220ms cubic-bezier(0.22,1,0.36,1);
   }
   @keyframes yt-enter {
@@ -289,52 +291,22 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     to { opacity: 1; transform: scale(1) translateY(0); }
   }
 
-  /* ── Cover strip ─────────────────────────── */
-  .cover-strip {
-    aspect-ratio: 3/1;
-    background: ${hasCover ? c.surface : `linear-gradient(135deg, ${c.surface} 0%, ${c.surface} 40%, transparent 100%)`};
-    display: flex; align-items: center; justify-content: center;
-    overflow: hidden;
-  }
-  .cover-strip img {
-    width: 100%; height: 100%; object-fit: cover;
-  }
-  .cover-strip-empty {
-    display: flex; flex-direction: column; align-items: center; gap: 6px;
-    color: ${c.muted};
-  }
-  .cover-strip-empty svg { opacity: 0.3; }
-
-  /* ── Body ─────────────────────────────────── */
-  .body {
-    padding: 24px 28px 28px;
-    display: flex; flex-direction: column; gap: 20px;
-  }
-
-  /* ── Title section ────────────────────────── */
   .article-title {
     margin: 0;
-    font-size: 20px; font-weight: 700; line-height: 1.3;
+    font-size: 20px; font-weight: 700; line-height: 1.35;
     color: ${c.text};
     word-break: break-word;
   }
 
-  /* ── Meta line ────────────────────────────── */
-  .meta-line {
-    display: flex; gap: 16px; flex-wrap: wrap;
-    font-size: 12px; color: ${c.muted};
-  }
-  .meta-line span + span::before {
-    content: '·'; margin-right: 16px; color: ${c.border};
+  .detail-list {
+    display: flex; flex-direction: column; gap: 6px;
+    font-size: 13px; color: ${c.muted};
   }
 
-  /* ── Divider ──────────────────────────────── */
   .divider {
-    height: 1px; background: ${c.border}; margin: 0;
-    border: none;
+    height: 1px; background: ${c.border}; margin: 0; border: none;
   }
 
-  /* ── Missing section ──────────────────────── */
   .missing-section {
     display: ${hasMissing ? "flex" : "none"};
     flex-direction: column; gap: 10px;
@@ -350,7 +322,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 11px; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
     color: ${c.muted};
-    background: ${c.warn}; border-radius: 5px;
+    background: ${c.warnBg}; border-radius: 5px;
     padding: 3px 6px 3px 10px;
   }
   .chip-add {
@@ -358,24 +330,21 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     width: 18px; height: 18px; border-radius: 4px;
     font-size: 12px; font-weight: 700; line-height: 1;
     cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
   }
   .chip-add:hover { filter: brightness(1.2); }
   .batch-link {
     border: none; background: none;
     color: ${c.muted}; cursor: pointer;
-    font-size: 11px; padding: 0; text-align: left; width: fit-content;
+    font-size: 11px; padding: 0; width: fit-content;
     text-decoration: underline; text-underline-offset: 3px;
     text-decoration-color: ${c.border};
   }
-  .batch-link:hover { color: ${c.text}; text-decoration-color: ${c.muted}; }
+  .batch-link:hover { color: ${c.text}; }
 
-  /* ── Tier + Actions ───────────────────────── */
   .tier-row {
     display: flex; align-items: center; gap: 12px;
     font-size: 12px; color: ${c.muted};
   }
-  .tier-label { flex-shrink: 0; }
   .tier-seg {
     display: inline-flex;
     border: 1px solid ${c.border}; border-radius: 8px; overflow: hidden;
@@ -398,7 +367,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   .btn-primary {
     flex: 1;
     border: none; border-radius: 12px;
-    padding: 14px 20px;
+    padding: 13px 20px;
     font-size: 15px; font-weight: 600;
     background: ${c.accent}; color: #fff;
     cursor: pointer; transition: background 150ms;
@@ -418,42 +387,38 @@ const renderDialogHtml = (preview: ImportPreview): string => {
 <div class="backdrop" role="dialog" aria-modal="true" aria-label="Import">
   <div class="panel">
 
-    <div class="cover-strip">
-      ${hasCover ? `<img src="${escapeHtml(preview.coverImage!)}" alt="" />` : `<div class="cover-strip-empty"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="${c.muted}" stroke-width="1.2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg><span style="font-size:11px">No cover</span></div>`}
+    <h2 class="article-title">${escapeHtml(preview.title)}</h2>
+
+    <div class="detail-list">
+      ${detailParts.map((d) => `<span>${escapeHtml(d)}</span>`).join("")}
     </div>
 
-    <div class="body">
-      <h2 class="article-title">${escapeHtml(preview.title)}</h2>
+    ${hasMissing ? `<hr class="divider" />
+    <div class="missing-section">
+      <p class="missing-header">Missing assets</p>
+      <div class="chip-list">${missingChips}</div>
+      <button class="batch-link" type="button" data-action="pick-directory">Match from directory…</button>
+    </div>` : ""}
 
-      ${statParts.length > 0 ? `<div class="meta-line">${statParts.map((s) => `<span>${s}</span>`).join("")}</div>` : ""}
+    <hr class="divider" />
 
-      ${hasMissing ? `<hr class="divider" />
-      <div class="missing-section">
-        <p class="missing-header">Missing assets</p>
-        <div class="chip-list">${missingChips}</div>
-        <button class="batch-link" type="button" data-action="pick-directory">Match from directory…</button>
-      </div>` : ""}
-
-      <hr class="divider" />
-
-      <div class="tier-row">
-        <span class="tier-label">Subscription</span>
-        <div class="tier-seg">
-          <label>
-            <input type="radio" name="subscription-tier" value="premium" checked>
-            <span>Premium</span>
-          </label>
-          <label>
-            <input type="radio" name="subscription-tier" value="premium-plus">
-            <span>Premium+</span>
-          </label>
-        </div>
+    <div class="tier-row">
+      <span>Subscription</span>
+      <div class="tier-seg">
+        <label>
+          <input type="radio" name="subscription-tier" value="premium" checked>
+          <span>Premium</span>
+        </label>
+        <label>
+          <input type="radio" name="subscription-tier" value="premium-plus">
+          <span>Premium+</span>
+        </label>
       </div>
+    </div>
 
-      <div class="actions">
-        <button class="btn-primary" type="button" data-action="confirm" ${hasMissing ? "disabled" : ""}>Publish</button>
-        <button class="btn-ghost" type="button" data-action="cancel">Cancel</button>
-      </div>
+    <div class="actions">
+      <button class="btn-primary" type="button" data-action="confirm" ${hasMissing ? "disabled" : ""}>Publish</button>
+      <button class="btn-ghost" type="button" data-action="cancel">Cancel</button>
     </div>
 
   </div>

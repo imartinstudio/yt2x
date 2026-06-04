@@ -195,10 +195,18 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
     let authorizedFiles = dirFiles;
     let registry = buildMediaRegistry({ markdown, authorizedFiles });
 
-    // Extract cover path directly from raw markdown (parser may not detect it)
-    const rawCoverMatch = markdown.match(/!\[.*?cover.*?\]\(([^)\s]+)\)/i)
-      ?? markdown.match(/!\[.*?\]\(([^)\s]+)\)/);
-    const rawCoverPath = rawCoverMatch?.[1] ?? null;
+    // Extract cover from raw markdown: frontmatter, ![...cover...](path), first ![alt](path), or <img src>
+    const coverPatterns = [
+      /^cover:\s*(\S+)/im,
+      /!\[[^\]]*cover[^\]]*\]\(([^)\s]+)\)/i,
+      /!\[[^\]]*\]\(([^)\s]+)\)/,
+      /<img[^>]+src=["']([^"']+)["'][^>]*>/i,
+    ];
+    let rawCoverPath: string | null = null;
+    for (const re of coverPatterns) {
+      const m = markdown.match(re);
+      if (m?.[1]) { rawCoverPath = m[1]; break; }
+    }
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
 
@@ -221,7 +229,6 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
       coverBlobUrl = undefined;
 
       const preview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
-      // Use parser result or fallback to raw markdown regex extraction
       const coverPath = preview.coverImage || rawCoverPath;
       if (coverPath && !/^https?:/i.test(coverPath)) {
         const coverFile = findCoverFile(coverPath);

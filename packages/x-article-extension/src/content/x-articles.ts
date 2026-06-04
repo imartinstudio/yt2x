@@ -245,8 +245,15 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
       if (!preview.coverImage && rawCoverPath) preview.coverImage = rawCoverPath;
       const coverPath = preview.coverImage;
       if (preview.contentImages.length === 0) {
-        preview.contentImages = rawImagePaths.filter((p) => p !== coverPath);
-        preview.contentImageCount = preview.contentImages.length;
+        // Combine regex results + directory scan (find all image files that aren't the cover)
+        const isImage = (name: string) => /\.(png|jpe?g|webp|gif|svg)$/i.test(name);
+        const dirImages = authorizedFiles
+          .map((f) => f.webkitRelativePath || f.name)
+          .filter((p) => isImage(p) && p !== coverPath);
+        // Merge regex paths and directory paths, deduplicate
+        const allPaths = [...new Set([...rawImagePaths.filter((p) => p !== coverPath), ...dirImages])];
+        preview.contentImages = allPaths;
+        preview.contentImageCount = allPaths.length;
       }
       if (coverPath && !/^https?:/i.test(coverPath)) {
         const coverFile = findCoverFile(coverPath);

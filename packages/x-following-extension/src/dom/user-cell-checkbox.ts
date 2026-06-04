@@ -64,9 +64,10 @@ const updateVisualSpan = (span: HTMLSpanElement, checked: boolean): void => {
 const updateVisualSpanInstant = (span: HTMLSpanElement, checked: boolean): void => {
   span.style.transition = "none";
   updateVisualSpan(span, checked);
-  // 强制回流后恢复动画
-  void span.offsetWidth;
-  span.style.transition = "all 0.15s cubic-bezier(0.34,1.56,0.64,1)";
+  // 异步恢复动画，避免同步回流（void offsetWidth）导致滚动时帧率下降闪烁
+  requestAnimationFrame(() => {
+    span.style.transition = "all 0.15s cubic-bezier(0.34,1.56,0.64,1)";
+  });
 };
 
 const HIT_ZONE_HEIGHT_PX = 40;

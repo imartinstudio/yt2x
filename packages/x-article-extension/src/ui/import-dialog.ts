@@ -378,8 +378,9 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     border-right: 1px solid ${c.border};
   }
   .tier-seg input:checked + span {
-    background: ${c.accent};
-    color: #fff;
+    background: ${c.surface};
+    color: ${c.text};
+    font-weight: 600;
   }
 
   .actions {

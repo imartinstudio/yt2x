@@ -288,29 +288,17 @@ const stopToolbarGuard = (): void => {
 const stopCheckboxGuard = (): void => {
   checkboxGuardObserver?.disconnect();
   checkboxGuardObserver = null;
-  if (checkboxResyncRaf !== 0) {
-    window.cancelAnimationFrame(checkboxResyncRaf);
-    checkboxResyncRaf = 0;
-  }
-};
-
-let checkboxResyncRaf = 0;
-
-const scheduleCheckboxResync = (): void => {
-  if (busy) return;
-  if (checkboxResyncRaf !== 0) return;
-  checkboxResyncRaf = window.requestAnimationFrame(() => {
-    checkboxResyncRaf = 0;
-    applySelectionToViewportCells(selectedHandles, filterMode);
-    lastSyncAt = 0;
-    syncViewportCheckboxes(true);
-  });
 };
 
 const startCheckboxGuard = (): void => {
   const column = findPrimaryColumn();
   if (column === null || checkboxGuardObserver !== null) return;
-  checkboxGuardObserver = new MutationObserver(() => scheduleCheckboxResync());
+  // DOM 变更时不立即同步 checkbox（滚动中频繁触发会导致闪烁），
+  // 仅触发轻量 state 刷新；完整 checkbox 创建由 scroll/sync loop 驱动
+  checkboxGuardObserver = new MutationObserver(() => {
+    if (busy) return;
+    applySelectionToViewportCells(selectedHandles, filterMode);
+  });
   checkboxGuardObserver.observe(column, { childList: true, subtree: true });
 };
 

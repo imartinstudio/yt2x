@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "X 关注列表助手",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "在 X 正在关注列表中筛选未回关用户、勾选并批量取消关注。",
   "icons": {
     "16": "icons/icon-16.png",

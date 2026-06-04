@@ -579,9 +579,9 @@ export const mountFollowingToolbar = (
   const progressLog = shadow.querySelector<HTMLElement>('[data-ref="progress-log"]')!;
   const completeWrap = shadow.querySelector<HTMLElement>('[data-ref="complete-wrap"]')!;
   const completeText = shadow.querySelector<HTMLElement>('[data-ref="complete-text"]')!;
-  const filterOneWay = shadow.querySelector<HTMLElement>('[data-action="filter-one-way"]')!;
-  const filterAll = shadow.querySelector<HTMLElement>('[data-action="filter-all"]')!;
-  const unfollowBtn = shadow.querySelector<HTMLElement>('[data-action="unfollow-selected"]')!;
+  const filterOneWay = shadow.querySelector<HTMLButtonElement>('[data-action="filter-one-way"]')!;
+  const filterAll = shadow.querySelector<HTMLButtonElement>('[data-action="filter-all"]')!;
+  const unfollowBtn = shadow.querySelector<HTMLButtonElement>('[data-action="unfollow-selected"]')!;
 
   // === 事件绑定 ===
   filterOneWay.addEventListener("click", () => {

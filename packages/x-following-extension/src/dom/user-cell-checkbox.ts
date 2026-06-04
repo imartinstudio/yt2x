@@ -286,6 +286,17 @@ export const applyCheckboxChangeToSelection = (
 ): void => {
   const handle = input.dataset.xfmHandle?.toLowerCase() ?? null;
   if (handle === null || handle.length === 0) return;
+
+  // 从 DOM 验证 handle 是否与当前 cell 内容一致（防止虚拟列表回收导致串号）
+  const hit = input.closest(`[${CHECKBOX_HIT_ATTR}]`);
+  if (hit instanceof HTMLElement) {
+    const cell = hit.nextElementSibling ?? hit.parentElement?.querySelector('[data-testid="UserCell"]');
+    if (cell instanceof HTMLElement) {
+      const domHandle = extractUserCellHandle(cell);
+      if (domHandle !== null && domHandle !== handle) return;
+    }
+  }
+
   if (input.checked) selectedHandles.add(handle);
   else selectedHandles.delete(handle);
 };

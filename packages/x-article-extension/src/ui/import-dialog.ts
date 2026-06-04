@@ -255,10 +255,9 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   const hasCoverPreview = Boolean(preview.coverObjectUrl);
 
   const detailParts: string[] = [];
-  if (preview.coverImage) detailParts.push(`Cover · ${preview.coverImage}`);
-  if (preview.contentImages.length > 0) {
-    const names = preview.contentImages.map((p) => p.replaceAll("\\", "/").split("/").pop()).join(", ");
-    detailParts.push(`${preview.contentImages.length} body image${preview.contentImages.length > 1 ? "s" : ""} · ${names}`);
+  if (preview.coverImage) detailParts.push(`Cover · ${preview.coverImage.replaceAll("\\", "/").split("/").pop()}`);
+  for (const path of preview.contentImages) {
+    detailParts.push(path.replaceAll("\\", "/").split("/").pop()!);
   }
   if (preview.contentVideoCount > 0) detailParts.push(`${preview.contentVideoCount} video${preview.contentVideoCount > 1 ? "s" : ""}`);
   if (preview.adaptations.length > 0) detailParts.push(`${preview.adaptations.length} adaptation${preview.adaptations.length > 1 ? "s" : ""}`);
@@ -323,8 +322,14 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   }
 
   .detail-list {
-    display: flex; flex-direction: column; gap: 6px;
-    font-size: 13px; color: ${c.muted};
+    display: flex; flex-direction: column; gap: 5px;
+    font-size: 12px; color: ${c.muted};
+  }
+  .detail-list span::before {
+    content: '✓';
+    color: ${c.accent};
+    font-weight: 700;
+    margin-right: 6px;
   }
 
   .divider {

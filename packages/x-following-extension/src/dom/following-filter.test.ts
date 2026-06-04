@@ -95,6 +95,24 @@ describe("setFollowingFilterMode", () => {
     document.getElementById("xfm-following-filter-style")?.remove();
     document.documentElement.removeAttribute("data-xfm-filter");
   });
+
+  it("filter CSS does not affect shadow DOM toolbar content", () => {
+    const host = document.createElement("div");
+    host.setAttribute("data-xfm-following-toolbar-host", "true");
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = '<div class="bar"><span class="title">关注列表助手</span></div>';
+    document.body.append(host);
+
+    setFollowingFilterMode("one-way");
+
+    const title = shadow.querySelector(".title");
+    expect(title?.textContent).toBe("关注列表助手");
+    expect(title instanceof HTMLElement).toBe(true);
+
+    host.remove();
+    document.getElementById("xfm-following-filter-style")?.remove();
+    document.documentElement.removeAttribute("data-xfm-filter");
+  });
 });
 
 describe("extractUserCellHandle", () => {

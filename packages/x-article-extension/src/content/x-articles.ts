@@ -1,6 +1,6 @@
 import {
   buildMediaRegistry,
-  pickMarkdownFile,
+  pickArticleDirectory,
   pickMediaDirectory,
   pickSupplementalMedia,
   readFileAsText,
@@ -179,24 +179,23 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
   }
 
   try {
-    const markdownFile = await pickMarkdownFile();
-    if (markdownFile === null) return;
+    // Pick article directory — gets .md + all media files in one step
+    const dirFiles = await pickArticleDirectory();
+    if (dirFiles.length === 0) return;
+
+    const markdownFile = dirFiles.find((f) =>
+      /\.(md|markdown|mdx)$/i.test(f.webkitRelativePath || f.name),
+    );
+    if (!markdownFile) {
+      showImportError("未在目录中找到 Markdown 文件");
+      return;
+    }
 
     const markdown = await readFileAsText(markdownFile);
-    let authorizedFiles = [markdownFile];
+    let authorizedFiles = dirFiles;
     let registry = buildMediaRegistry({ markdown, authorizedFiles });
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
-
-    // Auto-pick directory if media files are referenced but not yet authorized
-    const initialPreview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
-    if (initialPreview.coverImage || initialPreview.missingSources.length > 0) {
-      const dirFiles = await pickMediaDirectory();
-      if (dirFiles.length > 0) {
-        authorizedFiles = [...authorizedFiles, ...dirFiles];
-        registry = buildMediaRegistry({ markdown, authorizedFiles });
-      }
-    }
 
     let coverBlobUrl: string | undefined;
 

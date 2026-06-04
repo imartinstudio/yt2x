@@ -74,6 +74,9 @@ export const pickSupplementalMedia = (): Promise<File[]> =>
 export const pickMediaDirectory = (): Promise<File[]> =>
   pickFiles({ accept: "image/*,video/*", multiple: true, directory: true });
 
+export const pickArticleDirectory = (): Promise<File[]> =>
+  pickFiles({ accept: "", multiple: true, directory: true });
+
 const pickFiles = (input: {
   accept: string;
   multiple: boolean;

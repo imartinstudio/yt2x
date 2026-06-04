@@ -282,9 +282,8 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     overflow-y: auto;
     background: ${c.bg};
     border-radius: 16px;
-    padding: 28px 28px 24px;
     box-shadow: 0 0 0 1px ${c.border}, 0 20px 60px ${c.shadow};
-    display: flex; flex-direction: column; gap: 20px;
+    display: flex; flex-direction: column;
     animation: yt-enter 220ms cubic-bezier(0.22,1,0.36,1);
   }
   @keyframes yt-enter {
@@ -294,16 +293,19 @@ const renderDialogHtml = (preview: ImportPreview): string => {
 
   .cover-preview {
     aspect-ratio: 2/1;
-    border-radius: 10px;
     overflow: hidden;
     background: ${c.surface};
+    border-radius: 16px 16px 0 0;
+    flex-shrink: 0;
   }
   .cover-preview img {
     width: 100%; height: 100%; object-fit: cover;
+    display: block;
   }
-  .cover-preview-placeholder {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    height: 100%; gap: 4px; color: ${c.muted}; font-size: 11px;
+
+  .panel-body {
+    padding: ${hasCoverPreview ? "24px 28px 24px" : "28px 28px 24px"};
+    display: flex; flex-direction: column; gap: 20px;
   }
 
   .article-title {
@@ -404,38 +406,40 @@ const renderDialogHtml = (preview: ImportPreview): string => {
 
     ${hasCoverPreview ? `<div class="cover-preview"><img src="${escapeHtml(preview.coverObjectUrl!)}" alt="" /></div>` : ""}
 
-    <h2 class="article-title">${escapeHtml(preview.title)}</h2>
+    <div class="panel-body">
+      <h2 class="article-title">${escapeHtml(preview.title)}</h2>
 
-    <div class="detail-list">
-      ${detailParts.map((d) => `<span>${escapeHtml(d)}</span>`).join("")}
-    </div>
-
-    ${hasMissing ? `<hr class="divider" />
-    <div class="missing-section">
-      <p class="missing-header">Missing assets</p>
-      <div class="chip-list">${missingChips}</div>
-      <button class="batch-link" type="button" data-action="pick-directory">Match from directory…</button>
-    </div>` : ""}
-
-    <hr class="divider" />
-
-    <div class="tier-row">
-      <span>Subscription</span>
-      <div class="tier-seg">
-        <label>
-          <input type="radio" name="subscription-tier" value="premium" checked>
-          <span>Premium</span>
-        </label>
-        <label>
-          <input type="radio" name="subscription-tier" value="premium-plus">
-          <span>Premium+</span>
-        </label>
+      <div class="detail-list">
+        ${detailParts.map((d) => `<span>${escapeHtml(d)}</span>`).join("")}
       </div>
-    </div>
 
-    <div class="actions">
-      <button class="btn-primary" type="button" data-action="confirm" ${hasMissing ? "disabled" : ""}>Publish</button>
-      <button class="btn-ghost" type="button" data-action="cancel">Cancel</button>
+      ${hasMissing ? `<hr class="divider" />
+      <div class="missing-section">
+        <p class="missing-header">Missing assets</p>
+        <div class="chip-list">${missingChips}</div>
+        <button class="batch-link" type="button" data-action="pick-directory">Match from directory…</button>
+      </div>` : ""}
+
+      <hr class="divider" />
+
+      <div class="tier-row">
+        <span>Subscription</span>
+        <div class="tier-seg">
+          <label>
+            <input type="radio" name="subscription-tier" value="premium" checked>
+            <span>Premium</span>
+          </label>
+          <label>
+            <input type="radio" name="subscription-tier" value="premium-plus">
+            <span>Premium+</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn-primary" type="button" data-action="confirm" ${hasMissing ? "disabled" : ""}>Publish</button>
+        <button class="btn-ghost" type="button" data-action="cancel">Cancel</button>
+      </div>
     </div>
 
   </div>

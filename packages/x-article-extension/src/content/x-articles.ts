@@ -1,6 +1,6 @@
 import {
   buildMediaRegistry,
-  pickArticleDirectory,
+  pickMarkdownFile,
   pickMediaDirectory,
   pickSupplementalMedia,
   readFileAsText,
@@ -179,18 +179,22 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
   }
 
   try {
-    // Pick article directory — gets .md + all media files in one step
-    const dirFiles = await pickArticleDirectory();
-    if (dirFiles.length === 0) return;
+    // Pick markdown file
+    const markdownFile = await pickMarkdownFile();
+    if (!markdownFile) return;
 
-    const mdFiles = dirFiles.filter((f) =>
-      /\.(md|markdown|mdx)$/i.test(f.webkitRelativePath || f.name),
-    );
-    let markdownFile = mdFiles[0];
-    const sourceFileNames = mdFiles.map((f) => f.webkitRelativePath || f.name);
-    if (!markdownFile) {
-      showImportError("未在目录中找到 Markdown 文件");
-      return;
+    const markdown = await readFileAsText(markdownFile);
+    let authorizedFiles = [markdownFile];
+    let registry = buildMediaRegistry({ markdown, authorizedFiles });
+
+    // Auto-pick directory if media files are referenced
+    const initialCheck = buildImportPreviewState({ markdown, subscriptionTier: await loadSubscriptionTier(), mediaRegistry: registry });
+    if (initialCheck.coverImage || initialCheck.missingSources.length > 0) {
+      const dirFiles = await pickMediaDirectory();
+      if (dirFiles.length > 0) {
+        authorizedFiles = [...authorizedFiles, ...dirFiles];
+        registry = buildMediaRegistry({ markdown, authorizedFiles });
+      }
     }
 
     const countConversions = (md: string) => {
@@ -221,50 +225,6 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
         /cover\.(png|jpe?g|webp|gif|svg)$/i.test(f.webkitRelativePath || f.name),
       )?.webkitRelativePath || null;
     };
-
-    const extractImagePaths = (md: string): string[] =>
-      [...md.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((m) => m[1]!).filter((p) => !/^https?:/i.test(p));
-
-    const markdown = await readFileAsText(markdownFile);
-    let currentMarkdown = markdown;
-    let authorizedFiles = dirFiles;
-    let registry = buildMediaRegistry({ markdown, authorizedFiles });
-
-    const readAndPreview = async (file: File): Promise<ImportPreview> => {
-      const md = await readFileAsText(file);
-      currentMarkdown = md;
-      if (coverBlobUrl) URL.revokeObjectURL(coverBlobUrl);
-      coverBlobUrl = undefined;
-
-      const preview = buildImportPreviewState({ markdown: md, subscriptionTier, mediaRegistry: registry });
-      preview.sourceFile = file.webkitRelativePath || file.name;
-      preview.sourceFiles = sourceFileNames;
-
-      const rawCover = extractCoverPath(md);
-      if (!preview.coverImage && rawCover) preview.coverImage = rawCover;
-      const cp = preview.coverImage;
-
-      if (preview.contentImages.length === 0) {
-        const rawImgs = extractImagePaths(md);
-        const isImg = (n: string) => /\.(png|jpe?g|webp|gif|svg)$/i.test(n);
-        const dirImgs = authorizedFiles.map((f) => f.webkitRelativePath || f.name).filter((p) => isImg(p) && p !== cp);
-        preview.contentImages = [...new Set([...rawImgs.filter((p) => p !== cp), ...dirImgs])];
-        preview.contentImageCount = preview.contentImages.length;
-      }
-
-      if (preview.adaptations.length === 0) {
-        const stats = countConversions(md);
-        for (const s of stats) {
-          preview.adaptations.push({ kind: s.label, message: `${s.label} (×${s.count})` } as never);
-        }
-      }
-
-      if (cp && !/^https?:/i.test(cp)) {
-        const cf = findCoverFile(cp);
-        if (cf) { coverBlobUrl = URL.createObjectURL(cf); preview.coverObjectUrl = coverBlobUrl; }
-      }
-      return preview;
-    };
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
 
@@ -282,33 +242,55 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
       );
     };
 
-    subscriptionTier = await loadSubscriptionTier();
-    const initialPreview = await readAndPreview(markdownFile);
+    const buildPreview = (): ImportPreview => {
+      if (coverBlobUrl) URL.revokeObjectURL(coverBlobUrl);
+      coverBlobUrl = undefined;
 
-    const dialog = await showImportPreviewDialog(initialPreview, {
+      const preview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
+
+      const rawCover = extractCoverPath(markdown);
+      if (!preview.coverImage && rawCover) preview.coverImage = rawCover;
+      const cp = preview.coverImage;
+
+      if (preview.contentImages.length === 0) {
+        const isImg = (n: string) => /\.(png|jpe?g|webp|gif|svg)$/i.test(n);
+        const dirImgs = authorizedFiles.map((f) => f.webkitRelativePath || f.name).filter((p) => isImg(p) && p !== cp);
+        preview.contentImages = [...new Set(dirImgs)];
+        preview.contentImageCount = preview.contentImages.length;
+      }
+
+      if (preview.adaptations.length === 0) {
+        for (const s of countConversions(markdown)) {
+          preview.adaptations.push({ kind: s.label, message: `${s.label} (×${s.count})` } as never);
+        }
+      }
+
+      if (cp && !/^https?:/i.test(cp)) {
+        const cf = findCoverFile(cp);
+        if (cf) { coverBlobUrl = URL.createObjectURL(cf); preview.coverObjectUrl = coverBlobUrl; }
+      }
+      return preview;
+    };
+
+    subscriptionTier = await loadSubscriptionTier();
+    const dialog = await showImportPreviewDialog(buildPreview(), {
       onPickDirectory: async () => {
         const files = await pickMediaDirectory();
         if (files.length > 0) {
           authorizedFiles = [...authorizedFiles, ...files];
-          registry = buildMediaRegistry({ markdown: currentMarkdown, authorizedFiles });
+          registry = buildMediaRegistry({ markdown, authorizedFiles });
         }
         subscriptionTier = await loadSubscriptionTier();
-        return readAndPreview(markdownFile!);
+        return buildPreview();
       },
       onPickFiles: async () => {
         const files = await pickSupplementalMedia();
         if (files.length > 0) {
           authorizedFiles = [...authorizedFiles, ...files];
-          registry = buildMediaRegistry({ markdown: currentMarkdown, authorizedFiles });
+          registry = buildMediaRegistry({ markdown, authorizedFiles });
         }
         subscriptionTier = await loadSubscriptionTier();
-        return readAndPreview(markdownFile!);
-      },
-      onSelectSource: async (filename: string) => {
-        const file = authorizedFiles.find((f) => (f.webkitRelativePath || f.name) === filename);
-        if (!file) throw new Error("File not found");
-        markdownFile = file;
-        return readAndPreview(file);
+        return buildPreview();
       },
     });
 

@@ -11,8 +11,6 @@ export type ImportPreview = {
   title: string;
   coverImage: string | null;
   coverObjectUrl?: string;
-  sourceFile?: string;
-  sourceFiles?: string[];
   contentImages: string[];
   contentImageCount: number;
   contentVideoCount: number;
@@ -30,7 +28,6 @@ export type ImportDialogResult =
 export type ImportDialogCallbacks = {
   onPickDirectory: () => Promise<ImportPreview>;
   onPickFiles: () => Promise<ImportPreview>;
-  onSelectSource?: (filename: string) => Promise<ImportPreview>;
 };
 
 import {
@@ -138,20 +135,6 @@ export const showImportPreviewDialog = (
         pickFilesBtn?.addEventListener("click", () => {
           void saveSubscriptionTier(readTier()).then(() => {
             close({ type: "pick-files" });
-          });
-        });
-      }
-
-      if (callbacks?.onSelectSource) {
-        shadow.querySelectorAll("[data-action='select-source']").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const file = (btn as HTMLElement).dataset.file;
-            if (file) {
-              try {
-                currentPreview = await callbacks.onSelectSource!(file);
-                render();
-              } catch { /* cancelled */ }
-            }
           });
         });
       }
@@ -346,23 +329,6 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     display: flex; flex-direction: column;
   }
 
-  .source-picker {
-    display: flex; flex-wrap: wrap; gap: 6px;
-    margin-bottom: 4px;
-  }
-  .source-opt {
-    border: 1px solid ${c.border}; border-radius: 6px;
-    padding: 4px 10px;
-    font-size: 11px; color: ${c.muted};
-    background: transparent; cursor: pointer;
-    transition: border-color 120ms, color 120ms, background 120ms;
-  }
-  .source-opt:hover { border-color: ${c.muted}; color: ${c.text}; }
-  .source-opt.active {
-    border-color: ${c.accent}; color: ${c.accent};
-    background: ${dark ? "rgba(77,157,224,0.1)" : "rgba(59,130,196,0.08)"};
-  }
-
   .article-title {
     margin: 0 0 24px 0;
     font-size: 20px; font-weight: 700; line-height: 1.35;
@@ -483,8 +449,6 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     ${hasCoverPreview ? `<div class="cover-preview"><img src="${escapeHtml(preview.coverObjectUrl!)}" alt="" /></div>` : ""}
 
     <div class="panel-body">
-      ${preview.sourceFiles && preview.sourceFiles.length > 1 ? `<div class="source-picker">${preview.sourceFiles.map((f) => `<button class="source-opt${f === preview.sourceFile ? " active" : ""}" data-action="select-source" data-file="${escapeHtml(f)}">${escapeHtml(f)}</button>`).join("")}</div>` : ""}
-
       <h2 class="article-title">${escapeHtml(preview.title)}</h2>
 
       ${assetLines.length > 0 ? `<p class="section-label">${t("素材", "Assets")}</p>${renderMediaSection(assetLines)}` : ""}

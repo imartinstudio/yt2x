@@ -96,10 +96,9 @@ const updateVisualSpan = (span: HTMLSpanElement, checked: boolean): void => {
   }
 };
 
-/** 无动画更新 visual span，同步提交样式避免 rAF 跨帧闪烁。 */
+/** 无动画更新 visual span：先更新状态再一次性提交，避免双 reflow 导致旧状态被绘制到屏幕。 */
 const updateVisualSpanInstant = (span: HTMLSpanElement, checked: boolean): void => {
   span.style.transition = "none";
-  void span.offsetHeight; // 强制提交 transition:none
   updateVisualSpan(span, checked);
   void span.offsetHeight; // 强制提交新样式（无过渡）
   span.style.transition = "all 0.15s cubic-bezier(0.34,1.56,0.64,1)";

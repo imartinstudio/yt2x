@@ -4,8 +4,47 @@ export const CHECKBOX_INPUT_ATTR = "data-xfm-follow-select-input";
 export const CHECKBOX_HIT_ATTR = "data-xfm-follow-select-hit";
 export const CHECKBOX_PAD_ATTR = "data-xfm-follow-padded";
 export const CHECKBOX_ROW_ATTR = "data-xfm-follow-row";
+export const CHECKBOX_VISUAL_ATTR = "data-xfm-follow-select-visual";
 
 const HIT_ZONE_WIDTH_PX = 52;
+
+const createVisualSpan = (): HTMLSpanElement => {
+  const span = document.createElement("span");
+  span.setAttribute(CHECKBOX_VISUAL_ATTR, "true");
+  span.style.cssText = [
+    "width:20px",
+    "height:20px",
+    "border-radius:5px",
+    "border:1.5px solid rgba(255,255,255,0.12)",
+    "background:transparent",
+    "display:flex",
+    "align-items:center",
+    "justify-content:center",
+    "font-size:12px",
+    "font-weight:700",
+    "color:transparent",
+    "flex-shrink:0",
+    "transition:all 0.15s cubic-bezier(0.34,1.56,0.64,1)",
+    "pointer-events:none",
+  ].join(";");
+  return span;
+};
+
+const updateVisualSpan = (span: HTMLSpanElement, checked: boolean): void => {
+  if (checked) {
+    span.style.background = "rgba(99,102,241,0.2)";
+    span.style.borderColor = "rgba(129,140,248,0.6)";
+    span.style.boxShadow = "0 0 24px rgba(99,102,241,0.2)";
+    span.style.color = "white";
+    span.textContent = "✓";
+  } else {
+    span.style.background = "transparent";
+    span.style.borderColor = "rgba(255,255,255,0.12)";
+    span.style.boxShadow = "none";
+    span.style.color = "transparent";
+    span.textContent = "";
+  }
+};
 
 const hitZoneStyle = [
   "position:absolute",
@@ -22,8 +61,14 @@ const hitZoneStyle = [
   "-webkit-tap-highlight-color:transparent",
 ].join(";");
 
-const inputStyle =
-  "width:18px;height:18px;margin:0;flex-shrink:0;cursor:pointer;accent-color:rgb(29,155,240)";
+const inputStyle = [
+  "position:absolute",
+  "opacity:0",
+  "width:1px",
+  "height:1px",
+  "margin:0",
+  "pointer-events:none",
+].join(";");
 
 export type UserCellMount = {
   mountEl: HTMLElement;
@@ -105,6 +150,16 @@ export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
   input.style.cssText = inputStyle;
 
   hit.append(input);
+
+  const visual = createVisualSpan();
+  updateVisualSpan(visual, input.checked);
+  hit.append(visual);
+
+  input.addEventListener("change", () => {
+    const vis = hit.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
+    if (vis) updateVisualSpan(vis, input.checked);
+  });
+
   mount.mountEl.insertBefore(hit, mount.userCell);
   return input;
 };
@@ -201,6 +256,9 @@ const setCellsChecked = (
     const handle = normalizeHandle(extractUserCellHandle(mount.userCell));
     const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
     if (input.checked !== checked) input.checked = checked;
+    // 同步视觉 span
+    const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
+    if (visual) updateVisualSpan(visual, input.checked);
     if (selectedHandles === undefined || handle === null) continue;
     if (checked) selectedHandles.add(handle);
     else selectedHandles.delete(handle);
@@ -238,7 +296,11 @@ export const applySelectionToViewportCells = (
     const input = findOrReuseCheckboxInput(mount, handle);
     if (input === null) continue;
     const shouldCheck = selectedHandles.has(handle);
-    if (input.checked !== shouldCheck) input.checked = shouldCheck;
+    if (input.checked !== shouldCheck) {
+      input.checked = shouldCheck;
+      const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
+      if (visual) updateVisualSpan(visual, input.checked);
+    }
   }
 };
 
@@ -254,5 +316,9 @@ export const syncCheckboxOnCell = (
   const shouldCheck = selectedHandles.has(handle);
   const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
   if (input.dataset.xfmHandle !== handle) input.dataset.xfmHandle = handle;
-  if (input.checked !== shouldCheck) input.checked = shouldCheck;
+  if (input.checked !== shouldCheck) {
+    input.checked = shouldCheck;
+    const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
+    if (visual) updateVisualSpan(visual, input.checked);
+  }
 };

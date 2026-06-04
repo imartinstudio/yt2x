@@ -4,6 +4,7 @@ import {
   CHECKBOX_HIT_ATTR,
   CHECKBOX_INPUT_ATTR,
   CHECKBOX_PAD_ATTR,
+  CHECKBOX_VISUAL_ATTR,
   cellHasCheckbox,
   ensureUserCellCheckbox,
   getCheckedHandlesInViewport,
@@ -39,10 +40,18 @@ describe("ensureUserCellCheckbox", () => {
     wrapper.append(cell);
 
     const input = ensureUserCellCheckbox(cell);
+    const hit = cell.previousElementSibling;
+    const visual = hit?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
+    expect(visual).not.toBeNull();
+    expect(visual!.style.background).toBe("transparent");
+    expect(visual!.textContent).toBe("");
+
     input.checked = true;
+    input.dispatchEvent(new Event("change"));
+    expect(visual!.style.background).toContain("rgba(99, 102, 241");
+    expect(visual!.textContent).toBe("✓");
 
     expect(cellHasCheckbox(cell)).toBe(true);
-    const hit = cell.previousElementSibling;
     expect(hit?.getAttribute(CHECKBOX_HIT_ATTR)).toBe("true");
     expect(hit?.querySelector(`[${CHECKBOX_INPUT_ATTR}]`)).toBe(input);
     expect(cell.parentElement).toBe(wrapper);
@@ -70,6 +79,7 @@ describe("ensureUserCellCheckbox", () => {
     const hit = cell.previousElementSibling as HTMLElement;
     const input = hit.querySelector("input") as HTMLInputElement;
     input.checked = true;
+    input.dispatchEvent(new Event("change"));
     input.dataset.xfmHandle = "alice";
 
     cell.innerHTML = '<a href="/bob">@bob</a>';
@@ -79,6 +89,14 @@ describe("ensureUserCellCheckbox", () => {
     expect(cell.previousElementSibling).toBe(hit);
     expect(input.dataset.xfmHandle).toBe("bob");
     expect(input.checked).toBe(true);
+
+    const visual = hit.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
+    expect(visual).not.toBeNull();
+    expect(visual!.style.background).toContain("rgba(99, 102, 241");
+
+    input.checked = false;
+    input.dispatchEvent(new Event("change"));
+    expect(visual!.style.background).toBe("transparent");
 
     wrapper.remove();
   });

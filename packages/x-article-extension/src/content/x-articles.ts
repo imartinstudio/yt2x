@@ -183,9 +183,12 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
     const dirFiles = await pickArticleDirectory();
     if (dirFiles.length === 0) return;
 
-    const markdownFile = dirFiles.find((f) =>
+    const mdFiles = dirFiles.filter((f) =>
       /\.(md|markdown|mdx)$/i.test(f.webkitRelativePath || f.name),
     );
+    const markdownFile =
+      mdFiles.find((f) => /article\.md$/i.test(f.webkitRelativePath || f.name)) ??
+      mdFiles[0];
     if (!markdownFile) {
       showImportError("未在目录中找到 Markdown 文件");
       return;
@@ -220,16 +223,16 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
       .map((m) => m[1]!)
       .filter((p) => !/^https?:/i.test(p));
 
-    // Count structural elements from raw markdown
+    // Count structural elements from raw markdown (lenient patterns)
     const conversionStats: { label: string; count: number }[] = [];
-    const h2Count = (markdown.match(/^##\s+.+$/gm) ?? []).length;
+    const h2Count = (markdown.match(/^#{2}\s*[^#\n]+$/gm) ?? []).length;
     if (h2Count > 0) conversionStats.push({ label: "H2", count: h2Count });
-    const h3Count = (markdown.match(/^###\s+.+$/gm) ?? []).length;
+    const h3Count = (markdown.match(/^#{3}\s*[^#\n]+$/gm) ?? []).length;
     if (h3Count > 0) conversionStats.push({ label: "H3", count: h3Count });
     const codeBlockCount = (markdown.match(/```[\s\S]*?```/g) ?? []).length;
     if (codeBlockCount > 0) conversionStats.push({ label: "Code block", count: codeBlockCount });
-    const tableCount = (markdown.match(/^\|.+\|$/gm) ?? []).length;
-    if (tableCount > 0) conversionStats.push({ label: "Table row", count: tableCount });
+    const tableRowCount = (markdown.match(/^\|.+\|/gm) ?? []).length;
+    if (tableRowCount > 0) conversionStats.push({ label: "Table row", count: tableRowCount });
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
 

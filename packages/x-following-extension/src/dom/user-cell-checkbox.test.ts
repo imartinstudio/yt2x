@@ -48,7 +48,7 @@ describe("ensureUserCellCheckbox", () => {
 
     input.checked = true;
     input.dispatchEvent(new Event("change"));
-    expect(visual!.style.background).toContain("rgba(99, 102, 241");
+    expect(visual!.style.background).toBe("var(--xfm-cb-bg-checked)");
     expect(visual!.textContent).toBe("✓");
 
     expect(cellHasCheckbox(cell)).toBe(true);
@@ -92,7 +92,7 @@ describe("ensureUserCellCheckbox", () => {
 
     const visual = hit.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
     expect(visual).not.toBeNull();
-    expect(visual!.style.background).toContain("rgba(99, 102, 241");
+    expect(visual!.style.background).toBe("var(--xfm-cb-bg-checked)");
 
     input.checked = false;
     input.dispatchEvent(new Event("change"));

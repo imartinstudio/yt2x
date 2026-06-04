@@ -104,7 +104,7 @@ describe("mountFollowingToolbar", () => {
     expect(shadow.querySelector('[data-ref="loaded-count"]')?.textContent).toBe("20");
     expect(shadow.querySelector('[data-ref="selected-count"]')?.textContent).toBe("3");
     expect(shadow.querySelector('[data-ref="oneway-count"]')?.textContent).toBe("14");
-    expect(shadow.querySelector(".title")?.textContent).toContain("关注列表助手");
+    expect(shadow.querySelector(".title")?.textContent).toContain("X 清道夫");
 
     const filterOneWay = shadow.querySelector<HTMLButtonElement>('[data-action="filter-one-way"]')!;
     expect(filterOneWay.classList.contains("active")).toBe(true);

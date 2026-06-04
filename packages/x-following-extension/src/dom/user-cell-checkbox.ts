@@ -191,8 +191,10 @@ export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
 
   // 显式 click handler：替代浏览器隐式 label 行为，避免 X 页面事件冲突
   hit.addEventListener("click", (e) => {
-    // 阻止 label 默认行为（会再次 toggle），手动切换
     e.preventDefault();
+    // 从 cell DOM 重新读取 handle，防止虚拟列表回收导致 input.dataset.xfmHandle 指向旧账号
+    const currentHandle = extractUserCellHandle(cell);
+    if (currentHandle !== null) input.dataset.xfmHandle = currentHandle;
     input.checked = !input.checked;
     input.dispatchEvent(new Event("change", { bubbles: true }));
   });

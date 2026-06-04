@@ -36,7 +36,7 @@ export type FollowingToolbarHandlers = {
 export type FollowingToolbar = {
   root: HTMLElement;
   update: (state: FollowingToolbarState) => void;
-  confirmUnfollow: (count: number) => Promise<boolean>;
+  confirmUnfollow: (loadedCount: number, totalSelected: number) => Promise<boolean>;
   remove: () => void;
 };
 
@@ -621,9 +621,13 @@ export const mountFollowingToolbar = (
     }
   });
 
-  const confirmUnfollow = (count: number): Promise<boolean> =>
+  const confirmUnfollow = (loadedCount: number, totalSelected: number): Promise<boolean> =>
     new Promise((resolve) => {
-      dialogDesc.innerHTML = `将取消关注 <b>${count}</b> 个账号`;
+      if (loadedCount < totalSelected) {
+        dialogDesc.innerHTML = `当前列表已加载 <b>${loadedCount}</b> 人（共选择 <b>${totalSelected}</b> 人）<br>确定取消关注这 <b>${loadedCount}</b> 个账号吗？<br><small style="color:var(--text-dim)">其余账号请滚动加载后再次操作</small>`;
+      } else {
+        dialogDesc.innerHTML = `将取消关注 <b>${loadedCount}</b> 个账号`;
+      }
       dialogResolve = resolve;
       dialogOverlay.classList.add("show");
     });

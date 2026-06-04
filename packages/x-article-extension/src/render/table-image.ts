@@ -1,3 +1,23 @@
+type TableLayoutCell = {
+  text: string;
+  lines: string[];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  isHeader: boolean;
+};
+
+const FONT_FAMILY = "-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+const FONT_SIZE = 22;
+const LINE_HEIGHT = 31;
+const CELL_PADDING_X = 18;
+const CELL_PADDING_Y = 14;
+const BORDER_WIDTH = 2;
+const MAX_TABLE_WIDTH = 1376;
+const MIN_COLUMN_WIDTH = 140;
+const MAX_COLUMN_WIDTH = 360;
+
 const tableCells = (line: string): string[] =>
   line
     .trim()
@@ -5,94 +25,169 @@ const tableCells = (line: string): string[] =>
     .split("|")
     .map((cell) => cell.trim());
 
-const escapeHtml = (value: string): string =>
-  value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-
-const renderTableDocument = (markdown: string): string => {
-  const rows = markdown
+const parseTableRows = (markdown: string): string[][] =>
+  markdown
     .split(/\r?\n/u)
     .map(tableCells)
     .filter((cells) => cells.length > 0 && !cells.every((cell) => /^:?-+:?$/u.test(cell)));
-  const [head = [], ...body] = rows;
-  return [
-    "<!doctype html>",
-    "<style>",
-    "body{margin:0;padding:32px;background:#fff;color:#111;font:22px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}",
-    "table{border-collapse:collapse;max-width:1376px;background:#fff}",
-    "th,td{border:2px solid #d0d7de;padding:14px 18px;text-align:left;vertical-align:top;white-space:pre-wrap}",
-    "th{background:#f3f4f6;font-weight:650}",
-    "</style>",
-    "<table><thead><tr>",
-    ...head.map((cell) => `<th>${escapeHtml(cell)}</th>`),
-    "</tr></thead><tbody>",
-    ...body.map((cells) => `<tr>${cells.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`),
-    "</tbody></table>",
-  ].join("");
+
+const measureTextWidth = (ctx: CanvasRenderingContext2D, text: string): number =>
+  Math.ceil(ctx.measureText(text || " ").width);
+
+const wrapText = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] => {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (normalized.length === 0) return [""];
+
+  const words = normalized.split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  const pushLongToken = (token: string): void => {
+    let fragment = "";
+    for (const char of token) {
+      const next = fragment + char;
+      if (fragment.length > 0 && measureTextWidth(ctx, next) > maxWidth) {
+        lines.push(fragment);
+        fragment = char;
+      } else {
+        fragment = next;
+      }
+    }
+    current = fragment;
+  };
+
+  for (const word of words) {
+    const next = current.length > 0 ? `${current} ${word}` : word;
+    if (measureTextWidth(ctx, next) <= maxWidth) {
+      current = next;
+      continue;
+    }
+    if (current.length > 0) lines.push(current);
+    if (measureTextWidth(ctx, word) > maxWidth) {
+      pushLongToken(word);
+    } else {
+      current = word;
+    }
+  }
+
+  if (current.length > 0) lines.push(current);
+  return lines.length > 0 ? lines : [""];
 };
 
-export const renderTableMarkdownToPngBlob = async (markdown: string): Promise<Blob> => {
-  const iframe = document.createElement("iframe");
-  iframe.setAttribute("aria-hidden", "true");
-  iframe.style.cssText = "position:fixed;left:-9999px;top:0;width:1440px;height:960px;border:0";
-  document.body.appendChild(iframe);
+const normalizeRows = (rows: string[][]): string[][] => {
+  const columnCount = Math.max(...rows.map((row) => row.length), 1);
+  return rows.map((row) => Array.from({ length: columnCount }, (_, index) => row[index] ?? ""));
+};
 
-  try {
-    const doc = iframe.contentDocument;
-    if (doc === null) throw new Error("Table render iframe document was unavailable.");
-    doc.open();
-    doc.write(renderTableDocument(markdown));
-    doc.close();
-    const table = doc.querySelector("table");
-    if (table === null) throw new Error("Table element was not rendered for PNG export.");
-
-    const scale = 2;
-    const rect = table.getBoundingClientRect();
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.ceil(rect.width * scale);
-    canvas.height = Math.ceil(rect.height * scale);
-    const ctx = canvas.getContext("2d");
-    if (ctx === null) throw new Error("Canvas 2D context was unavailable for table PNG export.");
-
-    const svg = new XMLSerializer().serializeToString(
-      new DOMParser().parseFromString(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="${rect.width}" height="${rect.height}">
-          <foreignObject width="100%" height="100%">${table.outerHTML}</foreignObject>
-        </svg>`,
-        "image/svg+xml",
-      ).documentElement,
+const calculateColumnWidths = (
+  ctx: CanvasRenderingContext2D,
+  rows: string[][],
+): number[] => {
+  const columnCount = rows[0]?.length ?? 1;
+  const naturalWidths = Array.from({ length: columnCount }, (_, columnIndex) => {
+    const maxContentWidth = Math.max(
+      ...rows.map((row) => measureTextWidth(ctx, row[columnIndex] ?? "")),
+      MIN_COLUMN_WIDTH,
     );
-    const url = URL.createObjectURL(
-      new Blob([svg], { type: "image/svg+xml;charset=utf-8" }),
+    return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, maxContentWidth + CELL_PADDING_X * 2));
+  });
+
+  const totalWidth = naturalWidths.reduce((sum, width) => sum + width, 0);
+  if (totalWidth <= MAX_TABLE_WIDTH) return naturalWidths;
+
+  const scale = MAX_TABLE_WIDTH / totalWidth;
+  return naturalWidths.map((width) => Math.max(MIN_COLUMN_WIDTH, Math.floor(width * scale)));
+};
+
+const createMeasureContext = (): CanvasRenderingContext2D => {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  if (ctx === null) throw new Error("Canvas 2D context was unavailable for table PNG export.");
+  ctx.font = `${FONT_SIZE}px ${FONT_FAMILY}`;
+  return ctx;
+};
+
+const createTableLayout = (ctx: CanvasRenderingContext2D, markdown: string): {
+  cells: TableLayoutCell[];
+  width: number;
+  height: number;
+} => {
+  const parsedRows = normalizeRows(parseTableRows(markdown));
+  const rows = parsedRows.length > 0 ? parsedRows : [[""]];
+  const columnWidths = calculateColumnWidths(ctx, rows);
+  const cells: TableLayoutCell[] = [];
+  let y = 0;
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex]!;
+    const wrapped = row.map((cell, columnIndex) =>
+      wrapText(ctx, cell, columnWidths[columnIndex]! - CELL_PADDING_X * 2),
     );
-    try {
-      const image = await loadImage(url);
-      ctx.scale(scale, scale);
-      ctx.drawImage(image, 0, 0);
-    } finally {
-      URL.revokeObjectURL(url);
+    const rowHeight = Math.max(...wrapped.map((lines) => lines.length * LINE_HEIGHT + CELL_PADDING_Y * 2));
+    let x = 0;
+    for (let columnIndex = 0; columnIndex < row.length; columnIndex += 1) {
+      cells.push({
+        text: row[columnIndex]!,
+        lines: wrapped[columnIndex]!,
+        x,
+        y,
+        width: columnWidths[columnIndex]!,
+        height: rowHeight,
+        isHeader: rowIndex === 0,
+      });
+      x += columnWidths[columnIndex]!;
     }
+    y += rowHeight;
+  }
 
-    const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((result) => {
-        if (result === null) reject(new Error("Table PNG conversion failed."));
-        else resolve(result);
-      }, "image/png");
-    });
-    return blob;
-  } finally {
-    iframe.remove();
+  return {
+    cells,
+    width: columnWidths.reduce((sum, width) => sum + width, 0),
+    height: y,
+  };
+};
+
+const drawTable = (
+  ctx: CanvasRenderingContext2D,
+  layout: ReturnType<typeof createTableLayout>,
+): void => {
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, layout.width, layout.height);
+  ctx.textBaseline = "top";
+  ctx.lineWidth = BORDER_WIDTH;
+
+  for (const cell of layout.cells) {
+    ctx.fillStyle = cell.isHeader ? "#f3f4f6" : "#fff";
+    ctx.fillRect(cell.x, cell.y, cell.width, cell.height);
+    ctx.strokeStyle = "#d0d7de";
+    ctx.strokeRect(cell.x, cell.y, cell.width, cell.height);
+
+    ctx.fillStyle = "#111";
+    ctx.font = `${cell.isHeader ? "650 " : ""}${FONT_SIZE}px ${FONT_FAMILY}`;
+    let lineY = cell.y + CELL_PADDING_Y;
+    for (const line of cell.lines) {
+      ctx.fillText(line, cell.x + CELL_PADDING_X, lineY);
+      lineY += LINE_HEIGHT;
+    }
   }
 };
 
-const loadImage = (url: string): Promise<HTMLImageElement> =>
-  new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("Failed to load rendered table image."));
-    image.src = url;
+export const renderTableMarkdownToPngBlob = async (markdown: string): Promise<Blob> => {
+  const measureCtx = createMeasureContext();
+  const layout = createTableLayout(measureCtx, markdown);
+  const scale = 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(layout.width * scale);
+  canvas.height = Math.ceil(layout.height * scale);
+  const ctx = canvas.getContext("2d");
+  if (ctx === null) throw new Error("Canvas 2D context was unavailable for table PNG export.");
+  ctx.scale(scale, scale);
+  drawTable(ctx, layout);
+
+  return await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result === null) reject(new Error("Table PNG conversion failed."));
+      else resolve(result);
+    }, "image/png");
   });
+};

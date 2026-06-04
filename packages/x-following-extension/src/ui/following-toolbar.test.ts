@@ -179,7 +179,7 @@ describe("mountFollowingToolbar", () => {
     const tb = mountFollowingToolbar(null, document.body, noopHandlers, initialState);
     const shadow = tb.root.shadowRoot!;
 
-    const promise = tb.confirmUnfollow(6);
+    const promise = tb.confirmUnfollow(6, 6);
     const overlay = shadow.querySelector<HTMLElement>('[data-ref="dialog-overlay"]')!;
     expect(overlay.classList.contains("show")).toBe(true);
     expect(shadow.querySelector('[data-ref="dialog-desc"]')?.innerHTML).toContain("6");
@@ -197,7 +197,7 @@ describe("mountFollowingToolbar", () => {
     const tb = mountFollowingToolbar(null, document.body, noopHandlers, initialState);
     const shadow = tb.root.shadowRoot!;
 
-    const promise = tb.confirmUnfollow(3);
+    const promise = tb.confirmUnfollow(3, 3);
     shadow.querySelector<HTMLButtonElement>('[data-action="dialog-cancel"]')!.click();
 
     const result = await promise;
@@ -210,7 +210,7 @@ describe("mountFollowingToolbar", () => {
     const tb = mountFollowingToolbar(null, document.body, noopHandlers, initialState);
     const shadow = tb.root.shadowRoot!;
 
-    const promise = tb.confirmUnfollow(2);
+    const promise = tb.confirmUnfollow(2, 2);
     const overlay = shadow.querySelector<HTMLElement>('[data-ref="dialog-overlay"]')!;
     overlay.click();
 

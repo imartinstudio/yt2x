@@ -445,7 +445,7 @@ const handleUnfollowSelected = async (): Promise<void> => {
 
   // 玻璃 Dialog 确认（替代 window.confirm）
   if (toolbar === null) return;
-  const confirmed = await toolbar.confirmUnfollow(cells.length);
+  const confirmed = await toolbar.confirmUnfollow(cells.length, handles.length);
   if (!confirmed) return;
 
   busy = true;

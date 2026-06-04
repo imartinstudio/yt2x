@@ -285,7 +285,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   @keyframes yt-fade { from { opacity: 0; } to { opacity: 1; } }
 
   .panel {
-    width: min(420px, calc(100vw - 32px));
+    width: min(480px, calc(100vw - 32px));
     max-height: calc(100vh - 48px);
     overflow-y: auto;
     background: ${c.bg};

@@ -252,9 +252,10 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   const hasCoverPreview = Boolean(preview.coverObjectUrl);
 
   const detailParts: string[] = [];
-  if (preview.contentImageCount > 0) detailParts.push(`${preview.contentImageCount} images`);
-  if (preview.contentVideoCount > 0) detailParts.push(`${preview.contentVideoCount} videos`);
-  if (preview.adaptations.length > 0) detailParts.push(`${preview.adaptations.length} adaptations`);
+  if (preview.coverImage) detailParts.push(`Cover · ${preview.coverImage}`);
+  if (preview.contentImageCount > 0) detailParts.push(`${preview.contentImageCount} body image${preview.contentImageCount > 1 ? "s" : ""}`);
+  if (preview.contentVideoCount > 0) detailParts.push(`${preview.contentVideoCount} video${preview.contentVideoCount > 1 ? "s" : ""}`);
+  if (preview.adaptations.length > 0) detailParts.push(`${preview.adaptations.length} adaptation${preview.adaptations.length > 1 ? "s" : ""}`);
 
   const missingChips = preview.missingSources
     .map(
@@ -409,9 +410,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     <div class="panel-body">
       <h2 class="article-title">${escapeHtml(preview.title)}</h2>
 
-      <div class="detail-list">
-        ${detailParts.map((d) => `<span>${escapeHtml(d)}</span>`).join("")}
-      </div>
+      ${detailParts.length > 0 ? `<div class="detail-list">${detailParts.map((d) => `<span>${escapeHtml(d)}</span>`).join("")}</div>` : ""}
 
       ${hasMissing ? `<hr class="divider" />
       <div class="missing-section">

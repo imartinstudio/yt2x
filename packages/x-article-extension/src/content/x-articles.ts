@@ -236,7 +236,9 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
       coverBlobUrl = undefined;
 
       const preview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
-      const coverPath = preview.coverImage || rawCoverPath;
+      // Ensure coverImage is populated even when parser returns null
+      if (!preview.coverImage && rawCoverPath) preview.coverImage = rawCoverPath;
+      const coverPath = preview.coverImage;
       if (coverPath && !/^https?:/i.test(coverPath)) {
         const coverFile = findCoverFile(coverPath);
         if (coverFile) {

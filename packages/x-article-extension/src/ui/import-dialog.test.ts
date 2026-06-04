@@ -125,7 +125,9 @@ describe("X Articles import media policy", () => {
     const host = document.querySelector("[data-yt2x-import-dialog]") as HTMLElement;
     const shadow = host.shadowRoot!;
 
-    expect(shadow.textContent).toContain("仍缺少封面或正文图片素材：cover.png, images/body.png");
+    expect(shadow.textContent).toContain("cover.png");
+    expect(shadow.textContent).toContain("images/body.png");
+    expect(shadow.textContent).toContain("缺少素材文件");
     shadow.querySelector<HTMLButtonElement>("[data-action='confirm']")!.click();
     await Promise.resolve();
     expect(host.isConnected).toBe(true);

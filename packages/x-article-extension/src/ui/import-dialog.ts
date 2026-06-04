@@ -30,6 +30,9 @@ import {
 
 export { loadSubscriptionTier, saveSubscriptionTier };
 
+const isDarkMode = (): boolean =>
+  window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
+
 export const buildImportPreviewState = (input: {
   markdown: string;
   subscriptionTier: XArticleSubscriptionTier;
@@ -145,8 +148,19 @@ export const showImportSuccessToast = (input: {
   }
   const suffix = notes.length > 0 ? `（${notes.join("；")}）` : "";
   toast.textContent = `草稿内容已写入，请人工复核后发布${suffix}`;
-  toast.style.cssText =
-    "position:fixed;right:24px;bottom:24px;z-index:2147483647;padding:12px 16px;border-radius:8px;background:#111;color:#fff;font:14px system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.2)";
+
+  const dark = isDarkMode();
+  const bg = dark ? "#2c2c2e" : "#1c1c1e";
+  const fg = dark ? "#e4e4e5" : "#ffffff";
+  const border = dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.1)";
+  toast.style.cssText = `
+    position:fixed;right:20px;bottom:20px;z-index:2147483647;
+    max-width:min(400px,calc(100vw - 40px));
+    padding:12px 16px;border-radius:12px;
+    background:${bg};color:${fg};
+    font:14px/1.5 system-ui,-apple-system,sans-serif;
+    box-shadow:0 0 0 1px ${border},0 8px 28px rgba(0,0,0,.2);
+  `;
   document.body.appendChild(toast);
   window.setTimeout(
     () => toast.remove(),
@@ -158,84 +172,223 @@ export const showImportError = (message: string): void => {
   const toast = document.createElement("div");
   toast.setAttribute("data-yt2x-import-error", "true");
   toast.textContent = message.startsWith("yt2x") ? message : `yt2x 导入失败：${message}`;
-  toast.style.cssText =
-    "position:fixed;right:24px;bottom:24px;z-index:2147483647;max-width:min(420px,calc(100vw - 48px));padding:14px 16px;border-radius:8px;background:#b42318;color:#fff;font:14px/1.45 system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.25)";
+
+  const dark = isDarkMode();
+  const bg = dark ? "#451a1a" : "#fef2f2";
+  const fg = dark ? "#fca5a5" : "#991b1b";
+  const border = dark ? "rgba(248,113,113,0.2)" : "rgba(220,38,38,0.15)";
+  toast.style.cssText = `
+    position:fixed;right:20px;bottom:20px;z-index:2147483647;
+    max-width:min(420px,calc(100vw - 40px));
+    padding:12px 16px;border-radius:12px;
+    background:${bg};color:${fg};
+    font:14px/1.5 system-ui,-apple-system,sans-serif;
+    box-shadow:0 0 0 1px ${border},0 8px 28px rgba(0,0,0,.2);
+  `;
   document.body.appendChild(toast);
   window.setTimeout(() => toast.remove(), message.includes("刷新") ? 12_000 : 8_000);
 };
 
 const renderDialogHtml = (preview: ImportPreview): string => {
-  const adaptationLines =
+  const dark = isDarkMode();
+  const c = {
+    bg: dark ? "#1c1c1e" : "#ffffff",
+    surface: dark ? "#2c2c2e" : "#f5f5f7",
+    text: dark ? "#e4e4e5" : "#1d1d1f",
+    muted: dark ? "#8e8e93" : "#6e6e73",
+    accent: dark ? "#3b82f6" : "#2563eb",
+    accentHover: dark ? "#2563eb" : "#1d4ed8",
+    warn: dark ? "rgba(245,158,11,0.12)" : "rgba(245,158,11,0.1)",
+    warnText: dark ? "#fbbf24" : "#b45309",
+    success: dark ? "#34d399" : "#059669",
+    danger: dark ? "#f87171" : "#dc2626",
+    border: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
+    shadow: dark ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.15)",
+  };
+
+  const hasMissing = preview.missingSources.length > 0;
+
+  const statParts: string[] = [];
+  if (preview.contentImageCount > 0) statParts.push(`${preview.contentImageCount} 张图片`);
+  if (preview.contentVideoCount > 0) statParts.push(`${preview.contentVideoCount} 个视频`);
+  const statLine = statParts.length > 0 ? statParts.join("、") : "无素材";
+
+  const adaptationText =
     preview.adaptations.length === 0
-      ? "<li>无 Premium 降级项</li>"
-      : preview.adaptations.map((item) => `<li>${escapeHtml(item.message)}</li>`).join("");
-  const warningLines =
-    preview.warnings.length === 0
-      ? ""
-      : `<section><h3>警告</h3><ul>${preview.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul></section>`;
-  const missingLines =
-    preview.missingSources.length === 0
-      ? "<p>封面和正文图片素材已齐全；正文视频会在导入时自动过滤。</p>"
-      : `<p class="error">仍缺少封面或正文图片素材：${preview.missingSources.map(escapeHtml).join(", ")}</p>`;
-  const mediaActions =
-    preview.missingSources.length === 0
-      ? ""
-      : `<div class="media-actions">
-      <button type="button" data-action="pick-directory">选择文章目录</button>
-      <button type="button" data-action="pick-files">选择素材文件</button>
-    </div>
-    <p class="meta">请在确认导入前授权封面和正文图片文件；正文视频会自动过滤。</p>`;
+      ? "无"
+      : preview.adaptations.map((a) => a.message).join("；");
 
   return `
 <style>
   :host { all: initial; }
   .backdrop {
     position: fixed; inset: 0; z-index: 2147483646;
-    background: rgba(0,0,0,.45); display: grid; place-items: center;
-    font: 14px/1.5 system-ui, -apple-system, sans-serif; color: #111;
+    background: rgba(0,0,0,.35);
+    display: grid; place-items: center;
+    font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    color: ${c.text};
+    animation: yt-fade 150ms ease-out;
   }
+  @keyframes yt-fade { from { opacity: 0; } to { opacity: 1; } }
+
   .panel {
-    width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px);
-    overflow: auto; background: #fff; border-radius: 12px; padding: 20px;
-    box-shadow: 0 16px 48px rgba(0,0,0,.2);
+    width: min(440px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    background: ${c.bg};
+    border-radius: 16px;
+    padding: 28px 28px 24px;
+    box-shadow: 0 0 0 1px ${c.border}, 0 16px 48px ${c.shadow};
+    display: flex; flex-direction: column; gap: 22px;
+    animation: yt-enter 200ms cubic-bezier(0.22,1,0.36,1);
   }
-  h2 { margin: 0 0 12px; font-size: 18px; }
-  h3 { margin: 16px 0 8px; font-size: 14px; }
-  ul { margin: 0; padding-left: 20px; }
-  .meta { margin: 0 0 8px; color: #536471; }
-  .error { color: #b42318; }
-  .media-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-  .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-  button, select { font: inherit; }
-  button {
-    border: 1px solid #d0d7de; border-radius: 8px; padding: 8px 12px;
-    background: #f6f8fa; cursor: pointer;
+  @keyframes yt-enter {
+    from { opacity: 0; transform: scale(0.95) translateY(8px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
   }
-  button[data-action='confirm'] { background: #111; color: #fff; border-color: #111; }
-  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  .panel-title {
+    margin: 0;
+    font-size: 13px; font-weight: 600;
+    color: ${c.muted};
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+
+  .title-block {
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .article-title {
+    margin: 0;
+    font-size: 19px; font-weight: 700; line-height: 1.3;
+    color: ${c.text};
+    word-break: break-word;
+  }
+  .cover-ref {
+    font-size: 12px; color: ${c.muted};
+    display: flex; align-items: center; gap: 6px;
+  }
+  .cover-ref::before {
+    content: ''; display: inline-block;
+    width: 14px; height: 14px;
+    background: ${c.surface}; border-radius: 3px;
+  }
+
+  .meta-row {
+    display: flex; gap: 24px; flex-wrap: wrap;
+    font-size: 13px; color: ${c.muted};
+  }
+  .meta-label { font-weight: 500; color: ${c.text}; }
+
+  .adapt-block {
+    font-size: 12px; color: ${c.muted}; line-height: 1.5;
+    padding: 10px 14px;
+    background: ${c.surface}; border-radius: 10px;
+  }
+
+  .missing-block {
+    background: ${c.warn}; border-radius: 10px;
+    padding: 14px 16px;
+    display: ${hasMissing ? "flex" : "none"};
+    flex-direction: column; gap: 10px;
+  }
+  .missing-label {
+    font-size: 12px; font-weight: 600; color: ${c.warnText}; margin: 0;
+  }
+  .missing-list {
+    font-size: 12px; color: ${c.muted};
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    word-break: break-all; line-height: 1.6;
+  }
+  .media-actions {
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+
+  .tier-row {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 13px; color: ${c.muted};
+  }
+  .tier-row select {
+    border: 1px solid ${c.border}; border-radius: 8px;
+    padding: 6px 28px 6px 12px; font-size: 13px;
+    background: ${c.surface}; color: ${c.text}; cursor: pointer;
+    appearance: none; -webkit-appearance: none;
+  }
+
+  .actions {
+    display: flex; gap: 10px; align-items: center;
+  }
+
+  .btn-primary {
+    flex: 1;
+    border: none; border-radius: 12px;
+    padding: 13px 20px;
+    font-size: 15px; font-weight: 600;
+    background: ${c.accent}; color: #fff;
+    cursor: pointer;
+    transition: background 150ms;
+  }
+  .btn-primary:hover:not(:disabled) { background: ${c.accentHover}; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-secondary {
+    border: 1px solid ${c.border}; border-radius: 10px;
+    padding: 9px 14px; font-size: 13px;
+    background: ${c.surface}; color: ${c.text}; cursor: pointer;
+    transition: background 120ms;
+  }
+  .btn-secondary:hover { background: ${c.border}; }
+
+  .btn-ghost {
+    border: none; background: none;
+    color: ${c.muted}; cursor: pointer;
+    font-size: 13px; padding: 8px 12px; border-radius: 8px;
+    transition: color 120ms, background 120ms;
+  }
+  .btn-ghost:hover { color: ${c.text}; background: ${c.surface}; }
+
+  .warning-block {
+    font-size: 12px; color: ${c.warnText}; line-height: 1.5;
+    padding: 10px 14px;
+    background: ${c.warn}; border-radius: 10px;
+  }
 </style>
-<div class="backdrop" role="dialog" aria-modal="true" aria-label="导入 Markdown 预览">
+
+<div class="backdrop" role="dialog" aria-modal="true" aria-label="导入确认">
   <div class="panel">
-    <h2>导入 Markdown 预览</h2>
-    <p class="meta"><strong>标题：</strong>${escapeHtml(preview.title)}</p>
-    <p class="meta"><strong>封面：</strong>${escapeHtml(preview.coverImage ?? "（无）")}</p>
-    <p class="meta"><strong>正文素材：</strong>${preview.contentImageCount} 张图片将自动插入，${preview.contentVideoCount} 个视频将过滤（不含封面）</p>
-    <label>订阅档位
+    <p class="panel-title">导入 Markdown</p>
+
+    <div class="title-block">
+      <h2 class="article-title">${escapeHtml(preview.title)}</h2>
+      <div class="cover-ref">${escapeHtml(preview.coverImage ?? "无封面")}</div>
+    </div>
+
+    <div class="meta-row">
+      <span><span class="meta-label">素材</span> ${statLine}</span>
+      <span><span class="meta-label">转换</span> ${escapeHtml(adaptationText)}</span>
+    </div>
+
+    ${preview.warnings.length > 0 ? `<div class="warning-block">${preview.warnings.map(escapeHtml).join("<br>")}</div>` : ""}
+
+    <div class="missing-block">
+      <p class="missing-label">缺少素材文件</p>
+      <div class="missing-list">${preview.missingSources.map(escapeHtml).join("、")}</div>
+      <div class="media-actions">
+        <button class="btn-secondary" type="button" data-action="pick-directory">选择文章目录</button>
+        <button class="btn-secondary" type="button" data-action="pick-files">选择素材文件</button>
+      </div>
+    </div>
+
+    <div class="tier-row">
+      订阅档位
       <select name="subscription-tier">
         <option value="premium">X Premium</option>
         <option value="premium-plus">X Premium+</option>
       </select>
-    </label>
-    <section>
-      <h3>转换摘要</h3>
-      <ul>${adaptationLines}</ul>
-    </section>
-    ${warningLines}
-    <section><h3>素材</h3>${missingLines}${mediaActions}</section>
-    <p class="meta">确认后将点击「添加」新建空白草稿，再写入上述内容。</p>
+    </div>
+
     <div class="actions">
-      <button type="button" data-action="cancel">取消</button>
-      <button type="button" data-action="confirm" ${preview.missingSources.length > 0 ? "disabled" : ""}>确认导入</button>
+      <button class="btn-primary" type="button" data-action="confirm" ${hasMissing ? "disabled" : ""}>确认导入</button>
+      <button class="btn-ghost" type="button" data-action="cancel">取消</button>
     </div>
   </div>
 </div>`;

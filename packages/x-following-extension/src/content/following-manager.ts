@@ -157,6 +157,13 @@ const buildToolbarState = (counts: { loadedCount: number; selectedCount: number 
   oneWayCount: seenOneWayHandles.size,
 });
 
+/** 将 seenHandles 中所有 handle 加入选中（替代仅 DOM 的全选，跨虚拟列表有效）。 */
+const selectAllSeenHandles = (): void => {
+  for (const handle of seenHandles) selectedHandles.add(handle);
+  // 立即同步视口内 cell 的勾选状态
+  applySelectionToViewportCells(selectedHandles, filterMode);
+};
+
 const toolbarSignature = (state: FollowingToolbarState): string =>
   `${state.filterMode}|${state.loadedCount}|${state.selectedCount}|${state.busy}|${state.statusText}|${state.phase}`;
 
@@ -381,7 +388,7 @@ const ensureToolbar = (): boolean => {
       },
       onSelectAll: () => {
         if (busy) return;
-        setAllLoadedChecked(true, filterMode, selectedHandles);
+        selectAllSeenHandles();
         updateToolbar(true);
       },
       onClearSelection: () => {

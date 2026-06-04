@@ -284,8 +284,12 @@ export const mountFollowingToolbar = (
       display: flex;
       gap: 14px;
       font-size: 11px;
+      flex-shrink: 0;
     }
-    .stat { color: var(--text-sec); }
+    .stat {
+      color: var(--text-sec);
+      white-space: nowrap;
+    }
     .stat b { font-weight: 600; }
     .stat b.accent { color: var(--accent); }
     .stat b.danger { color: var(--danger); }
@@ -295,7 +299,8 @@ export const mountFollowingToolbar = (
       display: flex;
       align-items: center;
       gap: 8px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
+      overflow: hidden;
     }
     .segmented {
       display: flex;
@@ -505,7 +510,6 @@ export const mountFollowingToolbar = (
       font-weight: 600;
     }
 
-    .bar { animation: slideDown 0.25s ease-out; }
   </style>
 
   <div class="dialog-overlay" data-ref="dialog-overlay">

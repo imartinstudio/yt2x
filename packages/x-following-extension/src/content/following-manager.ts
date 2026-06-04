@@ -66,6 +66,7 @@ let busy = false;
 let statusText = "勾选用户后可批量取消关注";
 const seenHandles = new Set<string>();
 const seenOneWayHandles = new Set<string>();
+let selectAllMode = false;
 let activationAttempts = 0;
 let activationRetryId = 0;
 let syncDebounceTimer = 0;
@@ -141,8 +142,10 @@ const readCounts = (): { loadedCount: number; selectedCount: number } => {
   for (const cell of cells) {
     const handle = extractUserCellHandle(cell);
     if (handle !== null) {
+      const isNew = !seenHandles.has(handle);
       seenHandles.add(handle);
       if (!userCellFollowsYou(cell)) seenOneWayHandles.add(handle);
+      if (isNew && selectAllMode) selectedHandles.add(handle);
     }
   }
   return { loadedCount: cells.length, selectedCount: selectedHandles.size };
@@ -158,10 +161,10 @@ const buildToolbarState = (counts: { loadedCount: number; selectedCount: number 
   oneWayCount: seenOneWayHandles.size,
 });
 
-/** 将 seenHandles 中所有 handle 加入选中（替代仅 DOM 的全选，跨虚拟列表有效）。 */
+/** 将 seenHandles 中所有 handle 加入选中，并开启全选模式：继续滚动发现的新 handle 自动勾选。 */
 const selectAllSeenHandles = (): void => {
+  selectAllMode = true;
   for (const handle of seenHandles) selectedHandles.add(handle);
-  // 确保视口内所有 cell 都有 checkbox 并同步勾选状态
   syncViewportCheckboxes(true);
 };
 
@@ -181,6 +184,8 @@ const bindCheckboxListener = (input: HTMLInputElement): void => {
   input.dataset.xfmBound = "true";
   input.addEventListener("change", () => {
     applyCheckboxChangeToSelection(input, selectedHandles);
+    // 用户手动取消勾选时退出全选模式
+    if (!input.checked) selectAllMode = false;
     updateToolbar();
   });
 };
@@ -218,8 +223,11 @@ const syncViewportCheckboxes = (attachMissing = true): number => {
     // 记录已发现的唯一 handle（虚拟列表安全计数）
     const handle = extractUserCellHandle(cell);
     if (handle !== null) {
+      const isNew = !seenHandles.has(handle);
       seenHandles.add(handle);
       if (!userCellFollowsYou(cell)) seenOneWayHandles.add(handle);
+      // 全选模式：新发现的 handle 自动加入选中
+      if (isNew && selectAllMode) selectedHandles.add(handle);
     }
     processed += 1;
     if (processed >= MAX_CELLS_PER_PASS) break;
@@ -340,6 +348,7 @@ const destroyPageState = (): void => {
   pageActive = false;
   toolbar?.remove();
   toolbar = null;
+  selectAllMode = false;
   seenHandles.clear();
   seenOneWayHandles.clear();
   removeFollowingFilterStyles();
@@ -396,6 +405,7 @@ const ensureToolbar = (): boolean => {
       },
       onClearSelection: () => {
         if (busy) return;
+        selectAllMode = false;
         selectedHandles.clear();
         setAllLoadedChecked(false, filterMode, selectedHandles);
         updateToolbar(true);

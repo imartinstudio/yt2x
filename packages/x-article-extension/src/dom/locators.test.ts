@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import {
   articleEditor,
   editorHasContent,
@@ -8,8 +8,10 @@ import {
   findImportTextButtonAnchor,
   findTitleField,
   findWriteArticleButton,
+  createNewArticleDraft,
   readTitleFieldText,
   titleFieldShowsPlaceholder,
+  waitForArticleDraftReady,
 } from "./locators.js";
 
 describe("x articles locators", () => {
@@ -157,6 +159,81 @@ describe("x articles locators", () => {
       const write = findWriteArticleButton();
       expect(write).toBeInstanceOf(HTMLAnchorElement);
       expect(findImportTextButtonAnchor()).toBe(write);
+    });
+
+    it("times out even when the page stops mutating before the draft shell appears", async () => {
+      vi.useFakeTimers();
+      document.body.innerHTML = "<main></main>";
+
+      const waiting = expect(waitForArticleDraftReady(500)).rejects.toThrow(
+        "Timed out waiting for X Articles draft shell",
+      );
+      await vi.advanceTimersByTimeAsync(600);
+
+      await waiting;
+      vi.useRealTimers();
+    });
+
+    it("waits for the newly created draft instead of reusing the current editor", async () => {
+      vi.useFakeTimers();
+      const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function rectMock(
+        this: HTMLElement,
+      ) {
+        const id = this.getAttribute("id");
+        const isEditor = id === "old-body" || id === "new-body";
+        return {
+          x: 0,
+          y: 0,
+          width: isEditor ? 600 : 200,
+          height: isEditor ? 400 : 80,
+          top: 0,
+          left: 0,
+          right: isEditor ? 600 : 200,
+          bottom: isEditor ? 400 : 80,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+      window.history.replaceState(null, "", "/compose/articles/edit/old");
+      document.body.innerHTML = `
+        <nav>
+          <div><span>文章</span><button type="button" aria-label="添加">+</button></div>
+        </nav>
+        <main>
+          <textarea placeholder="添加标题">旧标题</textarea>
+          <div id="old-body" class="public-DraftEditor-content" contenteditable="true" style="width:600px;height:400px">
+            旧正文内容
+          </div>
+        </main>
+      `;
+      findAddArticleButton()?.addEventListener("click", () => {
+        window.setTimeout(() => {
+          window.history.pushState(null, "", "/compose/articles/edit/new");
+          document.body.innerHTML = `
+            <nav>
+              <div><span>文章</span><button type="button" aria-label="添加">+</button></div>
+            </nav>
+            <main>
+              <textarea placeholder="添加标题"></textarea>
+              <div id="new-body" class="public-DraftEditor-content" contenteditable="true" style="width:600px;height:400px"></div>
+            </main>
+          `;
+        }, 500);
+      });
+
+      let resolved = false;
+      const waiting = createNewArticleDraft().then((editor) => {
+        resolved = true;
+        return editor;
+      });
+
+      await vi.advanceTimersByTimeAsync(300);
+      expect(resolved).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(waiting).resolves.toHaveProperty("id", "new-body");
+      expect(resolved).toBe(true);
+      rectSpy.mockRestore();
+      vi.useRealTimers();
     });
   });
 });

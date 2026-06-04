@@ -403,32 +403,70 @@ export type ArticleDraftShell = {
   editor: HTMLElement;
 };
 
-export const waitForArticleDraftReady = (timeoutMs = 20_000): Promise<ArticleDraftShell> =>
+type ArticleDraftReadyOptions = {
+  timeoutMs?: number;
+  isReady?: (shell: ArticleDraftShell) => boolean;
+};
+
+const normalizeText = (value: string): string => value.replace(/\u200b/gu, "").trim();
+
+const readEditorText = (editor: HTMLElement): string =>
+  normalizeText(editor.innerText ?? editor.textContent ?? "");
+
+export const waitForArticleDraftReady = (
+  timeoutOrOptions: number | ArticleDraftReadyOptions = 20_000,
+): Promise<ArticleDraftShell> =>
   new Promise((resolve, reject) => {
+    const options =
+      typeof timeoutOrOptions === "number"
+        ? { timeoutMs: timeoutOrOptions }
+        : timeoutOrOptions;
+    const timeoutMs = options.timeoutMs ?? 20_000;
     const started = Date.now();
+    let settled = false;
+    let observer: MutationObserver | null = null;
+    let pollTimer = 0;
+    let timeoutTimer = 0;
+
+    const cleanup = (): void => {
+      if (settled) return;
+      settled = true;
+      observer?.disconnect();
+      window.clearInterval(pollTimer);
+      window.clearTimeout(timeoutTimer);
+    };
+
+    const rejectTimeout = (): void => {
+      cleanup();
+      reject(
+        new Error(
+          "Timed out waiting for X Articles draft shell (title field and body editor) to finish loading.",
+        ),
+      );
+    };
+
     const tryResolve = (): void => {
+      if (settled) return;
       try {
         const titleField = findTitleField();
         const editor = pickArticleBodyEditor();
-        if (editorLooksReady(editor)) {
-          observer.disconnect();
-          resolve({ titleField, editor });
+        const shell = { titleField, editor };
+        if (editorLooksReady(editor) && (options.isReady?.(shell) ?? true)) {
+          cleanup();
+          resolve(shell);
           return;
         }
       } catch {
         // Draft shell not ready yet.
       }
       if (Date.now() - started > timeoutMs) {
-        observer.disconnect();
-        reject(
-          new Error(
-            "Timed out waiting for X Articles draft shell (title field and body editor) to finish loading.",
-          ),
-        );
+        rejectTimeout();
       }
     };
-    const observer = new MutationObserver(tryResolve);
+    observer = new MutationObserver(tryResolve);
     observer.observe(document.body, { childList: true, subtree: true });
+    pollTimer = window.setInterval(tryResolve, 250);
+    timeoutTimer = window.setTimeout(rejectTimeout, timeoutMs);
     tryResolve();
   });
 
@@ -442,8 +480,29 @@ export const createNewArticleDraft = async (): Promise<HTMLElement> => {
       'X Articles "添加" button was not found beside "文章" (expected on the row above "已发布").',
     );
   }
+  const previousUrl = window.location.href;
+  let previousTitle = "";
+  let previousEditorText = "";
+  try {
+    previousTitle = readTitleFieldText(findTitleField());
+    previousEditorText = readEditorText(pickArticleBodyEditor());
+  } catch {
+    // The current page may be the empty article list before creating the first draft.
+  }
   add.click();
-  const shell = await waitForArticleDraftReady();
+  const shell = await waitForArticleDraftReady({
+    isReady: ({ titleField, editor }) => {
+      const titleText = readTitleFieldText(titleField);
+      const editorText = readEditorText(editor);
+      const urlChanged = window.location.href !== previousUrl;
+      const titleLooksNew = titleFieldShowsPlaceholder(titleField) || titleText !== previousTitle;
+      const editorLooksNew =
+        previousEditorText.length === 0 ||
+        editorText.length === 0 ||
+        editorText.slice(0, 240) !== previousEditorText.slice(0, 240);
+      return urlChanged && titleLooksNew && editorLooksNew;
+    },
+  });
   return shell.editor;
 };
 

@@ -4,6 +4,8 @@ import type { PreparedArticleImport } from "../files/prepare-import.js";
 
 const actionMocks = vi.hoisted(() => ({
   dismissOpenOverlays: vi.fn(),
+  insertContentMedia: vi.fn(),
+  resetInsertButtonCache: vi.fn(),
   waitForMediaUploadComplete: vi.fn(),
 }));
 
@@ -41,7 +43,7 @@ describe("writeArticleDraftToPage", () => {
       <div contenteditable="true" id="title"></div>
       <div class="DraftEditor-root">
         <div class="public-DraftEditor-content" contenteditable="true" id="editor">
-          <div data-block="true"><div>Imported body content long enough for verification.</div></div>
+          <div data-block="true"><div>Imported body content long enough for verification. __YT2X_test_IMAGE_0__</div></div>
         </div>
       </div>
     `;
@@ -52,11 +54,22 @@ describe("writeArticleDraftToPage", () => {
     locatorMocks.readTitleFieldText.mockImplementation((field: HTMLElement) => field.textContent ?? "");
     locatorMocks.waitForArticleDraftReady.mockResolvedValue({ editor });
     actionMocks.waitForMediaUploadComplete.mockResolvedValue(undefined);
+    actionMocks.insertContentMedia.mockResolvedValue(undefined);
     coverMocks.uploadCoverImage.mockResolvedValue(undefined);
     payloadMocks.buildMainWorldWritePayload.mockResolvedValue({
       title: "Title",
       blocks: [{ type: "unstyled", text: "Body", inlineStyleRanges: [], links: [] }],
-      plan: [],
+      plan: [
+        {
+          marker: "__YT2X_test_IMAGE_0__",
+          op: {
+            type: "image",
+            file: { token: "img_0" },
+            source: "images/scene.png",
+            fallbackText: "![scene](images/scene.png)",
+          },
+        },
+      ],
       html: "<p>Body</p>",
       plain: "Body",
       markerPrefix: "__YT2X_test_",
@@ -100,18 +113,42 @@ describe("writeArticleDraftToPage", () => {
       },
       adapted: { markdown: "# Title\n\nBody", adaptations: [], warnings: [] },
       mediaRegistry: { getUploadable: vi.fn(), resolveMediaPath: (source: string) => source },
-      generatedBlobs: new Map(),
+      generatedBlobs: new Map([["images/scene.png", new Blob(["image"], { type: "image/png" })]]),
     } as unknown as PreparedArticleImport;
 
     const result = await writeArticleDraftToPage(prepared);
 
     expect(payloadMocks.buildMainWorldWritePayload).toHaveBeenCalledWith(prepared);
-    expect(mainWorldMocks.runMainWorldImport).toHaveBeenCalled();
+    expect(mainWorldMocks.runMainWorldImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plan: [],
+        imageFiles: [],
+        markerPrefix: "__YT2X_test_MAIN_",
+      }),
+      expect.anything(),
+    );
+    expect(actionMocks.insertContentMedia).toHaveBeenCalledWith(
+      expect.any(File),
+      expect.objectContaining({
+        editor,
+        afterText: "__YT2X_test_IMAGE_0__",
+        blockIndex: 0,
+      }),
+    );
     expect(result.skippedMedia).toEqual([]);
     expect(result.manualContentMedia).toEqual([]);
   });
 
   it("reports image upload failures from the MAIN world summary", async () => {
+    payloadMocks.buildMainWorldWritePayload.mockResolvedValue({
+      title: "Title",
+      blocks: [{ type: "unstyled", text: "Body", inlineStyleRanges: [], links: [] }],
+      plan: [],
+      html: "<p>Body</p>",
+      plain: "Body",
+      markerPrefix: "__YT2X_test_",
+      imageFiles: [],
+    });
     mainWorldMocks.runMainWorldImport.mockResolvedValue({
       summary: {
         atomicOk: 0,
@@ -151,5 +188,57 @@ describe("writeArticleDraftToPage", () => {
 
     expect(result.skippedMedia).toEqual(["images/scene.png"]);
     expect(result.lastMediaError).toBe("Image upload failed");
+  });
+
+  it("reports missing image placeholders as manual content media instead of upload failures", async () => {
+    payloadMocks.buildMainWorldWritePayload.mockResolvedValue({
+      title: "Title",
+      blocks: [{ type: "unstyled", text: "Body", inlineStyleRanges: [], links: [] }],
+      plan: [],
+      html: "<p>Body</p>",
+      plain: "Body",
+      markerPrefix: "__YT2X_test_",
+      imageFiles: [],
+    });
+    mainWorldMocks.runMainWorldImport.mockResolvedValue({
+      summary: {
+        atomicOk: 0,
+        atomicFail: 0,
+        imgOk: 0,
+        imgFail: 1,
+        imageErrors: [
+          {
+            index: 1,
+            marker: "__YT2X_test_IMAGE_0__",
+            source: "yt2x-table-1.png",
+            error: "Image placeholder was not found in the X editor",
+          },
+        ],
+        markersCleaned: 0,
+      },
+    });
+
+    const prepared = {
+      parseResult: {
+        title: "Title",
+        coverImage: null,
+        contentImages: [],
+        contentVideos: [],
+        contentCodeBlocks: [],
+        dividers: [],
+        html: "<p>Body</p>",
+        htmlBlocks: ["<p>Body</p>"],
+        totalBlocks: 1,
+      },
+      adapted: { markdown: "# Title\n\nBody", adaptations: [], warnings: [] },
+      mediaRegistry: { getUploadable: vi.fn(), resolveMediaPath: (source: string) => source },
+      generatedBlobs: new Map(),
+    } as unknown as PreparedArticleImport;
+
+    const result = await writeArticleDraftToPage(prepared);
+
+    expect(result.skippedMedia).toEqual([]);
+    expect(result.manualContentMedia).toEqual(["yt2x-table-1.png"]);
+    expect(result.lastMediaError).toBeNull();
   });
 });

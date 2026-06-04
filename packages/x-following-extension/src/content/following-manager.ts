@@ -20,6 +20,8 @@ import {
   listViewportUserCells,
   removeUserCellCheckboxes,
   resolveUserCellMount,
+  removeCheckboxSpaceReservation,
+  reserveCheckboxSpace,
   setAllLoadedChecked,
   syncCheckboxOnCell,
 } from "../dom/user-cell-checkbox.js";
@@ -341,6 +343,7 @@ const destroyPageState = (): void => {
   seenHandles.clear();
   seenOneWayHandles.clear();
   removeFollowingFilterStyles();
+  removeCheckboxSpaceReservation();
   removeUserCellCheckboxes();
   selectedHandles.clear();
   busy = false;
@@ -419,6 +422,7 @@ const activatePageUi = (): boolean => {
     return false;
   }
 
+  reserveCheckboxSpace();
   setFollowingFilterMode(filterMode);
   const toolbarReady = ensureToolbar();
   pageActive = toolbarReady;

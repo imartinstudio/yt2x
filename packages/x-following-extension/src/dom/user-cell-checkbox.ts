@@ -7,6 +7,20 @@ export const CHECKBOX_ROW_ATTR = "data-xfm-follow-row";
 export const CHECKBOX_VISUAL_ATTR = "data-xfm-follow-select-visual";
 
 const HIT_ZONE_WIDTH_PX = 52;
+const CHECKBOX_RESERVE_STYLE_ID = "xfm-checkbox-reserve-style";
+
+/** 预先用 CSS 给 UserCell 父容器预留 checkbox 空间，避免异步插入 checkbox 时布局偏移。 */
+export const reserveCheckboxSpace = (): void => {
+  if (document.getElementById(CHECKBOX_RESERVE_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = CHECKBOX_RESERVE_STYLE_ID;
+  style.textContent = `:has(> [data-testid="UserCell"]){padding-left:${HIT_ZONE_WIDTH_PX}px;position:relative}`;
+  document.head.append(style);
+};
+
+export const removeCheckboxSpaceReservation = (): void => {
+  document.getElementById(CHECKBOX_RESERVE_STYLE_ID)?.remove();
+};
 
 const createVisualSpan = (): HTMLSpanElement => {
   const span = document.createElement("span");
@@ -138,11 +152,8 @@ export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
 
   findHitZone(mount)?.remove();
 
-  const computed = window.getComputedStyle(mount.mountEl);
+  // CSS 已通过 reserveCheckboxSpace 预留 52px 空间，无需动态加 padding
   if (mount.mountEl.getAttribute(CHECKBOX_PAD_ATTR) !== "true") {
-    const baseLeft = Number.parseFloat(computed.paddingLeft) || 0;
-    mount.mountEl.style.paddingLeft = `${baseLeft + HIT_ZONE_WIDTH_PX}px`;
-    if (computed.position === "static") mount.mountEl.style.position = "relative";
     mount.mountEl.setAttribute(CHECKBOX_PAD_ATTR, "true");
     mount.mountEl.setAttribute(CHECKBOX_ROW_ATTR, "true");
   }

@@ -190,16 +190,27 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
 
     let coverBlobUrl: string | undefined;
 
+    const findCoverFile = (coverPath: string): File | undefined => {
+      // Try exact match through registry first
+      const resolved = registry.resolveMediaPath(coverPath);
+      const exact = registry.getUploadable(resolved);
+      if (exact) return exact;
+
+      // Fallback: match by filename across all authorized files
+      const targetName = coverPath.replaceAll("\\", "/").split("/").pop()?.toLowerCase();
+      if (!targetName) return undefined;
+      return authorizedFiles.find(
+        (f) => (f.webkitRelativePath || f.name).replaceAll("\\", "/").split("/").pop()?.toLowerCase() === targetName,
+      );
+    };
+
     const buildPreview = (): ImportPreview => {
-      // Revoke previous blob URL to avoid memory leaks
       if (coverBlobUrl) URL.revokeObjectURL(coverBlobUrl);
       coverBlobUrl = undefined;
 
       const preview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
-      if (preview.coverImage) {
-        const coverFile = registry.getUploadable(
-          registry.resolveMediaPath(preview.coverImage),
-        );
+      if (preview.coverImage && !/^https?:/i.test(preview.coverImage)) {
+        const coverFile = findCoverFile(preview.coverImage);
         if (coverFile) {
           coverBlobUrl = URL.createObjectURL(coverFile);
           preview.coverObjectUrl = coverBlobUrl;

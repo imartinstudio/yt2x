@@ -128,7 +128,7 @@ describe("X Articles import media policy", () => {
 
     expect(shadow.textContent).toContain("cover.png");
     expect(shadow.textContent).toContain("images/body.png");
-    expect(shadow.textContent).toContain("Missing assets");
+    expect(shadow.textContent).toContain("Missing");
     shadow.querySelector<HTMLButtonElement>("[data-action='confirm']")!.click();
     await Promise.resolve();
     expect(host.isConnected).toBe(true);

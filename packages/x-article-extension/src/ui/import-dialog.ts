@@ -239,48 +239,24 @@ export const showImportError = (message: string): void => {
 const renderDialogHtml = (preview: ImportPreview): string => {
   const dark = isDarkMode();
   const c = {
-    // Fluent Design acrylic surfaces
-    panelBg: dark ? "rgba(28,28,30,0.85)" : "rgba(255,255,255,0.82)",
-    surface: dark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)",
-    surfaceHover: dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)",
-    text: dark ? "#e8e8ec" : "#1d1d20",
-    muted: dark ? "#98989e" : "#6e6e73",
-    // Fluent-style accent colors per type
-    coverColor: "#f59e0b",   // amber
-    imageColor: "#10b981",   // emerald
-    videoColor: "#0ea5e9",   // sky
-    adaptColor: "#8b5cf6",   // violet
-    // Primary button
-    accent: dark ? "#0d9488" : "#0f766e",
-    accentHover: dark ? "#0f766e" : "#115e59",
-    // Missing/warning
-    warnBg: dark ? "rgba(245,158,11,0.08)" : "rgba(245,158,11,0.06)",
+    bg: dark ? "#1a1a1c" : "#ffffff",
+    surface: dark ? "#242426" : "#f5f5f7",
+    text: dark ? "#e4e4e5" : "#1d1d1f",
+    muted: dark ? "#86868b" : "#6e6e73",
+    accent: dark ? "#4d9de0" : "#3b82c4",
+    accentHover: dark ? "#3d8dcc" : "#3570b0",
+    warn: dark ? "rgba(245,158,11,0.1)" : "rgba(245,158,11,0.08)",
     warnText: dark ? "#fbbf24" : "#b45309",
-    // Borders
-    border: dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)",
-    borderStrong: dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.1)",
-    // Shadows
-    shadow: dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.12)",
+    border: dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
+    shadow: dark ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.1)",
   };
 
   const hasMissing = preview.missingSources.length > 0;
   const hasCoverPreview = Boolean(preview.coverObjectUrl);
 
-  // Build detail lines with type-specific colors
-  type DetailLine = { text: string; color: string };
-  const detailLines: DetailLine[] = [];
-  if (preview.coverImage) {
-    detailLines.push({ text: `Cover · ${preview.coverImage}`, color: c.coverColor });
-  }
-  for (const path of preview.contentImages) {
-    detailLines.push({ text: `Image · ${path}`, color: c.imageColor });
-  }
-  if (preview.contentVideoCount > 0) {
-    detailLines.push({ text: `Video · ${preview.contentVideoCount}`, color: c.videoColor });
-  }
-  if (preview.adaptations.length > 0) {
-    detailLines.push({ text: `Adaptation · ${preview.adaptations.length}`, color: c.adaptColor });
-  }
+  const mediaLines: string[] = [];
+  if (preview.coverImage) mediaLines.push(preview.coverImage);
+  for (const path of preview.contentImages) mediaLines.push(path);
 
   const missingChips = preview.missingSources
     .map(
@@ -294,13 +270,11 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   :host { all: initial; }
   .backdrop {
     position: fixed; inset: 0; z-index: 2147483646;
-    background: rgba(0,0,0,.3);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    background: rgba(0,0,0,.35);
     display: grid; place-items: center;
     font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     color: ${c.text};
-    animation: yt-fade 180ms ease-out;
+    animation: yt-fade 150ms ease-out;
   }
   @keyframes yt-fade { from { opacity: 0; } to { opacity: 1; } }
 
@@ -308,17 +282,15 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     width: min(420px, calc(100vw - 32px));
     max-height: calc(100vh - 48px);
     overflow-y: auto;
-    background: ${c.panelBg};
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
-    border-radius: 16px;
+    background: ${c.bg};
+    border-radius: 14px;
     border: 1px solid ${c.border};
-    box-shadow: 0 4px 8px rgba(0,0,0,.04), 0 16px 40px ${c.shadow};
+    box-shadow: 0 16px 48px ${c.shadow};
     display: flex; flex-direction: column;
-    animation: yt-enter 240ms cubic-bezier(0.22,1,0.36,1);
+    animation: yt-enter 200ms cubic-bezier(0.22,1,0.36,1);
   }
   @keyframes yt-enter {
-    from { opacity: 0; transform: scale(0.94) translateY(12px); }
+    from { opacity: 0; transform: scale(0.95) translateY(10px); }
     to { opacity: 1; transform: scale(1) translateY(0); }
   }
 
@@ -326,9 +298,8 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     aspect-ratio: 2/1;
     overflow: hidden;
     background: ${c.surface};
-    border-radius: 16px 16px 0 0;
+    border-radius: 14px 14px 0 0;
     flex-shrink: 0;
-    border-bottom: 1px solid ${c.border};
   }
   .cover-preview img {
     width: 100%; height: 100%; object-fit: cover;
@@ -336,46 +307,45 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   }
 
   .panel-body {
-    padding: ${hasCoverPreview ? "22px 28px 24px" : "28px 28px 24px"};
-    display: flex; flex-direction: column; gap: 18px;
+    padding: 28px 28px 24px;
+    display: flex; flex-direction: column;
   }
 
   .article-title {
-    margin: 0;
-    font-size: 19px; font-weight: 700; line-height: 1.35;
+    margin: 0 0 24px 0;
+    font-size: 20px; font-weight: 700; line-height: 1.35;
     color: ${c.text};
     word-break: break-word;
-    letter-spacing: -0.01em;
   }
 
-  .detail-list {
-    display: flex; flex-direction: column;
-    background: ${c.surface};
-    border-radius: 10px;
-    padding: 10px 14px;
+  .section-label {
+    margin: 0 0 6px 0;
+    font-size: 11px; font-weight: 600; color: ${c.muted};
+    text-transform: uppercase; letter-spacing: 0.05em;
   }
-  .detail-line {
-    display: flex; align-items: flex-start; gap: 8px;
-    font-size: 12px; line-height: 1.6;
-    color: ${c.muted};
-    padding: 2px 0;
+
+  .media-list {
+    margin: 0 0 20px 0;
+    display: flex; flex-direction: column; gap: 3px;
   }
-  .detail-dot {
-    width: 5px; height: 5px; border-radius: 50%;
-    flex-shrink: 0; margin-top: 6px;
+  .media-item {
+    font-size: 12px; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    color: ${c.muted}; line-height: 1.6;
+    word-break: break-all;
   }
 
   .divider {
-    height: 1px; background: ${c.border}; margin: 0; border: none;
+    height: 1px; background: ${c.border}; margin: 0 0 20px 0; border: none;
   }
 
   .missing-section {
     display: ${hasMissing ? "flex" : "none"};
-    flex-direction: column; gap: 10px;
+    flex-direction: column; gap: 8px;
+    margin-bottom: 20px;
   }
   .missing-header {
     font-size: 11px; font-weight: 600; color: ${c.warnText};
-    text-transform: uppercase; letter-spacing: 0.04em; margin: 0;
+    text-transform: uppercase; letter-spacing: 0.05em; margin: 0;
   }
   .chip-list {
     display: flex; flex-wrap: wrap; gap: 6px;
@@ -384,11 +354,12 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 11px; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
     color: ${c.muted};
-    background: ${c.warnBg}; border-radius: 5px;
+    background: ${c.warn}; border-radius: 5px;
     padding: 3px 6px 3px 10px;
   }
   .chip-add {
-    border: none; background: ${c.warnText}; color: ${dark ? "#1c1c1e" : "#fff"};
+    border: none; background: ${c.warnText};
+    color: ${dark ? "#1a1a1c" : "#fff"};
     width: 18px; height: 18px; border-radius: 4px;
     font-size: 12px; font-weight: 700; line-height: 1;
     cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
@@ -406,18 +377,19 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   .tier-row {
     display: flex; align-items: center; gap: 12px;
     font-size: 12px; color: ${c.muted};
+    margin-bottom: 20px;
   }
   .tier-seg {
     display: inline-flex;
-    border: 1px solid ${c.border}; border-radius: 8px; overflow: hidden;
+    border: 1px solid ${c.border}; border-radius: 7px; overflow: hidden;
   }
   .tier-seg label { cursor: pointer; position: relative; }
   .tier-seg input { position: absolute; opacity: 0; width: 0; height: 0; }
   .tier-seg span {
-    display: block; padding: 6px 14px;
+    display: block; padding: 5px 14px;
     font-size: 12px; font-weight: 500; color: ${c.muted};
     background: transparent;
-    transition: background 180ms ease, color 180ms ease;
+    transition: background 160ms ease, color 160ms ease;
     user-select: none;
   }
   .tier-seg label:first-child span { border-right: 1px solid ${c.border}; }
@@ -428,9 +400,9 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   }
   .btn-primary {
     flex: 1;
-    border: none; border-radius: 12px;
-    padding: 13px 20px;
-    font-size: 15px; font-weight: 600;
+    border: none; border-radius: 10px;
+    padding: 12px 20px;
+    font-size: 14px; font-weight: 600;
     background: ${c.accent}; color: #fff;
     cursor: pointer; transition: background 150ms;
   }
@@ -440,7 +412,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   .btn-ghost {
     border: none; background: none;
     color: ${c.muted}; cursor: pointer;
-    font-size: 13px; padding: 8px 14px; border-radius: 8px;
+    font-size: 14px; padding: 8px 14px; border-radius: 8px;
     transition: color 120ms, background 120ms;
   }
   .btn-ghost:hover { color: ${c.text}; background: ${c.surface}; }
@@ -454,11 +426,10 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     <div class="panel-body">
       <h2 class="article-title">${escapeHtml(preview.title)}</h2>
 
-      ${detailLines.length > 0 ? `<div class="detail-list">${detailLines.map((l) => `<div class="detail-line"><span class="detail-dot" style="background:${l.color}"></span><span>${escapeHtml(l.text)}</span></div>`).join("")}</div>` : ""}
+      ${mediaLines.length > 0 ? `<p class="section-label">Media</p><div class="media-list">${mediaLines.map((p) => `<span class="media-item">${escapeHtml(p)}</span>`).join("")}</div>` : ""}
 
-      ${hasMissing ? `<hr class="divider" />
-      <div class="missing-section">
-        <p class="missing-header">Missing assets</p>
+      ${hasMissing ? `<div class="missing-section">
+        <p class="missing-header">Missing</p>
         <div class="chip-list">${missingChips}</div>
         <button class="batch-link" type="button" data-action="pick-directory">Match from directory…</button>
       </div>` : ""}

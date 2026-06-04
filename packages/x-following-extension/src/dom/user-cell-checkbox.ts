@@ -69,7 +69,7 @@ const updateVisualSpanInstant = (span: HTMLSpanElement, checked: boolean): void 
   span.style.transition = "all 0.15s cubic-bezier(0.34,1.56,0.64,1)";
 };
 
-const HIT_ZONE_HEIGHT_PX = 48;
+const HIT_ZONE_HEIGHT_PX = 44;
 
 const hitZoneStyle = [
   "position:absolute",

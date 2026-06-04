@@ -239,28 +239,48 @@ export const showImportError = (message: string): void => {
 const renderDialogHtml = (preview: ImportPreview): string => {
   const dark = isDarkMode();
   const c = {
-    bg: dark ? "#1c1c1e" : "#ffffff",
-    surface: dark ? "#2c2c2e" : "#f5f5f7",
-    text: dark ? "#e4e4e5" : "#1d1d1f",
-    muted: dark ? "#8e8e93" : "#6e6e73",
-    accent: dark ? "#3b82f6" : "#2563eb",
-    accentHover: dark ? "#2563eb" : "#1d4ed8",
+    // Fluent Design acrylic surfaces
+    panelBg: dark ? "rgba(28,28,30,0.85)" : "rgba(255,255,255,0.82)",
+    surface: dark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)",
+    surfaceHover: dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)",
+    text: dark ? "#e8e8ec" : "#1d1d20",
+    muted: dark ? "#98989e" : "#6e6e73",
+    // Fluent-style accent colors per type
+    coverColor: "#f59e0b",   // amber
+    imageColor: "#10b981",   // emerald
+    videoColor: "#0ea5e9",   // sky
+    adaptColor: "#8b5cf6",   // violet
+    // Primary button
+    accent: dark ? "#0d9488" : "#0f766e",
+    accentHover: dark ? "#0f766e" : "#115e59",
+    // Missing/warning
     warnBg: dark ? "rgba(245,158,11,0.08)" : "rgba(245,158,11,0.06)",
     warnText: dark ? "#fbbf24" : "#b45309",
-    border: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
-    shadow: dark ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.15)",
+    // Borders
+    border: dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)",
+    borderStrong: dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.1)",
+    // Shadows
+    shadow: dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.12)",
   };
 
   const hasMissing = preview.missingSources.length > 0;
   const hasCoverPreview = Boolean(preview.coverObjectUrl);
 
-  const detailParts: string[] = [];
-  if (preview.coverImage) detailParts.push(`Cover · ${preview.coverImage.replaceAll("\\", "/").split("/").pop()}`);
-  for (const path of preview.contentImages) {
-    detailParts.push(path.replaceAll("\\", "/").split("/").pop()!);
+  // Build detail lines with type-specific colors
+  type DetailLine = { text: string; color: string };
+  const detailLines: DetailLine[] = [];
+  if (preview.coverImage) {
+    detailLines.push({ text: `Cover · ${preview.coverImage}`, color: c.coverColor });
   }
-  if (preview.contentVideoCount > 0) detailParts.push(`${preview.contentVideoCount} video${preview.contentVideoCount > 1 ? "s" : ""}`);
-  if (preview.adaptations.length > 0) detailParts.push(`${preview.adaptations.length} adaptation${preview.adaptations.length > 1 ? "s" : ""}`);
+  for (const path of preview.contentImages) {
+    detailLines.push({ text: `Image · ${path}`, color: c.imageColor });
+  }
+  if (preview.contentVideoCount > 0) {
+    detailLines.push({ text: `Video · ${preview.contentVideoCount}`, color: c.videoColor });
+  }
+  if (preview.adaptations.length > 0) {
+    detailLines.push({ text: `Adaptation · ${preview.adaptations.length}`, color: c.adaptColor });
+  }
 
   const missingChips = preview.missingSources
     .map(
@@ -274,26 +294,31 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   :host { all: initial; }
   .backdrop {
     position: fixed; inset: 0; z-index: 2147483646;
-    background: rgba(0,0,0,.35);
+    background: rgba(0,0,0,.3);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     display: grid; place-items: center;
     font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     color: ${c.text};
-    animation: yt-fade 150ms ease-out;
+    animation: yt-fade 180ms ease-out;
   }
   @keyframes yt-fade { from { opacity: 0; } to { opacity: 1; } }
 
   .panel {
-    width: min(400px, calc(100vw - 32px));
+    width: min(420px, calc(100vw - 32px));
     max-height: calc(100vh - 48px);
     overflow-y: auto;
-    background: ${c.bg};
+    background: ${c.panelBg};
+    backdrop-filter: blur(40px);
+    -webkit-backdrop-filter: blur(40px);
     border-radius: 16px;
-    box-shadow: 0 0 0 1px ${c.border}, 0 20px 60px ${c.shadow};
+    border: 1px solid ${c.border};
+    box-shadow: 0 4px 8px rgba(0,0,0,.04), 0 16px 40px ${c.shadow};
     display: flex; flex-direction: column;
-    animation: yt-enter 220ms cubic-bezier(0.22,1,0.36,1);
+    animation: yt-enter 240ms cubic-bezier(0.22,1,0.36,1);
   }
   @keyframes yt-enter {
-    from { opacity: 0; transform: scale(0.95) translateY(8px); }
+    from { opacity: 0; transform: scale(0.94) translateY(12px); }
     to { opacity: 1; transform: scale(1) translateY(0); }
   }
 
@@ -303,6 +328,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     background: ${c.surface};
     border-radius: 16px 16px 0 0;
     flex-shrink: 0;
+    border-bottom: 1px solid ${c.border};
   }
   .cover-preview img {
     width: 100%; height: 100%; object-fit: cover;
@@ -310,26 +336,33 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   }
 
   .panel-body {
-    padding: ${hasCoverPreview ? "24px 28px 24px" : "28px 28px 24px"};
-    display: flex; flex-direction: column; gap: 20px;
+    padding: ${hasCoverPreview ? "22px 28px 24px" : "28px 28px 24px"};
+    display: flex; flex-direction: column; gap: 18px;
   }
 
   .article-title {
     margin: 0;
-    font-size: 20px; font-weight: 700; line-height: 1.35;
+    font-size: 19px; font-weight: 700; line-height: 1.35;
     color: ${c.text};
     word-break: break-word;
+    letter-spacing: -0.01em;
   }
 
   .detail-list {
-    display: flex; flex-direction: column; gap: 5px;
-    font-size: 12px; color: ${c.muted};
+    display: flex; flex-direction: column;
+    background: ${c.surface};
+    border-radius: 10px;
+    padding: 10px 14px;
   }
-  .detail-list span::before {
-    content: '✓';
-    color: ${c.accent};
-    font-weight: 700;
-    margin-right: 6px;
+  .detail-line {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 12px; line-height: 1.6;
+    color: ${c.muted};
+    padding: 2px 0;
+  }
+  .detail-dot {
+    width: 5px; height: 5px; border-radius: 50%;
+    flex-shrink: 0; margin-top: 6px;
   }
 
   .divider {
@@ -355,7 +388,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     padding: 3px 6px 3px 10px;
   }
   .chip-add {
-    border: none; background: ${c.warnText}; color: ${c.bg};
+    border: none; background: ${c.warnText}; color: ${dark ? "#1c1c1e" : "#fff"};
     width: 18px; height: 18px; border-radius: 4px;
     font-size: 12px; font-weight: 700; line-height: 1;
     cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
@@ -421,7 +454,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     <div class="panel-body">
       <h2 class="article-title">${escapeHtml(preview.title)}</h2>
 
-      ${detailParts.length > 0 ? `<div class="detail-list">${detailParts.map((d) => `<span>${escapeHtml(d)}</span>`).join("")}</div>` : ""}
+      ${detailLines.length > 0 ? `<div class="detail-list">${detailLines.map((l) => `<div class="detail-line"><span class="detail-dot" style="background:${l.color}"></span><span>${escapeHtml(l.text)}</span></div>`).join("")}</div>` : ""}
 
       ${hasMissing ? `<hr class="divider" />
       <div class="missing-section">

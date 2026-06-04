@@ -216,14 +216,12 @@ export const mountFollowingToolbar = (
       display: block;
       font-family: -apple-system, "SF Pro Display", "Helvetica Neue", "Segoe UI", sans-serif;
       -webkit-font-smoothing: antialiased;
-    }
-    .bar {
       --bg-base: #0a0a14;
       --bg-surface: rgba(18,18,32,0.7);
       --glass-border: rgba(255,255,255,0.06);
       --text-pri: rgba(255,255,255,0.9);
-      --text-sec: rgba(255,255,255,0.45);
-      --text-dim: rgba(255,255,255,0.25);
+      --text-sec: rgba(255,255,255,0.5);
+      --text-dim: rgba(255,255,255,0.3);
       --accent: #818cf8;
       --accent-glow: rgba(99,102,241,0.2);
       --danger: #ef4444;
@@ -233,6 +231,8 @@ export const mountFollowingToolbar = (
       --btn-border: rgba(255,255,255,0.06);
       --seg-bg: rgba(255,255,255,0.04);
       --seg-active: rgba(129,140,248,0.22);
+    }
+    .bar {
       box-sizing: border-box;
       position: relative;
       display: flex;

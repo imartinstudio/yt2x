@@ -59,9 +59,11 @@ describe("followingListUsername", () => {
 
 describe("isOwnFollowingListPage", () => {
   it("matches only the signed-in user's following tab", () => {
+    document.body.innerHTML = '<a role="tab" href="/martin/following" aria-selected="true">正在关注</a>';
     expect(isOwnFollowingListPage("/martin/following", "martin")).toBe(true);
     expect(isOwnFollowingListPage("/other/following", "martin")).toBe(false);
     expect(isOwnFollowingListPage("/martin/followers", "martin")).toBe(false);
+    document.body.innerHTML = "";
   });
 });
 

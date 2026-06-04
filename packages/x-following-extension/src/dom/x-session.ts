@@ -79,6 +79,28 @@ export const inferOwnFollowingFromTabs = (
   return selectedTab !== null;
 };
 
+const FOLLOWING_TAB_ACTIVE_SELECTORS = [
+  'a[role="tab"][aria-selected="true"]',
+  'a[aria-selected="true"]',
+] as const;
+
+const FOLLOWING_TAB_HREF = /\/following\/?$/u;
+const FOLLOWING_TAB_LABEL = /^(正在关注|Following)$/u;
+
+/** 确认「正在关注」tab 处于激活态，而非关注者/认证关注者等子 tab。 */
+export const isFollowingTabActive = (root: ParentNode = document): boolean => {
+  for (const selector of FOLLOWING_TAB_ACTIVE_SELECTORS) {
+    for (const tab of root.querySelectorAll<HTMLAnchorElement>(selector)) {
+      const href = tab.getAttribute("href") ?? "";
+      const label = tab.textContent?.trim() ?? "";
+      if (FOLLOWING_TAB_HREF.test(href) || FOLLOWING_TAB_LABEL.test(label)) {
+        return true;
+      }
+    }
+  }
+  return false;
+};
+
 export const isOwnFollowingListPage = (
   pathname: string,
   loggedInUserKey: string | null,
@@ -86,6 +108,9 @@ export const isOwnFollowingListPage = (
 ): boolean => {
   const pageKey = followingPageUserKey(pathname);
   if (pageKey === null) return false;
+
+  // 必须「正在关注」tab 激活（非关注者/认证关注者）
+  if (!isFollowingTabActive(root)) return false;
 
   const keys = new Set(collectProfileUserKeys(root));
   if (loggedInUserKey !== null) keys.add(loggedInUserKey);

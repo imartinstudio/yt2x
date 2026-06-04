@@ -46,6 +46,15 @@ const updateVisualSpan = (span: HTMLSpanElement, checked: boolean): void => {
   }
 };
 
+/** 无动画更新 visual span，用于虚拟列表回收等场景避免状态闪烁。 */
+const updateVisualSpanInstant = (span: HTMLSpanElement, checked: boolean): void => {
+  span.style.transition = "none";
+  updateVisualSpan(span, checked);
+  // 强制回流后恢复动画
+  void span.offsetWidth;
+  span.style.transition = "all 0.15s cubic-bezier(0.34,1.56,0.64,1)";
+};
+
 const hitZoneStyle = [
   "position:absolute",
   "left:0",
@@ -315,10 +324,15 @@ export const syncCheckboxOnCell = (
   if (handle === null) return;
   const shouldCheck = selectedHandles.has(handle);
   const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
-  if (input.dataset.xfmHandle !== handle) input.dataset.xfmHandle = handle;
+  const recycled = input.dataset.xfmHandle !== handle;
+  if (recycled) input.dataset.xfmHandle = handle;
   if (input.checked !== shouldCheck) {
     input.checked = shouldCheck;
     const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
-    if (visual) updateVisualSpan(visual, input.checked);
+    if (visual) {
+      // 虚拟列表回收时无动画更新，避免前一用户的勾选态闪烁
+      if (recycled) updateVisualSpanInstant(visual, input.checked);
+      else updateVisualSpan(visual, input.checked);
+    }
   }
 };

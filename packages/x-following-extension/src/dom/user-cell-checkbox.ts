@@ -74,7 +74,7 @@ const HIT_ZONE_HEIGHT_PX = 48;
 const hitZoneStyle = [
   "position:absolute",
   "left:0",
-  "top:0",
+  "top:12px",
   `width:${HIT_ZONE_WIDTH_PX}px`,
   `height:${HIT_ZONE_HEIGHT_PX}px`,
   "margin:0",

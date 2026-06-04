@@ -628,7 +628,7 @@ export const mountFollowingToolbar = (
   let lastSignature = "";
 
   const stateSignature = (s: FollowingToolbarState): string =>
-    `${s.filterMode}|${s.loadedCount}|${s.selectedCount}|${s.busy}|${s.phase}|${s.progress?.done ?? 0}|${s.progress?.total ?? 0}`;
+    `${s.filterMode}|${s.loadedCount}|${s.selectedCount}|${s.busy}|${s.phase}|${s.oneWayCount}|${s.progress?.done ?? 0}|${s.progress?.total ?? 0}|${s.completeResult?.succeeded ?? 0}|${s.completeResult?.failed ?? 0}`;
 
   const paint = (state: FollowingToolbarState): void => {
     const sig = stateSignature(state);
@@ -710,6 +710,9 @@ export const mountFollowingToolbar = (
     update: paint,
     confirmUnfollow,
     remove: () => {
+      dialogOverlay.classList.remove("show");
+      dialogResolve?.(false);
+      dialogResolve = null;
       host.remove();
     },
   };

@@ -347,23 +347,40 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   }
 
   .tier-row {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 12px;
     font-size: 13px; color: ${c.muted};
   }
   .tier-label {
-    font-size: 13px; color: ${c.muted};
+    font-size: 13px; color: ${c.muted}; flex-shrink: 0;
   }
-  .tier-option {
-    display: flex; align-items: center; gap: 5px;
-    font-size: 13px; color: ${c.text}; cursor: pointer;
-    padding: 5px 12px; border-radius: 8px;
-    border: 1px solid ${c.border}; background: ${c.surface};
-    transition: border-color 120ms, background 120ms;
+  .tier-seg {
+    display: inline-flex;
+    border: 1px solid ${c.border};
+    border-radius: 10px;
+    overflow: hidden;
   }
-  .tier-option:has(:checked) {
-    border-color: ${c.accent}; background: ${dark ? "rgba(59,130,246,0.12)" : "rgba(37,99,235,0.08)"};
+  .tier-seg label {
+    cursor: pointer; position: relative;
   }
-  .tier-option input { accent-color: ${c.accent}; }
+  .tier-seg input {
+    position: absolute; opacity: 0; width: 0; height: 0;
+  }
+  .tier-seg span {
+    display: block;
+    padding: 7px 18px;
+    font-size: 13px; font-weight: 500;
+    color: ${c.muted};
+    background: transparent;
+    transition: background 180ms ease, color 180ms ease;
+    user-select: none;
+  }
+  .tier-seg label:first-child span {
+    border-right: 1px solid ${c.border};
+  }
+  .tier-seg input:checked + span {
+    background: ${c.accent};
+    color: #fff;
+  }
 
   .actions {
     display: flex; gap: 10px; align-items: center;
@@ -431,12 +448,16 @@ const renderDialogHtml = (preview: ImportPreview): string => {
 
     <div class="tier-row">
       <span class="tier-label">订阅档位</span>
-      <label class="tier-option">
-        <input type="radio" name="subscription-tier" value="premium" checked> Premium
-      </label>
-      <label class="tier-option">
-        <input type="radio" name="subscription-tier" value="premium-plus"> Premium+
-      </label>
+      <div class="tier-seg">
+        <label>
+          <input type="radio" name="subscription-tier" value="premium" checked>
+          <span>Premium</span>
+        </label>
+        <label>
+          <input type="radio" name="subscription-tier" value="premium-plus">
+          <span>Premium+</span>
+        </label>
+      </div>
     </div>
 
     <div class="actions">

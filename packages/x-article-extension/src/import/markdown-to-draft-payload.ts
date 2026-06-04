@@ -331,6 +331,7 @@ export const buildMainWorldWritePayload = async (
   const plan: MainWorldPlanOperation[] = [];
   const html: string[] = [];
   const imageFiles: MainWorldImageFile[] = [];
+  let skippedDocumentTitle = false;
 
   const addBlock = (segment: DraftTextBlock): void => {
     blocks.push({
@@ -421,6 +422,14 @@ export const buildMainWorldWritePayload = async (
     }
 
     for (const segment of parseTextBlocks(block.source)) {
+      if (
+        !skippedDocumentTitle &&
+        segment.type === "header-one" &&
+        segment.text.trim() === parseResult.title.trim()
+      ) {
+        skippedDocumentTitle = true;
+        continue;
+      }
       addBlock(segment);
     }
   }

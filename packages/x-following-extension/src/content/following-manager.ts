@@ -6,7 +6,7 @@ import {
   readLoggedInUserKey,
   removeFollowingFilterStyles,
   setFollowingFilterMode,
-  unfollowSelectedCells,
+  unfollowUserCell,
   userCellFollowsYou,
   type FollowingFilterMode,
 } from "../dom/following-filter.js";
@@ -432,61 +432,108 @@ const activatePageUi = (): boolean => {
 const handleUnfollowSelected = async (): Promise<void> => {
   if (busy) return;
 
-  const handles = [...selectedHandles];
-  const cells = handles
-    .map((handle) => findUserCellByHandle(handle))
-    .filter((cell): cell is HTMLElement => cell !== null);
-
-  if (cells.length === 0) {
+  const remainingHandles = new Set(selectedHandles);
+  if (remainingHandles.size === 0) {
     statusText = "请先勾选要取消关注的用户";
     updateToolbar(true);
     return;
   }
 
-  // 玻璃 Dialog 确认（替代 window.confirm）
+  // 找出当前 DOM 中可操作的 cell
+  const findLoadedCells = (): HTMLElement[] => {
+    const cells: HTMLElement[] = [];
+    for (const handle of remainingHandles) {
+      const cell = findUserCellByHandle(handle);
+      if (cell !== null) cells.push(cell);
+    }
+    return cells;
+  };
+
+  const initialCells = findLoadedCells();
+
+  // 玻璃 Dialog 确认
   if (toolbar === null) return;
-  const confirmed = await toolbar.confirmUnfollow(cells.length, handles.length);
+  const confirmed = await toolbar.confirmUnfollow(initialCells.length, remainingHandles.size);
   if (!confirmed) return;
 
   busy = true;
 
-  // 进入进度态
   const logBuffer: { handle: string; succeeded: boolean }[] = [];
-  const pushProgress = (done: number, total: number): void => {
+  let totalSucceeded = 0;
+  let totalFailed = 0;
+  const totalSelected = remainingHandles.size;
+
+  const pushProgress = (): void => {
     if (toolbar === null) return;
     toolbar.update({
-      ...buildToolbarState({ loadedCount: listLoadedUserCells(filterMode).length, selectedCount: selectedHandles.size }),
+      ...buildToolbarState({ loadedCount: listLoadedUserCells(filterMode).length, selectedCount: remainingHandles.size }),
       busy: true,
       phase: "progress",
-      progress: { done, total, recentLog: logBuffer.slice(-3) },
+      progress: { done: totalSucceeded + totalFailed, total: totalSelected, recentLog: logBuffer.slice(-3) },
     });
   };
-  pushProgress(0, cells.length);
 
-  const result = await unfollowSelectedCells(cells, (progress) => {
-    logBuffer.push({ handle: progress.handle, succeeded: progress.succeeded });
-    pushProgress(progress.done, progress.total);
-  });
+  // 自动滚动加载 + 批量取关循环
+  const SCROLL_STEP = 800;
+  const SCROLL_WAIT_MS = 1_200;
+  const MAX_SCROLL_ATTEMPTS = 50;
+
+  for (let attempt = 0; attempt < MAX_SCROLL_ATTEMPTS && remainingHandles.size > 0; attempt += 1) {
+    const batch = findLoadedCells();
+    if (batch.length === 0) {
+      // 没有可操作的 cell，向下滚动加载更多
+      window.scrollBy(0, SCROLL_STEP);
+      await new Promise((r) => window.setTimeout(r, SCROLL_WAIT_MS));
+      continue;
+    }
+
+    pushProgress();
+
+    for (let i = 0; i < batch.length; i += 1) {
+      const cell = batch[i];
+      const handle = extractUserCellHandle(cell);
+      const ok = await unfollowUserCell(cell);
+      if (ok) {
+        totalSucceeded += 1;
+        if (handle !== null) remainingHandles.delete(handle);
+      } else {
+        totalFailed += 1;
+      }
+      logBuffer.push({ handle: handle ?? `#${i + 1}`, succeeded: ok });
+      pushProgress();
+
+      // 间距 1 秒
+      if (i < batch.length - 1) {
+        await new Promise((r) => window.setTimeout(r, 1_000));
+      }
+    }
+
+    // 滚动加载下一批
+    if (remainingHandles.size > 0) {
+      window.scrollBy(0, SCROLL_STEP);
+      await new Promise((r) => window.setTimeout(r, SCROLL_WAIT_MS));
+    }
+  }
 
   selectedHandles.clear();
   setAllLoadedChecked(false, filterMode, selectedHandles);
   busy = false;
-  statusText = `完成：成功 ${result.succeeded}，失败 ${result.failed}`;
+  statusText = totalFailed > 0
+    ? `完成：成功 ${totalSucceeded}，失败 ${totalFailed}`
+    : `完成：成功取消关注 ${totalSucceeded} 人`;
 
-  // 进入完成态
   if (toolbar !== null) {
     toolbar.update({
       ...buildToolbarState({ loadedCount: listLoadedUserCells(filterMode).length, selectedCount: 0 }),
       busy: false,
       phase: "complete",
-      completeResult: { succeeded: result.succeeded, failed: result.failed },
+      completeResult: { succeeded: totalSucceeded, failed: totalFailed },
     });
   }
 
   lastSyncAt = 0;
   runThrottledSync(true);
 
-  // 3 秒后自动恢复正常态
   window.setTimeout(() => {
     statusText = "勾选用户后可批量取消关注";
     updateToolbar(true);

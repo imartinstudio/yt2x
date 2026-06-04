@@ -63,6 +63,8 @@ let filterMode: FollowingFilterMode = "one-way";
 let toolbar: FollowingToolbar | null = null;
 let busy = false;
 let statusText = "勾选用户后可批量取消关注";
+let peakLoadedCount = 0;
+let peakOneWayCount = 0;
 let activationAttempts = 0;
 let activationRetryId = 0;
 let syncDebounceTimer = 0;
@@ -148,16 +150,20 @@ const readCounts = (): { loadedCount: number; selectedCount: number } => ({
 
 const buildToolbarState = (counts: { loadedCount: number; selectedCount: number }): FollowingToolbarState => {
   const followBackCount = countFollowBackCells();
+  const rawOneWay = filterMode === "one-way"
+    ? counts.loadedCount
+    : counts.loadedCount - followBackCount;
+  // 峰值跟踪：虚拟列表滚动时 DOM 节点增减会导致计数波动，取峰值避免数字来回跳
+  if (counts.loadedCount > peakLoadedCount) peakLoadedCount = counts.loadedCount;
+  if (rawOneWay > peakOneWayCount) peakOneWayCount = rawOneWay;
   return {
     filterMode,
-    loadedCount: counts.loadedCount,
+    loadedCount: peakLoadedCount,
     selectedCount: counts.selectedCount,
     busy,
     statusText,
     phase: "normal",
-    oneWayCount: filterMode === "one-way"
-      ? counts.loadedCount
-      : counts.loadedCount - followBackCount,
+    oneWayCount: peakOneWayCount,
   };
 };
 
@@ -329,6 +335,8 @@ const destroyPageState = (): void => {
   pageActive = false;
   toolbar?.remove();
   toolbar = null;
+  peakLoadedCount = 0;
+  peakOneWayCount = 0;
   removeFollowingFilterStyles();
   removeUserCellCheckboxes();
   selectedHandles.clear();
@@ -371,6 +379,8 @@ const ensureToolbar = (): boolean => {
       onFilterModeChange: (mode) => {
         if (busy) return;
         filterMode = mode;
+        peakLoadedCount = 0;
+        peakOneWayCount = 0;
         setFollowingFilterMode(mode);
         lastSyncAt = 0;
         runThrottledSync(true);

@@ -164,6 +164,14 @@ export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
   updateVisualSpan(visual, input.checked);
   hit.append(visual);
 
+  // 显式 click handler：替代浏览器隐式 label 行为，避免 X 页面事件冲突
+  hit.addEventListener("click", (e) => {
+    // 阻止 label 默认行为（会再次 toggle），手动切换
+    e.preventDefault();
+    input.checked = !input.checked;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
   input.addEventListener("change", () => {
     const vis = hit.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
     if (vis) updateVisualSpan(vis, input.checked);

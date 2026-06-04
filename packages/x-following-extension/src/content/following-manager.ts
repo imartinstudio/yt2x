@@ -63,8 +63,8 @@ let filterMode: FollowingFilterMode = "one-way";
 let toolbar: FollowingToolbar | null = null;
 let busy = false;
 let statusText = "勾选用户后可批量取消关注";
-let peakLoadedCount = 0;
-let peakOneWayCount = 0;
+const seenHandles = new Set<string>();
+const seenOneWayHandles = new Set<string>();
 let activationAttempts = 0;
 let activationRetryId = 0;
 let syncDebounceTimer = 0;
@@ -78,15 +78,6 @@ let checkboxGuardObserver: MutationObserver | null = null;
 let checkboxResyncTimer = 0;
 let scrollCheckboxResyncRaf = 0;
 let watchdogTimer = 0;
-
-const countFollowBackCells = (): number => {
-  const cells = document.querySelectorAll<HTMLElement>('[data-testid="UserCell"]');
-  let count = 0;
-  for (const cell of cells) {
-    if (userCellFollowsYou(cell)) count += 1;
-  }
-  return count;
-};
 
 const hasToolbarInDom = (): boolean => listFollowingToolbarHosts().length > 0;
 
@@ -148,24 +139,15 @@ const readCounts = (): { loadedCount: number; selectedCount: number } => ({
   selectedCount: selectedHandles.size,
 });
 
-const buildToolbarState = (counts: { loadedCount: number; selectedCount: number }): FollowingToolbarState => {
-  const followBackCount = countFollowBackCells();
-  const rawOneWay = filterMode === "one-way"
-    ? counts.loadedCount
-    : counts.loadedCount - followBackCount;
-  // 峰值跟踪：虚拟列表滚动时 DOM 节点增减会导致计数波动，取峰值避免数字来回跳
-  if (counts.loadedCount > peakLoadedCount) peakLoadedCount = counts.loadedCount;
-  if (rawOneWay > peakOneWayCount) peakOneWayCount = rawOneWay;
-  return {
-    filterMode,
-    loadedCount: peakLoadedCount,
-    selectedCount: counts.selectedCount,
-    busy,
-    statusText,
-    phase: "normal",
-    oneWayCount: peakOneWayCount,
-  };
-};
+const buildToolbarState = (counts: { loadedCount: number; selectedCount: number }): FollowingToolbarState => ({
+  filterMode,
+  loadedCount: seenHandles.size,
+  selectedCount: counts.selectedCount,
+  busy,
+  statusText,
+  phase: "normal",
+  oneWayCount: seenOneWayHandles.size,
+});
 
 const toolbarSignature = (state: FollowingToolbarState): string =>
   `${state.filterMode}|${state.loadedCount}|${state.selectedCount}|${state.busy}|${state.statusText}|${state.phase}`;
@@ -217,6 +199,12 @@ const syncViewportCheckboxes = (attachMissing = true): number => {
   let processed = 0;
   for (const cell of targets) {
     syncCheckboxOnViewportCell(cell, attachMissing);
+    // 记录已发现的唯一 handle（虚拟列表安全计数）
+    const handle = extractUserCellHandle(cell);
+    if (handle !== null) {
+      seenHandles.add(handle);
+      if (!userCellFollowsYou(cell)) seenOneWayHandles.add(handle);
+    }
     processed += 1;
     if (processed >= MAX_CELLS_PER_PASS) break;
   }
@@ -335,8 +323,8 @@ const destroyPageState = (): void => {
   pageActive = false;
   toolbar?.remove();
   toolbar = null;
-  peakLoadedCount = 0;
-  peakOneWayCount = 0;
+  seenHandles.clear();
+  seenOneWayHandles.clear();
   removeFollowingFilterStyles();
   removeUserCellCheckboxes();
   selectedHandles.clear();
@@ -379,8 +367,8 @@ const ensureToolbar = (): boolean => {
       onFilterModeChange: (mode) => {
         if (busy) return;
         filterMode = mode;
-        peakLoadedCount = 0;
-        peakOneWayCount = 0;
+        seenHandles.clear();
+        seenOneWayHandles.clear();
         setFollowingFilterMode(mode);
         lastSyncAt = 0;
         runThrottledSync(true);

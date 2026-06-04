@@ -316,7 +316,8 @@ export const applySelectionToViewportCells = (
     if (input.checked !== shouldCheck) {
       input.checked = shouldCheck;
       const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
-      if (visual) updateVisualSpan(visual, input.checked);
+      // 程序化同步用 instant 更新，避免虚拟列表滚动时动画闪烁
+      if (visual) updateVisualSpanInstant(visual, input.checked);
     }
   }
 };

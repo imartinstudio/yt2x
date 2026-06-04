@@ -576,6 +576,10 @@ const installPassiveSyncTriggers = (): void => {
     "scroll",
     () => {
       refreshToolbarStickyTop();
+      // 立即同步已有 checkbox 的状态（不创建新 checkbox，不做 debounce）
+      if (pageActive && !busy) {
+        applySelectionToViewportCells(selectedHandles, filterMode);
+      }
       scheduleSync(false);
     },
     { passive: true, capture: true },

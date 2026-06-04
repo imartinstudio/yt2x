@@ -219,6 +219,17 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
     const rawImagePaths = [...markdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)]
       .map((m) => m[1]!)
       .filter((p) => !/^https?:/i.test(p));
+
+    // Count structural elements from raw markdown
+    const conversionStats: { label: string; count: number }[] = [];
+    const h2Count = (markdown.match(/^##\s+.+$/gm) ?? []).length;
+    if (h2Count > 0) conversionStats.push({ label: "H2", count: h2Count });
+    const h3Count = (markdown.match(/^###\s+.+$/gm) ?? []).length;
+    if (h3Count > 0) conversionStats.push({ label: "H3", count: h3Count });
+    const codeBlockCount = (markdown.match(/```[\s\S]*?```/g) ?? []).length;
+    if (codeBlockCount > 0) conversionStats.push({ label: "Code block", count: codeBlockCount });
+    const tableCount = (markdown.match(/^\|.+\|$/gm) ?? []).length;
+    if (tableCount > 0) conversionStats.push({ label: "Table row", count: tableCount });
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
 
@@ -241,7 +252,11 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
       coverBlobUrl = undefined;
 
       const preview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
-      // Fallback: use raw markdown extraction when parser returns empty
+      if (preview.adaptations.length === 0 && conversionStats.length > 0) {
+        for (const s of conversionStats) {
+          preview.adaptations.push({ kind: s.label, message: `${s.label} (×${s.count})` } as never);
+        }
+      }
       if (!preview.coverImage && rawCoverPath) preview.coverImage = rawCoverPath;
       const coverPath = preview.coverImage;
       if (preview.contentImages.length === 0) {

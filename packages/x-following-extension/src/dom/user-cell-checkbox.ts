@@ -152,8 +152,15 @@ export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
 
   findHitZone(mount)?.remove();
 
-  // CSS 已通过 reserveCheckboxSpace 预留 52px 空间，无需动态加 padding
   if (mount.mountEl.getAttribute(CHECKBOX_PAD_ATTR) !== "true") {
+    const computed = window.getComputedStyle(mount.mountEl);
+    const currentPad = Number.parseFloat(computed.paddingLeft) || 0;
+    // CSS reserveCheckboxSpace 已为大部分 wrapper 预留 52px。
+    // 仅在 CSS 未覆盖时由 JS 补足，避免双重叠加导致错位。
+    if (currentPad < HIT_ZONE_WIDTH_PX - 1) {
+      mount.mountEl.style.paddingLeft = `${HIT_ZONE_WIDTH_PX}px`;
+    }
+    if (computed.position === "static") mount.mountEl.style.position = "relative";
     mount.mountEl.setAttribute(CHECKBOX_PAD_ATTR, "true");
     mount.mountEl.setAttribute(CHECKBOX_ROW_ATTR, "true");
   }

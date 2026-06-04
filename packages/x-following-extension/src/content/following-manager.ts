@@ -161,8 +161,8 @@ const buildToolbarState = (counts: { loadedCount: number; selectedCount: number 
 /** 将 seenHandles 中所有 handle 加入选中（替代仅 DOM 的全选，跨虚拟列表有效）。 */
 const selectAllSeenHandles = (): void => {
   for (const handle of seenHandles) selectedHandles.add(handle);
-  // 立即同步视口内 cell 的勾选状态
-  applySelectionToViewportCells(selectedHandles, filterMode);
+  // 确保视口内所有 cell 都有 checkbox 并同步勾选状态
+  syncViewportCheckboxes(true);
 };
 
 const toolbarSignature = (state: FollowingToolbarState): string =>

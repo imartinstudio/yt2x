@@ -263,7 +263,15 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   const mediaLines: MediaLine[] = [];
   if (preview.coverImage) mediaLines.push({ path: preview.coverImage, color: "#f59e0b" });
   for (const path of preview.contentImages) mediaLines.push({ path, color: "#10b981" });
-  for (const a of preview.adaptations) mediaLines.push({ path: a.message, color: "#8b5cf6" });
+
+  // Group adaptations by message, show counts for duplicates
+  const adaptCounts = new Map<string, number>();
+  for (const a of preview.adaptations) {
+    adaptCounts.set(a.message, (adaptCounts.get(a.message) ?? 0) + 1);
+  }
+  for (const [msg, count] of adaptCounts) {
+    mediaLines.push({ path: count > 1 ? `${msg} (×${count})` : msg, color: "#8b5cf6" });
+  }
 
   const missingChips = preview.missingSources
     .map(

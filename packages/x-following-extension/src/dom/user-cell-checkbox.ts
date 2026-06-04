@@ -338,12 +338,10 @@ export const applySelectionToViewportCells = (
     const input = findOrReuseCheckboxInput(mount, handle);
     if (input === null) continue;
     const shouldCheck = selectedHandles.has(handle);
-    if (input.checked !== shouldCheck) {
-      input.checked = shouldCheck;
-      const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
-      // 程序化同步用 instant 更新，避免虚拟列表滚动时动画闪烁
-      if (visual) updateVisualSpanInstant(visual, input.checked);
-    }
+    // 无条件写入，防止虚拟列表回收时旧 cell 的勾选状态残留
+    input.checked = shouldCheck;
+    const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
+    if (visual) updateVisualSpanInstant(visual, input.checked);
   }
 };
 
@@ -359,10 +357,8 @@ export const syncCheckboxOnCell = (
   const shouldCheck = selectedHandles.has(handle);
   const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
   if (input.dataset.xfmHandle !== handle) input.dataset.xfmHandle = handle;
-  if (input.checked !== shouldCheck) {
-    input.checked = shouldCheck;
-    const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
-    // 程序化同步一律无动画，仅用户点击保留弹性动画
-    if (visual) updateVisualSpanInstant(visual, input.checked);
-  }
+  // 无条件写入，防止虚拟列表回收时旧 cell 的勾选状态残留
+  input.checked = shouldCheck;
+  const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
+  if (visual) updateVisualSpanInstant(visual, input.checked);
 };

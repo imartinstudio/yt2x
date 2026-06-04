@@ -79,7 +79,7 @@ const hitZoneStyle = [
   "display:flex",
   "align-items:flex-start",
   "justify-content:center",
-  "padding-top:12px",
+  "padding-top:14px",
   "cursor:pointer",
   "z-index:2",
   "-webkit-tap-highlight-color:transparent",

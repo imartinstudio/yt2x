@@ -367,8 +367,6 @@ const ensureToolbar = (): boolean => {
       onFilterModeChange: (mode) => {
         if (busy) return;
         filterMode = mode;
-        seenHandles.clear();
-        seenOneWayHandles.clear();
         setFollowingFilterMode(mode);
         lastSyncAt = 0;
         runThrottledSync(true);

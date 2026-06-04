@@ -113,7 +113,7 @@ export const findTabStickyStrip = (tablist: HTMLElement): HTMLElement => {
 };
 
 /**
- * 插入锚点：sticky tab 顶栏之后；若紧邻极薄分割条则再往后挪到横线下方。
+ * 插入锚点：sticky tab 顶栏之后；若紧邻极薄分割条则再往后挪到横线下方！
  * 实页结构：sticky(header+tabs) → 0px分割 div → section(UserCell…)
  */
 export const findFollowingInsertAnchor = (tablist: HTMLElement): HTMLElement => {
@@ -150,7 +150,7 @@ export const applyToolbarStickyLayout = (host: HTMLElement): void => {
   host.style.position = "sticky";
   host.style.zIndex = "3";
   host.style.top = `${resolveToolbarStickyTopPx()}px`;
-  host.style.background = "rgb(0, 0, 0)";
+  host.style.background = "var(--sticky-bg)";
   host.style.boxSizing = "border-box";
 };
 
@@ -216,6 +216,8 @@ export const mountFollowingToolbar = (
       display: block;
       font-family: -apple-system, "SF Pro Display", "Helvetica Neue", "Segoe UI", sans-serif;
       -webkit-font-smoothing: antialiased;
+      color-scheme: light dark;
+      /* dark */
       --bg-base: #0a0a14;
       --bg-surface: rgba(18,18,32,0.7);
       --glass-border: rgba(255,255,255,0.06);
@@ -231,6 +233,65 @@ export const mountFollowingToolbar = (
       --btn-border: rgba(255,255,255,0.06);
       --seg-bg: rgba(255,255,255,0.04);
       --seg-active: rgba(129,140,248,0.22);
+      --sticky-bg: rgb(0, 0, 0);
+      --bar-glow: rgba(99,102,241,0.08);
+      --badge-bg: rgba(255,255,255,0.05);
+      --btn-hover: rgba(255,255,255,0.08);
+      --progress-track-bg: rgba(255,255,255,0.06);
+      --complete-bg: rgba(10,25,15,0.6);
+      --complete-border: rgba(16,185,129,0.5);
+      --dialog-overlay-bg: rgba(0,0,0,0.6);
+      --dialog-panel-bg: rgba(24,24,44,0.88);
+      --dialog-panel-border: rgba(255,255,255,0.08);
+      --dialog-panel-shadow: 0 40px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04) inset;
+      --dialog-icon-bg: rgba(239,68,68,0.12);
+      --btn-cancel-bg: rgba(255,255,255,0.05);
+      --btn-cancel-border: rgba(255,255,255,0.06);
+      --btn-danger-border: rgba(239,68,68,0.2);
+      --btn-danger-bg: linear-gradient(135deg, rgba(239,68,68,0.65), rgba(220,38,38,0.55));
+      --btn-danger-hover-shadow: 0 6px 24px rgba(239,68,68,0.45);
+      --progress-fill-bg: linear-gradient(90deg, rgba(239,68,68,0.4), rgba(239,68,68,0.8), rgba(248,113,113,0.9));
+      --progress-dot-bg: rgb(248,113,113);
+      --progress-dot-shadow: 0 0 8px rgba(248,113,113,0.6);
+    }
+    @media (prefers-color-scheme: light) {
+      :host {
+        --bg-base: #f2f2f7;
+        --bg-surface: rgba(255,255,255,0.82);
+        --glass-border: rgba(0,0,0,0.08);
+        --text-pri: rgba(0,0,0,0.88);
+        --text-sec: rgba(0,0,0,0.55);
+        --text-dim: rgba(0,0,0,0.35);
+        --accent: #1a1a2e;
+        --accent-glow: rgba(0,0,0,0.08);
+        --danger: #dc2626;
+        --danger-glow: rgba(220,38,38,0.22);
+        --success: #059669;
+        --btn-bg: rgba(0,0,0,0.05);
+        --btn-border: rgba(0,0,0,0.08);
+        --seg-bg: rgba(0,0,0,0.05);
+        --seg-active: rgba(0,0,0,0.88);
+        --sticky-bg: rgb(242, 242, 247);
+        --bar-glow: rgba(0,0,0,0.03);
+        --badge-bg: rgba(0,0,0,0.06);
+        --btn-hover: rgba(0,0,0,0.08);
+        --progress-track-bg: rgba(0,0,0,0.08);
+        --complete-bg: rgba(16,185,129,0.1);
+        --complete-border: rgba(5,150,105,0.45);
+        --dialog-overlay-bg: rgba(0,0,0,0.35);
+        --dialog-panel-bg: rgba(255,255,255,0.94);
+        --dialog-panel-border: rgba(0,0,0,0.08);
+        --dialog-panel-shadow: 0 40px 80px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05) inset;
+        --dialog-icon-bg: rgba(220,38,38,0.1);
+        --btn-cancel-bg: rgba(0,0,0,0.05);
+        --btn-cancel-border: rgba(0,0,0,0.08);
+        --btn-danger-border: rgba(220,38,38,0.32);
+        --btn-danger-bg: linear-gradient(135deg, #f43f3f, #e01d1d);
+        --btn-danger-hover-shadow: 0 8px 32px rgba(239,68,68,0.55);
+        --progress-fill-bg: linear-gradient(90deg, rgba(239,68,68,0.55), rgba(239,68,68,0.88), rgba(248,113,113,0.95));
+        --progress-dot-bg: rgb(239,68,68);
+        --progress-dot-shadow: 0 0 8px rgba(239,68,68,0.45);
+      }
     }
     .bar {
       box-sizing: border-box;
@@ -254,7 +315,7 @@ export const mountFollowingToolbar = (
       width: 120px;
       height: 120px;
       border-radius: 50%;
-      background: radial-gradient(circle, rgba(99,102,241,0.08), transparent 70%);
+      background: radial-gradient(circle, var(--bar-glow), transparent 70%);
       pointer-events: none;
     }
     .header-row {
@@ -276,7 +337,7 @@ export const mountFollowingToolbar = (
       font-size: 10px;
       font-weight: 500;
       color: var(--text-dim);
-      background: rgba(255,255,255,0.05);
+      background: var(--badge-bg);
       padding: 2px 7px;
       border-radius: 100px;
     }
@@ -344,20 +405,36 @@ export const mountFollowingToolbar = (
       font-family: inherit;
       white-space: nowrap;
     }
-    .btn:hover { background: rgba(255,255,255,0.08); }
+    .btn:hover { background: var(--btn-hover); }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
     .btn-danger {
-      border: 1px solid rgba(239,68,68,0.2);
-      background: linear-gradient(135deg, rgba(239,68,68,0.65), rgba(220,38,38,0.55));
+      border: 1px solid var(--btn-danger-border);
+      background: var(--btn-danger-bg);
       color: white;
       font-weight: 600;
       box-shadow: 0 4px 16px var(--danger-glow);
     }
     .btn-danger:hover:not(:disabled) {
-      box-shadow: 0 6px 24px rgba(239,68,68,0.45);
+      background: var(--btn-danger-bg);
     }
 
+    .tip-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      min-height: 16px;
+    }
+    .tip-warn {
+      color: var(--danger);
+      flex-shrink: 1;
+    }
+    .tip-status {
+      color: var(--text-dim);
+      flex-shrink: 0;
+      text-align: right;
+    }
     .progress-wrap {
       display: none;
       flex-direction: column;
@@ -373,14 +450,14 @@ export const mountFollowingToolbar = (
     }
     .progress-track {
       height: 4px;
-      background: rgba(255,255,255,0.06);
+      background: var(--progress-track-bg);
       border-radius: 2px;
       overflow: hidden;
       position: relative;
     }
     .progress-fill {
       height: 100%;
-      background: linear-gradient(90deg, rgba(239,68,68,0.4), rgba(239,68,68,0.8), rgba(248,113,113,0.9));
+      background: var(--progress-fill-bg);
       border-radius: 2px;
       transition: width 0.3s ease-out;
       position: relative;
@@ -394,8 +471,8 @@ export const mountFollowingToolbar = (
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: rgb(248,113,113);
-      box-shadow: 0 0 8px rgba(248,113,113,0.6);
+      background: var(--progress-dot-bg);
+      box-shadow: var(--progress-dot-shadow);
     }
     .progress-log {
       font-size: 11px;
@@ -414,10 +491,10 @@ export const mountFollowingToolbar = (
       align-items: center;
       gap: 12px;
       padding: 10px 14px;
-      background: rgba(10,25,15,0.6);
+      background: var(--complete-bg);
       backdrop-filter: blur(24px);
       -webkit-backdrop-filter: blur(24px);
-      border-left: 3px solid rgba(16,185,129,0.5);
+      border-left: 3px solid var(--complete-border);
       border-radius: 0 8px 8px 0;
     }
     .complete-wrap.show { display: flex; }
@@ -431,7 +508,7 @@ export const mountFollowingToolbar = (
       position: fixed;
       inset: 0;
       z-index: 10000;
-      background: rgba(0,0,0,0.6);
+      background: var(--dialog-overlay-bg);
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
       align-items: center;
@@ -440,15 +517,15 @@ export const mountFollowingToolbar = (
     .dialog-overlay.show { display: flex; }
 
     .dialog-panel {
-      background: rgba(24,24,44,0.88);
+      background: var(--dialog-panel-bg);
       backdrop-filter: blur(40px);
       -webkit-backdrop-filter: blur(40px);
-      border: 1px solid rgba(255,255,255,0.08);
+      border: 1px solid var(--dialog-panel-border);
       border-radius: 20px;
       padding: 24px;
       width: 360px;
       max-width: 90vw;
-      box-shadow: 0 40px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04) inset;
+      box-shadow: var(--dialog-panel-shadow);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -474,7 +551,7 @@ export const mountFollowingToolbar = (
       width: 48px;
       height: 48px;
       border-radius: 50%;
-      background: rgba(239,68,68,0.12);
+      background: var(--dialog-icon-bg);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -498,8 +575,8 @@ export const mountFollowingToolbar = (
       text-align: center;
     }
     .dialog-actions .btn-cancel {
-      background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(255,255,255,0.06);
+      background: var(--btn-cancel-bg);
+      border: 1px solid var(--btn-cancel-border);
       color: var(--text-sec);
       font-weight: 500;
     }
@@ -549,7 +626,11 @@ export const mountFollowingToolbar = (
       <button class="btn btn-danger" data-action="unfollow-selected">取消关注所选</button>
     </div>
 
-    <div style="font-size:12px;color:var(--text-dim);min-height:16px" data-ref="status-text"></div>
+    <div class="tip-row">
+	      <span class="tip-status" data-ref="status-text"></span>
+	      <div class="spacer"></div>
+	      <span class="tip-warn">⚠️ 建议分批取关，每小时不超过 50 人，以减少账号限制风险！</span>
+	    </div>
 
     <div class="progress-wrap" data-ref="progress-wrap">
       <div class="progress-header">

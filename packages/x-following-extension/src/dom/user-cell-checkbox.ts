@@ -8,6 +8,33 @@ export const CHECKBOX_VISUAL_ATTR = "data-xfm-follow-select-visual";
 
 const HIT_ZONE_WIDTH_PX = 52;
 const CHECKBOX_RESERVE_STYLE_ID = "xfm-checkbox-reserve-style";
+const CHECKBOX_THEME_STYLE_ID = "xfm-checkbox-theme-style";
+
+/** 注入勾选框配色 CSS 变量，跟随系统深/浅模式。 */
+export const injectCheckboxTheme = (): void => {
+  if (document.getElementById(CHECKBOX_THEME_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = CHECKBOX_THEME_STYLE_ID;
+  style.textContent = [
+    ":root {",
+    "  --xfm-cb-border: rgba(255,255,255,0.12);",
+    "  --xfm-cb-bg-checked: rgba(99,102,241,0.2);",
+    "  --xfm-cb-border-checked: rgba(129,140,248,0.6);",
+    "  --xfm-cb-glow: rgba(99,102,241,0.2);",
+    "  --xfm-cb-check: white;",
+    "}",
+    "@media (prefers-color-scheme: light) {",
+    "  :root {",
+    "    --xfm-cb-border: rgba(0,0,0,0.18);",
+    "    --xfm-cb-bg-checked: rgba(0,0,0,0.88);",
+    "    --xfm-cb-border-checked: rgba(0,0,0,0.88);",
+    "    --xfm-cb-glow: rgba(0,0,0,0.08);",
+    "    --xfm-cb-check: white;",
+    "  }",
+    "}",
+  ].join("\n");
+  document.head.append(style);
+};
 
 /** 预先用 CSS 给 UserCell 父容器预留 checkbox 空间，避免异步插入 checkbox 时布局偏移。 */
 export const reserveCheckboxSpace = (): void => {
@@ -29,7 +56,7 @@ const createVisualSpan = (): HTMLSpanElement => {
     "width:20px",
     "height:20px",
     "border-radius:5px",
-    "border:1.5px solid rgba(255,255,255,0.12)",
+    "border:1.5px solid var(--xfm-cb-border)",
     "background:transparent",
     "display:flex",
     "align-items:center",
@@ -46,28 +73,27 @@ const createVisualSpan = (): HTMLSpanElement => {
 
 const updateVisualSpan = (span: HTMLSpanElement, checked: boolean): void => {
   if (checked) {
-    span.style.background = "rgba(99,102,241,0.2)";
-    span.style.borderColor = "rgba(129,140,248,0.6)";
-    span.style.boxShadow = "0 0 24px rgba(99,102,241,0.2)";
-    span.style.color = "white";
+    span.style.background = "var(--xfm-cb-bg-checked)";
+    span.style.borderColor = "var(--xfm-cb-border-checked)";
+    span.style.boxShadow = "0 0 24px var(--xfm-cb-glow)";
+    span.style.color = "var(--xfm-cb-check)";
     span.textContent = "✓";
   } else {
     span.style.background = "transparent";
-    span.style.borderColor = "rgba(255,255,255,0.12)";
+    span.style.borderColor = "var(--xfm-cb-border)";
     span.style.boxShadow = "none";
     span.style.color = "transparent";
     span.textContent = "";
   }
 };
 
-/** 无动画更新 visual span，用于虚拟列表回收等场景避免状态闪烁。 */
+/** 无动画更新 visual span，同步提交样式避免 rAF 跨帧闪烁。 */
 const updateVisualSpanInstant = (span: HTMLSpanElement, checked: boolean): void => {
   span.style.transition = "none";
+  void span.offsetHeight; // 强制提交 transition:none
   updateVisualSpan(span, checked);
-  // 异步恢复动画，避免同步回流（void offsetWidth）导致滚动时帧率下降闪烁
-  requestAnimationFrame(() => {
-    span.style.transition = "all 0.15s cubic-bezier(0.34,1.56,0.64,1)";
-  });
+  void span.offsetHeight; // 强制提交新样式（无过渡）
+  span.style.transition = "all 0.15s cubic-bezier(0.34,1.56,0.64,1)";
 };
 
 const HIT_ZONE_HEIGHT_PX = 40;

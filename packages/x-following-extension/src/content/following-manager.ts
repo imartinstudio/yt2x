@@ -22,6 +22,7 @@ import {
   resolveUserCellMount,
   removeCheckboxSpaceReservation,
   reserveCheckboxSpace,
+  injectCheckboxTheme,
   setAllLoadedChecked,
   syncCheckboxOnCell,
 } from "../dom/user-cell-checkbox.js";
@@ -63,7 +64,7 @@ const selectedHandles = new Set<string>();
 let filterMode: FollowingFilterMode = "one-way";
 let toolbar: FollowingToolbar | null = null;
 let busy = false;
-let statusText = "勾选用户后可批量取消关注";
+let statusText = "勾选后批量取关";
 const seenHandles = new Set<string>();
 const seenOneWayHandles = new Set<string>();
 let activationAttempts = 0;
@@ -334,10 +335,11 @@ const destroyPageState = (): void => {
   seenOneWayHandles.clear();
   removeFollowingFilterStyles();
   removeCheckboxSpaceReservation();
+  document.getElementById("xfm-checkbox-theme-style")?.remove();
   removeUserCellCheckboxes();
   selectedHandles.clear();
   busy = false;
-  statusText = "勾选用户后可批量取消关注";
+  statusText = "勾选后批量取关";
   lastToolbarSignature = "";
   lastSyncAt = 0;
 };
@@ -413,6 +415,7 @@ const activatePageUi = (): boolean => {
   }
 
   reserveCheckboxSpace();
+  injectCheckboxTheme();
   setFollowingFilterMode(filterMode);
   const toolbarReady = ensureToolbar();
   pageActive = toolbarReady;
@@ -534,7 +537,7 @@ const handleUnfollowSelected = async (): Promise<void> => {
   runThrottledSync(true);
 
   window.setTimeout(() => {
-    statusText = "勾选用户后可批量取消关注";
+    statusText = "勾选后批量取关";
     updateToolbar(true);
   }, 3_000);
 };

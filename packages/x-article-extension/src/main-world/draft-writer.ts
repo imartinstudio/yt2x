@@ -146,19 +146,39 @@
     return null;
   };
 
-  const findDraftStateNodeForElement = (editor: HTMLElement | null): any | null => {
-    if (editor === null) return null;
-    const fiberKey = Object.keys(editor).find(
+  const reactFiberFromElement = (element: HTMLElement): any | null => {
+    const fiberKey = Object.keys(element).find(
       (key) => key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$"),
     );
-    if (fiberKey === undefined) return null;
-    let fiber = (editor as unknown as Record<string, unknown>)[fiberKey] as any;
+    return fiberKey === undefined ? null : (element as unknown as Record<string, unknown>)[fiberKey];
+  };
+
+  const draftNodeFromFiber = (startFiber: any): any | null => {
+    let fiber = startFiber;
     for (let depth = 0; depth < 80 && fiber; depth += 1) {
       const stateNode = fiber.stateNode;
       if (stateNode?.props?.editorState && typeof stateNode.props.onChange === "function") {
         return stateNode;
       }
+      const memoizedProps = fiber.memoizedProps;
+      if (memoizedProps?.editorState && typeof memoizedProps.onChange === "function") {
+        return { props: memoizedProps };
+      }
+      const pendingProps = fiber.pendingProps;
+      if (pendingProps?.editorState && typeof pendingProps.onChange === "function") {
+        return { props: pendingProps };
+      }
       fiber = fiber.return;
+    }
+    return null;
+  };
+
+  const findDraftStateNodeForElement = (editor: HTMLElement | null): any | null => {
+    let current: HTMLElement | null = editor;
+    for (let hops = 0; hops < 8 && current !== null; hops += 1) {
+      const direct = draftNodeFromFiber(reactFiberFromElement(current));
+      if (direct !== null) return direct;
+      current = current.parentElement;
     }
     return null;
   };
@@ -414,12 +434,14 @@
     const sample =
       findDraftCharacterSample(titleNode) ||
       (fallbackSampleNode ? findDraftCharacterSample(fallbackSampleNode) : null);
-    const sampleCharacter = sample?.character;
-    if (!sampleCharacter?.set) {
-      return writeTitleDom(normalizedTitle);
-    }
+    let sampleCharacter = sample?.character;
 
     const CharacterList = sample?.block?.getCharacterList?.().constructor ?? titleBlock.getCharacterList().constructor;
+    if (!sampleCharacter?.set) {
+      const CharacterMetadata = titleBlock.getCharacterList?.()?.constructor?.of?.({})?.first?.()?.constructor;
+      sampleCharacter = CharacterMetadata?.create?.({}) ?? null;
+    }
+    if (!sampleCharacter?.set) return writeTitleDom(normalizedTitle);
     const style = sampleCharacter.getStyle?.().clear?.() ?? sampleCharacter.getStyle?.();
     const character = style ? sampleCharacter.set("style", style).set("entity", null) : sampleCharacter.set("entity", null);
     const characterList = CharacterList(Array.from({ length: normalizedTitle.length }, () => character));

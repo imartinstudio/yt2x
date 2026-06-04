@@ -48,7 +48,7 @@ declare global {
 }
 
 const MIN_SYNC_INTERVAL_MS = 800;
-const SCROLL_SYNC_DEBOUNCE_MS = 50;
+const SCROLL_SYNC_DEBOUNCE_MS = 200;
 const ACTIVATION_RETRY_MS = 500;
 const ACTIVATION_MAX_ATTEMPTS = 80;
 const TOOLBAR_GUARD_DEBOUNCE_MS = 150;
@@ -293,14 +293,10 @@ const stopCheckboxGuard = (): void => {
 const startCheckboxGuard = (): void => {
   const column = findPrimaryColumn();
   if (column === null || checkboxGuardObserver !== null) return;
-  // 轻量 state 刷新，用 rAF 限频为每帧一次（滚动中 DOM 变更可达 60+ 次/秒）
-  let stateSyncRaf = 0;
+  // 仅监听 DOM 变更；滚动期间不做同步（由 scroll 停止后的 debounce 驱动）
   checkboxGuardObserver = new MutationObserver(() => {
-    if (busy || stateSyncRaf !== 0) return;
-    stateSyncRaf = requestAnimationFrame(() => {
-      stateSyncRaf = 0;
-      applySelectionToViewportCells(selectedHandles, filterMode);
-    });
+    if (busy) return;
+    scheduleSync(false);
   });
   checkboxGuardObserver.observe(column, { childList: true, subtree: true });
 };

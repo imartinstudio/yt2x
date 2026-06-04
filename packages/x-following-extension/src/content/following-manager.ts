@@ -7,6 +7,7 @@ import {
   removeFollowingFilterStyles,
   setFollowingFilterMode,
   unfollowSelectedCells,
+  userCellFollowsYou,
   type FollowingFilterMode,
 } from "../dom/following-filter.js";
 import {
@@ -76,6 +77,15 @@ let checkboxResyncTimer = 0;
 let scrollCheckboxResyncRaf = 0;
 let watchdogTimer = 0;
 
+const countFollowBackCells = (): number => {
+  const cells = document.querySelectorAll<HTMLElement>('[data-testid="UserCell"]');
+  let count = 0;
+  for (const cell of cells) {
+    if (userCellFollowsYou(cell)) count += 1;
+  }
+  return count;
+};
+
 const hasToolbarInDom = (): boolean => listFollowingToolbarHosts().length > 0;
 
 /** 保留当前实例持有的工具栏，移除重复或失去绑定的节点。 */
@@ -136,16 +146,23 @@ const readCounts = (): { loadedCount: number; selectedCount: number } => ({
   selectedCount: selectedHandles.size,
 });
 
-const buildToolbarState = (counts: { loadedCount: number; selectedCount: number }): FollowingToolbarState => ({
-  filterMode,
-  loadedCount: counts.loadedCount,
-  selectedCount: counts.selectedCount,
-  busy,
-  statusText,
-});
+const buildToolbarState = (counts: { loadedCount: number; selectedCount: number }): FollowingToolbarState => {
+  const followBackCount = countFollowBackCells();
+  return {
+    filterMode,
+    loadedCount: counts.loadedCount,
+    selectedCount: counts.selectedCount,
+    busy,
+    statusText,
+    phase: "normal",
+    oneWayCount: filterMode === "one-way"
+      ? counts.loadedCount
+      : counts.loadedCount - followBackCount,
+  };
+};
 
 const toolbarSignature = (state: FollowingToolbarState): string =>
-  `${state.filterMode}|${state.loadedCount}|${state.selectedCount}|${state.busy}|${state.statusText}`;
+  `${state.filterMode}|${state.loadedCount}|${state.selectedCount}|${state.busy}|${state.statusText}|${state.phase}`;
 
 const updateToolbar = (force = false): void => {
   const state = buildToolbarState(readCounts());
@@ -414,42 +431,60 @@ const handleUnfollowSelected = async (): Promise<void> => {
     .map((handle) => findUserCellByHandle(handle))
     .filter((cell): cell is HTMLElement => cell !== null);
 
-  if (cells.length < handles.length) {
-    statusText = `已选 ${handles.length} 人，当前列表仅加载了 ${cells.length} 人；请滚动列表后再取消关注`;
-    updateToolbar(true);
-    if (cells.length === 0) return;
-  }
-
   if (cells.length === 0) {
     statusText = "请先勾选要取消关注的用户";
     updateToolbar(true);
     return;
   }
 
-  const confirmed = window.confirm(
-    cells.length < handles.length
-      ? `已选 ${handles.length} 人，当前仅能操作列表中的 ${cells.length} 人。确定取消关注这 ${cells.length} 个账号吗？`
-      : `确定要取消关注已选的 ${cells.length} 个账号吗？此操作不可撤销。`,
-  );
+  // 玻璃 Dialog 确认（替代 window.confirm）
+  if (toolbar === null) return;
+  const confirmed = await toolbar.confirmUnfollow(cells.length);
   if (!confirmed) return;
 
   busy = true;
-  statusText = `正在取消关注 0 / ${cells.length}…`;
-  updateToolbar(true);
+
+  // 进入进度态
+  const logBuffer: { handle: string; succeeded: boolean }[] = [];
+  const pushProgress = (done: number, total: number): void => {
+    if (toolbar === null) return;
+    toolbar.update({
+      ...buildToolbarState({ loadedCount: listLoadedUserCells(filterMode).length, selectedCount: selectedHandles.size }),
+      busy: true,
+      phase: "progress",
+      progress: { done, total, recentLog: logBuffer.slice(-3) },
+    });
+  };
+  pushProgress(0, cells.length);
 
   const result = await unfollowSelectedCells(cells, (progress) => {
-    statusText = progress.succeeded
-      ? `正在取消关注 ${progress.done} / ${progress.total}（@${progress.handle}）`
-      : `跳过 @${progress.handle}（${progress.done} / ${progress.total}）`;
-    updateToolbar(true);
+    logBuffer.push({ handle: progress.handle, succeeded: progress.succeeded });
+    pushProgress(progress.done, progress.total);
   });
 
   selectedHandles.clear();
   setAllLoadedChecked(false, filterMode, selectedHandles);
   busy = false;
   statusText = `完成：成功 ${result.succeeded}，失败 ${result.failed}`;
+
+  // 进入完成态
+  if (toolbar !== null) {
+    toolbar.update({
+      ...buildToolbarState({ loadedCount: listLoadedUserCells(filterMode).length, selectedCount: 0 }),
+      busy: false,
+      phase: "complete",
+      completeResult: { succeeded: result.succeeded, failed: result.failed },
+    });
+  }
+
   lastSyncAt = 0;
   runThrottledSync(true);
+
+  // 3 秒后自动恢复正常态
+  window.setTimeout(() => {
+    statusText = "勾选用户后可批量取消关注";
+    updateToolbar(true);
+  }, 3_000);
 };
 
 const stopActivationRetry = (): void => {

@@ -11,6 +11,7 @@ export type ImportPreview = {
   title: string;
   coverImage: string | null;
   coverObjectUrl?: string;
+  contentImages: string[];
   contentImageCount: number;
   contentVideoCount: number;
   adaptations: AdaptArticleForXResult["adaptations"];
@@ -58,6 +59,7 @@ export const buildImportPreviewState = (input: {
   return {
     title: parseResult.title,
     coverImage: parseResult.coverImage,
+    contentImages: parseResult.contentImages.map((img) => img.path),
     contentImageCount: parseResult.contentImages.length,
     contentVideoCount: parseResult.contentVideos.length,
     adaptations: adapted.adaptations,
@@ -149,6 +151,7 @@ export const buildImportPreview = (input: {
 }): ImportPreview => ({
   title: input.prepared.parseResult.title,
   coverImage: input.prepared.parseResult.coverImage,
+  contentImages: input.prepared.parseResult.contentImages.map((img) => img.path),
   contentImageCount: input.prepared.parseResult.contentImages.length,
   contentVideoCount: input.prepared.parseResult.contentVideos.length,
   adaptations: input.prepared.adapted.adaptations,
@@ -253,7 +256,10 @@ const renderDialogHtml = (preview: ImportPreview): string => {
 
   const detailParts: string[] = [];
   if (preview.coverImage) detailParts.push(`Cover · ${preview.coverImage}`);
-  if (preview.contentImageCount > 0) detailParts.push(`${preview.contentImageCount} body image${preview.contentImageCount > 1 ? "s" : ""}`);
+  if (preview.contentImages.length > 0) {
+    const names = preview.contentImages.map((p) => p.replaceAll("\\", "/").split("/").pop()).join(", ");
+    detailParts.push(`${preview.contentImages.length} body image${preview.contentImages.length > 1 ? "s" : ""} · ${names}`);
+  }
   if (preview.contentVideoCount > 0) detailParts.push(`${preview.contentVideoCount} video${preview.contentVideoCount > 1 ? "s" : ""}`);
   if (preview.adaptations.length > 0) detailParts.push(`${preview.adaptations.length} adaptation${preview.adaptations.length > 1 ? "s" : ""}`);
 

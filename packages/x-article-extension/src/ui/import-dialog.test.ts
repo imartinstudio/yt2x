@@ -116,6 +116,7 @@ describe("X Articles import media policy", () => {
     const result = showImportPreviewDialog({
       title: "A <title>",
       coverImage: "cover.png",
+      contentImages: [],
       contentImageCount: 1,
       contentVideoCount: 1,
       adaptations: [{ kind: "premium-image", message: "Use <image>" }],
@@ -143,6 +144,7 @@ describe("X Articles import media policy", () => {
     const result = showImportPreviewDialog({
       title: "标题",
       coverImage: null,
+      contentImages: [],
       contentImageCount: 0,
       contentVideoCount: 0,
       adaptations: [],

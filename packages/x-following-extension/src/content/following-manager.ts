@@ -258,6 +258,10 @@ const startSyncLoop = (): void => {
   if (syncLoopTimer !== 0) return;
   syncLoopTimer = window.setInterval(() => {
     runThrottledSync(false);
+    // 全量同步所有已加载 cell 的状态（包含离屏 cell，防止虚拟列表回收残留）
+    for (const cell of listLoadedUserCells(filterMode)) {
+      syncCheckboxOnCell(cell, selectedHandles, filterMode);
+    }
   }, MIN_SYNC_INTERVAL_MS + 400);
 };
 
@@ -284,20 +288,23 @@ const stopToolbarGuard = (): void => {
 const stopCheckboxGuard = (): void => {
   checkboxGuardObserver?.disconnect();
   checkboxGuardObserver = null;
-  lastCheckboxResyncAt = 0;
+  if (checkboxResyncRaf !== 0) {
+    window.cancelAnimationFrame(checkboxResyncRaf);
+    checkboxResyncRaf = 0;
+  }
 };
 
-let lastCheckboxResyncAt = 0;
-const CHECKBOX_RESYNC_MIN_INTERVAL_MS = 16; // ~60fps
+let checkboxResyncRaf = 0;
 
 const scheduleCheckboxResync = (): void => {
   if (busy) return;
-  const now = Date.now();
-  if (now - lastCheckboxResyncAt < CHECKBOX_RESYNC_MIN_INTERVAL_MS) return;
-  lastCheckboxResyncAt = now;
-  applySelectionToViewportCells(selectedHandles, filterMode);
-  lastSyncAt = 0;
-  syncViewportCheckboxes(true);
+  if (checkboxResyncRaf !== 0) return;
+  checkboxResyncRaf = window.requestAnimationFrame(() => {
+    checkboxResyncRaf = 0;
+    applySelectionToViewportCells(selectedHandles, filterMode);
+    lastSyncAt = 0;
+    syncViewportCheckboxes(true);
+  });
 };
 
 const startCheckboxGuard = (): void => {

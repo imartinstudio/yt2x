@@ -122,11 +122,15 @@ describe("extractUserCellHandle", () => {
     expect(extractUserCellHandle(buildUserCell(false, "Bob"))).toBe("bob");
   });
 
-  it("reads handle from @ prefixed profile links", () => {
+  it("picks most frequent handle from cell links", () => {
     const cell = buildUserCell(false, "ignored");
-    const link = document.createElement("a");
-    link.href = "/@PickMe";
-    cell.append(link);
+    // @PickMe 出现两次（模拟头像+名称），频率高于 ignored 的一次，应该胜出
+    const link1 = document.createElement("a");
+    link1.href = "/@PickMe";
+    cell.append(link1);
+    const link2 = document.createElement("a");
+    link2.href = "/@PickMe";
+    cell.append(link2);
     expect(extractUserCellHandle(cell)).toBe("pickme");
   });
 });

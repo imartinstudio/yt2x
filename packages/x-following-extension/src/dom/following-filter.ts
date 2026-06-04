@@ -77,13 +77,16 @@ const parseHandleFromHref = (href: string): string | null => {
 };
 
 export const extractUserCellHandle = (cell: Element): string | null => {
-  const handles: string[] = [];
+  const frequency = new Map<string, number>();
   for (const link of cell.querySelectorAll('a[href^="/"]')) {
     const handle = parseHandleFromHref(link.getAttribute("href") ?? "");
-    if (handle !== null) handles.push(handle);
+    if (handle !== null) {
+      frequency.set(handle, (frequency.get(handle) ?? 0) + 1);
+    }
   }
-  if (handles.length === 0) return null;
-  return handles.sort((a, b) => a.length - b.length)[0];
+  if (frequency.size === 0) return null;
+  // 返回出现频率最高的 handle（profile handle 出现在头像+名称处，次数 > bio 中 @ 引用）
+  return [...frequency.entries()].sort((a, b) => b[1] - a[1])[0][0];
 };
 
 export const findUnfollowButton = (cell: Element): HTMLElement | null =>

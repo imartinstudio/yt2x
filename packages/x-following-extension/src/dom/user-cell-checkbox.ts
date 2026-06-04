@@ -10,6 +10,15 @@ const HIT_ZONE_WIDTH_PX = 52;
 const CHECKBOX_RESERVE_STYLE_ID = "xfm-checkbox-reserve-style";
 const CHECKBOX_THEME_STYLE_ID = "xfm-checkbox-theme-style";
 
+/**
+ * 程序化同步标记 — 当 syncCheckboxOnCell 等批量操作设置 input.checked 时设为 true，
+ * 防止触发的 change 事件意外修改 selectedHandles 导致已选计数闪烁。
+ */
+export let _checkboxSyncInProgress = false;
+export const setCheckboxSyncInProgress = (value: boolean): void => {
+  _checkboxSyncInProgress = value;
+};
+
 /** 注入勾选框配色 CSS 变量，跟随系统深/浅模式。 */
 export const injectCheckboxTheme = (): void => {
   if (document.getElementById(CHECKBOX_THEME_STYLE_ID)) return;
@@ -219,9 +228,15 @@ export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
   // 显式 click handler：替代浏览器隐式 label 行为，避免 X 页面事件冲突
   hit.addEventListener("click", (e) => {
     e.preventDefault();
-    // 从 cell DOM 重新读取 handle，防止虚拟列表回收导致 input.dataset.xfmHandle 指向旧账号
-    const currentHandle = extractUserCellHandle(cell);
-    if (currentHandle !== null) input.dataset.xfmHandle = currentHandle;
+    // 从 DOM 动态查找当前 cell，而非使用闭包中的 cell（虚拟列表回收时闭包 cell 可能已脱离 DOM）
+    const domCell: HTMLElement | null =
+      (hit.nextElementSibling as HTMLElement | null) ??
+      hit.parentElement?.querySelector<HTMLElement>('[data-testid="UserCell"]') ??
+      null;
+    if (domCell !== null) {
+      const currentHandle = extractUserCellHandle(domCell);
+      if (currentHandle !== null) input.dataset.xfmHandle = currentHandle;
+    }
     input.checked = !input.checked;
     input.dispatchEvent(new Event("change", { bubbles: true }));
   });
@@ -323,6 +338,10 @@ export const applyCheckboxChangeToSelection = (
       if (domHandle !== null && domHandle !== handle) return;
     }
   }
+
+  // 程序化同步期间（syncCheckboxOnCell 等）不要修改 selectedHandles，
+  // 避免批量设置 input.checked 触发的 change 事件意外修改选择集导致 UI 闪烁
+  if (_checkboxSyncInProgress) return;
 
   if (input.checked) selectedHandles.add(handle);
   else selectedHandles.delete(handle);

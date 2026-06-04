@@ -186,53 +186,85 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
     const mdFiles = dirFiles.filter((f) =>
       /\.(md|markdown|mdx)$/i.test(f.webkitRelativePath || f.name),
     );
-    const markdownFile =
-      mdFiles.find((f) => /article\.md$/i.test(f.webkitRelativePath || f.name)) ??
-      mdFiles[0];
+    let markdownFile = mdFiles[0];
+    const sourceFileNames = mdFiles.map((f) => f.webkitRelativePath || f.name);
     if (!markdownFile) {
       showImportError("未在目录中找到 Markdown 文件");
       return;
     }
 
+    const countConversions = (md: string) => {
+      const stats: { label: string; count: number }[] = [];
+      const h2 = (md.match(/^#{2}\s*[^#\n]+$/gm) ?? []).length;
+      if (h2 > 0) stats.push({ label: "H2", count: h2 });
+      const h3 = (md.match(/^#{3}\s*[^#\n]+$/gm) ?? []).length;
+      if (h3 > 0) stats.push({ label: "H3", count: h3 });
+      const code = (md.match(/```[\s\S]*?```/g) ?? []).length;
+      if (code > 0) stats.push({ label: "Code block", count: code });
+      const table = (md.match(/^\|.+\|/gm) ?? []).length;
+      if (table > 0) stats.push({ label: "Table row", count: table });
+      return stats;
+    };
+
+    const extractCoverPath = (md: string): string | null => {
+      const patterns = [
+        /^cover:\s*(\S+)/im,
+        /!\[[^\]]*cover[^\]]*\]\(([^)\s]+)\)/i,
+        /!\[[^\]]*\]\(([^)\s]+)\)/,
+        /<img[^>]+src=["']([^"']+)["'][^>]*>/i,
+      ];
+      for (const re of patterns) {
+        const m = md.match(re);
+        if (m?.[1]) return m[1];
+      }
+      return authorizedFiles.find((f) =>
+        /cover\.(png|jpe?g|webp|gif|svg)$/i.test(f.webkitRelativePath || f.name),
+      )?.webkitRelativePath || null;
+    };
+
+    const extractImagePaths = (md: string): string[] =>
+      [...md.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((m) => m[1]!).filter((p) => !/^https?:/i.test(p));
+
     const markdown = await readFileAsText(markdownFile);
+    let currentMarkdown = markdown;
     let authorizedFiles = dirFiles;
     let registry = buildMediaRegistry({ markdown, authorizedFiles });
 
-    // 1) Try regex on raw markdown
-    const coverPatterns = [
-      /^cover:\s*(\S+)/im,
-      /!\[[^\]]*cover[^\]]*\]\(([^)\s]+)\)/i,
-      /!\[[^\]]*\]\(([^)\s]+)\)/,
-      /<img[^>]+src=["']([^"']+)["'][^>]*>/i,
-    ];
-    let rawCoverPath: string | null = null;
-    for (const re of coverPatterns) {
-      const m = markdown.match(re);
-      if (m?.[1]) { rawCoverPath = m[1]; break; }
-    }
-    // 2) Fallback: find any file with "cover" in its name
-    if (!rawCoverPath) {
-      const coverFile = authorizedFiles.find((f) =>
-        /cover\.(png|jpe?g|webp|gif|svg)$/i.test(f.webkitRelativePath || f.name),
-      );
-      if (coverFile) rawCoverPath = coverFile.webkitRelativePath || coverFile.name;
-    }
+    const readAndPreview = async (file: File): Promise<ImportPreview> => {
+      const md = await readFileAsText(file);
+      currentMarkdown = md;
+      if (coverBlobUrl) URL.revokeObjectURL(coverBlobUrl);
+      coverBlobUrl = undefined;
 
-    // Extract ALL image paths from raw markdown
-    const rawImagePaths = [...markdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)]
-      .map((m) => m[1]!)
-      .filter((p) => !/^https?:/i.test(p));
+      const preview = buildImportPreviewState({ markdown: md, subscriptionTier, mediaRegistry: registry });
+      preview.sourceFile = file.webkitRelativePath || file.name;
+      preview.sourceFiles = sourceFileNames;
 
-    // Count structural elements from raw markdown (lenient patterns)
-    const conversionStats: { label: string; count: number }[] = [];
-    const h2Count = (markdown.match(/^#{2}\s*[^#\n]+$/gm) ?? []).length;
-    if (h2Count > 0) conversionStats.push({ label: "H2", count: h2Count });
-    const h3Count = (markdown.match(/^#{3}\s*[^#\n]+$/gm) ?? []).length;
-    if (h3Count > 0) conversionStats.push({ label: "H3", count: h3Count });
-    const codeBlockCount = (markdown.match(/```[\s\S]*?```/g) ?? []).length;
-    if (codeBlockCount > 0) conversionStats.push({ label: "Code block", count: codeBlockCount });
-    const tableRowCount = (markdown.match(/^\|.+\|/gm) ?? []).length;
-    if (tableRowCount > 0) conversionStats.push({ label: "Table row", count: tableRowCount });
+      const rawCover = extractCoverPath(md);
+      if (!preview.coverImage && rawCover) preview.coverImage = rawCover;
+      const cp = preview.coverImage;
+
+      if (preview.contentImages.length === 0) {
+        const rawImgs = extractImagePaths(md);
+        const isImg = (n: string) => /\.(png|jpe?g|webp|gif|svg)$/i.test(n);
+        const dirImgs = authorizedFiles.map((f) => f.webkitRelativePath || f.name).filter((p) => isImg(p) && p !== cp);
+        preview.contentImages = [...new Set([...rawImgs.filter((p) => p !== cp), ...dirImgs])];
+        preview.contentImageCount = preview.contentImages.length;
+      }
+
+      if (preview.adaptations.length === 0) {
+        const stats = countConversions(md);
+        for (const s of stats) {
+          preview.adaptations.push({ kind: s.label, message: `${s.label} (×${s.count})` } as never);
+        }
+      }
+
+      if (cp && !/^https?:/i.test(cp)) {
+        const cf = findCoverFile(cp);
+        if (cf) { coverBlobUrl = URL.createObjectURL(cf); preview.coverObjectUrl = coverBlobUrl; }
+      }
+      return preview;
+    };
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
 
@@ -250,61 +282,35 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
       );
     };
 
-    const buildPreview = (): ImportPreview => {
-      if (coverBlobUrl) URL.revokeObjectURL(coverBlobUrl);
-      coverBlobUrl = undefined;
-
-      const preview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
-      if (preview.adaptations.length === 0 && conversionStats.length > 0) {
-        for (const s of conversionStats) {
-          preview.adaptations.push({ kind: s.label, message: `${s.label} (×${s.count})` } as never);
-        }
-      }
-      if (!preview.coverImage && rawCoverPath) preview.coverImage = rawCoverPath;
-      const coverPath = preview.coverImage;
-      if (preview.contentImages.length === 0) {
-        // Combine regex results + directory scan (find all image files that aren't the cover)
-        const isImage = (name: string) => /\.(png|jpe?g|webp|gif|svg)$/i.test(name);
-        const dirImages = authorizedFiles
-          .map((f) => f.webkitRelativePath || f.name)
-          .filter((p) => isImage(p) && p !== coverPath);
-        // Merge regex paths and directory paths, deduplicate
-        const allPaths = [...new Set([...rawImagePaths.filter((p) => p !== coverPath), ...dirImages])];
-        preview.contentImages = allPaths;
-        preview.contentImageCount = allPaths.length;
-      }
-      if (coverPath && !/^https?:/i.test(coverPath)) {
-        const coverFile = findCoverFile(coverPath);
-        if (coverFile) {
-          coverBlobUrl = URL.createObjectURL(coverFile);
-          preview.coverObjectUrl = coverBlobUrl;
-        }
-      }
-      return preview;
-    };
-
     subscriptionTier = await loadSubscriptionTier();
-    const dialog = await showImportPreviewDialog(buildPreview(), {
+    const initialPreview = await readAndPreview(markdownFile);
+
+    const dialog = await showImportPreviewDialog(initialPreview, {
       onPickDirectory: async () => {
         const files = await pickMediaDirectory();
         if (files.length > 0) {
           authorizedFiles = [...authorizedFiles, ...files];
-          registry = buildMediaRegistry({ markdown, authorizedFiles });
+          registry = buildMediaRegistry({ markdown: currentMarkdown, authorizedFiles });
         }
         subscriptionTier = await loadSubscriptionTier();
-        return buildPreview();
+        return readAndPreview(markdownFile!);
       },
       onPickFiles: async () => {
         const files = await pickSupplementalMedia();
         if (files.length > 0) {
           authorizedFiles = [...authorizedFiles, ...files];
-          registry = buildMediaRegistry({ markdown, authorizedFiles });
+          registry = buildMediaRegistry({ markdown: currentMarkdown, authorizedFiles });
         }
         subscriptionTier = await loadSubscriptionTier();
-          return buildPreview();
-        },
+        return readAndPreview(markdownFile!);
       },
-    );
+      onSelectSource: async (filename: string) => {
+        const file = authorizedFiles.find((f) => (f.webkitRelativePath || f.name) === filename);
+        if (!file) throw new Error("File not found");
+        markdownFile = file;
+        return readAndPreview(file);
+      },
+    });
 
     if (dialog.type !== "confirm") return; // cancel or unreachable pick-* with callbacks
     confirmedTier = dialog.subscriptionTier;

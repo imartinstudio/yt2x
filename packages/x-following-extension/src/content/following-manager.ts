@@ -24,6 +24,7 @@ import {
   reserveCheckboxSpace,
   injectCheckboxTheme,
   setAllLoadedChecked,
+  setCheckboxSyncInProgress,
   syncCheckboxOnCell,
 } from "../dom/user-cell-checkbox.js";
 import {
@@ -210,21 +211,26 @@ const syncViewportCheckboxes = (attachMissing = true): number => {
   const loggedInKey = readLoggedInUserKey();
   if (!isOwnFollowingListPage(location.pathname, loggedInKey, document)) return 0;
 
-  const targets = listViewportUserCells(filterMode);
-  let processed = 0;
-  for (const cell of targets) {
-    syncCheckboxOnViewportCell(cell, attachMissing);
-    // 记录已发现的唯一 handle（虚拟列表安全计数）
-    const handle = extractUserCellHandle(cell);
-    if (handle !== null) {
-      seenHandles.add(handle);
-      if (!userCellFollowsYou(cell)) seenOneWayHandles.add(handle);
+  setCheckboxSyncInProgress(true);
+  try {
+    const targets = listViewportUserCells(filterMode);
+    let processed = 0;
+    for (const cell of targets) {
+      syncCheckboxOnViewportCell(cell, attachMissing);
+      // 记录已发现的唯一 handle（虚拟列表安全计数）
+      const handle = extractUserCellHandle(cell);
+      if (handle !== null) {
+        seenHandles.add(handle);
+        if (!userCellFollowsYou(cell)) seenOneWayHandles.add(handle);
+      }
+      processed += 1;
+      if (processed >= MAX_CELLS_PER_PASS) break;
     }
-    processed += 1;
-    if (processed >= MAX_CELLS_PER_PASS) break;
+    if (toolbar !== null) updateToolbar();
+    return processed;
+  } finally {
+    setCheckboxSyncInProgress(false);
   }
-  if (toolbar !== null) updateToolbar();
-  return processed;
 };
 
 const runThrottledSync = (force = false): void => {
@@ -260,8 +266,13 @@ const startSyncLoop = (): void => {
   syncLoopTimer = window.setInterval(() => {
     runThrottledSync(false);
     // 全量同步所有已加载 cell 的状态（包含离屏 cell，防止虚拟列表回收残留）
-    for (const cell of listLoadedUserCells(filterMode)) {
-      syncCheckboxOnCell(cell, selectedHandles, filterMode);
+    setCheckboxSyncInProgress(true);
+    try {
+      for (const cell of listLoadedUserCells(filterMode)) {
+        syncCheckboxOnCell(cell, selectedHandles, filterMode);
+      }
+    } finally {
+      setCheckboxSyncInProgress(false);
     }
   }, MIN_SYNC_INTERVAL_MS + 400);
 };

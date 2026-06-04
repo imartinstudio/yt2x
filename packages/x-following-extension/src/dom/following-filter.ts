@@ -150,7 +150,7 @@ export type UnfollowBatchProgress = {
 export const unfollowSelectedCells = async (
   cells: HTMLElement[],
   onProgress: (progress: UnfollowBatchProgress) => void,
-  delayMs = 700,
+  delayMs = 1_000,
 ): Promise<{ succeeded: number; failed: number }> => {
   let succeeded = 0;
   let failed = 0;

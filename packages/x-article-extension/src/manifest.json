@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "yt2x X Articles Markdown Import",
+  "name": "X 100",
   "version": "0.2.0",
-  "description": "Import local Markdown into the current X Articles draft editor.",
+  "description": "将本地 Markdown 导入 X Articles 草稿编辑器。Import local Markdown into the X Articles draft editor.",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",

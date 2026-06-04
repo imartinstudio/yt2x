@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Chrome MV3 extension to import Markdown into X Articles draft editor.",
+  "description": "Chrome MV3 extension to import Markdown into X Articles draft editor. 将本地 Markdown 导入 X Articles 草稿编辑器。",
   "scripts": {
     "build": "node ./build.mjs",
     "typecheck": "tsc --noEmit",

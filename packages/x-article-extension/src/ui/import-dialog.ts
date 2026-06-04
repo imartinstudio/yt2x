@@ -10,6 +10,7 @@ import type { PreparedArticleImport } from "../files/prepare-import.js";
 export type ImportPreview = {
   title: string;
   coverImage: string | null;
+  coverObjectUrl?: string;
   contentImageCount: number;
   contentVideoCount: number;
   adaptations: AdaptArticleForXResult["adaptations"];
@@ -248,9 +249,9 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   };
 
   const hasMissing = preview.missingSources.length > 0;
+  const hasCoverPreview = Boolean(preview.coverObjectUrl);
 
   const detailParts: string[] = [];
-  if (preview.coverImage) detailParts.push(`Cover: ${preview.coverImage}`);
   if (preview.contentImageCount > 0) detailParts.push(`${preview.contentImageCount} images`);
   if (preview.contentVideoCount > 0) detailParts.push(`${preview.contentVideoCount} videos`);
   if (preview.adaptations.length > 0) detailParts.push(`${preview.adaptations.length} adaptations`);
@@ -289,6 +290,20 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   @keyframes yt-enter {
     from { opacity: 0; transform: scale(0.95) translateY(8px); }
     to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .cover-preview {
+    aspect-ratio: 2/1;
+    border-radius: 10px;
+    overflow: hidden;
+    background: ${c.surface};
+  }
+  .cover-preview img {
+    width: 100%; height: 100%; object-fit: cover;
+  }
+  .cover-preview-placeholder {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 100%; gap: 4px; color: ${c.muted}; font-size: 11px;
   }
 
   .article-title {
@@ -386,6 +401,8 @@ const renderDialogHtml = (preview: ImportPreview): string => {
 
 <div class="backdrop" role="dialog" aria-modal="true" aria-label="Import">
   <div class="panel">
+
+    ${hasCoverPreview ? `<div class="cover-preview"><img src="${escapeHtml(preview.coverObjectUrl!)}" alt="" /></div>` : ""}
 
     <h2 class="article-title">${escapeHtml(preview.title)}</h2>
 

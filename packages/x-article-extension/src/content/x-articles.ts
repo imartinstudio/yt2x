@@ -19,6 +19,7 @@ import {
   showImportError,
   showImportPreviewDialog,
   showImportSuccessToast,
+  type ImportPreview,
 } from "../ui/import-dialog.js";
 import {
   extensionInvalidatedUserMessage,
@@ -187,27 +188,45 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
 
+    let coverBlobUrl: string | undefined;
+
+    const buildPreview = (): ImportPreview => {
+      // Revoke previous blob URL to avoid memory leaks
+      if (coverBlobUrl) URL.revokeObjectURL(coverBlobUrl);
+      coverBlobUrl = undefined;
+
+      const preview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
+      if (preview.coverImage) {
+        const coverFile = registry.getUploadable(
+          registry.resolveMediaPath(preview.coverImage),
+        );
+        if (coverFile) {
+          coverBlobUrl = URL.createObjectURL(coverFile);
+          preview.coverObjectUrl = coverBlobUrl;
+        }
+      }
+      return preview;
+    };
+
     subscriptionTier = await loadSubscriptionTier();
-    const dialog = await showImportPreviewDialog(
-      buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry }),
-      {
-        onPickDirectory: async () => {
-          const files = await pickMediaDirectory();
-          if (files.length > 0) {
-            authorizedFiles = [...authorizedFiles, ...files];
-            registry = buildMediaRegistry({ markdown, authorizedFiles });
-          }
-          subscriptionTier = await loadSubscriptionTier();
-          return buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
-        },
-        onPickFiles: async () => {
-          const files = await pickSupplementalMedia();
-          if (files.length > 0) {
-            authorizedFiles = [...authorizedFiles, ...files];
-            registry = buildMediaRegistry({ markdown, authorizedFiles });
-          }
-          subscriptionTier = await loadSubscriptionTier();
-          return buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
+    const dialog = await showImportPreviewDialog(buildPreview(), {
+      onPickDirectory: async () => {
+        const files = await pickMediaDirectory();
+        if (files.length > 0) {
+          authorizedFiles = [...authorizedFiles, ...files];
+          registry = buildMediaRegistry({ markdown, authorizedFiles });
+        }
+        subscriptionTier = await loadSubscriptionTier();
+        return buildPreview();
+      },
+      onPickFiles: async () => {
+        const files = await pickSupplementalMedia();
+        if (files.length > 0) {
+          authorizedFiles = [...authorizedFiles, ...files];
+          registry = buildMediaRegistry({ markdown, authorizedFiles });
+        }
+        subscriptionTier = await loadSubscriptionTier();
+          return buildPreview();
         },
       },
     );

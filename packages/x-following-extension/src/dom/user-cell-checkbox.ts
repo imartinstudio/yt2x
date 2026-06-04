@@ -333,15 +333,11 @@ export const syncCheckboxOnCell = (
   if (handle === null) return;
   const shouldCheck = selectedHandles.has(handle);
   const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
-  const recycled = input.dataset.xfmHandle !== handle;
-  if (recycled) input.dataset.xfmHandle = handle;
+  if (input.dataset.xfmHandle !== handle) input.dataset.xfmHandle = handle;
   if (input.checked !== shouldCheck) {
     input.checked = shouldCheck;
     const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
-    if (visual) {
-      // 虚拟列表回收时无动画更新，避免前一用户的勾选态闪烁
-      if (recycled) updateVisualSpanInstant(visual, input.checked);
-      else updateVisualSpan(visual, input.checked);
-    }
+    // 程序化同步一律无动画，仅用户点击保留弹性动画
+    if (visual) updateVisualSpanInstant(visual, input.checked);
   }
 };

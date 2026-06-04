@@ -4,14 +4,15 @@
  * Inspired by Draft.js integration patterns used in X Articles import extensions.
  */
 (() => {
-  if ((window as unknown as { __YT2X_DRAFT_WRITER__?: boolean }).__YT2X_DRAFT_WRITER__ === true) {
+  const WRITER_INSTANCE_KEY = "__YT2X_DRAFT_WRITER_V2__";
+  if ((window as unknown as Record<string, boolean | undefined>)[WRITER_INSTANCE_KEY] === true) {
     return;
   }
-  (window as unknown as { __YT2X_DRAFT_WRITER__?: boolean }).__YT2X_DRAFT_WRITER__ = true;
+  (window as unknown as Record<string, boolean | undefined>)[WRITER_INSTANCE_KEY] = true;
 
   const LOG = "[yt2x MAIN]";
-  const CHANNEL_TO_MAIN = "yt2x-content";
-  const CHANNEL_FROM_MAIN = "yt2x-main";
+  const CHANNEL_TO_MAIN = "yt2x-content-v2";
+  const CHANNEL_FROM_MAIN = "yt2x-main-v2";
   const EDITOR_SELECTOR =
     "[data-contents='true'] [contenteditable='true'], [contenteditable='true'][role='textbox'], [contenteditable='true'].public-DraftEditor-content, [contenteditable='true']";
   const MEDIA_UPLOAD_BASE_TIMEOUT_MS = 90_000;
@@ -116,22 +117,140 @@
     return null;
   };
 
-  const findDraftStateNode = (): any | null => {
-    const editor = findEditorElement();
-    if (editor === null) return null;
-    const fiberKey = Object.keys(editor).find(
+  const isTitleFieldHint = (hint: string): boolean =>
+    /添加标题|add\s*a\s*title|article\s*title/iu.test(hint);
+
+  const findTitleElement = (): HTMLElement | null => {
+    for (const element of document.querySelectorAll(
+      '[data-placeholder],[placeholder],[aria-label],[contenteditable="true"],[role="textbox"]',
+    )) {
+      if (!(element instanceof HTMLElement)) continue;
+      if (element.closest('[role="dialog"]') !== null) continue;
+      const hint =
+        element.getAttribute("data-placeholder") ??
+        element.getAttribute("placeholder") ??
+        element.getAttribute("aria-label") ??
+        "";
+      if (!isTitleFieldHint(hint)) continue;
+      const editable = element.closest('[contenteditable="true"],[role="textbox"]') ?? element;
+      if (editable instanceof HTMLElement) return editable;
+    }
+
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (!(node instanceof Text) || node.data.trim() !== "添加标题") continue;
+      const editable = node.parentElement?.closest('[contenteditable="true"],[role="textbox"]');
+      if (editable instanceof HTMLElement && editable.closest('[role="dialog"]') === null) return editable;
+    }
+    return null;
+  };
+
+  const reactFiberFromElement = (element: HTMLElement): any | null => {
+    const fiberKey = Object.keys(element).find(
       (key) => key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$"),
     );
-    if (fiberKey === undefined) return null;
-    let fiber = (editor as unknown as Record<string, unknown>)[fiberKey] as any;
+    return fiberKey === undefined ? null : (element as unknown as Record<string, unknown>)[fiberKey];
+  };
+
+  const draftNodeFromFiber = (startFiber: any): any | null => {
+    let fiber = startFiber;
     for (let depth = 0; depth < 80 && fiber; depth += 1) {
       const stateNode = fiber.stateNode;
       if (stateNode?.props?.editorState && typeof stateNode.props.onChange === "function") {
         return stateNode;
       }
+      const memoizedProps = fiber.memoizedProps;
+      if (memoizedProps?.editorState && typeof memoizedProps.onChange === "function") {
+        return { props: memoizedProps };
+      }
+      const pendingProps = fiber.pendingProps;
+      if (pendingProps?.editorState && typeof pendingProps.onChange === "function") {
+        return { props: pendingProps };
+      }
       fiber = fiber.return;
     }
     return null;
+  };
+
+  const findDraftStateNodeForElement = (editor: HTMLElement | null): any | null => {
+    let current: HTMLElement | null = editor;
+    for (let hops = 0; hops < 8 && current !== null; hops += 1) {
+      const direct = draftNodeFromFiber(reactFiberFromElement(current));
+      if (direct !== null) return direct;
+      current = current.parentElement;
+    }
+    return null;
+  };
+
+  const findDraftStateNode = (): any | null => findDraftStateNodeForElement(findEditorElement());
+
+  const findTitleDraftStateNode = (): any | null => findDraftStateNodeForElement(findTitleElement());
+
+  const readTitleText = (field: HTMLElement): string => {
+    if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) {
+      return field.value.replace(/\u200b/gu, "").trim();
+    }
+    return (field.innerText ?? field.textContent ?? "").replace(/\u200b/gu, "").trim();
+  };
+
+  const selectElementContents = (element: HTMLElement): void => {
+    element.focus();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  };
+
+  const dispatchTextInputEvents = (element: HTMLElement, title: string): void => {
+    try {
+      element.dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: title,
+        }),
+      );
+    } catch {
+      // Older page contexts may not allow constructing InputEvent with data.
+    }
+    element.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: title,
+      }),
+    );
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+
+  const writeTitleDom = (title: string): { ok: boolean; error?: string } => {
+    const normalizedTitle = String(title || "").trim();
+    if (normalizedTitle.length === 0) return { ok: true };
+
+    const field = findTitleElement();
+    if (field === null) return { ok: false, error: "X Articles title field was not reachable" };
+
+    if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) {
+      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")?.set;
+      if (setter !== undefined) setter.call(field, normalizedTitle);
+      else field.value = normalizedTitle;
+      dispatchTextInputEvents(field, normalizedTitle);
+      const ok = readTitleText(field).includes(normalizedTitle);
+      return { ok, ...(ok ? {} : { error: "X Articles title DOM input did not retain content" }) };
+    }
+
+    selectElementContents(field);
+    const inserted = document.execCommand("insertText", false, normalizedTitle);
+    if (!inserted || !readTitleText(field).includes(normalizedTitle)) {
+      field.textContent = normalizedTitle;
+    }
+    dispatchTextInputEvents(field, normalizedTitle);
+    field.blur();
+    const ok = readTitleText(field).includes(normalizedTitle);
+    return { ok, ...(ok ? {} : { error: "X Articles title DOM editor did not retain content" }) };
   };
 
   const findOnFilesAdded = (): ((files: File[]) => void) | null => {
@@ -294,6 +413,58 @@
     let nextEditorState = EditorState.push(editorState, nextState, "insert-fragment");
     nextEditorState = EditorState.moveSelectionToEnd(nextEditorState);
     draftNode.props.onChange(nextEditorState);
+    return { ok: true };
+  };
+
+  const writeTitleDraftState = (title: string, fallbackSampleNode: any | null): { ok: boolean; error?: string } => {
+    const normalizedTitle = String(title || "").trim();
+    if (normalizedTitle.length === 0) return { ok: true };
+
+    const titleNode = findTitleDraftStateNode();
+    if (!titleNode) return writeTitleDom(normalizedTitle);
+
+    const editorState = titleNode.props.editorState;
+    const EditorState = editorState.constructor;
+    const SelectionState = editorState.getSelection().constructor;
+    const contentState = editorState.getCurrentContent();
+    const blockMap = contentState.getBlockMap();
+    const titleBlock = blockMap.first?.() || blockMap.valueSeq?.().first?.();
+    if (!titleBlock) return { ok: false, error: "X Articles title block was not reachable" };
+
+    const sample =
+      findDraftCharacterSample(titleNode) ||
+      (fallbackSampleNode ? findDraftCharacterSample(fallbackSampleNode) : null);
+    let sampleCharacter = sample?.character;
+
+    const CharacterList = sample?.block?.getCharacterList?.().constructor ?? titleBlock.getCharacterList().constructor;
+    if (!sampleCharacter?.set) {
+      const CharacterMetadata = titleBlock.getCharacterList?.()?.constructor?.of?.({})?.first?.()?.constructor;
+      sampleCharacter = CharacterMetadata?.create?.({}) ?? null;
+    }
+    if (!sampleCharacter?.set) return writeTitleDom(normalizedTitle);
+    const style = sampleCharacter.getStyle?.().clear?.() ?? sampleCharacter.getStyle?.();
+    const character = style ? sampleCharacter.set("style", style).set("entity", null) : sampleCharacter.set("entity", null);
+    const characterList = CharacterList(Array.from({ length: normalizedTitle.length }, () => character));
+    const nextBlock = titleBlock.merge({
+      text: normalizedTitle,
+      type: titleBlock.getType?.() || "unstyled",
+      characterList,
+      depth: 0,
+      data: titleBlock.getData?.()?.clear?.() || titleBlock.getData?.(),
+    });
+    const nextBlockMap = blockMap.clear().set(titleBlock.getKey(), nextBlock);
+    const selection = SelectionState.createEmpty(titleBlock.getKey()).merge({
+      anchorOffset: normalizedTitle.length,
+      focusOffset: normalizedTitle.length,
+    });
+    const nextContent = contentState
+      .set("blockMap", nextBlockMap)
+      .set("selectionBefore", selection)
+      .set("selectionAfter", selection);
+    let nextEditorState = EditorState.push(editorState, nextContent, "insert-characters");
+    nextEditorState = EditorState.forceSelection(nextEditorState, selection);
+    titleNode.props.onChange(nextEditorState);
+    writeTitleDom(normalizedTitle);
     return { ok: true };
   };
 
@@ -848,6 +1019,9 @@
       pasteHtml(payload.html, payload.plain);
     }
 
+    const titleResult = writeTitleDraftState(payload.title || "", draftNode);
+    if (!titleResult.ok) console.warn(LOG, "title write failed", titleResult.error);
+
     draftNode = (await waitForDraftMarkers(payload.markerPrefix, payload.plan.length)) || draftNode;
     if (!draftNode) throw new Error("X Draft.js editor was not reachable after writing Markdown");
     await sleep(150);
@@ -928,6 +1102,8 @@
     draftNode = findDraftStateNode() || draftNode;
     summary.markersCleaned = cleanupMarkers(draftNode, payload.markerPrefix);
     kickRender(draftNode);
+    const finalTitleResult = writeTitleDraftState(payload.title || "", draftNode);
+    if (!finalTitleResult.ok) console.warn(LOG, "final title write failed", finalTitleResult.error);
     await sleep(250);
     throwIfCancelled();
     post("done", { summary });

@@ -3,12 +3,10 @@ const FOLLOWS_YOU_INDICATOR = '[data-testid="userFollowIndicator"]';
 const UNFOLLOW_BUTTON_SELECTOR = '[data-testid$="-unfollow"]';
 const CONFIRM_UNFOLLOW_SELECTOR = '[data-testid="confirmationSheetConfirm"]';
 const FILTER_STYLE_ID = "xfm-following-filter-style";
-
-export const FILTER_ATTR = "data-xfm-follow-filter";
-export const CHECKBOX_WRAP_ATTR = "data-xfm-follow-select-wrap";
-export const CHECKBOX_INPUT_ATTR = "data-xfm-follow-select-input";
+const FILTER_HTML_ATTR = "data-xfm-filter";
 
 const FOLLOWS_YOU_LABELS = /^(Follows you|关注了你)$/u;
+const HANDLE_FROM_HREF = /^\/@?([A-Za-z0-9_]+)\/?$/u;
 
 const RESERVED_HANDLES = new Set([
   "home",
@@ -23,34 +21,36 @@ const RESERVED_HANDLES = new Set([
 
 export type FollowingFilterMode = "all" | "one-way";
 
-export const isFollowingListPage = (pathname: string): boolean =>
-  /\/following\/?$/u.test(pathname);
+export {
+  followingPageUserKey as followingListUsername,
+  isFollowingListPage,
+  isOwnFollowingListPage,
+  readLoggedInUserKey,
+} from "./x-session.js";
 
-export const followingListUsername = (pathname: string): string | null => {
-  const match = pathname.match(/^\/([^/]+)\/following\/?$/u);
-  return match?.[1]?.toLowerCase() ?? null;
+const filterCss = (mode: FollowingFilterMode): string => {
+  if (mode !== "one-way") return "";
+  return `html[${FILTER_HTML_ATTR}="one-way"] [data-testid="UserCell"]:has(${FOLLOWS_YOU_INDICATOR}){display:none!important}`;
 };
 
-export const isOwnFollowingListPage = (
-  pathname: string,
-  loggedInUsername: string | null,
-): boolean => {
-  if (!isFollowingListPage(pathname)) return false;
-  const pageUser = followingListUsername(pathname);
-  if (pageUser === null || loggedInUsername === null) return false;
-  return pageUser === loggedInUsername.toLowerCase();
-};
-
-export const ensureFollowingFilterStyles = (): void => {
-  if (document.getElementById(FILTER_STYLE_ID) !== null) return;
-  const style = document.createElement("style");
-  style.id = FILTER_STYLE_ID;
-  style.textContent = `[data-testid="UserCell"][${FILTER_ATTR}="hidden"]{display:none!important}`;
-  document.head.append(style);
+export const setFollowingFilterMode = (mode: FollowingFilterMode): void => {
+  let style = document.getElementById(FILTER_STYLE_ID) as HTMLStyleElement | null;
+  if (style === null) {
+    style = document.createElement("style");
+    style.id = FILTER_STYLE_ID;
+    document.head.append(style);
+  }
+  style.textContent = filterCss(mode);
+  if (mode === "one-way") {
+    document.documentElement.setAttribute(FILTER_HTML_ATTR, "one-way");
+  } else {
+    document.documentElement.removeAttribute(FILTER_HTML_ATTR);
+  }
 };
 
 export const removeFollowingFilterStyles = (): void => {
   document.getElementById(FILTER_STYLE_ID)?.remove();
+  document.documentElement.removeAttribute(FILTER_HTML_ATTR);
 };
 
 export const userCellFollowsYou = (cell: Element): boolean => {
@@ -62,85 +62,49 @@ export const userCellFollowsYou = (cell: Element): boolean => {
 
 export const shouldShowOneWayFollowCell = (cell: Element): boolean => !userCellFollowsYou(cell);
 
-export const shouldShowUserCell = (cell: Element, mode: FollowingFilterMode): boolean =>
-  mode === "all" ? true : shouldShowOneWayFollowCell(cell);
-
-export const filterVisibilityToken = (
+export const shouldShowCheckboxOnCell = (
   cell: Element,
   mode: FollowingFilterMode,
-): "shown" | "hidden" | "cleared" => {
-  if (mode === "all") return "cleared";
-  return shouldShowUserCell(cell, mode) ? "shown" : "hidden";
+): boolean => (mode === "all" ? true : shouldShowOneWayFollowCell(cell));
+
+const parseHandleFromHref = (href: string): string | null => {
+  const path = href.split("?")[0]?.split("#")[0] ?? "";
+  const match = path.match(HANDLE_FROM_HREF);
+  if (match === null) return null;
+  const handle = match[1].toLowerCase();
+  if (RESERVED_HANDLES.has(handle)) return null;
+  return handle;
 };
 
-export const isUserCellVisible = (cell: HTMLElement): boolean =>
-  cell.getAttribute(FILTER_ATTR) !== "hidden";
-
 export const extractUserCellHandle = (cell: Element): string | null => {
+  const frequency = new Map<string, number>();
   for (const link of cell.querySelectorAll('a[href^="/"]')) {
-    const href = link.getAttribute("href") ?? "";
-    const match = href.match(/^\/([A-Za-z0-9_]+)\/?$/u);
-    if (match === null) continue;
-    const handle = match[1].toLowerCase();
-    if (RESERVED_HANDLES.has(handle)) continue;
-    return handle;
+    const handle = parseHandleFromHref(link.getAttribute("href") ?? "");
+    if (handle !== null) {
+      frequency.set(handle, (frequency.get(handle) ?? 0) + 1);
+    }
   }
-  return null;
+  if (frequency.size === 0) return null;
+  // 返回出现频率最高的 handle（profile handle 出现在头像+名称处，次数 > bio 中 @ 引用）
+  return [...frequency.entries()].sort((a, b) => b[1] - a[1])[0][0];
 };
 
 export const findUnfollowButton = (cell: Element): HTMLElement | null =>
   cell.querySelector<HTMLElement>(UNFOLLOW_BUTTON_SELECTOR);
 
-export const applyFollowingListFilterToCell = (
-  cell: HTMLElement,
-  mode: FollowingFilterMode,
-): boolean => {
-  const token = filterVisibilityToken(cell, mode);
-  const current = cell.getAttribute(FILTER_ATTR);
-  if (token === "cleared") {
-    if (current === null && cell.style.display === "") return false;
-    cell.removeAttribute(FILTER_ATTR);
-    cell.style.removeProperty("display");
-    return true;
-  }
-  if (current === token) return false;
-  cell.setAttribute(FILTER_ATTR, token);
-  cell.style.removeProperty("display");
-  if (token === "hidden") {
-    const input = cell.querySelector<HTMLInputElement>(`[${CHECKBOX_INPUT_ATTR}]`);
-    if (input !== null) input.checked = false;
-  }
-  return true;
-};
-
-export const applyFollowingListFilter = (
-  mode: FollowingFilterMode,
-  root: ParentNode = document,
-  cells: HTMLElement[] | null = null,
-): number => {
-  ensureFollowingFilterStyles();
-  let changed = 0;
-  const targets = cells ?? listUserCells(root);
-  for (const cell of targets) {
-    if (applyFollowingListFilterToCell(cell, mode)) changed += 1;
-  }
-  return changed;
-};
-
-export const clearFollowingListFilter = (root: ParentNode = document): void => {
-  for (const cell of root.querySelectorAll(`${USER_CELL_SELECTOR}[${FILTER_ATTR}]`)) {
-    const htmlCell = cell as HTMLElement;
-    htmlCell.removeAttribute(FILTER_ATTR);
-    htmlCell.style.removeProperty("display");
-  }
-  removeFollowingFilterStyles();
-};
-
 export const listUserCells = (root: ParentNode = document): HTMLElement[] =>
   [...root.querySelectorAll<HTMLElement>(USER_CELL_SELECTOR)];
 
-export const listVisibleUserCells = (root: ParentNode = document): HTMLElement[] =>
-  listUserCells(root).filter(isUserCellVisible);
+export const findUserCellByHandle = (
+  handle: string,
+  root: ParentNode = document,
+): HTMLElement | null => {
+  const normalized = handle.toLowerCase();
+  for (const cell of listUserCells(root)) {
+    if (extractUserCellHandle(cell) === normalized) return cell;
+  }
+  return null;
+};
 
 export const collectUserCellsFromNode = (node: Node, bucket: HTMLElement[]): void => {
   if (!(node instanceof Element)) return;
@@ -151,91 +115,6 @@ export const collectUserCellsFromNode = (node: Node, bucket: HTMLElement[]): voi
   for (const cell of node.querySelectorAll<HTMLElement>(USER_CELL_SELECTOR)) {
     bucket.push(cell);
   }
-};
-
-export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
-  const existing = cell.querySelector<HTMLInputElement>(`[${CHECKBOX_INPUT_ATTR}]`);
-  if (existing !== null) return existing;
-
-  const wrap = document.createElement("label");
-  wrap.setAttribute(CHECKBOX_WRAP_ATTR, "true");
-  wrap.style.cssText =
-    "display:flex;align-items:flex-start;gap:12px;width:100%;cursor:pointer;box-sizing:border-box;padding:0 4px 0 0";
-
-  const input = document.createElement("input");
-  input.type = "checkbox";
-  input.setAttribute(CHECKBOX_INPUT_ATTR, "true");
-  input.style.cssText =
-    "margin:18px 0 0;width:18px;height:18px;flex:0 0 auto;cursor:pointer;accent-color:rgb(29,155,240)";
-
-  const content = document.createElement("div");
-  content.style.cssText = "flex:1 1 auto;min-width:0";
-
-  while (cell.firstChild !== null) {
-    content.append(cell.firstChild);
-  }
-
-  wrap.append(input, content);
-  cell.append(wrap);
-  return input;
-};
-
-export const removeUserCellCheckboxes = (root: ParentNode = document): void => {
-  for (const cell of listUserCells(root)) {
-    const wrap = cell.querySelector(`[${CHECKBOX_WRAP_ATTR}]`);
-    if (wrap === null) continue;
-    const content = wrap.querySelector("div");
-    if (content !== null) {
-      while (content.firstChild !== null) {
-        cell.append(content.firstChild);
-      }
-    }
-    wrap.remove();
-  }
-};
-
-export const getSelectedHandles = (root: ParentNode = document): string[] => {
-  const handles: string[] = [];
-  for (const cell of listVisibleUserCells(root)) {
-    const input = cell.querySelector<HTMLInputElement>(`[${CHECKBOX_INPUT_ATTR}]`);
-    if (input?.checked !== true) continue;
-    const handle = extractUserCellHandle(cell);
-    if (handle !== null) handles.push(handle);
-  }
-  return handles;
-};
-
-export const setAllVisibleChecked = (checked: boolean, root: ParentNode = document): void => {
-  for (const cell of listVisibleUserCells(root)) {
-    const input = ensureUserCellCheckbox(cell);
-    input.checked = checked;
-  }
-};
-
-export const syncCheckboxOnCell = (
-  cell: HTMLElement,
-  selectedHandles: ReadonlySet<string>,
-): boolean => {
-  const input = ensureUserCellCheckbox(cell);
-  const handle = extractUserCellHandle(cell);
-  const nextChecked =
-    handle !== null && selectedHandles.has(handle) && isUserCellVisible(cell);
-  if (input.checked === nextChecked) return false;
-  input.checked = nextChecked;
-  return true;
-};
-
-export const syncCheckboxSelection = (
-  selectedHandles: ReadonlySet<string>,
-  root: ParentNode = document,
-  cells: HTMLElement[] | null = null,
-): number => {
-  let changed = 0;
-  const targets = cells ?? listUserCells(root);
-  for (const cell of targets) {
-    if (syncCheckboxOnCell(cell, selectedHandles)) changed += 1;
-  }
-  return changed;
 };
 
 const sleep = (ms: number): Promise<void> =>
@@ -274,7 +153,7 @@ export type UnfollowBatchProgress = {
 export const unfollowSelectedCells = async (
   cells: HTMLElement[],
   onProgress: (progress: UnfollowBatchProgress) => void,
-  delayMs = 700,
+  delayMs = 1_000,
 ): Promise<{ succeeded: number; failed: number }> => {
   let succeeded = 0;
   let failed = 0;

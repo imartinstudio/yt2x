@@ -13,6 +13,7 @@ mkdirSync(dist, { recursive: true });
 await esbuild.build({
   entryPoints: {
     "content/following-manager": join(root, "src/content/following-manager.ts"),
+    "background/background": join(root, "src/background/background.ts"),
   },
   bundle: true,
   format: "iife",

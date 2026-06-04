@@ -48,4 +48,38 @@ describe("buildMainWorldWritePayload", () => {
     expect(payload.imageFiles).toHaveLength(1);
     expect(payload.imageFiles[0]?.fileName).toBe("scene.png");
   });
+
+  it("does not duplicate the document title as the first body heading", async () => {
+    const prepared = {
+      adapted: {
+        markdown: "# 标题\n\n正文。",
+        adaptations: [],
+        warnings: [],
+      },
+      parseResult: {
+        title: "标题",
+        coverImage: null,
+        contentImages: [],
+        contentCodeBlocks: [],
+        dividers: [],
+        html: "<p>正文。</p>",
+        htmlBlocks: ["<p>正文。</p>"],
+        totalBlocks: 1,
+      },
+      mediaRegistry: {
+        resolveMediaPath: (source: string) => source,
+        getUploadable: () => undefined,
+      },
+      generatedBlobs: new Map(),
+    } as unknown as PreparedArticleImport;
+
+    const payload = await buildMainWorldWritePayload(prepared);
+
+    expect(payload.title).toBe("标题");
+    expect(payload.blocks).toEqual([
+      { type: "unstyled", text: "正文。", inlineStyleRanges: [], links: [] },
+    ]);
+    expect(payload.html).toBe("<p>正文。</p>");
+    expect(payload.plain).toBe("正文。");
+  });
 });

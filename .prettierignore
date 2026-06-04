@@ -6,3 +6,4 @@ packages/adapters-node/scripts/
 pnpm-lock.yaml
 NOTICE
 .hermes/
+.superpowers/

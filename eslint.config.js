@@ -9,6 +9,7 @@ export default tseslint.config(
       "packages/x-article-extension/build.mjs",
       "packages/x-article-extension/scripts/**",
       "packages/x-following-extension/build.mjs",
+      "packages/x-following-extension/scripts/**",
       "**/node_modules/**",
       "**/*.tsbuildinfo",
       "files/downloads/**",

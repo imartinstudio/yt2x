@@ -621,13 +621,9 @@ export const mountFollowingToolbar = (
     }
   });
 
-  const confirmUnfollow = (loadedCount: number, totalSelected: number): Promise<boolean> =>
+  const confirmUnfollow = (_loadedCount: number, totalSelected: number): Promise<boolean> =>
     new Promise((resolve) => {
-      if (loadedCount < totalSelected) {
-        dialogDesc.innerHTML = `当前列表已加载 <b>${loadedCount}</b> 人（共选择 <b>${totalSelected}</b> 人）<br>确定取消关注这 <b>${loadedCount}</b> 个账号吗？<br><small style="color:var(--text-dim)">其余账号请滚动加载后再次操作</small>`;
-      } else {
-        dialogDesc.innerHTML = `将取消关注 <b>${loadedCount}</b> 个账号`;
-      }
+      dialogDesc.innerHTML = `将取消关注 <b>${totalSelected}</b> 个账号`;
       dialogResolve = resolve;
       dialogOverlay.classList.add("show");
     });

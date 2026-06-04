@@ -4,14 +4,15 @@
  * Inspired by Draft.js integration patterns used in X Articles import extensions.
  */
 (() => {
-  if ((window as unknown as { __YT2X_DRAFT_WRITER__?: boolean }).__YT2X_DRAFT_WRITER__ === true) {
+  const WRITER_INSTANCE_KEY = "__YT2X_DRAFT_WRITER_V2__";
+  if ((window as unknown as Record<string, boolean | undefined>)[WRITER_INSTANCE_KEY] === true) {
     return;
   }
-  (window as unknown as { __YT2X_DRAFT_WRITER__?: boolean }).__YT2X_DRAFT_WRITER__ = true;
+  (window as unknown as Record<string, boolean | undefined>)[WRITER_INSTANCE_KEY] = true;
 
   const LOG = "[yt2x MAIN]";
-  const CHANNEL_TO_MAIN = "yt2x-content";
-  const CHANNEL_FROM_MAIN = "yt2x-main";
+  const CHANNEL_TO_MAIN = "yt2x-content-v2";
+  const CHANNEL_FROM_MAIN = "yt2x-main-v2";
   const EDITOR_SELECTOR =
     "[data-contents='true'] [contenteditable='true'], [contenteditable='true'][role='textbox'], [contenteditable='true'].public-DraftEditor-content, [contenteditable='true']";
   const MEDIA_UPLOAD_BASE_TIMEOUT_MS = 90_000;
@@ -217,7 +218,8 @@
       if (setter !== undefined) setter.call(field, normalizedTitle);
       else field.value = normalizedTitle;
       dispatchTextInputEvents(field, normalizedTitle);
-      return { ok: readTitleText(field).includes(normalizedTitle), error: "X Articles title DOM input did not retain content" };
+      const ok = readTitleText(field).includes(normalizedTitle);
+      return { ok, ...(ok ? {} : { error: "X Articles title DOM input did not retain content" }) };
     }
 
     selectElementContents(field);
@@ -227,7 +229,8 @@
     }
     dispatchTextInputEvents(field, normalizedTitle);
     field.blur();
-    return { ok: readTitleText(field).includes(normalizedTitle), error: "X Articles title DOM editor did not retain content" };
+    const ok = readTitleText(field).includes(normalizedTitle);
+    return { ok, ...(ok ? {} : { error: "X Articles title DOM editor did not retain content" }) };
   };
 
   const findOnFilesAdded = (): ((files: File[]) => void) | null => {

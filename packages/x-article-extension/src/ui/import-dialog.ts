@@ -263,6 +263,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   const mediaLines: MediaLine[] = [];
   if (preview.coverImage) mediaLines.push({ path: preview.coverImage, color: "#f59e0b" });
   for (const path of preview.contentImages) mediaLines.push({ path, color: "#10b981" });
+  for (const a of preview.adaptations) mediaLines.push({ path: a.message, color: "#8b5cf6" });
 
   const missingChips = preview.missingSources
     .map(

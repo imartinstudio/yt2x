@@ -167,10 +167,15 @@ export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
     mount.mountEl.setAttribute(CHECKBOX_ROW_ATTR, "true");
   }
 
+  // 读取 X UserCell 内部 padding 以动态对齐头像中心
+  const cellStyle = window.getComputedStyle(mount.userCell);
+  const cellPadTop = Number.parseFloat(cellStyle.paddingTop) || 0;
+
   const hit = document.createElement("label");
   hit.setAttribute(CHECKBOX_HIT_ATTR, "true");
   hit.setAttribute("aria-label", "选择此用户");
   hit.style.cssText = hitZoneStyle;
+  hit.style.top = `${cellPadTop}px`;
 
   const input = document.createElement("input");
   input.type = "checkbox";

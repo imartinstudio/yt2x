@@ -76,7 +76,6 @@ let pageActive = false;
 let toolbarGuardObserver: MutationObserver | null = null;
 let toolbarGuardTimer = 0;
 let checkboxGuardObserver: MutationObserver | null = null;
-let checkboxResyncTimer = 0;
 let scrollCheckboxResyncRaf = 0;
 let watchdogTimer = 0;
 
@@ -285,22 +284,20 @@ const stopToolbarGuard = (): void => {
 const stopCheckboxGuard = (): void => {
   checkboxGuardObserver?.disconnect();
   checkboxGuardObserver = null;
-  if (checkboxResyncTimer !== 0) {
-    window.cancelAnimationFrame(checkboxResyncTimer);
-    checkboxResyncTimer = 0;
-  }
+  lastCheckboxResyncAt = 0;
 };
+
+let lastCheckboxResyncAt = 0;
+const CHECKBOX_RESYNC_MIN_INTERVAL_MS = 16; // ~60fps
 
 const scheduleCheckboxResync = (): void => {
   if (busy) return;
-  // 用 rAF 替代 setTimeout：在同一帧内完成 checkbox 同步，消除 DOM 插入到勾选框出现的可见延迟
-  if (checkboxResyncTimer !== 0) return; // 已排入当前帧
-  checkboxResyncTimer = window.requestAnimationFrame(() => {
-    checkboxResyncTimer = 0;
-    applySelectionToViewportCells(selectedHandles, filterMode);
-    lastSyncAt = 0;
-    syncViewportCheckboxes(true);
-  });
+  const now = Date.now();
+  if (now - lastCheckboxResyncAt < CHECKBOX_RESYNC_MIN_INTERVAL_MS) return;
+  lastCheckboxResyncAt = now;
+  applySelectionToViewportCells(selectedHandles, filterMode);
+  lastSyncAt = 0;
+  syncViewportCheckboxes(true);
 };
 
 const startCheckboxGuard = (): void => {
@@ -576,10 +573,6 @@ const installPassiveSyncTriggers = (): void => {
     "scroll",
     () => {
       refreshToolbarStickyTop();
-      // 立即同步已有 checkbox 的状态（不创建新 checkbox，不做 debounce）
-      if (pageActive && !busy) {
-        applySelectionToViewportCells(selectedHandles, filterMode);
-      }
       scheduleSync(false);
     },
     { passive: true, capture: true },

@@ -254,9 +254,10 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   const hasMissing = preview.missingSources.length > 0;
   const hasCoverPreview = Boolean(preview.coverObjectUrl);
 
-  const mediaLines: string[] = [];
-  if (preview.coverImage) mediaLines.push(preview.coverImage);
-  for (const path of preview.contentImages) mediaLines.push(path);
+  type MediaLine = { path: string; color: string };
+  const mediaLines: MediaLine[] = [];
+  if (preview.coverImage) mediaLines.push({ path: preview.coverImage, color: "#f59e0b" });
+  for (const path of preview.contentImages) mediaLines.push({ path, color: "#10b981" });
 
   const missingChips = preview.missingSources
     .map(
@@ -329,9 +330,14 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     display: flex; flex-direction: column; gap: 3px;
   }
   .media-item {
+    display: flex; align-items: baseline; gap: 8px;
     font-size: 12px; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
     color: ${c.muted}; line-height: 1.6;
     word-break: break-all;
+  }
+  .media-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    flex-shrink: 0;
   }
 
   .divider {
@@ -426,7 +432,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     <div class="panel-body">
       <h2 class="article-title">${escapeHtml(preview.title)}</h2>
 
-      ${mediaLines.length > 0 ? `<p class="section-label">Media</p><div class="media-list">${mediaLines.map((p) => `<span class="media-item">${escapeHtml(p)}</span>`).join("")}</div>` : ""}
+      ${mediaLines.length > 0 ? `<p class="section-label">Media</p><div class="media-list">${mediaLines.map((m) => `<div class="media-item"><span class="media-dot" style="background:${m.color}"></span><span>${escapeHtml(m.path)}</span></div>`).join("")}</div>` : ""}
 
       ${hasMissing ? `<div class="missing-section">
         <p class="missing-header">Missing</p>

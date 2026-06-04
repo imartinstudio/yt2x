@@ -11,13 +11,9 @@ const CHECKBOX_RESERVE_STYLE_ID = "xfm-checkbox-reserve-style";
 const CHECKBOX_THEME_STYLE_ID = "xfm-checkbox-theme-style";
 
 /**
- * 程序化同步标记 — 当 syncCheckboxOnCell 等批量操作设置 input.checked 时设为 true，
- * 防止触发的 change 事件意外修改 selectedHandles 导致已选计数闪烁。
+ * Per-input 同步标记 — 通过 dataset.xfmSyncing 区分程序化同步和用户点击，
+ * 避免同步期间批量变更意外修改 selectedHandles 导致闪烁。
  */
-export let _checkboxSyncInProgress = false;
-export const setCheckboxSyncInProgress = (value: boolean): void => {
-  _checkboxSyncInProgress = value;
-};
 
 /** 注入勾选框配色 CSS 变量，跟随系统深/浅模式。 */
 export const injectCheckboxTheme = (): void => {
@@ -338,9 +334,8 @@ export const applyCheckboxChangeToSelection = (
     }
   }
 
-  // 程序化同步期间（syncCheckboxOnCell 等）不要修改 selectedHandles，
-  // 避免批量设置 input.checked 触发的 change 事件意外修改选择集导致 UI 闪烁
-  if (_checkboxSyncInProgress) return;
+  // Per-input 标记：程序化同步时跳过 selectedHandles 修改，但用户点击不受影响
+  if (input.dataset.xfmSyncing === "true") return;
 
   if (input.checked) selectedHandles.add(handle);
   else selectedHandles.delete(handle);
@@ -355,7 +350,11 @@ const setCellsChecked = (
     const mount = resolveUserCellMount(cell);
     const handle = normalizeHandle(extractUserCellHandle(mount.userCell));
     const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
-    if (input.checked !== checked) input.checked = checked;
+    if (input.checked !== checked) {
+      input.dataset.xfmSyncing = "true";
+      input.checked = checked;
+      delete input.dataset.xfmSyncing;
+    }
     // 同步视觉 span
     const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
     if (visual) updateVisualSpan(visual, input.checked);
@@ -397,7 +396,9 @@ export const applySelectionToViewportCells = (
     if (input === null) continue;
     const shouldCheck = selectedHandles.has(handle);
     if (input.checked !== shouldCheck) {
+      input.dataset.xfmSyncing = "true";
       input.checked = shouldCheck;
+      delete input.dataset.xfmSyncing;
       const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
       if (visual) updateVisualSpanInstant(visual, input.checked);
     }
@@ -417,7 +418,9 @@ export const syncCheckboxOnCell = (
   const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
   if (input.dataset.xfmHandle !== handle) input.dataset.xfmHandle = handle;
   if (input.checked !== shouldCheck) {
+    input.dataset.xfmSyncing = "true";
     input.checked = shouldCheck;
+    delete input.dataset.xfmSyncing;
     const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
     if (visual) updateVisualSpanInstant(visual, input.checked);
   }

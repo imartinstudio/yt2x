@@ -69,17 +69,18 @@ const updateVisualSpanInstant = (span: HTMLSpanElement, checked: boolean): void 
   span.style.transition = "all 0.15s cubic-bezier(0.34,1.56,0.64,1)";
 };
 
+const HIT_ZONE_HEIGHT_PX = 48;
+
 const hitZoneStyle = [
   "position:absolute",
   "left:0",
   "top:0",
-  "bottom:0",
   `width:${HIT_ZONE_WIDTH_PX}px`,
+  `height:${HIT_ZONE_HEIGHT_PX}px`,
   "margin:0",
   "display:flex",
-  "align-items:flex-start",
+  "align-items:center",
   "justify-content:center",
-  "padding-top:14px",
   "cursor:pointer",
   "z-index:2",
   "-webkit-tap-highlight-color:transparent",

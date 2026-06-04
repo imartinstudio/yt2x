@@ -23,6 +23,11 @@ export type ImportDialogResult =
   | { type: "pick-directory" }
   | { type: "pick-files" };
 
+export type ImportDialogCallbacks = {
+  onPickDirectory: () => Promise<ImportPreview>;
+  onPickFiles: () => Promise<ImportPreview>;
+};
+
 import {
   loadSubscriptionTier,
   saveSubscriptionTier,
@@ -60,16 +65,25 @@ export const buildImportPreviewState = (input: {
   };
 };
 
-export const showImportPreviewDialog = (preview: ImportPreview): Promise<ImportDialogResult> =>
+export const showImportPreviewDialog = (
+  preview: ImportPreview,
+  callbacks?: ImportDialogCallbacks,
+): Promise<ImportDialogResult> =>
   new Promise((resolve) => {
     const host = document.createElement("div");
     host.setAttribute("data-yt2x-import-dialog", "true");
     const shadow = host.attachShadow({ mode: "open" });
-    shadow.innerHTML = renderDialogHtml(preview);
+
+    let currentPreview = preview;
+
+    const render = (): void => {
+      shadow.innerHTML = renderDialogHtml(currentPreview);
+      bindEvents();
+    };
 
     const readTier = (): XArticleSubscriptionTier => {
-      const tierInput = shadow.querySelector<HTMLSelectElement>("[name='subscription-tier']");
-      return tierInput?.value === "premium-plus" ? "premium-plus" : "premium";
+      const checked = shadow.querySelector<HTMLInputElement>("[name='subscription-tier']:checked");
+      return checked?.value === "premium-plus" ? "premium-plus" : "premium";
     };
 
     const close = (result: ImportDialogResult): void => {
@@ -77,26 +91,55 @@ export const showImportPreviewDialog = (preview: ImportPreview): Promise<ImportD
       resolve(result);
     };
 
-    shadow.querySelector("[data-action='cancel']")?.addEventListener("click", () => {
-      close({ type: "cancel" });
-    });
-    shadow.querySelector("[data-action='pick-directory']")?.addEventListener("click", () => {
-      void saveSubscriptionTier(readTier()).then(() => {
-        close({ type: "pick-directory" });
+    const bindEvents = (): void => {
+      shadow.querySelector("[data-action='cancel']")?.addEventListener("click", () => {
+        close({ type: "cancel" });
       });
-    });
-    shadow.querySelector("[data-action='pick-files']")?.addEventListener("click", () => {
-      void saveSubscriptionTier(readTier()).then(() => {
-        close({ type: "pick-files" });
-      });
-    });
-    shadow.querySelector("[data-action='confirm']")?.addEventListener("click", () => {
-      if (preview.missingSources.length > 0) return;
-      void saveSubscriptionTier(readTier()).then(() => {
-        close({ type: "confirm", subscriptionTier: readTier() });
-      });
-    });
 
+      const pickDirBtn = shadow.querySelector("[data-action='pick-directory']");
+      const pickFilesBtn = shadow.querySelector("[data-action='pick-files']");
+
+      if (callbacks) {
+        // Inline mode: dialog stays open, re-renders with updated preview
+        pickDirBtn?.addEventListener("click", async () => {
+          try {
+            currentPreview = await callbacks.onPickDirectory();
+            render();
+          } catch {
+            /* cancelled */
+          }
+        });
+        pickFilesBtn?.addEventListener("click", async () => {
+          try {
+            currentPreview = await callbacks.onPickFiles();
+            render();
+          } catch {
+            /* cancelled */
+          }
+        });
+      } else {
+        // Legacy mode: close dialog and let caller handle picking
+        pickDirBtn?.addEventListener("click", () => {
+          void saveSubscriptionTier(readTier()).then(() => {
+            close({ type: "pick-directory" });
+          });
+        });
+        pickFilesBtn?.addEventListener("click", () => {
+          void saveSubscriptionTier(readTier()).then(() => {
+            close({ type: "pick-files" });
+          });
+        });
+      }
+
+      shadow.querySelector("[data-action='confirm']")?.addEventListener("click", () => {
+        if (currentPreview.missingSources.length > 0) return;
+        void saveSubscriptionTier(readTier()).then(() => {
+          close({ type: "confirm", subscriptionTier: readTier() });
+        });
+      });
+    };
+
+    render();
     document.body.appendChild(host);
   });
 
@@ -304,15 +347,23 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   }
 
   .tier-row {
-    display: flex; align-items: center; justify-content: space-between;
+    display: flex; align-items: center; gap: 8px;
     font-size: 13px; color: ${c.muted};
   }
-  .tier-row select {
-    border: 1px solid ${c.border}; border-radius: 8px;
-    padding: 6px 28px 6px 12px; font-size: 13px;
-    background: ${c.surface}; color: ${c.text}; cursor: pointer;
-    appearance: none; -webkit-appearance: none;
+  .tier-label {
+    font-size: 13px; color: ${c.muted};
   }
+  .tier-option {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 13px; color: ${c.text}; cursor: pointer;
+    padding: 5px 12px; border-radius: 8px;
+    border: 1px solid ${c.border}; background: ${c.surface};
+    transition: border-color 120ms, background 120ms;
+  }
+  .tier-option:has(:checked) {
+    border-color: ${c.accent}; background: ${dark ? "rgba(59,130,246,0.12)" : "rgba(37,99,235,0.08)"};
+  }
+  .tier-option input { accent-color: ${c.accent}; }
 
   .actions {
     display: flex; gap: 10px; align-items: center;
@@ -379,11 +430,13 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     </div>
 
     <div class="tier-row">
-      订阅档位
-      <select name="subscription-tier">
-        <option value="premium">X Premium</option>
-        <option value="premium-plus">X Premium+</option>
-      </select>
+      <span class="tier-label">订阅档位</span>
+      <label class="tier-option">
+        <input type="radio" name="subscription-tier" value="premium" checked> Premium
+      </label>
+      <label class="tier-option">
+        <input type="radio" name="subscription-tier" value="premium-plus"> Premium+
+      </label>
     </div>
 
     <div class="actions">

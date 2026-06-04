@@ -187,34 +187,33 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
 
-    while (true) {
-      subscriptionTier = await loadSubscriptionTier();
-      const preview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
-      const dialog = await showImportPreviewDialog(preview);
+    subscriptionTier = await loadSubscriptionTier();
+    const dialog = await showImportPreviewDialog(
+      buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry }),
+      {
+        onPickDirectory: async () => {
+          const files = await pickMediaDirectory();
+          if (files.length > 0) {
+            authorizedFiles = [...authorizedFiles, ...files];
+            registry = buildMediaRegistry({ markdown, authorizedFiles });
+          }
+          subscriptionTier = await loadSubscriptionTier();
+          return buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
+        },
+        onPickFiles: async () => {
+          const files = await pickSupplementalMedia();
+          if (files.length > 0) {
+            authorizedFiles = [...authorizedFiles, ...files];
+            registry = buildMediaRegistry({ markdown, authorizedFiles });
+          }
+          subscriptionTier = await loadSubscriptionTier();
+          return buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
+        },
+      },
+    );
 
-      if (dialog.type === "cancel") return;
-
-      if (dialog.type === "pick-directory") {
-        const directoryFiles = await pickMediaDirectory();
-        if (directoryFiles.length > 0) {
-          authorizedFiles = [...authorizedFiles, ...directoryFiles];
-          registry = buildMediaRegistry({ markdown, authorizedFiles });
-        }
-        continue;
-      }
-
-      if (dialog.type === "pick-files") {
-        const supplemental = await pickSupplementalMedia();
-        if (supplemental.length > 0) {
-          authorizedFiles = [...authorizedFiles, ...supplemental];
-          registry = buildMediaRegistry({ markdown, authorizedFiles });
-        }
-        continue;
-      }
-
-      confirmedTier = dialog.subscriptionTier;
-      break;
-    }
+    if (dialog.type !== "confirm") return; // cancel or unreachable pick-* with callbacks
+    confirmedTier = dialog.subscriptionTier;
 
     let loading: ImportLoadingHandle | null = showImportLoading(
       mode === "new-draft" ? "正在新建草稿…" : "正在确认当前草稿…",

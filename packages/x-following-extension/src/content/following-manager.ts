@@ -47,7 +47,6 @@ declare global {
 
 const MIN_SYNC_INTERVAL_MS = 800;
 const SCROLL_SYNC_DEBOUNCE_MS = 50;
-const CHECKBOX_RESYNC_DEBOUNCE_MS = 50;
 const ACTIVATION_RETRY_MS = 500;
 const ACTIVATION_MAX_ATTEMPTS = 80;
 const TOOLBAR_GUARD_DEBOUNCE_MS = 150;
@@ -286,20 +285,21 @@ const stopCheckboxGuard = (): void => {
   checkboxGuardObserver?.disconnect();
   checkboxGuardObserver = null;
   if (checkboxResyncTimer !== 0) {
-    window.clearTimeout(checkboxResyncTimer);
+    window.cancelAnimationFrame(checkboxResyncTimer);
     checkboxResyncTimer = 0;
   }
 };
 
 const scheduleCheckboxResync = (): void => {
   if (busy) return;
-  if (checkboxResyncTimer !== 0) window.clearTimeout(checkboxResyncTimer);
-  checkboxResyncTimer = window.setTimeout(() => {
+  // 用 rAF 替代 setTimeout：在同一帧内完成 checkbox 同步，消除 DOM 插入到勾选框出现的可见延迟
+  if (checkboxResyncTimer !== 0) return; // 已排入当前帧
+  checkboxResyncTimer = window.requestAnimationFrame(() => {
     checkboxResyncTimer = 0;
     applySelectionToViewportCells(selectedHandles, filterMode);
     lastSyncAt = 0;
     syncViewportCheckboxes(true);
-  }, CHECKBOX_RESYNC_DEBOUNCE_MS);
+  });
 };
 
 const startCheckboxGuard = (): void => {

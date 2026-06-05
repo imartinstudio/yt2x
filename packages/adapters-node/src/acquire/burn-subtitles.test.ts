@@ -45,7 +45,7 @@ Overlaps with first
     expect(result.issues.some((i) => i.kind === "overlap")).toBe(true);
   });
 
-  it("flags empty text cues", async () => {
+  it("flags empty text cues as non-fatal warnings", async () => {
     const srtPath = await seedSrt(`1
 00:00:01,000 --> 00:00:03,000
 Hello
@@ -59,8 +59,11 @@ Hello
 After empty
 `);
     const result = await validateSrtIntegrity(srtPath);
-    expect(result.valid).toBe(false);
+    // Empty-text cues are non-fatal — they are silently skipped by the Python renderer.
+    expect(result.valid).toBe(true);
     expect(result.issues.some((i) => i.kind === "empty_text")).toBe(true);
+    // Fatal issue kinds should NOT be present
+    expect(result.issues.some((i) => i.kind === "overlap" || i.kind === "negative_duration" || i.kind === "no_cues")).toBe(false);
   });
 
   it("flags negative duration cues", async () => {

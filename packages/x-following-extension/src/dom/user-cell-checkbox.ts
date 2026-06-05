@@ -10,6 +10,11 @@ const HIT_ZONE_WIDTH_PX = 52;
 const CHECKBOX_RESERVE_STYLE_ID = "xfm-checkbox-reserve-style";
 const CHECKBOX_THEME_STYLE_ID = "xfm-checkbox-theme-style";
 
+/**
+ * Per-input 同步标记 — 通过 dataset.xfmSyncing 区分程序化同步和用户点击，
+ * 避免同步期间批量变更意外修改 selectedHandles 导致闪烁。
+ */
+
 /** 注入勾选框配色 CSS 变量，跟随系统深/浅模式。 */
 export const injectCheckboxTheme = (): void => {
   if (document.getElementById(CHECKBOX_THEME_STYLE_ID)) return;
@@ -87,7 +92,7 @@ const updateVisualSpan = (span: HTMLSpanElement, checked: boolean): void => {
   }
 };
 
-/** 无动画更新 visual span，同步提交样式避免 rAF 跨帧闪烁。 */
+/** 无动画更新 visual span：先更新状态再一次性提交，避免双 reflow 导致旧状态被绘制到屏幕。 */
 const updateVisualSpanInstant = (span: HTMLSpanElement, checked: boolean): void => {
   span.style.transition = "none";
   void span.offsetHeight; // 强制提交 transition:none
@@ -219,9 +224,15 @@ export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
   // 显式 click handler：替代浏览器隐式 label 行为，避免 X 页面事件冲突
   hit.addEventListener("click", (e) => {
     e.preventDefault();
-    // 从 cell DOM 重新读取 handle，防止虚拟列表回收导致 input.dataset.xfmHandle 指向旧账号
-    const currentHandle = extractUserCellHandle(cell);
-    if (currentHandle !== null) input.dataset.xfmHandle = currentHandle;
+    // 从 DOM 动态查找当前 cell，而非使用闭包中的 cell（虚拟列表回收时闭包 cell 可能已脱离 DOM）
+    const domCell: HTMLElement | null =
+      (hit.nextElementSibling as HTMLElement | null) ??
+      hit.parentElement?.querySelector<HTMLElement>('[data-testid="UserCell"]') ??
+      null;
+    if (domCell !== null) {
+      const currentHandle = extractUserCellHandle(domCell);
+      if (currentHandle !== null) input.dataset.xfmHandle = currentHandle;
+    }
     input.checked = !input.checked;
     input.dispatchEvent(new Event("change", { bubbles: true }));
   });
@@ -324,6 +335,9 @@ export const applyCheckboxChangeToSelection = (
     }
   }
 
+  // Per-input 标记：程序化同步时跳过 selectedHandles 修改，但用户点击不受影响
+  if (input.dataset.xfmSyncing === "true") return;
+
   if (input.checked) selectedHandles.add(handle);
   else selectedHandles.delete(handle);
 };
@@ -337,7 +351,11 @@ const setCellsChecked = (
     const mount = resolveUserCellMount(cell);
     const handle = normalizeHandle(extractUserCellHandle(mount.userCell));
     const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
-    if (input.checked !== checked) input.checked = checked;
+    if (input.checked !== checked) {
+      input.dataset.xfmSyncing = "true";
+      input.checked = checked;
+      delete input.dataset.xfmSyncing;
+    }
     // 同步视觉 span
     const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
     if (visual) updateVisualSpan(visual, input.checked);
@@ -379,7 +397,9 @@ export const applySelectionToViewportCells = (
     if (input === null) continue;
     const shouldCheck = selectedHandles.has(handle);
     if (input.checked !== shouldCheck) {
+      input.dataset.xfmSyncing = "true";
       input.checked = shouldCheck;
+      delete input.dataset.xfmSyncing;
       const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
       if (visual) updateVisualSpanInstant(visual, input.checked);
     }
@@ -399,7 +419,9 @@ export const syncCheckboxOnCell = (
   const input = findOrReuseCheckboxInput(mount, handle) ?? ensureUserCellCheckbox(cell);
   if (input.dataset.xfmHandle !== handle) input.dataset.xfmHandle = handle;
   if (input.checked !== shouldCheck) {
+    input.dataset.xfmSyncing = "true";
     input.checked = shouldCheck;
+    delete input.dataset.xfmSyncing;
     const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
     if (visual) updateVisualSpanInstant(visual, input.checked);
   }

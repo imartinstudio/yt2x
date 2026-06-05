@@ -43,7 +43,7 @@ const OVERLAY_FPS = 4;
 // ---- SRT integrity validation ----
 
 export type SrtIntegrityIssue = {
-  kind: "overlap" | "gap" | "empty_text" | "non_monotonic" | "negative_duration";
+  kind: "overlap" | "gap" | "empty_text" | "non_monotonic" | "negative_duration" | "no_cues";
   cueIndex: number;
   message: string;
 };
@@ -115,7 +115,7 @@ export const validateSrtIntegrity = async (
   flushBlock();
 
   if (blocks.length === 0) {
-    issues.push({ kind: "empty_text", cueIndex: 0, message: "SRT file contains no parseable cues" });
+    issues.push({ kind: "no_cues", cueIndex: 0, message: "SRT file contains no parseable cues" });
     return { valid: false, issues };
   }
 
@@ -173,7 +173,7 @@ export const validateSrtIntegrity = async (
   }
 
   return {
-    valid: issues.filter((i) => i.kind === "overlap" || i.kind === "empty_text" || i.kind === "negative_duration" || i.kind === "non_monotonic").length === 0,
+    valid: issues.filter((i) => i.kind === "overlap" || i.kind === "negative_duration" || i.kind === "non_monotonic" || i.kind === "no_cues").length === 0,
     issues,
   };
 };
@@ -347,18 +347,19 @@ export const burnSubtitles = async (opts: BurnSubtitlesOptions): Promise<void> =
   const integrity = await validateSrtIntegrity(opts.srtPath);
   if (!integrity.valid) {
     const fatal = integrity.issues.filter(
-      (i) => i.kind === "overlap" || i.kind === "empty_text" || i.kind === "negative_duration",
+      (i) => i.kind === "overlap" || i.kind === "negative_duration" || i.kind === "no_cues",
     );
     if (fatal.length > 0) {
       throw new Error(
         `SRT integrity check failed:\n${fatal.map((i) => `  - ${i.message}`).join("\n")}`,
       );
     }
-    // Gaps are warnings — log them but continue
-    const gaps = integrity.issues.filter((i) => i.kind === "gap");
-    if (gaps.length > 0) {
-      const gapMsgs = gaps.map((i) => `  - ${i.message}`).join("\n");
-      console.warn(`SRT gaps detected (non-fatal):\n${gapMsgs}`);
+    // Empty cues and gaps are warnings — log them but continue.
+    // Empty cues are harmless: the Python renderer skips blocks with < 3 non-empty lines.
+    const warnings = integrity.issues.filter((i) => i.kind === "gap" || i.kind === "empty_text");
+    if (warnings.length > 0) {
+      const warnMsgs = warnings.map((i) => `  - ${i.message}`).join("\n");
+      console.warn(`SRT warnings (non-fatal):\n${warnMsgs}`);
     }
   }
 

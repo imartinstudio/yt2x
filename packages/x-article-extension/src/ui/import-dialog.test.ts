@@ -116,6 +116,7 @@ describe("X Articles import media policy", () => {
     const result = showImportPreviewDialog({
       title: "A <title>",
       coverImage: "cover.png",
+      contentImages: [],
       contentImageCount: 1,
       contentVideoCount: 1,
       adaptations: [{ kind: "premium-image", message: "Use <image>" }],
@@ -125,7 +126,9 @@ describe("X Articles import media policy", () => {
     const host = document.querySelector("[data-yt2x-import-dialog]") as HTMLElement;
     const shadow = host.shadowRoot!;
 
-    expect(shadow.textContent).toContain("仍缺少封面或正文图片素材：cover.png, images/body.png");
+    expect(shadow.textContent).toContain("cover.png");
+    expect(shadow.textContent).toContain("images/body.png");
+    expect(shadow.textContent).toContain("Missing");
     shadow.querySelector<HTMLButtonElement>("[data-action='confirm']")!.click();
     await Promise.resolve();
     expect(host.isConnected).toBe(true);
@@ -141,6 +144,7 @@ describe("X Articles import media policy", () => {
     const result = showImportPreviewDialog({
       title: "标题",
       coverImage: null,
+      contentImages: [],
       contentImageCount: 0,
       contentVideoCount: 0,
       adaptations: [],
@@ -149,7 +153,8 @@ describe("X Articles import media policy", () => {
     });
     const host = document.querySelector("[data-yt2x-import-dialog]") as HTMLElement;
     const shadow = host.shadowRoot!;
-    shadow.querySelector<HTMLSelectElement>("[name='subscription-tier']")!.value = "premium-plus";
+    const premiumPlusRadio = shadow.querySelector<HTMLInputElement>("[name='subscription-tier'][value='premium-plus']");
+    premiumPlusRadio!.checked = true;
     shadow.querySelector<HTMLButtonElement>("[data-action='confirm']")!.click();
 
     await expect(result).resolves.toEqual({

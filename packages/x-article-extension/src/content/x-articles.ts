@@ -19,6 +19,7 @@ import {
   showImportError,
   showImportPreviewDialog,
   showImportSuccessToast,
+  type ImportPreview,
 } from "../ui/import-dialog.js";
 import {
   extensionInvalidatedUserMessage,
@@ -178,43 +179,123 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
   }
 
   try {
+    // Pick markdown file
     const markdownFile = await pickMarkdownFile();
-    if (markdownFile === null) return;
+    if (!markdownFile) return;
 
     const markdown = await readFileAsText(markdownFile);
     let authorizedFiles = [markdownFile];
     let registry = buildMediaRegistry({ markdown, authorizedFiles });
+
+    // Auto-pick directory if media files are referenced
+    const initialCheck = buildImportPreviewState({ markdown, subscriptionTier: await loadSubscriptionTier(), mediaRegistry: registry });
+    if (initialCheck.coverImage || initialCheck.missingSources.length > 0) {
+      const dirFiles = await pickMediaDirectory();
+      if (dirFiles.length > 0) {
+        authorizedFiles = [...authorizedFiles, ...dirFiles];
+        registry = buildMediaRegistry({ markdown, authorizedFiles });
+      }
+    }
+
+    const countConversions = (md: string) => {
+      const stats: { label: string; count: number }[] = [];
+      const h2 = (md.match(/^#{2}\s*[^#\n]+$/gm) ?? []).length;
+      if (h2 > 0) stats.push({ label: "H2", count: h2 });
+      const h3 = (md.match(/^#{3}\s*[^#\n]+$/gm) ?? []).length;
+      if (h3 > 0) stats.push({ label: "H3", count: h3 });
+      const code = (md.match(/```[\s\S]*?```/g) ?? []).length;
+      if (code > 0) stats.push({ label: "Code block", count: code });
+      const table = (md.match(/^\|.+\|/gm) ?? []).length;
+      if (table > 0) stats.push({ label: "Table row", count: table });
+      return stats;
+    };
+
+    const extractCoverPath = (md: string): string | null => {
+      const patterns = [
+        /^cover:\s*(\S+)/im,
+        /!\[[^\]]*cover[^\]]*\]\(([^)\s]+)\)/i,
+        /!\[[^\]]*\]\(([^)\s]+)\)/,
+        /<img[^>]+src=["']([^"']+)["'][^>]*>/i,
+      ];
+      for (const re of patterns) {
+        const m = md.match(re);
+        if (m?.[1]) return m[1];
+      }
+      return authorizedFiles.find((f) =>
+        /cover\.(png|jpe?g|webp|gif|svg)$/i.test(f.webkitRelativePath || f.name),
+      )?.webkitRelativePath || null;
+    };
     let subscriptionTier = await loadSubscriptionTier();
     let confirmedTier = subscriptionTier;
 
-    while (true) {
-      subscriptionTier = await loadSubscriptionTier();
+    let coverBlobUrl: string | undefined;
+
+    const findCoverFile = (coverPath: string): File | undefined => {
+      const resolved = registry.resolveMediaPath(coverPath);
+      const exact = registry.getUploadable(resolved);
+      if (exact) return exact;
+
+      const targetName = coverPath.replaceAll("\\", "/").split("/").pop()?.toLowerCase();
+      if (!targetName) return undefined;
+      return authorizedFiles.find(
+        (f) => (f.webkitRelativePath || f.name).replaceAll("\\", "/").split("/").pop()?.toLowerCase() === targetName,
+      );
+    };
+
+    const buildPreview = (): ImportPreview => {
+      if (coverBlobUrl) URL.revokeObjectURL(coverBlobUrl);
+      coverBlobUrl = undefined;
+
       const preview = buildImportPreviewState({ markdown, subscriptionTier, mediaRegistry: registry });
-      const dialog = await showImportPreviewDialog(preview);
 
-      if (dialog.type === "cancel") return;
+      const rawCover = extractCoverPath(markdown);
+      if (!preview.coverImage && rawCover) preview.coverImage = rawCover;
+      const cp = preview.coverImage;
 
-      if (dialog.type === "pick-directory") {
-        const directoryFiles = await pickMediaDirectory();
-        if (directoryFiles.length > 0) {
-          authorizedFiles = [...authorizedFiles, ...directoryFiles];
-          registry = buildMediaRegistry({ markdown, authorizedFiles });
-        }
-        continue;
+      if (preview.contentImages.length === 0) {
+        const isImg = (n: string) => /\.(png|jpe?g|webp|gif|svg)$/i.test(n);
+        const dirImgs = authorizedFiles.map((f) => f.webkitRelativePath || f.name).filter((p) => isImg(p) && p !== cp);
+        preview.contentImages = [...new Set(dirImgs)];
+        preview.contentImageCount = preview.contentImages.length;
       }
 
-      if (dialog.type === "pick-files") {
-        const supplemental = await pickSupplementalMedia();
-        if (supplemental.length > 0) {
-          authorizedFiles = [...authorizedFiles, ...supplemental];
-          registry = buildMediaRegistry({ markdown, authorizedFiles });
+      if (preview.adaptations.length === 0) {
+        for (const s of countConversions(markdown)) {
+          preview.adaptations.push({ kind: s.label, message: `${s.label} (×${s.count})` } as never);
         }
-        continue;
       }
 
-      confirmedTier = dialog.subscriptionTier;
-      break;
-    }
+      if (cp && !/^https?:/i.test(cp)) {
+        const cf = findCoverFile(cp);
+        if (cf) { coverBlobUrl = URL.createObjectURL(cf); preview.coverObjectUrl = coverBlobUrl; }
+      }
+      return preview;
+    };
+
+    subscriptionTier = await loadSubscriptionTier();
+    const dialog = await showImportPreviewDialog(buildPreview(), {
+      onPickDirectory: async () => {
+        const files = await pickMediaDirectory();
+        if (files.length > 0) {
+          authorizedFiles = [...authorizedFiles, ...files];
+          registry = buildMediaRegistry({ markdown, authorizedFiles });
+        }
+        subscriptionTier = await loadSubscriptionTier();
+        return buildPreview();
+      },
+      onPickFiles: async () => {
+        const files = await pickSupplementalMedia();
+        if (files.length > 0) {
+          authorizedFiles = [...authorizedFiles, ...files];
+          registry = buildMediaRegistry({ markdown, authorizedFiles });
+        }
+        subscriptionTier = await loadSubscriptionTier();
+        return buildPreview();
+      },
+    });
+
+    if (dialog.type !== "confirm") return; // cancel or unreachable pick-* with callbacks
+    confirmedTier = dialog.subscriptionTier;
 
     let loading: ImportLoadingHandle | null = showImportLoading(
       mode === "new-draft" ? "正在新建草稿…" : "正在确认当前草稿…",

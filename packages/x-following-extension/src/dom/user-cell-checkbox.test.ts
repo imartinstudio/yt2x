@@ -101,6 +101,36 @@ describe("ensureUserCellCheckbox", () => {
     wrapper.remove();
   });
 
+  it("toggles checkbox from the custom hit zone without double toggling on click", () => {
+    const cell = document.createElement("button");
+    cell.setAttribute("data-testid", "UserCell");
+    cell.type = "button";
+    cell.innerHTML = '<a href="/alice">@alice</a>';
+    const wrapper = document.createElement("div");
+    wrapper.append(cell);
+    document.body.append(wrapper);
+
+    const input = ensureUserCellCheckbox(cell);
+    const hit = cell.previousElementSibling as HTMLElement;
+    const selected = new Set<string>();
+    input.addEventListener("change", () => applyCheckboxChangeToSelection(input, selected));
+
+    hit.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+    hit.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(input.checked).toBe(true);
+    expect(hit.getAttribute("aria-checked")).toBe("true");
+    expect(selected.has("alice")).toBe(true);
+
+    hit.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(input.checked).toBe(false);
+    expect(hit.getAttribute("aria-checked")).toBe("false");
+    expect(selected.has("alice")).toBe(false);
+
+    wrapper.remove();
+  });
+
   it("restores checked state from selectedHandles when list row is re-mounted", () => {
     const selected = new Set<string>(["bob"]);
     const cell = document.createElement("button");

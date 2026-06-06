@@ -1,103 +1,175 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Privacy Policy — X 清道夫</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.7; color: #1a1a1a; }
-  h1 { font-size: 1.6rem; margin-bottom: 0; }
-  h2 { font-size: 1.2rem; margin-top: 2rem; border-bottom: 1px solid #e5e5e5; padding-bottom: 0.3rem; }
-  p, li { font-size: 0.95rem; color: #333; }
-  .lang-label { color: #888; font-size: 0.85rem; font-weight: normal; }
-  hr { margin: 2rem 0; border: none; border-top: 1px solid #e5e5e5; }
-  .footer { margin-top: 3rem; color: #888; font-size: 0.85rem; }
-</style>
-</head>
-<body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privacy Policy — X 清道夫</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        max-width: 720px;
+        margin: 40px auto;
+        padding: 0 20px;
+        line-height: 1.7;
+        color: #1a1a1a;
+      }
+      h1 {
+        font-size: 1.6rem;
+        margin-bottom: 0;
+      }
+      h2 {
+        font-size: 1.2rem;
+        margin-top: 2rem;
+        border-bottom: 1px solid #e5e5e5;
+        padding-bottom: 0.3rem;
+      }
+      p,
+      li {
+        font-size: 0.95rem;
+        color: #333;
+      }
+      .lang-label {
+        color: #888;
+        font-size: 0.85rem;
+        font-weight: normal;
+      }
+      hr {
+        margin: 2rem 0;
+        border: none;
+        border-top: 1px solid #e5e5e5;
+      }
+      .footer {
+        margin-top: 3rem;
+        color: #888;
+        font-size: 0.85rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🔒 Privacy Policy · 隐私政策</h1>
+    <p style="color: #888; font-size: 0.9rem">X 清道夫 (X Scavenger) — Chrome Extension</p>
+    <p><strong>Last updated:</strong> 2026-06-05</p>
 
-<h1>🔒 Privacy Policy · 隐私政策</h1>
-<p style="color:#888;font-size:0.9rem;">X 清道夫 (X Scavenger) — Chrome Extension</p>
-<p><strong>Last updated:</strong> 2026-06-05</p>
+    <!-- ============================================================ -->
+    <h2>1. Data Collection · 数据收集</h2>
 
-<!-- ============================================================ -->
-<h2>1. Data Collection · 数据收集</h2>
+    <p><strong>X 清道夫 does NOT collect, store, or transmit any personal data.</strong></p>
 
-<p><strong>X 清道夫 does NOT collect, store, or transmit any personal data.</strong></p>
+    <p>This extension operates entirely within your browser. It does not:</p>
+    <ul>
+      <li>❌ Collect your X/Twitter credentials or authentication tokens</li>
+      <li>❌ Read, store, or transmit the contents of your X timeline, posts, or messages</li>
+      <li>❌ Track your browsing history across other websites</li>
+      <li>❌ Use cookies, localStorage, or any persistent storage</li>
+      <li>❌ Send any data to external servers or third-party services</li>
+      <li>❌ Include analytics, telemetry, or crash reporting SDKs</li>
+    </ul>
 
-<p>This extension operates entirely within your browser. It does not:</p>
-<ul>
-  <li>❌ Collect your X/Twitter credentials or authentication tokens</li>
-  <li>❌ Read, store, or transmit the contents of your X timeline, posts, or messages</li>
-  <li>❌ Track your browsing history across other websites</li>
-  <li>❌ Use cookies, localStorage, or any persistent storage</li>
-  <li>❌ Send any data to external servers or third-party services</li>
-  <li>❌ Include analytics, telemetry, or crash reporting SDKs</li>
-</ul>
+    <!-- ============================================================ -->
+    <h2>2. How the Extension Works · 扩展工作原理</h2>
 
-<!-- ============================================================ -->
-<h2>2. How the Extension Works · 扩展工作原理</h2>
+    <p>All processing happens locally on your device:</p>
+    <ul>
+      <li>
+        The extension activates only on <code>https://x.com/*</code> and
+        <code>https://twitter.com/*</code>
+        <strong>following list pages</strong> (<code>/following</code>).
+      </li>
+      <li>
+        It reads the DOM (page structure) to identify user cells on the following list, and injects
+        checkboxes and a toolbar UI.
+      </li>
+      <li>
+        When you choose to unfollow users, it clicks the "Unfollow" buttons on your behalf — the
+        same actions you could perform manually.
+      </li>
+      <li>
+        No data leaves your browser. The list of selected users exists only in memory (JavaScript
+        variable) and is cleared when you close or navigate away from the page.
+      </li>
+    </ul>
 
-<p>All processing happens locally on your device:</p>
-<ul>
-  <li>The extension activates only on <code>https://x.com/*</code> and <code>https://twitter.com/*</code> <strong>following list pages</strong> (<code>/following</code>).</li>
-  <li>It reads the DOM (page structure) to identify user cells on the following list, and injects checkboxes and a toolbar UI.</li>
-  <li>When you choose to unfollow users, it clicks the "Unfollow" buttons on your behalf — the same actions you could perform manually.</li>
-  <li>No data leaves your browser. The list of selected users exists only in memory (JavaScript variable) and is cleared when you close or navigate away from the page.</li>
-</ul>
+    <!-- ============================================================ -->
+    <h2>3. Permissions Explained · 权限说明</h2>
 
-<!-- ============================================================ -->
-<h2>3. Permissions Explained · 权限说明</h2>
+    <table style="width: 100%; border-collapse: collapse; margin: 1rem 0">
+      <tr style="background: #f5f5f5">
+        <th style="text-align: left; padding: 8px 12px; border: 1px solid #e0e0e0">Permission</th>
+        <th style="text-align: left; padding: 8px 12px; border: 1px solid #e0e0e0">
+          Why it's needed
+        </th>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; border: 1px solid #e0e0e0"><code>scripting</code></td>
+        <td style="padding: 8px 12px; border: 1px solid #e0e0e0">
+          To inject the toolbar UI and checkboxes into the X/Twitter following page.
+        </td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; border: 1px solid #e0e0e0"><code>tabs</code></td>
+        <td style="padding: 8px 12px; border: 1px solid #e0e0e0">
+          To detect when you open a following page and automatically activate the extension. The
+          extension does not read tab content from other sites.
+        </td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; border: 1px solid #e0e0e0">
+          <code>host_permissions</code><br />(x.com, twitter.com)
+        </td>
+        <td style="padding: 8px 12px; border: 1px solid #e0e0e0">
+          Required by Chrome Manifest V3 for content script injection on X/Twitter. The extension
+          does not run on any other websites.
+        </td>
+      </tr>
+    </table>
 
-<table style="width:100%;border-collapse:collapse;margin:1rem 0;">
-<tr style="background:#f5f5f5;">
-  <th style="text-align:left;padding:8px 12px;border:1px solid #e0e0e0;">Permission</th>
-  <th style="text-align:left;padding:8px 12px;border:1px solid #e0e0e0;">Why it's needed</th>
-</tr>
-<tr>
-  <td style="padding:8px 12px;border:1px solid #e0e0e0;"><code>scripting</code></td>
-  <td style="padding:8px 12px;border:1px solid #e0e0e0;">To inject the toolbar UI and checkboxes into the X/Twitter following page.</td>
-</tr>
-<tr>
-  <td style="padding:8px 12px;border:1px solid #e0e0e0;"><code>tabs</code></td>
-  <td style="padding:8px 12px;border:1px solid #e0e0e0;">To detect when you open a following page and automatically activate the extension. The extension does not read tab content from other sites.</td>
-</tr>
-<tr>
-  <td style="padding:8px 12px;border:1px solid #e0e0e0;"><code>host_permissions</code><br>(x.com, twitter.com)</td>
-  <td style="padding:8px 12px;border:1px solid #e0e0e0;">Required by Chrome Manifest V3 for content script injection on X/Twitter. The extension does not run on any other websites.</td>
-</tr>
-</table>
+    <!-- ============================================================ -->
+    <h2>4. Third-Party Services · 第三方服务</h2>
 
-<!-- ============================================================ -->
-<h2>4. Third-Party Services · 第三方服务</h2>
+    <p>
+      This extension does NOT use any third-party services, APIs, or libraries that communicate over
+      the network. The only network requests made are those inherent to your normal use of the
+      X/Twitter website itself.
+    </p>
 
-<p>This extension does NOT use any third-party services, APIs, or libraries that communicate over the network. The only network requests made are those inherent to your normal use of the X/Twitter website itself.</p>
+    <!-- ============================================================ -->
+    <h2>5. Children's Privacy · 儿童隐私</h2>
 
-<!-- ============================================================ -->
-<h2>5. Children's Privacy · 儿童隐私</h2>
+    <p>
+      This extension does not knowingly collect information from children under 13. It does not
+      collect information from anyone.
+    </p>
 
-<p>This extension does not knowingly collect information from children under 13. It does not collect information from anyone.</p>
+    <!-- ============================================================ -->
+    <h2>6. Changes to This Policy · 政策更新</h2>
 
-<!-- ============================================================ -->
-<h2>6. Changes to This Policy · 政策更新</h2>
+    <p>
+      If this privacy policy changes, the updated version will be posted at the same URL. The "Last
+      updated" date at the top will reflect the revision date.
+    </p>
 
-<p>If this privacy policy changes, the updated version will be posted at the same URL. The "Last updated" date at the top will reflect the revision date.</p>
+    <!-- ============================================================ -->
+    <h2>7. Contact · 联系方式</h2>
 
-<!-- ============================================================ -->
-<h2>7. Contact · 联系方式</h2>
+    <p>For questions about this privacy policy or the extension:</p>
+    <ul>
+      <li>
+        📧 GitHub Issues:
+        <a href="https://github.com/imartinstudio/yt2x/issues"
+          >github.com/imartinstudio/yt2x/issues</a
+        >
+      </li>
+      <li>
+        📦 Repository:
+        <a href="https://github.com/imartinstudio/yt2x">github.com/imartinstudio/yt2x</a>
+      </li>
+    </ul>
 
-<p>For questions about this privacy policy or the extension:</p>
-<ul>
-  <li>📧 GitHub Issues: <a href="https://github.com/imartinstudio/yt2x/issues">github.com/imartinstudio/yt2x/issues</a></li>
-  <li>📦 Repository: <a href="https://github.com/imartinstudio/yt2x">github.com/imartinstudio/yt2x</a></li>
-</ul>
+    <hr />
+    <p><em>This policy is also available in Chinese (中文版本见上方).</em></p>
 
-<hr>
-<p><em>This policy is also available in Chinese (中文版本见上方).</em></p>
-
-<div class="footer">
-  <p>X 清道夫 (X Scavenger) · Version 0.2.1 · © 2026 yt2x</p>
-</div>
-
-</body>
+    <div class="footer">
+      <p>X 清道夫 (X Scavenger) · Version 0.2.1 · © 2026 yt2x</p>
+    </div>
+  </body>
 </html>

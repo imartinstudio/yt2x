@@ -1,0 +1,1003 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #0a0a14;
+        color: rgba(255, 255, 255, 0.92);
+        font-family: sans-serif;
+      }
+
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 18% 18%, rgba(129, 140, 248, 0.22), transparent 28%),
+          radial-gradient(circle at 78% 12%, rgba(244, 63, 94, 0.14), transparent 26%),
+          radial-gradient(circle at 56% 84%, rgba(16, 185, 129, 0.1), transparent 30%),
+          linear-gradient(135deg, #05050b 0%, #0a0a14 44%, #111122 100%);
+      }
+
+      .noise {
+        position: absolute;
+        inset: 0;
+        opacity: 0.08;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+        background-size: 56px 56px;
+      }
+
+      .scene-content {
+        position: relative;
+        z-index: 2;
+        width: 100%;
+        height: 100%;
+        padding: 78px 96px;
+        display: grid;
+        grid-template-columns: 640px 1fr;
+        gap: 72px;
+        align-items: center;
+      }
+
+      .copy {
+        display: flex;
+        flex-direction: column;
+        gap: 28px;
+      }
+
+      .eyebrow {
+        width: max-content;
+        padding: 10px 16px;
+        border: 1px solid rgba(129, 140, 248, 0.26);
+        border-radius: 999px;
+        background: rgba(129, 140, 248, 0.12);
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 24px;
+        font-weight: 650;
+      }
+
+      .headline {
+        max-width: 610px;
+        font-size: 92px;
+        line-height: 0.98;
+        font-weight: 820;
+        letter-spacing: 0;
+      }
+
+      .headline span {
+        display: block;
+        color: #a5b4fc;
+      }
+
+      .subline {
+        max-width: 560px;
+        color: rgba(255, 255, 255, 0.58);
+        font-size: 32px;
+        line-height: 1.35;
+      }
+
+      .privacy-row {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 24px;
+      }
+
+      .path-rail {
+        position: absolute;
+        left: 96px;
+        right: 96px;
+        top: 32px;
+        z-index: 8;
+        height: 50px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+      }
+
+      .path-step {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 16px;
+        border-radius: 16px;
+        background: rgba(18, 18, 32, 0.68);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.62);
+        font-size: 18px;
+        font-weight: 700;
+        backdrop-filter: blur(22px);
+      }
+
+      .path-step strong {
+        display: grid;
+        place-items: center;
+        width: 26px;
+        height: 26px;
+        border-radius: 9px;
+        background: rgba(129, 140, 248, 0.18);
+        color: #c7d2fe;
+        font-size: 15px;
+      }
+
+      .path-step.active {
+        color: rgba(255, 255, 255, 0.95);
+        border-color: rgba(129, 140, 248, 0.34);
+        box-shadow: 0 0 30px rgba(129, 140, 248, 0.14);
+      }
+
+      .cover-badge {
+        width: max-content;
+        padding: 12px 18px;
+        border-radius: 16px;
+        background: rgba(16, 185, 129, 0.13);
+        border: 1px solid rgba(16, 185, 129, 0.24);
+        color: rgba(255, 255, 255, 0.86);
+        font-size: 22px;
+        font-weight: 760;
+      }
+
+      .shield {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        background: rgba(16, 185, 129, 0.14);
+        border: 1px solid rgba(16, 185, 129, 0.28);
+        color: #34d399;
+        font-weight: 800;
+      }
+
+      .browser {
+        width: 980px;
+        height: 820px;
+        border-radius: 28px;
+        overflow: hidden;
+        background: rgba(5, 5, 12, 0.82);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow:
+          0 36px 110px rgba(0, 0, 0, 0.58),
+          inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+      }
+
+      .browser-top {
+        height: 62px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 22px;
+        background: rgba(21, 21, 37, 0.88);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.24);
+      }
+
+      .address {
+        margin-left: 14px;
+        height: 34px;
+        flex: 1;
+        display: flex;
+        align-items: center;
+        padding: 0 18px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.62);
+        font-size: 18px;
+      }
+
+      .x-page {
+        height: calc(100% - 62px);
+        display: grid;
+        grid-template-columns: 248px 1fr;
+      }
+
+      .sidebar {
+        padding: 28px 22px;
+        border-right: 1px solid rgba(255, 255, 255, 0.06);
+        color: rgba(255, 255, 255, 0.74);
+        font-size: 24px;
+      }
+
+      .nav {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .nav-item {
+        height: 44px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .main-feed {
+        position: relative;
+        overflow: hidden;
+      }
+
+      .page-header {
+        height: 76px;
+        display: flex;
+        align-items: center;
+        padding: 0 26px;
+        gap: 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        background: rgba(10, 10, 20, 0.72);
+      }
+
+      .handle-title {
+        font-size: 26px;
+        font-weight: 760;
+      }
+
+      .handle-sub {
+        margin-top: 2px;
+        color: rgba(255, 255, 255, 0.64);
+        font-size: 17px;
+      }
+
+      .tabs {
+        height: 68px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        color: rgba(255, 255, 255, 0.62);
+        font-size: 20px;
+      }
+
+      .tab {
+        display: grid;
+        place-items: center;
+      }
+
+      .tab.active {
+        position: relative;
+        color: rgba(255, 255, 255, 0.9);
+        font-weight: 760;
+      }
+
+      .tab.active::after {
+        content: "";
+        position: absolute;
+        bottom: 0;
+        width: 76px;
+        height: 4px;
+        border-radius: 999px;
+        background: #818cf8;
+      }
+
+      .toolbar {
+        margin: 18px 18px 12px;
+        padding: 18px;
+        border-radius: 22px;
+        background: rgba(18, 18, 32, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow:
+          0 18px 52px rgba(0, 0, 0, 0.42),
+          inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+        backdrop-filter: blur(24px);
+      }
+
+      .toolbar-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .toolbar-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 23px;
+        font-weight: 780;
+      }
+
+      .beta {
+        padding: 4px 9px;
+        border-radius: 999px;
+        background: rgba(129, 140, 248, 0.18);
+        color: #c7d2fe;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .stats {
+        display: flex;
+        gap: 18px;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 17px;
+      }
+
+      .stats strong {
+        color: rgba(255, 255, 255, 0.9);
+        font-family: monospace;
+      }
+
+      .controls {
+        margin-top: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .segment {
+        display: flex;
+        padding: 4px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .seg-item {
+        padding: 9px 16px;
+        border-radius: 11px;
+        color: rgba(255, 255, 255, 0.66);
+        font-size: 16px;
+        font-weight: 650;
+      }
+
+      .seg-item.active {
+        background: rgba(129, 140, 248, 0.22);
+        color: rgba(255, 255, 255, 0.92);
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+      }
+
+      .btn {
+        height: 40px;
+        padding: 0 16px;
+        border-radius: 13px;
+        display: grid;
+        place-items: center;
+        background: rgba(255, 255, 255, 0.06);
+        color: rgba(255, 255, 255, 0.74);
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .btn.danger {
+        min-width: 116px;
+        color: #fff;
+        background: linear-gradient(135deg, #ef4444, #f43f5e);
+        box-shadow: 0 0 28px rgba(244, 63, 94, 0.22);
+      }
+
+      .user-list {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .user-row {
+        height: 92px;
+        display: grid;
+        grid-template-columns: 54px 58px 1fr 74px 104px;
+        align-items: center;
+        gap: 14px;
+        padding: 0 22px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .checkbox {
+        width: 44px;
+        height: 44px;
+        display: grid;
+        place-items: center;
+      }
+
+      .box {
+        width: 23px;
+        height: 23px;
+        border-radius: 6px;
+        border: 1.5px solid rgba(255, 255, 255, 0.16);
+      }
+
+      .user-row.selected .box {
+        border-color: #818cf8;
+        background: #6366f1;
+        box-shadow: 0 0 26px rgba(99, 102, 241, 0.26);
+      }
+
+      .user-row.selected .box::after {
+        content: "✓";
+        display: block;
+        color: #fff;
+        font-size: 16px;
+        line-height: 22px;
+        text-align: center;
+        font-weight: 900;
+      }
+
+      .avatar {
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-size: 17px;
+        font-weight: 800;
+      }
+
+      .name {
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 19px;
+        font-weight: 760;
+      }
+
+      .bio {
+        margin-top: 4px;
+        color: rgba(255, 255, 255, 0.64);
+        font-size: 16px;
+      }
+
+      .tag {
+        width: max-content;
+        padding: 5px 9px;
+        border-radius: 999px;
+        justify-self: start;
+        color: #fda4af;
+        background: rgba(244, 63, 94, 0.12);
+        font-size: 13px;
+        font-weight: 720;
+      }
+
+      .follow-btn {
+        height: 36px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 15px;
+        font-weight: 800;
+      }
+
+      .callout {
+        position: absolute;
+        right: 52px;
+        bottom: 48px;
+        width: 410px;
+        padding: 24px;
+        border-radius: 24px;
+        background: rgba(24, 24, 44, 0.88);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.52);
+        backdrop-filter: blur(34px);
+      }
+
+      .callout-title {
+        font-size: 26px;
+        font-weight: 820;
+      }
+
+      .callout-body {
+        margin-top: 10px;
+        color: rgba(255, 255, 255, 0.58);
+        font-size: 20px;
+        line-height: 1.35;
+      }
+
+      .install-panel {
+        position: absolute;
+        inset: 104px 92px 76px 92px;
+        z-index: 7;
+        display: grid;
+        grid-template-columns: 460px 1fr;
+        gap: 34px;
+        padding: 34px;
+        border-radius: 34px;
+        background: rgba(8, 8, 18, 0.88);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 42px 130px rgba(0, 0, 0, 0.68);
+        backdrop-filter: blur(36px);
+      }
+
+      .install-copy {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 22px;
+      }
+
+      .install-kicker {
+        color: #c7d2fe;
+        font-size: 22px;
+        font-weight: 800;
+      }
+
+      .install-title {
+        font-size: 60px;
+        line-height: 1.02;
+        font-weight: 850;
+        letter-spacing: 0;
+      }
+
+      .install-desc {
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 25px;
+        line-height: 1.34;
+      }
+
+      .chrome-window {
+        overflow: hidden;
+        border-radius: 26px;
+        background: rgba(20, 20, 34, 0.96);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .chrome-bar {
+        height: 62px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 22px;
+        background: rgba(31, 31, 48, 0.96);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .chrome-url {
+        flex: 1;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        padding: 0 18px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.07);
+        color: rgba(255, 255, 255, 0.66);
+        font-size: 18px;
+      }
+
+      .extensions-page {
+        height: calc(100% - 62px);
+        padding: 34px;
+      }
+
+      .extensions-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 28px;
+      }
+
+      .extensions-title {
+        font-size: 34px;
+        font-weight: 820;
+      }
+
+      .dev-mode {
+        padding: 10px 14px;
+        border-radius: 14px;
+        background: rgba(129, 140, 248, 0.18);
+        color: #c7d2fe;
+        font-size: 17px;
+        font-weight: 800;
+      }
+
+      .extension-card {
+        display: grid;
+        grid-template-columns: 70px 1fr auto;
+        gap: 18px;
+        align-items: center;
+        padding: 24px;
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .extension-icon {
+        width: 70px;
+        height: 70px;
+        display: block;
+        object-fit: contain;
+      }
+
+      .extension-name {
+        font-size: 26px;
+        font-weight: 820;
+      }
+
+      .extension-meta {
+        margin-top: 6px;
+        color: rgba(255, 255, 255, 0.62);
+        font-size: 18px;
+      }
+
+      .pin-toggle {
+        padding: 10px 16px;
+        border-radius: 14px;
+        background: rgba(16, 185, 129, 0.14);
+        border: 1px solid rgba(16, 185, 129, 0.26);
+        color: #a7f3d0;
+        font-size: 17px;
+        font-weight: 800;
+      }
+
+      .open-page-callout {
+        position: absolute;
+        z-index: 9;
+        right: 134px;
+        top: 166px;
+        width: 520px;
+        padding: 22px;
+        border-radius: 22px;
+        background: rgba(24, 24, 44, 0.92);
+        border: 1px solid rgba(129, 140, 248, 0.26);
+        box-shadow: 0 26px 80px rgba(0, 0, 0, 0.48);
+        backdrop-filter: blur(32px);
+      }
+
+      .open-page-callout .callout-title {
+        font-size: 28px;
+      }
+
+      .open-page-callout .callout-body {
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 21px;
+      }
+
+      .address-highlight {
+        position: absolute;
+        z-index: 6;
+        left: 918px;
+        top: 140px;
+        width: 852px;
+        height: 42px;
+        border-radius: 999px;
+        border: 2px solid rgba(129, 140, 248, 0.7);
+        box-shadow: 0 0 34px rgba(129, 140, 248, 0.25);
+      }
+
+      .toolbar-highlight {
+        position: absolute;
+        z-index: 6;
+        left: 1070px;
+        top: 350px;
+        width: 704px;
+        height: 142px;
+        border-radius: 28px;
+        border: 2px solid rgba(129, 140, 248, 0.76);
+        box-shadow: 0 0 44px rgba(129, 140, 248, 0.28);
+      }
+
+      .progress-panel {
+        position: absolute;
+        left: 300px;
+        right: 24px;
+        top: 224px;
+        padding: 22px;
+        border-radius: 24px;
+        background: rgba(24, 24, 44, 0.92);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 30px 84px rgba(0, 0, 0, 0.55);
+        backdrop-filter: blur(38px);
+      }
+
+      .progress-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 23px;
+        font-weight: 760;
+      }
+
+      .counter {
+        font-family: monospace;
+        color: rgba(255, 255, 255, 0.68);
+      }
+
+      .progress-track {
+        position: relative;
+        height: 8px;
+        margin: 20px 0 18px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        width: 68%;
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #ef4444, #f43f5e, #818cf8);
+        box-shadow: 0 0 26px rgba(244, 63, 94, 0.34);
+      }
+
+      .logs {
+        display: flex;
+        gap: 14px;
+        color: rgba(255, 255, 255, 0.56);
+        font-family: monospace;
+        font-size: 15px;
+      }
+
+      .log-ok {
+        color: #34d399;
+      }
+
+      .final-badge {
+        position: absolute;
+        left: 96px;
+        bottom: 76px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 18px 22px;
+        border-radius: 20px;
+        background: rgba(16, 185, 129, 0.14);
+        border: 1px solid rgba(16, 185, 129, 0.24);
+        color: rgba(255, 255, 255, 0.86);
+        font-size: 24px;
+        font-weight: 720;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="18"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div class="noise" data-layout-ignore></div>
+      <div class="path-rail">
+        <div class="path-step step-install active"><strong>1</strong><span>安装 Chrome 扩展</span></div>
+        <div class="path-step step-open"><strong>2</strong><span>打开自己的 Following 页</span></div>
+        <div class="path-step step-use"><strong>3</strong><span>筛选、勾选、批量取关</span></div>
+      </div>
+      <div class="scene-content">
+        <section class="copy">
+          <div class="eyebrow">Chrome 扩展 · 本地运行</div>
+          <h1 class="headline">X 清道夫<span>清理关注列表</span></h1>
+          <p class="subline">筛出未回关账号，勾选、确认、批量取消关注，一次完成。</p>
+          <div class="cover-badge">首帧即展示插件运行后的完整页面效果</div>
+          <div class="privacy-row">
+            <div class="shield">✓</div>
+            <div>不上传数据 · 不收集信息 · 只在你的浏览器里执行</div>
+          </div>
+        </section>
+
+        <section class="browser" aria-label="X 清道夫产品演示">
+          <div class="browser-top">
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="address">x.com/&lt;your-handle&gt;/following</div>
+          </div>
+          <div class="x-page">
+            <aside class="sidebar">
+              <div class="nav">
+                <div class="nav-item">⌂ 首页</div>
+                <div class="nav-item">⌕ 探索</div>
+                <div class="nav-item">◎ 通知</div>
+                <div class="nav-item">◌ 个人资料</div>
+              </div>
+            </aside>
+            <main class="main-feed">
+              <div class="page-header">
+                <div style="font-size: 30px">‹</div>
+                <div>
+                  <div class="handle-title">@你的账号</div>
+                  <div class="handle-sub">@your_handle</div>
+                </div>
+              </div>
+              <div class="tabs">
+                <div class="tab">帖子</div>
+                <div class="tab">回复</div>
+                <div class="tab active">正在关注</div>
+              </div>
+
+              <div class="toolbar">
+                <div class="toolbar-row">
+                  <div class="toolbar-title">X 清道夫 <span class="beta">BETA</span></div>
+                  <div class="stats">
+                    <span><strong>38</strong> 人</span>
+                    <span><strong>12</strong> 已选</span>
+                    <span><strong>28</strong> 未回关</span>
+                  </div>
+                </div>
+                <div class="controls">
+                  <div class="segment">
+                    <div class="seg-item active">仅未回关</div>
+                    <div class="seg-item">全部</div>
+                  </div>
+                  <div class="actions">
+                    <div class="btn">全选</div>
+                    <div class="btn">清除</div>
+                    <div class="btn danger">取关 12</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="user-list">
+                <div class="user-row selected">
+                  <div class="checkbox"><div class="box"></div></div>
+                  <div class="avatar" style="background: linear-gradient(135deg, #6366f1, #ec4899)">A1</div>
+                  <div><div class="name">创作者 A</div><div class="bio">@creator_a · 每天转发抽奖内容</div></div>
+                  <div class="tag">未回关</div>
+                  <div class="follow-btn">Following</div>
+                </div>
+                <div class="user-row selected">
+                  <div class="checkbox"><div class="box"></div></div>
+                  <div class="avatar" style="background: linear-gradient(135deg, #10b981, #6366f1)">B2</div>
+                  <div><div class="name">项目号 B</div><div class="bio">@project_b · 三个月未更新</div></div>
+                  <div class="tag">未回关</div>
+                  <div class="follow-btn">Following</div>
+                </div>
+                <div class="user-row selected">
+                  <div class="checkbox"><div class="box"></div></div>
+                  <div class="avatar" style="background: linear-gradient(135deg, #f43f5e, #f59e0b)">C3</div>
+                  <div><div class="name">资讯账号 C</div><div class="bio">@daily_c · 高频重复内容</div></div>
+                  <div class="tag">未回关</div>
+                  <div class="follow-btn">Following</div>
+                </div>
+                <div class="user-row">
+                  <div class="checkbox"><div class="box"></div></div>
+                  <div class="avatar" style="background: linear-gradient(135deg, #0ea5e9, #818cf8)">D4</div>
+                  <div><div class="name">朋友 D</div><div class="bio">@friend_d · 保留互关关系</div></div>
+                  <div class="tag" style="color: #c7d2fe; background: rgba(129, 140, 248, 0.12)">互关</div>
+                  <div class="follow-btn">Following</div>
+                </div>
+              </div>
+
+              <div class="callout">
+                <div class="callout-title">先筛选，再确认</div>
+                <div class="callout-body">只处理你自己的 Following 页面，批量操作前显示人数确认。</div>
+              </div>
+
+              <div class="progress-panel">
+                <div class="progress-head">
+                  <div>正在取消关注...</div>
+                  <div class="counter">8 / 12</div>
+                </div>
+                <div class="progress-track"><div class="progress-fill"></div></div>
+                <div class="logs">
+                  <span><span class="log-ok">✓</span> @creator_a</span>
+                  <span><span class="log-ok">✓</span> @project_b</span>
+                  <span>⏳ @daily_c</span>
+                </div>
+              </div>
+            </main>
+          </div>
+        </section>
+      </div>
+
+      <div class="install-panel">
+        <div class="install-copy">
+          <div class="install-kicker">第一步</div>
+          <div class="install-title">在 Chrome 里安装并固定插件</div>
+          <div class="install-desc">打开扩展管理页，加载已解压的 `x-following-extension`，固定到工具栏。安装完成后，不需要任何账号同步或云端授权。</div>
+        </div>
+        <div class="chrome-window">
+          <div class="chrome-bar">
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="chrome-url">chrome://extensions</div>
+          </div>
+          <div class="extensions-page">
+            <div class="extensions-head">
+              <div class="extensions-title">扩展程序</div>
+              <div class="dev-mode">开发者模式：已开启</div>
+            </div>
+            <div class="extension-card">
+              <img class="extension-icon" src="assets/x-following-extension-icon-128.png" alt="X 清道夫插件图标" />
+              <div>
+                <div class="extension-name">X 清道夫</div>
+                <div class="extension-meta">筛选未回关 · 批量取消关注 · 纯本地运行</div>
+              </div>
+              <div class="pin-toggle">已固定</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="open-page-callout">
+        <div class="callout-title">第二步：打开自己的关注列表</div>
+        <div class="callout-body">进入 `x.com/&lt;your-handle&gt;/following` 后，插件自动在列表上方注入工具栏。</div>
+      </div>
+      <div class="address-highlight" data-layout-ignore></div>
+      <div class="toolbar-highlight" data-layout-ignore></div>
+
+      <div class="final-badge">
+        <span style="color: #34d399">✓</span>
+        <span>完成：关注列表更干净，过程全程本地可控。</span>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      gsap.set(
+        [
+          ".install-panel",
+          ".open-page-callout",
+          ".address-highlight",
+          ".toolbar-highlight",
+          ".callout",
+          ".progress-panel",
+          ".final-badge",
+        ],
+        { opacity: 0 },
+      );
+      gsap.set(".install-panel", { scale: 0.96, y: 30 });
+      gsap.set([".address-highlight", ".toolbar-highlight"], { scale: 0.98 });
+
+      tl.to(".cover-badge", { scale: 1.04, duration: 0.32, ease: "power2.out" }, 0.18);
+      tl.to(".cover-badge", { scale: 1, duration: 0.32, ease: "power2.inOut" }, 0.5);
+      tl.to(".scene-content", { scale: 0.985, opacity: 0.5, duration: 0.55, ease: "power2.inOut" }, 1.15);
+      tl.fromTo(
+        ".install-panel",
+        { opacity: 0, y: 30, scale: 0.96 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.62, ease: "power3.out" },
+        1.35,
+      );
+      tl.from(".extension-card", { opacity: 0, y: 34, duration: 0.5, ease: "power3.out" }, 2.15);
+      tl.from(".pin-toggle", { scale: 0.82, opacity: 0, duration: 0.32, ease: "back.out(2)" }, 2.55);
+      tl.to(".step-install", { borderColor: "rgba(16,185,129,0.38)", color: "rgba(255,255,255,0.72)", duration: 0.28 }, 3.95);
+      tl.to(".step-open", { borderColor: "rgba(129,140,248,0.48)", color: "rgba(255,255,255,0.96)", duration: 0.28 }, 4.0);
+      tl.to(".install-panel", { opacity: 0, y: -26, scale: 0.985, duration: 0.55, ease: "power2.in" }, 4.2);
+      tl.to(".scene-content", { scale: 1, opacity: 1, duration: 0.55, ease: "power2.out" }, 4.35);
+      tl.fromTo(
+        ".open-page-callout",
+        { opacity: 0, y: 24, scale: 0.96 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.48, ease: "power3.out" },
+        4.8,
+      );
+      tl.to(".address-highlight", { opacity: 1, scale: 1, duration: 0.34, ease: "power2.out" }, 5.05);
+      tl.to([".open-page-callout", ".address-highlight"], { opacity: 0, y: -18, duration: 0.42, ease: "power2.in" }, 7.1);
+      tl.to(".step-open", { borderColor: "rgba(16,185,129,0.38)", color: "rgba(255,255,255,0.72)", duration: 0.28 }, 7.2);
+      tl.to(".step-use", { borderColor: "rgba(129,140,248,0.48)", color: "rgba(255,255,255,0.96)", duration: 0.28 }, 7.25);
+      tl.to(".toolbar-highlight", { opacity: 1, scale: 1, duration: 0.34, ease: "power2.out" }, 7.55);
+      tl.fromTo(".callout", { opacity: 0, y: 24 }, { opacity: 1, y: -10, duration: 0.5, ease: "power3.out" }, 7.8);
+      tl.from(".selected .box", { scale: 0.72, duration: 0.28, stagger: 0.08, ease: "back.out(2)" }, 8.5);
+      tl.to(".seg-item.active", { backgroundColor: "rgba(129, 140, 248, 0.34)", duration: 0.35, ease: "power2.out" }, 9.0);
+      tl.to(".btn.danger", { scale: 1.06, duration: 0.22, ease: "power2.out" }, 9.45);
+      tl.to(".btn.danger", { scale: 1, duration: 0.24, ease: "power2.inOut" }, 9.68);
+      tl.to([".callout", ".toolbar-highlight"], { opacity: 0, y: -24, duration: 0.42, ease: "power2.in" }, 10.6);
+      tl.fromTo(
+        ".progress-panel",
+        { opacity: 0, y: 38, scale: 0.96 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.55, ease: "power3.out" },
+        11.0,
+      );
+      tl.from(".progress-fill", { width: "0%", duration: 1.5, ease: "power2.out" }, 11.35);
+      tl.to(".counter", { color: "rgba(255,255,255,0.92)", duration: 0.25, ease: "power2.out" }, 12.2);
+      tl.to(".progress-panel", { opacity: 0, y: -20, duration: 0.45, ease: "power2.in" }, 14.4);
+      tl.to(".final-badge", { opacity: 1, y: -8, duration: 0.55, ease: "power3.out" }, 14.85);
+      tl.to(".headline span", { color: "#ffffff", duration: 0.5, ease: "power2.out" }, 15.2);
+      tl.to(".browser", { scale: 1.028, duration: 1.6, ease: "power1.inOut" }, 15.35);
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

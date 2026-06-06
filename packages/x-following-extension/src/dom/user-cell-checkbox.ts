@@ -115,6 +115,7 @@ const hitZoneStyle = [
   "justify-content:center",
   "cursor:pointer",
   "z-index:2",
+  "touch-action:manipulation",
   "-webkit-tap-highlight-color:transparent",
 ].join(";");
 
@@ -143,7 +144,7 @@ export const resolveUserCellMount = (cell: HTMLElement): UserCellMount => {
 const findHitZone = (mount: UserCellMount): HTMLElement | null => {
   const { mountEl, userCell } = mount;
   const prev = userCell.previousElementSibling;
-  if (prev?.matches(`[${CHECKBOX_HIT_ATTR}]`)) return prev;
+  if (prev instanceof HTMLElement && prev.matches(`[${CHECKBOX_HIT_ATTR}]`)) return prev;
   return mountEl.querySelector<HTMLElement>(`:scope > [${CHECKBOX_HIT_ATTR}]`);
 };
 
@@ -158,6 +159,64 @@ const findCheckboxInput = (mount: UserCellMount, handle: string | null): HTMLInp
   const normalized = normalizeHandle(handle);
   if (normalized === null || input.dataset.xfmHandle === normalized) return input;
   return null;
+};
+
+const syncInputHandleFromCurrentCell = (hit: HTMLElement, input: HTMLInputElement): void => {
+  const domCell: HTMLElement | null =
+    (hit.nextElementSibling as HTMLElement | null) ??
+    hit.parentElement?.querySelector<HTMLElement>('[data-testid="UserCell"]') ??
+    null;
+  if (domCell === null) return;
+  const currentHandle = extractUserCellHandle(domCell);
+  if (currentHandle !== null) input.dataset.xfmHandle = currentHandle;
+};
+
+const toggleInputFromHitZone = (hit: HTMLElement, input: HTMLInputElement): void => {
+  syncInputHandleFromCurrentCell(hit, input);
+  input.checked = !input.checked;
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+};
+
+const stopHitZoneEvent = (event: Event): void => {
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+};
+
+const bindHitZoneInteraction = (hit: HTMLElement, input: HTMLInputElement): void => {
+  if (hit.dataset.xfmHitBound === "true") return;
+  hit.dataset.xfmHitBound = "true";
+  hit.tabIndex = 0;
+  hit.setAttribute("role", "checkbox");
+
+  hit.addEventListener(
+    "pointerdown",
+    (event) => {
+      stopHitZoneEvent(event);
+      hit.dataset.xfmPointerToggled = "true";
+      toggleInputFromHitZone(hit, input);
+    },
+    { capture: true },
+  );
+
+  hit.addEventListener(
+    "click",
+    (event) => {
+      stopHitZoneEvent(event);
+      if (hit.dataset.xfmPointerToggled === "true") {
+        delete hit.dataset.xfmPointerToggled;
+        return;
+      }
+      toggleInputFromHitZone(hit, input);
+    },
+    { capture: true },
+  );
+
+  hit.addEventListener("keydown", (event) => {
+    if (event.key !== " " && event.key !== "Enter") return;
+    stopHitZoneEvent(event);
+    toggleInputFromHitZone(hit, input);
+  });
 };
 
 /** 复用行上已有热区并更正 handle，避免虚拟列表复用 DOM 时拆掉勾选框导致闪烁。 */
@@ -182,7 +241,11 @@ export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
   const handle = normalizeHandle(extractUserCellHandle(mount.userCell));
 
   const existingInput = findOrReuseCheckboxInput(mount, handle);
-  if (existingInput !== null) return existingInput;
+  if (existingInput !== null) {
+    const existingHit = existingInput.closest<HTMLElement>(`[${CHECKBOX_HIT_ATTR}]`);
+    if (existingHit !== null) bindHitZoneInteraction(existingHit, existingInput);
+    return existingInput;
+  }
 
   findHitZone(mount)?.remove();
 
@@ -220,26 +283,14 @@ export const ensureUserCellCheckbox = (cell: HTMLElement): HTMLInputElement => {
   const visual = createVisualSpan();
   updateVisualSpan(visual, input.checked);
   hit.append(visual);
+  hit.setAttribute("aria-checked", String(input.checked));
 
-  // 显式 click handler：替代浏览器隐式 label 行为，避免 X 页面事件冲突
-  hit.addEventListener("click", (e) => {
-    e.preventDefault();
-    // 从 DOM 动态查找当前 cell，而非使用闭包中的 cell（虚拟列表回收时闭包 cell 可能已脱离 DOM）
-    const domCell: HTMLElement | null =
-      (hit.nextElementSibling as HTMLElement | null) ??
-      hit.parentElement?.querySelector<HTMLElement>('[data-testid="UserCell"]') ??
-      null;
-    if (domCell !== null) {
-      const currentHandle = extractUserCellHandle(domCell);
-      if (currentHandle !== null) input.dataset.xfmHandle = currentHandle;
-    }
-    input.checked = !input.checked;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  bindHitZoneInteraction(hit, input);
 
   input.addEventListener("change", () => {
     const vis = hit.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
     if (vis) updateVisualSpan(vis, input.checked);
+    hit.setAttribute("aria-checked", String(input.checked));
   });
 
   mount.mountEl.insertBefore(hit, mount.userCell);

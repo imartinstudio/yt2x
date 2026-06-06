@@ -1,0 +1,1036 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>X 清道夫 Demo</title>
+    <style>
+      :root {
+        --bg: #07090c;
+        --panel: #0d1117;
+        --panel-2: #111722;
+        --line: rgba(255, 255, 255, 0.09);
+        --text: #f5f7fb;
+        --muted: #8d96a8;
+        --soft: #c8d0dd;
+        --blue: #2f9df4;
+        --blue-2: #77c8ff;
+        --green: #4fd18b;
+        --red: #f35f6f;
+        --amber: #f6c768;
+        --violet: #8e83ff;
+        --shadow: 0 32px 90px rgba(0, 0, 0, 0.46);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1280px;
+        height: 800px;
+        margin: 0;
+        overflow: hidden;
+      }
+      body {
+        background:
+          radial-gradient(circle at 17% 12%, rgba(47, 157, 244, 0.18), transparent 28%),
+          radial-gradient(circle at 82% 20%, rgba(79, 209, 139, 0.12), transparent 27%),
+          linear-gradient(135deg, #05070a 0%, #0c1119 52%, #071014 100%);
+        color: var(--text);
+        font-family:
+          ui-sans-serif,
+          -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Display",
+          "SF Pro Text",
+          "Segoe UI",
+          sans-serif;
+      }
+
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+        background-size: 46px 46px;
+        mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.8), transparent 78%);
+      }
+
+      .stage {
+        width: 1280px;
+        height: 800px;
+        padding: 30px 38px;
+        position: relative;
+      }
+
+      .topline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 22px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .mark {
+        width: 52px;
+        height: 52px;
+        border-radius: 16px;
+        background: rgba(8, 12, 18, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.16),
+          0 16px 38px rgba(0, 0, 0, 0.38);
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+      }
+
+      .mark img {
+        width: 42px;
+        height: 42px;
+        display: block;
+      }
+
+      .brand h1 {
+        font-size: 29px;
+        line-height: 1;
+        margin: 0 0 6px;
+        letter-spacing: 0;
+      }
+
+      .brand p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .badges {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .badge {
+        height: 34px;
+        padding: 0 13px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.055);
+        color: #dbe6f4;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 99px;
+        background: var(--green);
+        box-shadow: 0 0 18px rgba(79, 209, 139, 0.9);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 370px 1fr;
+        gap: 24px;
+        height: 680px;
+      }
+
+      .copy {
+        padding-top: 18px;
+      }
+
+      .kicker {
+        color: var(--blue-2);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0;
+        margin-bottom: 18px;
+      }
+
+      .headline {
+        margin: 0;
+        font-size: 48px;
+        line-height: 1.02;
+        letter-spacing: 0;
+        max-width: 360px;
+      }
+
+      .headline .accent {
+        color: #c5e7ff;
+        text-shadow: 0 0 34px rgba(47, 157, 244, 0.42);
+      }
+
+      .subhead {
+        margin: 20px 0 0;
+        color: var(--soft);
+        font-size: 18px;
+        line-height: 1.55;
+        max-width: 330px;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 11px;
+        margin-top: 30px;
+        width: 330px;
+      }
+
+      .metric {
+        min-height: 86px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.055);
+        padding: 15px;
+      }
+
+      .metric strong {
+        display: block;
+        font-size: 28px;
+        line-height: 1;
+        margin-bottom: 10px;
+      }
+
+      .metric span {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .privacy {
+        width: 330px;
+        margin-top: 18px;
+        padding: 15px 16px;
+        border-radius: 8px;
+        background: rgba(79, 209, 139, 0.09);
+        border: 1px solid rgba(79, 209, 139, 0.25);
+        color: #d7f7e5;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .browser {
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: var(--shadow);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: #050505;
+        position: relative;
+      }
+
+      .browser-top {
+        height: 52px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 18px;
+        background: linear-gradient(180deg, rgba(28, 35, 46, 0.96), rgba(17, 22, 30, 0.96));
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .traffic {
+        display: flex;
+        gap: 8px;
+      }
+
+      .traffic span {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #3b4654;
+      }
+
+      .address {
+        height: 32px;
+        flex: 1;
+        border-radius: 999px;
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #aeb7c6;
+        font-size: 13px;
+      }
+
+      .install-chip {
+        height: 30px;
+        padding: 0 12px;
+        border-radius: 999px;
+        display: flex;
+        align-items: center;
+        background: rgba(47, 157, 244, 0.16);
+        color: #bde3ff;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .x-shell {
+        height: 628px;
+        display: grid;
+        grid-template-columns: 174px minmax(0, 1fr);
+        background: #000;
+      }
+
+      .sidebar {
+        border-right: 1px solid #252930;
+        padding: 24px 18px;
+      }
+
+      .x-logo {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 18px;
+        color: #f4f7fb;
+        font-size: 24px;
+        font-weight: 900;
+        line-height: 1;
+      }
+
+      .nav-item {
+        height: 42px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: #d8dde6;
+        font-size: 15px;
+        font-weight: 720;
+      }
+
+      .nav-icon {
+        width: 23px;
+        color: #9aa3b3;
+        text-align: center;
+      }
+
+      .compose {
+        margin-top: 18px;
+        height: 42px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        background: #eef3f7;
+        color: #111;
+        font-weight: 860;
+      }
+
+      .profile-pill {
+        position: absolute;
+        bottom: 24px;
+        left: 18px;
+        width: 138px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: #d7dde8;
+      }
+
+      .mini-avatar {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #303846, #11161f);
+        border: 1px solid #394150;
+      }
+
+      .main {
+        border-right: 1px solid #252930;
+        min-width: 0;
+      }
+
+      .page-head {
+        height: 72px;
+        padding: 15px 20px;
+        border-bottom: 1px solid #252930;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .back {
+        width: 32px;
+        height: 32px;
+        border-radius: 99px;
+        display: grid;
+        place-items: center;
+        color: #dfe5ee;
+        font-size: 22px;
+      }
+
+      .page-title {
+        font-size: 22px;
+        font-weight: 850;
+        line-height: 1.1;
+      }
+
+      .page-subtitle {
+        color: #7c8594;
+        font-size: 13px;
+        margin-top: 3px;
+      }
+
+      .tabs {
+        height: 58px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border-bottom: 1px solid #252930;
+      }
+
+      .tab {
+        display: grid;
+        place-items: center;
+        color: #808998;
+        font-size: 14px;
+        font-weight: 740;
+        position: relative;
+      }
+
+      .tab.active {
+        color: #f2f5f8;
+      }
+
+      .tab.active::after {
+        content: "";
+        position: absolute;
+        bottom: 0;
+        width: 74px;
+        height: 4px;
+        border-radius: 999px;
+        background: var(--blue);
+      }
+
+      .toolbar {
+        padding: 15px 18px 16px;
+        background:
+          linear-gradient(135deg, rgba(47, 157, 244, 0.16), rgba(142, 131, 255, 0.12)), #0b0d16;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .toolbar-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 13px;
+      }
+
+      .tool-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 880;
+        font-size: 16px;
+      }
+
+      .tool-logo {
+        width: 22px;
+        height: 22px;
+        display: block;
+      }
+
+      .beta {
+        padding: 3px 7px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        color: #b7c0cf;
+        font-size: 10px;
+        font-weight: 900;
+      }
+
+      .stats {
+        color: #a7b2c3;
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .stats b {
+        color: #fff;
+      }
+
+      .toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        flex-wrap: nowrap;
+      }
+
+      .btn {
+        height: 38px;
+        min-width: 72px;
+        padding: 0 17px;
+        border-radius: 9px;
+        border: 1px solid rgba(255, 255, 255, 0.11);
+        background: rgba(255, 255, 255, 0.07);
+        color: #dfe6f3;
+        font-size: 13px;
+        font-weight: 820;
+        white-space: nowrap;
+      }
+
+      .btn.active {
+        background: rgba(47, 157, 244, 0.22);
+        border-color: rgba(119, 200, 255, 0.42);
+        color: #f8fcff;
+      }
+
+      .btn.danger {
+        margin-left: auto;
+        min-width: 102px;
+        background: linear-gradient(180deg, #f36a78, #c93849);
+        border-color: rgba(255, 255, 255, 0.16);
+        color: #fff;
+        box-shadow: 0 12px 28px rgba(243, 95, 111, 0.24);
+      }
+
+      .note {
+        margin-top: 11px;
+        color: #d9bd74;
+        font-size: 12px;
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .progress-track {
+        height: 7px;
+        margin-top: 12px;
+        border-radius: 99px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.09);
+      }
+
+      .progress-fill {
+        height: 100%;
+        width: 34%;
+        background: linear-gradient(90deg, var(--blue), var(--green));
+        border-radius: inherit;
+      }
+
+      .user-list {
+        height: 414px;
+        overflow: hidden;
+      }
+
+      .user {
+        min-height: 82px;
+        display: grid;
+        grid-template-columns: 30px 50px minmax(0, 1fr) 58px 82px;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 18px;
+        border-bottom: 1px solid #1e222a;
+        background: rgba(0, 0, 0, 0.58);
+      }
+
+      .check {
+        width: 23px;
+        height: 23px;
+        border-radius: 7px;
+        border: 2px solid #4b5574;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-weight: 900;
+        background: rgba(142, 131, 255, 0.15);
+      }
+
+      .check.on {
+        background: linear-gradient(135deg, #6174ff, #2f9df4);
+        border-color: rgba(255, 255, 255, 0.25);
+      }
+
+      .avatar {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        display: grid;
+        place-items: center;
+        font-weight: 880;
+        color: #fff;
+      }
+
+      .avatar.a {
+        background: linear-gradient(135deg, #2f9df4, #5f6cf4);
+      }
+      .avatar.b {
+        background: linear-gradient(135deg, #4fd18b, #168a73);
+      }
+      .avatar.c {
+        background: linear-gradient(135deg, #f6c768, #d66b45);
+      }
+      .avatar.d {
+        background: linear-gradient(135deg, #8e83ff, #d85cba);
+      }
+      .avatar.e {
+        background: linear-gradient(135deg, #536173, #171f2c);
+      }
+
+      .name {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        font-weight: 840;
+        font-size: 15px;
+      }
+
+      .handle {
+        margin-top: 3px;
+        color: #858e9d;
+        font-size: 13px;
+      }
+
+      .bio {
+        margin-top: 5px;
+        color: #c9d0da;
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .pill {
+        height: 26px;
+        border-radius: 99px;
+        display: grid;
+        place-items: center;
+        font-size: 11px;
+        font-weight: 860;
+        background: rgba(243, 95, 111, 0.12);
+        color: #ff9aa5;
+      }
+
+      .pill.mutual {
+        background: rgba(79, 209, 139, 0.12);
+        color: #9df0c2;
+      }
+
+      .following {
+        height: 34px;
+        border-radius: 99px;
+        border: 1px solid #4c5868;
+        background: transparent;
+        color: #edf2f7;
+        font-size: 12px;
+        font-weight: 840;
+      }
+
+      .callout {
+        position: absolute;
+        right: 36px;
+        top: 348px;
+        width: 234px;
+        padding: 15px 16px;
+        border-radius: 8px;
+        background: rgba(7, 11, 18, 0.86);
+        border: 1px solid rgba(119, 200, 255, 0.26);
+        box-shadow: 0 22px 54px rgba(0, 0, 0, 0.38);
+        backdrop-filter: blur(18px);
+      }
+
+      .callout::before {
+        content: "";
+        position: absolute;
+        right: 30px;
+        left: auto;
+        top: -9px;
+        width: 16px;
+        height: 16px;
+        transform: rotate(45deg);
+        background: rgba(7, 11, 18, 0.86);
+        border-left: 1px solid rgba(119, 200, 255, 0.26);
+        border-bottom: 1px solid rgba(119, 200, 255, 0.26);
+      }
+
+      .callout h2 {
+        margin: 0 0 7px;
+        font-size: 17px;
+      }
+
+      .callout p {
+        margin: 0;
+        color: #b8c5d6;
+        font-size: 13px;
+        line-height: 1.42;
+      }
+
+      .mask {
+        position: absolute;
+        inset: 52px 0 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.46);
+        backdrop-filter: blur(2px);
+      }
+
+      .modal {
+        width: 382px;
+        border-radius: 18px;
+        background: #0b0d12;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+        padding: 24px;
+      }
+
+      .modal h2 {
+        margin: 0 0 10px;
+        font-size: 22px;
+      }
+
+      .modal p {
+        margin: 0 0 18px;
+        color: #aab4c3;
+        line-height: 1.55;
+        font-size: 14px;
+      }
+
+      .modal .danger-line {
+        color: #ffc0c7;
+        background: rgba(243, 95, 111, 0.11);
+        border: 1px solid rgba(243, 95, 111, 0.25);
+        border-radius: 8px;
+        padding: 11px 12px;
+        margin-bottom: 16px;
+        font-size: 13px;
+      }
+
+      .modal-actions {
+        display: grid;
+        gap: 10px;
+      }
+
+      .modal-btn {
+        height: 44px;
+        border-radius: 999px;
+        border: 0;
+        font-weight: 880;
+        font-size: 14px;
+      }
+
+      .modal-btn.confirm {
+        color: #fff;
+        background: linear-gradient(180deg, #ff7481, #d84252);
+      }
+
+      .modal-btn.cancel {
+        color: #e7edf7;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+
+      .toast {
+        position: absolute;
+        right: 28px;
+        bottom: 28px;
+        width: 330px;
+        display: none;
+        grid-template-columns: 42px 1fr;
+        gap: 12px;
+        align-items: center;
+        padding: 16px;
+        border-radius: 13px;
+        background: rgba(8, 14, 20, 0.94);
+        border: 1px solid rgba(79, 209, 139, 0.34);
+        box-shadow: 0 22px 60px rgba(0, 0, 0, 0.48);
+      }
+
+      .toast-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        background: rgba(79, 209, 139, 0.16);
+        color: #8bf0bd;
+        display: grid;
+        place-items: center;
+        font-size: 22px;
+        font-weight: 900;
+      }
+
+      .toast strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 15px;
+      }
+
+      .toast span {
+        color: #aeb9c8;
+        font-size: 13px;
+      }
+
+      body[data-state="confirm"] .mask {
+        display: flex;
+      }
+      body[data-state="progress"] .progress-fill {
+        width: 72%;
+      }
+      body[data-state="progress"] .callout h2::after {
+        content: "中";
+      }
+      body[data-state="progress"] .stats .selected {
+        color: #fff;
+      }
+      body[data-state="progress"] .btn.danger {
+        background: linear-gradient(180deg, #798497, #4b5565);
+        box-shadow: none;
+      }
+      body[data-state="progress"] .btn.danger::before {
+        content: "正在处理";
+        font-size: 0;
+      }
+      body[data-state="progress"] .btn.danger {
+        font-size: 0;
+      }
+      body[data-state="progress"] .btn.danger::after {
+        content: "处理中 18/24";
+        font-size: 13px;
+      }
+      body[data-state="complete"] .progress-fill {
+        width: 100%;
+      }
+      body[data-state="complete"] .toast {
+        display: grid;
+      }
+      body[data-state="complete"] .callout h2 {
+        color: #bff8d7;
+      }
+      body[data-state="complete"] .btn.danger {
+        background: rgba(79, 209, 139, 0.15);
+        color: #bff8d7;
+        box-shadow: none;
+        border-color: rgba(79, 209, 139, 0.28);
+      }
+      body[data-state="complete"] .btn.danger {
+        font-size: 0;
+      }
+      body[data-state="complete"] .btn.danger::after {
+        content: "完成";
+        font-size: 13px;
+      }
+
+      .watermark {
+        position: absolute;
+        left: 38px;
+        bottom: 22px;
+        color: rgba(216, 226, 240, 0.48);
+        font-size: 12px;
+        font-weight: 740;
+      }
+    </style>
+  </head>
+  <body data-state="main">
+    <main class="stage">
+      <section class="topline">
+        <div class="brand">
+          <div class="mark"><img src="../src/icons/icon-128.png" alt="" /></div>
+          <div>
+            <h1>X 清道夫</h1>
+            <p>在 Following 页面直接筛选、勾选、批量取关</p>
+          </div>
+        </div>
+        <div class="badges">
+          <div class="badge"><span class="dot"></span>纯本地运行</div>
+          <div class="badge">不收集数据</div>
+          <div class="badge">Chrome 扩展</div>
+        </div>
+      </section>
+
+      <section class="hero">
+        <aside class="copy">
+          <div class="kicker">FOLLOWING CLEANUP WORKFLOW</div>
+          <h2 class="headline">清理未回关，<br /><span class="accent">不用再一个个点。</span></h2>
+          <p class="subhead">
+            打开自己的 X Following
+            页面，工具栏自动出现。筛选、全选、确认、进度反馈都在当前页面完成。
+          </p>
+          <div class="metrics">
+            <div class="metric"><strong>24</strong><span>匿名演示用户</span></div>
+            <div class="metric"><strong>12</strong><span>已勾选待处理</span></div>
+            <div class="metric"><strong>1s</strong><span>默认操作间隔</span></div>
+            <div class="metric"><strong>0</strong><span>云端数据上传</span></div>
+          </div>
+          <div class="privacy">
+            演示截图只使用占位账号、抽象头像和遮罩 handle，不包含真实用户、真实推荐内容、cookies
+            或浏览器凭证。
+          </div>
+        </aside>
+
+        <div class="browser">
+          <div class="browser-top">
+            <div class="traffic"><span></span><span></span><span></span></div>
+            <div class="address">x.com/&lt;your-handle&gt;/following</div>
+            <div class="install-chip">扩展已启用</div>
+          </div>
+          <div class="x-shell">
+            <aside class="sidebar">
+              <div class="x-logo">𝕏</div>
+              <div class="nav-item"><span class="nav-icon">⌂</span>主页</div>
+              <div class="nav-item"><span class="nav-icon">⌕</span>探索</div>
+              <div class="nav-item"><span class="nav-icon">◌</span>通知</div>
+              <div class="nav-item"><span class="nav-icon">✉</span>消息</div>
+              <div class="nav-item"><span class="nav-icon">◉</span>个人资料</div>
+              <div class="compose">发帖</div>
+              <div class="profile-pill">
+                <span class="mini-avatar"></span><span>@user_demo</span>
+              </div>
+            </aside>
+
+            <section class="main">
+              <header class="page-head">
+                <div class="back">←</div>
+                <div>
+                  <div class="page-title">Demo Account</div>
+                  <div class="page-subtitle">@user_demo · 仅用于截图展示</div>
+                </div>
+              </header>
+              <nav class="tabs">
+                <div class="tab">关注者</div>
+                <div class="tab">已验证</div>
+                <div class="tab active">正在关注</div>
+              </nav>
+              <section class="toolbar">
+                <div class="toolbar-head">
+                  <div class="tool-title">
+                    <img class="tool-logo" src="../src/icons/icon-128.png" alt="" />X 清道夫
+                    <span class="beta">BETA</span>
+                  </div>
+                  <div class="stats">
+                    列表 <b>24</b> 人 · 已选 <b class="selected">12</b> 人 · 未回关
+                    <b style="color: #ff8995">18</b> 人
+                  </div>
+                </div>
+                <div class="toolbar-actions">
+                  <button class="btn active">仅未回关</button>
+                  <button class="btn">全部</button>
+                  <button class="btn">全选列表</button>
+                  <button class="btn">清除选择</button>
+                  <button class="btn danger">取关选中</button>
+                </div>
+                <div class="note">
+                  <span>建议分批处理，降低账号限制风险</span>
+                  <span>本地页面内执行</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill"></div></div>
+              </section>
+              <section class="user-list">
+                <article class="user">
+                  <div class="check on">✓</div>
+                  <div class="avatar a">A1</div>
+                  <div>
+                    <div class="name">Creator Alpha</div>
+                    <div class="handle">@demo_user_001</div>
+                    <div class="bio">匿名演示资料，不代表真实账号</div>
+                  </div>
+                  <div class="pill">未回关</div>
+                  <button class="following">正在关注</button>
+                </article>
+                <article class="user">
+                  <div class="check on">✓</div>
+                  <div class="avatar b">B2</div>
+                  <div>
+                    <div class="name">Studio Beta</div>
+                    <div class="handle">@demo_user_002</div>
+                    <div class="bio">用于展示筛选、勾选和批量处理体验</div>
+                  </div>
+                  <div class="pill">未回关</div>
+                  <button class="following">正在关注</button>
+                </article>
+                <article class="user">
+                  <div class="check"></div>
+                  <div class="avatar c">C3</div>
+                  <div>
+                    <div class="name">Product Circle</div>
+                    <div class="handle">@demo_user_003</div>
+                    <div class="bio">互关账号会被清楚标记，避免误操作</div>
+                  </div>
+                  <div class="pill mutual">互关</div>
+                  <button class="following">正在关注</button>
+                </article>
+                <article class="user">
+                  <div class="check on">✓</div>
+                  <div class="avatar d">D4</div>
+                  <div>
+                    <div class="name">Design Lab</div>
+                    <div class="handle">@demo_user_004</div>
+                    <div class="bio">批量操作前会再次确认数量</div>
+                  </div>
+                  <div class="pill">未回关</div>
+                  <button class="following">正在关注</button>
+                </article>
+                <article class="user">
+                  <div class="check on">✓</div>
+                  <div class="avatar e">E5</div>
+                  <div>
+                    <div class="name">Research Notes</div>
+                    <div class="handle">@demo_user_005</div>
+                    <div class="bio">进度条实时反馈当前处理状态</div>
+                  </div>
+                  <div class="pill">未回关</div>
+                  <button class="following">正在关注</button>
+                </article>
+              </section>
+            </section>
+          </div>
+
+          <div class="callout">
+            <h2>筛选未回关</h2>
+            <p>一键切到未回关列表，批量勾选目标账号，操作前仍可逐个调整。</p>
+          </div>
+
+          <div class="mask">
+            <div class="modal">
+              <h2>确认取消关注？</h2>
+              <p>将对当前已勾选的 12 个匿名演示账号依次执行取消关注。</p>
+              <div class="danger-line">真实使用时建议小批量处理，并保留 1 秒间隔。</div>
+              <div class="modal-actions">
+                <button class="modal-btn confirm">确认取关选中账号</button>
+                <button class="modal-btn cancel">取消</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="toast">
+            <div class="toast-icon">✓</div>
+            <div>
+              <strong>本轮清理完成</strong>
+              <span>成功处理 12 个选中项，列表状态已刷新。</span>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div class="watermark">Demo data only · No real X accounts or browser credentials</div>
+    </main>
+    <script>
+      const state = new URLSearchParams(location.search).get("state") || "main";
+      document.body.dataset.state = state;
+      const callout = document.querySelector(".callout");
+      if (state === "confirm") {
+        callout.querySelector("h2").textContent = "确认再执行";
+        callout.querySelector("p").textContent = "批量取关前展示影响数量，减少误操作风险。";
+      }
+      if (state === "progress") {
+        callout.querySelector("h2").textContent = "实时进度";
+        callout.querySelector("p").textContent =
+          "逐个执行并更新进度，用户可以清楚看到当前批次状态。";
+      }
+      if (state === "complete") {
+        callout.querySelector("h2").textContent = "完成反馈";
+        callout.querySelector("p").textContent = "操作结束后给出结果摘要，方便继续下一批清理。";
+      }
+    </script>
+  </body>
+</html>

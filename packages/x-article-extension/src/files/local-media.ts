@@ -77,12 +77,17 @@ export const pickMediaDirectory = (): Promise<File[]> =>
 export const pickArticleDirectory = (): Promise<File[]> =>
   pickFiles({ accept: "", multiple: true, directory: true });
 
+const hasUserActivation = (): boolean => {
+  if (!("userActivation" in navigator)) return true;
+  return navigator.userActivation.isActive;
+};
+
 const pickFiles = (input: {
   accept: string;
   multiple: boolean;
   directory?: boolean;
 }): Promise<File[]> =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     const inputEl = document.createElement("input");
     inputEl.type = "file";
     inputEl.accept = input.accept;
@@ -99,5 +104,10 @@ const pickFiles = (input: {
     };
     inputEl.addEventListener("change", () => finish([...(inputEl.files ?? [])]), { once: true });
     inputEl.addEventListener("cancel", () => finish([]), { once: true });
+    if (!hasUserActivation()) {
+      inputEl.remove();
+      reject(new Error("File selection must be started from a direct click. Please use the import dialog's picker button."));
+      return;
+    }
     inputEl.click();
   });

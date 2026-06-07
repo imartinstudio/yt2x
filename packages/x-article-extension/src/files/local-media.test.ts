@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { buildMediaRegistry } from "./local-media.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildMediaRegistry, pickMarkdownFile } from "./local-media.js";
 
 const file = (name: string, relativePath?: string): File =>
   new File(["x"], name, {
@@ -31,5 +31,23 @@ describe("buildMediaRegistry", () => {
       authorizedFiles: [],
     });
     expect(registry.missingSources).toEqual(["images/missing.png"]);
+  });
+});
+
+describe("pickMarkdownFile", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("rejects before clicking hidden input when Chrome no longer has user activation", async () => {
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: false },
+    });
+    const click = vi.spyOn(HTMLInputElement.prototype, "click");
+
+    await expect(pickMarkdownFile()).rejects.toThrow(/direct click/i);
+    expect(click).not.toHaveBeenCalled();
+    expect(document.querySelectorAll('input[type="file"]')).toHaveLength(0);
   });
 });

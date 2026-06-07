@@ -4,7 +4,6 @@ import type { PreparedArticleImport } from "../files/prepare-import.js";
 
 const actionMocks = vi.hoisted(() => ({
   dismissOpenOverlays: vi.fn(),
-  insertContentMedia: vi.fn(),
   resetInsertButtonCache: vi.fn(),
   waitForMediaUploadComplete: vi.fn(),
 }));
@@ -54,7 +53,6 @@ describe("writeArticleDraftToPage", () => {
     locatorMocks.readTitleFieldText.mockImplementation((field: HTMLElement) => field.textContent ?? "");
     locatorMocks.waitForArticleDraftReady.mockResolvedValue({ editor });
     actionMocks.waitForMediaUploadComplete.mockResolvedValue(undefined);
-    actionMocks.insertContentMedia.mockResolvedValue(undefined);
     coverMocks.uploadCoverImage.mockResolvedValue(undefined);
     payloadMocks.buildMainWorldWritePayload.mockResolvedValue({
       title: "Title",
@@ -121,19 +119,18 @@ describe("writeArticleDraftToPage", () => {
     expect(payloadMocks.buildMainWorldWritePayload).toHaveBeenCalledWith(prepared);
     expect(mainWorldMocks.runMainWorldImport).toHaveBeenCalledWith(
       expect.objectContaining({
-        plan: [],
-        imageFiles: [],
-        markerPrefix: "__YT2X_test_MAIN_",
+        plan: [
+          expect.objectContaining({
+            marker: "__YT2X_test_IMAGE_0__",
+            op: expect.objectContaining({
+              type: "image",
+              source: "images/scene.png",
+            }),
+          }),
+        ],
+        markerPrefix: "__YT2X_test_",
       }),
       expect.anything(),
-    );
-    expect(actionMocks.insertContentMedia).toHaveBeenCalledWith(
-      expect.any(File),
-      expect.objectContaining({
-        editor,
-        afterText: "__YT2X_test_IMAGE_0__",
-        blockIndex: 0,
-      }),
     );
     expect(result.skippedMedia).toEqual([]);
     expect(result.manualContentMedia).toEqual([]);

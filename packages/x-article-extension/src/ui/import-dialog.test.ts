@@ -139,6 +139,31 @@ describe("X Articles import media policy", () => {
     expect(host.isConnected).toBe(false);
   });
 
+  it("marks missing assets distinctly from authorized assets in the preview list", () => {
+    const result = showImportPreviewDialog({
+      title: "Title",
+      coverImage: "images/cover.png",
+      contentImages: ["images/body.png"],
+      contentImageCount: 1,
+      contentVideoCount: 0,
+      adaptations: [],
+      warnings: [],
+      missingSources: ["images/body.png"],
+    });
+    const host = document.querySelector("[data-yt2x-import-dialog]") as HTMLElement;
+    const shadow = host.shadowRoot!;
+
+    const rows = [...shadow.querySelectorAll<HTMLElement>(".media-item")].map((row) => ({
+      text: row.textContent ?? "",
+      status: row.dataset.status,
+    }));
+
+    expect(rows).toContainEqual({ text: "images/cover.png", status: "ok" });
+    expect(rows).toContainEqual({ text: "images/body.png", status: "missing" });
+    shadow.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
+    return expect(result).resolves.toEqual({ type: "cancel" });
+  });
+
   it("saves the selected tier when confirming the import preview", async () => {
     runtimeMocks.saveSubscriptionTier.mockResolvedValue(undefined);
     const result = showImportPreviewDialog({

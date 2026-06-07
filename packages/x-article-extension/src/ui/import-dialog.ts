@@ -258,11 +258,28 @@ const renderDialogHtml = (preview: ImportPreview): string => {
 
   const hasMissing = preview.missingSources.length > 0;
   const hasCoverPreview = Boolean(preview.coverObjectUrl);
+  const missingSet = new Set(preview.missingSources);
 
-  type MediaLine = { path: string; color: string };
+  type MediaLine = { path: string; color: string; status?: "ok" | "missing" };
   const assetLines: MediaLine[] = [];
-  if (preview.coverImage) assetLines.push({ path: preview.coverImage, color: "#f59e0b" });
-  for (const path of preview.contentImages) assetLines.push({ path, color: "#10b981" });
+  const assetStatus = (path: string): "ok" | "missing" =>
+    missingSet.has(path) ? "missing" : "ok";
+  if (preview.coverImage) {
+    const status = assetStatus(preview.coverImage);
+    assetLines.push({
+      path: preview.coverImage,
+      color: status === "missing" ? "#fbbf24" : "#f59e0b",
+      status,
+    });
+  }
+  for (const path of preview.contentImages) {
+    const status = assetStatus(path);
+    assetLines.push({
+      path,
+      color: status === "missing" ? "#fbbf24" : "#10b981",
+      status,
+    });
+  }
 
   const convLines: MediaLine[] = [];
   const adaptCounts = new Map<string, number>();
@@ -274,7 +291,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
   }
 
   const renderMediaSection = (lines: MediaLine[]): string =>
-    lines.length === 0 ? "" : `<div class="media-list">${lines.map((m) => `<div class="media-item" style="--c:${m.color}"><span>${escapeHtml(m.path)}</span></div>`).join("")}</div>`;
+    lines.length === 0 ? "" : `<div class="media-list">${lines.map((m) => `<div class="media-item" data-status="${m.status ?? "ok"}" style="--c:${m.color}"><span>${escapeHtml(m.path)}</span></div>`).join("")}</div>`;
 
   const missingChips = preview.missingSources
     .map(
@@ -357,6 +374,9 @@ const renderDialogHtml = (preview: ImportPreview): string => {
     color: var(--c);
     font-weight: 700;
     flex-shrink: 0;
+  }
+  .media-item[data-status='missing']::before {
+    content: '!';
   }
 
   .divider {
@@ -457,7 +477,7 @@ const renderDialogHtml = (preview: ImportPreview): string => {
       ${hasMissing ? `<div class="missing-section">
         <p class="missing-header">${t("缺少素材", "Missing")}</p>
         <div class="chip-list">${missingChips}</div>
-        <button class="batch-link" type="button" data-action="pick-directory">${t("从目录匹配…", "Match from directory…")}</button>
+        <button class="batch-link" type="button" data-action="pick-directory">${t("授权文章目录并匹配…", "Authorize article directory…")}</button>
       </div>` : ""}
 
       <hr class="divider" />

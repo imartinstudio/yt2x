@@ -6,16 +6,13 @@ import {
 } from "./locators.js";
 import {
   dismissOpenOverlays,
-  insertContentMedia,
   resetInsertButtonCache,
   waitForMediaUploadComplete,
 } from "./x-insert-actions.js";
 import { type PreparedArticleImport, resolveUploadFile } from "../files/prepare-import.js";
 import { uploadCoverImage } from "./cover-upload.js";
 import { buildMainWorldWritePayload } from "../import/markdown-to-draft-payload.js";
-import type { MainWorldImageOperation } from "../import/markdown-to-draft-payload.js";
 import { runMainWorldImport } from "./main-world-import.js";
-import { formatIndexedStep } from "../ui/import-loading.js";
 
 export type WriteArticleDraftOptions = {
   onProgress?: (message: string) => void;
@@ -27,25 +24,6 @@ const wait = (ms: number): Promise<void> =>
   });
 
 export { dismissOpenOverlays };
-
-const removeVisibleText = (root: HTMLElement, needle: string): boolean => {
-  if (needle.trim().length === 0) return false;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) {
-    const node = walker.currentNode;
-    if (!(node instanceof Text)) continue;
-    const offset = node.data.indexOf(needle);
-    if (offset < 0) continue;
-    const range = document.createRange();
-    range.setStart(node, offset);
-    range.setEnd(node, offset + needle.length);
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    return document.execCommand("delete");
-  }
-  return false;
-};
 
 export type WriteArticleDraftResult = {
   skippedDividers: number[];
@@ -101,18 +79,9 @@ export const writeArticleDraftToPage = async (
 
     report("正在准备 MAIN world 导入数据…");
     const payload = await buildMainWorldWritePayload(prepared);
-    const imageOps = payload.plan.filter(
-      (item): item is MainWorldImageOperation => item.op.type === "image",
-    );
-    const mainWorldPayload = {
-      ...payload,
-      plan: payload.plan.filter((item) => item.op.type !== "image"),
-      imageFiles: [],
-      markerPrefix: `${payload.markerPrefix}MAIN_`,
-    };
 
-    report("正在通过 Draft.js 写入正文与代码块…");
-    const result = await runMainWorldImport(mainWorldPayload, {
+    report("正在通过 Draft.js 写入正文、代码块与图片…");
+    const result = await runMainWorldImport(payload, {
       onProgress: (message) => report(message),
     });
 
@@ -128,35 +97,6 @@ export const writeArticleDraftToPage = async (
     await fillTitle(parseResult.title);
     if (!editorHasMeaningfulContent(editor)) {
       throw new Error("X Articles body did not finish writing before import completed.");
-    }
-
-    const contentImages = [...imageOps].reverse();
-    for (let index = 0; index < contentImages.length; index += 1) {
-      const image = contentImages[index]!;
-      const imageFile = resolveUploadFile(prepared, image.op.source);
-      if (imageFile === undefined) {
-        lastMediaError = `Content image is not authorized: ${image.op.source}`;
-        skippedMedia.push(image.op.source);
-        continue;
-      }
-      report(formatIndexedStep("正在插入正文图片", index + 1, contentImages.length));
-      try {
-        await insertContentMedia(imageFile, {
-          editor,
-          afterText: image.marker,
-          blockIndex: 0,
-          totalBlocks: 0,
-          appendAtEnd: parseResult.totalBlocks === 0,
-        });
-        removeVisibleText(editor, image.marker);
-        dismissOpenOverlays();
-        await wait(350);
-      } catch (err: unknown) {
-        lastMediaError = err instanceof Error ? err.message : "Unknown content image upload error";
-        skippedMedia.push(image.op.source);
-        dismissOpenOverlays();
-      }
-      await fillTitle(parseResult.title);
     }
 
     if (filteredVideos.length > 0) {

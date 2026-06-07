@@ -179,23 +179,12 @@ const handleImportClick = async (mode: ImportMode): Promise<void> => {
   }
 
   try {
-    // Pick markdown file
     const markdownFile = await pickMarkdownFile();
     if (!markdownFile) return;
 
     const markdown = await readFileAsText(markdownFile);
     let authorizedFiles = [markdownFile];
     let registry = buildMediaRegistry({ markdown, authorizedFiles });
-
-    // Auto-pick directory if media files are referenced
-    const initialCheck = buildImportPreviewState({ markdown, subscriptionTier: await loadSubscriptionTier(), mediaRegistry: registry });
-    if (initialCheck.coverImage || initialCheck.missingSources.length > 0) {
-      const dirFiles = await pickMediaDirectory();
-      if (dirFiles.length > 0) {
-        authorizedFiles = [...authorizedFiles, ...dirFiles];
-        registry = buildMediaRegistry({ markdown, authorizedFiles });
-      }
-    }
 
     const countConversions = (md: string) => {
       const stats: { label: string; count: number }[] = [];

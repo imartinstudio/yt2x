@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "X 清道夫",
-  "version": "0.2.1",
-  "version_name": "0.2.1",
+  "version": "0.2.2",
+  "version_name": "0.2.2",
   "description": "清理你在 X 上的关注列表：筛选未回关用户、一键全选、批量取消关注。",
   "author": "yt2x",
   "homepage_url": "https://github.com/imartinstudio/yt2x",

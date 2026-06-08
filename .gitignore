@@ -63,6 +63,15 @@ files/_bench-*/
 # ── Misc ─────────────────────────────────────────────────────────────────────
 *.log
 *.tgz
+*.zip
+
+# ── Agent session state ──────────────────────────────────────────────────────
+.superpowers/
+.hyperframes/
+.thumbnails/
+
+# ── Video project local assets ────────────────────────────────────────────────
+**/assets/recordings/
 
 .cache/
 **/.process-status.lock

@@ -51,6 +51,7 @@ export const registerPipelineCommand = (program: Command): void => {
     .option("--error-strategy <mode>", "On stage failure: stop|skip", "stop")
     .option("--force", "Overwrite existing structured-notes.md in native notes stage")
     .option("--publish-dry-run", "Preview publish output without posting to X")
+    .option("--deconstruct <n>", "After article generation, auto-deconstruct into top N clips with posts (e.g. 5)")
     .option("--llm-provider <id>", "LLM provider: openai|anthropic|deepseek|moonshot", defaultCliLlmProvider())
     .option("--llm-model <name>", "Override LLM model")
     .option("--llm-base-url <url>", "Override LLM base URL")

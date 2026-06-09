@@ -5,6 +5,8 @@ import { Command } from "commander";
 import { registerAcquireCommand } from "./commands/acquire.js";
 import { registerArticleCommand } from "./commands/article.js";
 import { registerAuthCommand } from "./commands/auth.js";
+import { registerClipsCommand } from "./commands/clips.js";
+import { registerDeconstructCommand } from "./commands/deconstruct.js";
 import { registerInfoCommand } from "./commands/info.js";
 import { registerLlmCommand } from "./commands/llm.js";
 import { registerNotesCommand } from "./commands/notes.js";
@@ -33,6 +35,8 @@ registerArticleCommand(program);
 registerPublishCommand(program);
 registerSubtitleCommand(program);
 registerAuthCommand(program);
+registerClipsCommand(program);
+registerDeconstructCommand(program);
 registerLlmCommand(program);
 
 program.parseAsync().catch((err: unknown) => {

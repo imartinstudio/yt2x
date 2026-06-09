@@ -1,6 +1,7 @@
 export const CORE_VERSION = "0.0.0";
 
 export * from "./domain/article/index.js";
+export * from "./domain/deconstruct/index.js";
 export * from "./domain/notes/index.js";
 export * from "./domain/pipeline/index.js";
 export * from "./domain/publish/index.js";

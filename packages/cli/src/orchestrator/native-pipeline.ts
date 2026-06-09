@@ -18,6 +18,7 @@ import type { PipelineArgs } from "../args/pipeline.js";
 import { executeNativeArticle } from "./native-article.js";
 import { executeNativeNotes } from "./native-notes.js";
 import { executeNativePublish } from "./native-publish.js";
+import { runDeconstructCommand } from "../commands/deconstruct.js";
 import { logger } from "../logger.js";
 import { createAcquireReviewPrompt } from "./acquire-review-prompt.js";
 import { nativeAcquireOptionsFromPipelineArgs } from "./native-acquire-from-pipeline-args.js";
@@ -494,6 +495,27 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
           // burn 失败不影响已生成的文章
         }
         progress.record(stageTimingKey("subtitle-burn", id), Math.round(performance.now() - t0));
+      }
+    }
+
+    // deconstruct stage: after article + subtitle burn, before publish
+    if (args.deconstruct !== undefined) {
+      logger.info(
+        { videos: videoIds.length, selectTop: args.deconstruct },
+        "yt2x pipeline: deconstruct stage",
+      );
+      const deconstructDir = path.resolve(monorepoRoot, DEFAULT_ARTICLE_OUT_DIR);
+      for (const id of videoIds) {
+        progress.setActive(`deconstruct · ${id}`);
+        const articleDir = `${deconstructDir}/${id}`;
+        const code = await runDeconstructCommand(articleDir, args.deconstruct);
+        if (code !== 0) {
+          pipelineExit = mergePipelineExitCode(pipelineExit, code);
+          if (args.control.errorStrategy === "stop") {
+            finalExitCode = code;
+            return finalExitCode;
+          }
+        }
       }
     }
 

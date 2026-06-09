@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "prompt-to-asset": {
+      "command": "npx",
+      "args": ["-y", "prompt-to-asset"]
+    }
+  }
+}

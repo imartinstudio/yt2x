@@ -2,6 +2,7 @@ export const ADAPTERS_NODE_VERSION = "0.0.0";
 
 export * from "./acquire/index.js";
 export * from "./article/index.js";
+export * from "./deconstruct/index.js";
 export * from "./fs/process-status-store.js";
 export * from "./llm/index.js";
 export * from "./notes/index.js";

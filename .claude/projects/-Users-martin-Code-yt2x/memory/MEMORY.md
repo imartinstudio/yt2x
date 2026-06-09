@@ -1,0 +1,1 @@
+- [Clip Integrity Rule](clip-integrity-rule.md) — Video clips must end at natural sentence boundaries, not cut mid-speech

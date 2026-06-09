@@ -42,9 +42,10 @@ export const generateClipsPosts = async (
     throw new Error("No selected clips found. Run `yt2x clips select` first.");
   }
 
-  // Extract article title
+  // Extract article title and derive short series name
   const titleMatch = articleMd.match(/^#\s+(.+)$/m);
   const articleTitle = titleMatch?.[1] ?? manifest.source.videoId;
+  const seriesName = deriveSeriesName(articleTitle);
 
   // Build LLM input
   const clipsInput: GeneratePostsInput["clips"] = selected.map((c) => ({
@@ -61,6 +62,7 @@ export const generateClipsPosts = async (
 
   const userPrompt = buildPostUserPrompt({
     articleTitle,
+    seriesName,
     articlePath: manifest.source.articlePath,
     clips: clipsInput,
   });
@@ -89,7 +91,7 @@ export const generateClipsPosts = async (
     const clip = selected[i]!;
 
     // Build full post text
-    const seriesLine = `🧵 Codex 深度拆解 ${i + 1}/${total}`;
+    const seriesLine = `🧵 ${seriesName} ${i + 1}/${total}`;
     const videoLine = `🎬 视频 ${clip.video}（${Math.round(clip.timecodes.durationSec)}s）`;
     const teaserLine = i < total - 1
       ? post.teaser_next
@@ -148,6 +150,7 @@ const buildPostUserPrompt = (input: GeneratePostsInput): string => {
 
   parts.push(`## 文章`);
   parts.push(`标题：${input.articleTitle}`);
+  parts.push(`系列名称：${input.seriesName}`);
   parts.push(`路径：${input.articlePath}`);
   parts.push("");
 
@@ -166,6 +169,24 @@ const buildPostUserPrompt = (input: GeneratePostsInput): string => {
   parts.push("请为每个章节生成一条帖子文案。输出的 posts 数组顺序必须与输入顺序一致。");
 
   return parts.join("\n");
+};
+
+/**
+ * 从文章标题推导短系列名称。
+ * 例: "Claude Code 刚把网站设计行业翻了个底朝天" → "Claude Code 实战"
+ *      "10 个 Claude Code 插件，让你的项目效率翻 10 倍" → "Claude Code 插件"
+ *      "浏览器已死，Codex 和 Claude Code 才是知识工作的未来" → "AI 知识工作"
+ */
+export const deriveSeriesName = (title: string): string => {
+  const cleaned = title.replace(/^#?\s*[*#]*\s*/, "").replace(/\*\*/g, "").trim();
+  // Try to extract the topic before common delimiters
+  const delimiters = /[，,。.！!？?—‒–—:：]/;
+  const firstPart = cleaned.split(delimiters)[0]?.trim() ?? cleaned;
+  // Truncate to ~20 chars max
+  const short = Array.from(firstPart).slice(0, 20).join("").trim();
+  // Append a generic suffix if too short or looks incomplete
+  if (short.length <= 4) return `${short}深度拆解`;
+  return short;
 };
 
 const parseClipPosts = (raw: string): ClipPostList => {

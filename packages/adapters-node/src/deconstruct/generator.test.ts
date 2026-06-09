@@ -8,6 +8,7 @@ import {
   parseSrt,
   validateClipEndings,
 } from "./generator.js";
+import { deriveSeriesName } from "./post-generator.js";
 
 describe("toSlug", () => {
   it("converts Chinese title to slug", () => {
@@ -143,5 +144,32 @@ describe("validateClipEndings", () => {
     const warnings = validateClipEndings(sections, srt);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]!.warning).toContain("不以结束标点结尾");
+  });
+});
+
+describe("deriveSeriesName", () => {
+  it("extracts topic before comma with ~20 char limit", () => {
+    const result = deriveSeriesName("10 个 Claude Code 插件，让你的项目效率翻 10 倍");
+    // Split on ， → "10 个 Claude Code 插件" truncated to 20 chars
+    expect(result.length).toBeLessThanOrEqual(22);
+    expect(result).toContain("Claude Code");
+    expect(result).not.toContain("效率翻");
+  });
+
+  it("extracts first sentence before Chinese comma", () => {
+    const result = deriveSeriesName("浏览器已死，Codex 和 Claude Code 才是知识工作的未来");
+    expect(result).toContain("浏览器已死");
+    // Short enough that suffix kicks in
+    expect(result.length).toBeLessThanOrEqual(22);
+  });
+
+  it("handles markdown bold", () => {
+    expect(deriveSeriesName("**Claude Code** 刚把网站设计行业翻了个底朝天")).toContain("Claude Code");
+  });
+
+  it("falls back with suffix for very short titles", () => {
+    const result = deriveSeriesName("测试");
+    expect(result).toContain("测试");
+    expect(result).toContain("深度拆解");
   });
 });

@@ -51,6 +51,6 @@ export const publishClips = async (input: PublishClipsInput): Promise<PublishCli
   return {
     total: selected.length,
     published: publishedCount,
-    errors,
+    errors: _errors,
   };
 };

@@ -44,6 +44,10 @@ export const StageModesSchema = z.object({
 });
 export type StageModes = z.infer<typeof StageModesSchema>;
 
+/** deconstruct stage 配置：设置数值时自动选 Top N 并生成帖子 */
+export const DeconstructOptionSchema = z.coerce.number().int().min(1).max(20).optional();
+export type DeconstructOption = z.infer<typeof DeconstructOptionSchema>;
+
 export const AcquireOptionsSchema = z.object({
   keyframes: z.coerce.number().int().min(0).default(0),
   jobs: z.coerce.number().int().min(1).default(3),
@@ -121,6 +125,7 @@ export const PipelineArgsSchema = z
   .object({
     sources: VideoSourcesFieldsSchema,
     stages: StageModesSchema,
+    deconstruct: DeconstructOptionSchema,
     acquire: AcquireOptionsSchema,
     article: ArticleOptionsSchema,
     publish: PublishOptionsSchema,

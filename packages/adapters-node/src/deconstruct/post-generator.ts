@@ -1,0 +1,184 @@
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { CLIP_POST_SYSTEM_PROMPT, type ClipPostList, type DeconstructManifest, type GeneratePostsInput, type LlmPort } from "@yt2x/core";
+import { ClipPostListSchema } from "@yt2x/core";
+
+export type GeneratePostsRunnerInput = {
+  llm: LlmPort;
+  model: string;
+  articleDir: string;
+  signal?: AbortSignal;
+};
+
+export type GeneratePostsRunnerResult = {
+  postCount: number;
+  postPaths: string[];
+};
+
+const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
+const stripFence = (s: string): string => {
+  const m = s.match(JSON_FENCE_RE);
+  return m ? m[1]!.trim() : s.trim();
+};
+
+/**
+ * 为已选中的 clip 生成帖子文案并写入 post-*.md 文件。
+ */
+export const generateClipsPosts = async (
+  input: GeneratePostsRunnerInput,
+): Promise<GeneratePostsRunnerResult> => {
+  const manifestPath = path.join(input.articleDir, "clips", "clips-manifest.json");
+  const articlePath = path.join(input.articleDir, "article.md");
+
+  const [manifestRaw, articleMd] = await Promise.all([
+    readFile(manifestPath, "utf8"),
+    readFile(articlePath, "utf8"),
+  ]);
+
+  const manifest: DeconstructManifest = JSON.parse(manifestRaw);
+  const selected = manifest.clips.filter((c) => c.selected);
+
+  if (selected.length === 0) {
+    throw new Error("No selected clips found. Run `yt2x clips select` first.");
+  }
+
+  // Extract article title
+  const titleMatch = articleMd.match(/^#\s+(.+)$/m);
+  const articleTitle = titleMatch?.[1] ?? manifest.source.videoId;
+
+  // Build LLM input
+  const clipsInput: GeneratePostsInput["clips"] = selected.map((c) => ({
+    id: c.id,
+    title: c.title,
+    summary: c.scores?.composite !== undefined
+      ? `${c.title}（评分 ${c.scores.composite.toFixed(1)}）：${c.articleSection ?? ""}`
+      : c.title,
+    angle: c.angle,
+    timecodes: { durationSec: Math.round(c.timecodes.durationSec) },
+    video: c.video,
+    key_quote: undefined,
+  }));
+
+  const userPrompt = buildPostUserPrompt({
+    articleTitle,
+    articlePath: manifest.source.articlePath,
+    clips: clipsInput,
+  });
+
+  const _t0 = Date.now();
+  const resp = await input.llm.chat({
+    model: input.model,
+    messages: [
+      { role: "system", content: CLIP_POST_SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    temperature: 0.4,
+    maxTokens: 4096,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+
+  const parsed = parseClipPosts(resp.content);
+
+  // Write post files + update manifest
+  const clipsDir = path.join(input.articleDir, "clips");
+  const postPaths: string[] = [];
+  const total = parsed.posts.length;
+
+  for (let i = 0; i < parsed.posts.length; i++) {
+    const post = parsed.posts[i]!;
+    const clip = selected[i]!;
+
+    // Build full post text
+    const seriesLine = `🧵 Codex 深度拆解 ${i + 1}/${total}`;
+    const videoLine = `🎬 视频 ${clip.video}（${Math.round(clip.timecodes.durationSec)}s）`;
+    const teaserLine = i < total - 1
+      ? post.teaser_next
+      : `完整长文 👇\n🔗 https://www.youtube.com/watch?v=${manifest.source.videoId}`;
+    const articleLine = `📖 完整文章：${manifest.source.articlePath}`;
+
+    const postLines = [
+      seriesLine,
+      "",
+      post.first_line,
+      "",
+      post.body,
+      "",
+      videoLine,
+      "",
+      articleLine,
+      "",
+      teaserLine,
+      post.hashtags,
+    ];
+    const postText = postLines.join("\n");
+
+    // Write .md file
+    const slug = clip.slug || `clip-${i + 1}`;
+    const postPath = path.join(clipsDir, `post-${i + 1}-${slug}.md`);
+    await writeFile(
+      postPath,
+      `---\nref: clips-manifest.json\nclipId: ${clip.id}\ntype: clip-post\nplatform: x\nseries: ${i + 1}/${total}\n---\n\n${postText}\n`,
+      "utf8",
+    );
+    postPaths.push(postPath);
+
+    // Update manifest entry
+    const manifestEntry = manifest.clips.find((c) => c.id === clip.id);
+    if (manifestEntry) {
+      const fullText = postText;
+      manifestEntry.text = fullText;
+      manifestEntry.charCount = fullText.length;
+      manifestEntry.firstLineChars = post.first_line.length;
+      manifestEntry.nextTeaser = post.teaser_next;
+    }
+  }
+
+  // Write updated manifest
+  manifest.generatedAt = new Date().toISOString();
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+
+  return {
+    postCount: postPaths.length,
+    postPaths,
+  };
+};
+
+const buildPostUserPrompt = (input: GeneratePostsInput): string => {
+  const parts: string[] = [];
+
+  parts.push(`## 文章`);
+  parts.push(`标题：${input.articleTitle}`);
+  parts.push(`路径：${input.articlePath}`);
+  parts.push("");
+
+  parts.push(`## 候选章节（共 ${input.clips.length} 个，按发帖顺序排列）`);
+  for (let i = 0; i < input.clips.length; i++) {
+    const c = input.clips[i]!;
+    parts.push("");
+    parts.push(`### 第 ${i + 1} 篇`);
+    parts.push(`标题：${c.title}`);
+    parts.push(`角度：${c.angle}`);
+    parts.push(`摘要：${c.summary}`);
+    parts.push(`视频时长：${c.timecodes.durationSec}秒`);
+    parts.push(`文件名：${c.video}`);
+  }
+  parts.push("");
+  parts.push("请为每个章节生成一条帖子文案。输出的 posts 数组顺序必须与输入顺序一致。");
+
+  return parts.join("\n");
+};
+
+const parseClipPosts = (raw: string): ClipPostList => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripFence(raw));
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Clip posts LLM response is not JSON: ${msg}`);
+  }
+  const result = ClipPostListSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`Clip posts schema error: ${result.error.message}`);
+  }
+  return result.data;
+};

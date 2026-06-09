@@ -11,6 +11,7 @@ export type CommanderPipelineFlags = {
   notes?: string;
   article?: string;
   publish?: string;
+  deconstruct?: string;
   outDir?: string;
   keyframes?: string;
   platform?: string;
@@ -73,6 +74,7 @@ export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): Pipe
       article: flags.article ?? "review",
       publish: flags.publish ?? "review",
     },
+    deconstruct: flags.deconstruct !== undefined ? Number(flags.deconstruct) : undefined,
     acquire: {
       keyframes: flags.keyframes ?? "0",
       jobs: flags.jobs ?? "3",

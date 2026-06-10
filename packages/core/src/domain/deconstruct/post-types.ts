@@ -20,6 +20,8 @@ export type ClipPostList = z.infer<typeof ClipPostListSchema>;
 /** post-generator 输入 */
 export type GeneratePostsInput = {
   articleTitle: string;
+  /** 短系列名称，用于帖子系列标识行，如「Codex 深度拆解」「Claude Code CMS 实战」 */
+  seriesName: string;
   articlePath: string;
   /** 已选中的候选列表（按发帖顺序排列） */
   clips: Array<{

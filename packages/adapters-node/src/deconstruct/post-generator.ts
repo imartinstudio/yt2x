@@ -180,10 +180,11 @@ const buildPostUserPrompt = (input: GeneratePostsInput): string => {
 export const deriveSeriesName = (title: string): string => {
   const cleaned = title.replace(/^#?\s*[*#]*\s*/, "").replace(/\*\*/g, "").trim();
   // Try to extract the topic before common delimiters
-  const delimiters = /[，,。.！!？?—‒–—:：]/;
+  // ASCII comma only splits when NOT between digits (e.g., 10,000 stays intact)
+  const delimiters = /[，。.！!？?—‒–—:：]|(?<!\d),(?!\d)/;
   const firstPart = cleaned.split(delimiters)[0]?.trim() ?? cleaned;
-  // Truncate to ~20 chars max
-  const short = Array.from(firstPart).slice(0, 20).join("").trim();
+  // Truncate to ~40 chars max to preserve enough context
+  const short = Array.from(firstPart).slice(0, 40).join("").trim();
   // Append a generic suffix if too short or looks incomplete
   if (short.length <= 4) return `${short}深度拆解`;
   return short;

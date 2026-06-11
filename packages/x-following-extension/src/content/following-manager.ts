@@ -14,16 +14,17 @@ import {
   applyCheckboxChangeToSelection,
   applySelectionToViewportCells,
   cellNeedsCheckboxAttach,
+  clearExistingLoadedChecked,
   ensureUserCellCheckbox,
   findOrReuseCheckboxInput,
   listLoadedUserCells,
   listViewportUserCells,
   removeUserCellCheckboxes,
+  cleanupCheckboxArtifacts,
   resolveUserCellMount,
   removeCheckboxSpaceReservation,
   reserveCheckboxSpace,
   injectCheckboxTheme,
-  setAllLoadedChecked,
   syncCheckboxOnCell,
 } from "../dom/user-cell-checkbox.js";
 import {
@@ -135,6 +136,18 @@ const takeOverManagerSlot = (): void => {
   };
 };
 
+const activeListHandles = (): ReadonlySet<string> =>
+  filterMode === "one-way" ? seenOneWayHandles : seenHandles;
+
+const selectedCountForActiveList = (): number => {
+  const handles = activeListHandles();
+  let count = 0;
+  for (const handle of selectedHandles) {
+    if (handles.has(handle)) count += 1;
+  }
+  return count;
+};
+
 const readCounts = (): { loadedCount: number; selectedCount: number } => {
   const cells = listLoadedUserCells(filterMode);
   // 追踪所有已加载 cell 的 handle，不仅限于视口
@@ -145,12 +158,12 @@ const readCounts = (): { loadedCount: number; selectedCount: number } => {
       if (!userCellFollowsYou(cell)) seenOneWayHandles.add(handle);
     }
   }
-  return { loadedCount: cells.length, selectedCount: selectedHandles.size };
+  return { loadedCount: activeListHandles().size, selectedCount: selectedCountForActiveList() };
 };
 
 const buildToolbarState = (counts: { loadedCount: number; selectedCount: number }): FollowingToolbarState => ({
   filterMode,
-  loadedCount: seenHandles.size,
+  loadedCount: counts.loadedCount,
   selectedCount: counts.selectedCount,
   busy,
   statusText,
@@ -158,14 +171,21 @@ const buildToolbarState = (counts: { loadedCount: number; selectedCount: number 
   oneWayCount: seenOneWayHandles.size,
 });
 
-/** 将 seenHandles 中所有 handle 加入选中。 */
+/** 将当前筛选列表中的所有 handle 设为选中。 */
 const selectAllSeenHandles = (): void => {
-  for (const handle of seenHandles) selectedHandles.add(handle);
+  selectedHandles.clear();
+  for (const handle of activeListHandles()) selectedHandles.add(handle);
   syncViewportCheckboxes(true);
 };
 
+const clearSelection = (): void => {
+  selectedHandles.clear();
+  cleanupCheckboxArtifacts(filterMode);
+  clearExistingLoadedChecked(filterMode, selectedHandles);
+};
+
 const toolbarSignature = (state: FollowingToolbarState): string =>
-  `${state.filterMode}|${state.loadedCount}|${state.selectedCount}|${state.busy}|${state.statusText}|${state.phase}`;
+  `${state.filterMode}|${state.loadedCount}|${state.selectedCount}|${state.oneWayCount}|${state.busy}|${state.statusText}|${state.phase}`;
 
 const updateToolbar = (force = false): void => {
   const state = buildToolbarState(readCounts());
@@ -173,6 +193,26 @@ const updateToolbar = (force = false): void => {
   if (!force && signature === lastToolbarSignature) return;
   lastToolbarSignature = signature;
   toolbar?.update(state);
+};
+
+const notifyListLayoutChanged = (): void => {
+  window.dispatchEvent(new Event("resize"));
+  window.requestAnimationFrame(() => {
+    window.dispatchEvent(new Event("scroll"));
+  });
+};
+
+const handleFilterModeChange = (mode: FollowingFilterMode): void => {
+  if (busy || mode === filterMode) return;
+  cleanupCheckboxArtifacts(filterMode);
+  filterMode = mode;
+  setFollowingFilterMode(mode);
+  clearSelection();
+  cleanupCheckboxArtifacts(filterMode);
+  notifyListLayoutChanged();
+  lastSyncAt = 0;
+  runThrottledSync(true);
+  updateToolbar(true);
 };
 
 const bindCheckboxListener = (input: HTMLInputElement): void => {
@@ -210,6 +250,7 @@ const syncViewportCheckboxes = (attachMissing = true): number => {
   const loggedInKey = readLoggedInUserKey();
   if (!isOwnFollowingListPage(location.pathname, loggedInKey, document)) return 0;
 
+  cleanupCheckboxArtifacts(filterMode);
   const targets = listViewportUserCells(filterMode);
   let processed = 0;
   for (const cell of targets) {
@@ -259,6 +300,7 @@ const startSyncLoop = (): void => {
   if (syncLoopTimer !== 0) return;
   syncLoopTimer = window.setInterval(() => {
     runThrottledSync(false);
+    cleanupCheckboxArtifacts(filterMode);
     // 全量同步所有已加载 cell 的状态（包含离屏 cell，防止虚拟列表回收残留）
     for (const cell of listLoadedUserCells(filterMode)) {
       syncCheckboxOnCell(cell, selectedHandles, filterMode);
@@ -294,10 +336,10 @@ const stopCheckboxGuard = (): void => {
 const startCheckboxGuard = (): void => {
   const column = findPrimaryColumn();
   if (column === null || checkboxGuardObserver !== null) return;
-  // 仅监听 DOM 变更；滚动期间不做同步（由 scroll 停止后的 debounce 驱动）
   checkboxGuardObserver = new MutationObserver(() => {
     if (busy) return;
-    scheduleSync(false);
+    scheduleScrollCheckboxStateResync();
+    runThrottledSync(true);
   });
   checkboxGuardObserver.observe(column, { childList: true, subtree: true });
 };
@@ -375,11 +417,7 @@ const ensureToolbar = (): boolean => {
     fallbackAnchor,
     {
       onFilterModeChange: (mode) => {
-        if (busy) return;
-        filterMode = mode;
-        setFollowingFilterMode(mode);
-        lastSyncAt = 0;
-        runThrottledSync(true);
+        handleFilterModeChange(mode);
       },
       onSelectAll: () => {
         if (busy) return;
@@ -389,7 +427,7 @@ const ensureToolbar = (): boolean => {
       onClearSelection: () => {
         if (busy) return;
         selectedHandles.clear();
-        setAllLoadedChecked(false, filterMode, selectedHandles);
+        clearExistingLoadedChecked(filterMode, selectedHandles);
         updateToolbar(true);
       },
       onUnfollowSelected: () => {
@@ -468,7 +506,7 @@ const handleUnfollowSelected = async (): Promise<void> => {
   const pushProgress = (): void => {
     if (toolbar === null) return;
     toolbar.update({
-      ...buildToolbarState({ loadedCount: listLoadedUserCells(filterMode).length, selectedCount: remainingHandles.size }),
+      ...buildToolbarState({ ...readCounts(), selectedCount: remainingHandles.size }),
       busy: true,
       phase: "progress",
       progress: { done: totalSucceeded + totalFailed, total: totalSelected, recentLog: logBuffer.slice(-3) },
@@ -493,6 +531,7 @@ const handleUnfollowSelected = async (): Promise<void> => {
 
     for (let i = 0; i < batch.length; i += 1) {
       const cell = batch[i];
+      if (cell === undefined) continue;
       const handle = extractUserCellHandle(cell);
       const ok = await unfollowUserCell(cell);
       if (ok) {
@@ -518,7 +557,7 @@ const handleUnfollowSelected = async (): Promise<void> => {
   }
 
   selectedHandles.clear();
-  setAllLoadedChecked(false, filterMode, selectedHandles);
+  clearExistingLoadedChecked(filterMode, selectedHandles);
   busy = false;
   statusText = totalFailed > 0
     ? `完成：成功 ${totalSucceeded}，失败 ${totalFailed}`
@@ -526,7 +565,7 @@ const handleUnfollowSelected = async (): Promise<void> => {
 
   if (toolbar !== null) {
     toolbar.update({
-      ...buildToolbarState({ loadedCount: listLoadedUserCells(filterMode).length, selectedCount: 0 }),
+      ...buildToolbarState({ ...readCounts(), selectedCount: 0 }),
       busy: false,
       phase: "complete",
       completeResult: { succeeded: totalSucceeded, failed: totalFailed },

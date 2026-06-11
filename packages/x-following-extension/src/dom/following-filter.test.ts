@@ -89,6 +89,9 @@ describe("setFollowingFilterMode", () => {
     setFollowingFilterMode("one-way");
     expect(document.documentElement.getAttribute("data-xfm-filter")).toBe("one-way");
     expect(cell.getAttribute("data-xfm-follow-filter")).toBeNull();
+    expect(document.getElementById("xfm-following-filter-style")?.textContent).toContain(
+      ":has(> [data-testid=\"UserCell\"]:only-child:has(",
+    );
 
     setFollowingFilterMode("all");
     expect(document.documentElement.getAttribute("data-xfm-filter")).toBeNull();

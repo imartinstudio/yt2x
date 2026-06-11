@@ -6,9 +6,12 @@ import {
   CHECKBOX_PAD_ATTR,
   CHECKBOX_VISUAL_ATTR,
   cellHasCheckbox,
+  clearExistingLoadedChecked,
+  cleanupCheckboxArtifacts,
   ensureUserCellCheckbox,
   getCheckedHandlesInViewport,
   listLoadedUserCells,
+  removeFilteredOutCheckboxes,
   removeUserCellCheckboxes,
   syncCheckboxOnCell,
 } from "./user-cell-checkbox.js";
@@ -131,6 +134,78 @@ describe("ensureUserCellCheckbox", () => {
     wrapper.remove();
   });
 
+  it("does not let pointerdown-only interactions swallow the next checkbox click", () => {
+    const cell = document.createElement("button");
+    cell.setAttribute("data-testid", "UserCell");
+    cell.type = "button";
+    cell.innerHTML = '<a href="/alice">@alice</a>';
+    const wrapper = document.createElement("div");
+    wrapper.append(cell);
+    document.body.append(wrapper);
+
+    const input = ensureUserCellCheckbox(cell);
+    const hit = cell.previousElementSibling as HTMLElement;
+    const selected = new Set<string>();
+    input.addEventListener("change", () => applyCheckboxChangeToSelection(input, selected));
+
+    hit.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+    expect(input.checked).toBe(false);
+
+    hit.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(input.checked).toBe(true);
+    expect(selected.has("alice")).toBe(true);
+
+    wrapper.remove();
+  });
+
+  it("toggles on pointerup when the following click is swallowed by the page", () => {
+    const cell = document.createElement("button");
+    cell.setAttribute("data-testid", "UserCell");
+    cell.type = "button";
+    cell.innerHTML = '<a href="/alice">@alice</a>';
+    const wrapper = document.createElement("div");
+    wrapper.append(cell);
+    document.body.append(wrapper);
+
+    const input = ensureUserCellCheckbox(cell);
+    const hit = cell.previousElementSibling as HTMLElement;
+    const selected = new Set<string>();
+    input.addEventListener("change", () => applyCheckboxChangeToSelection(input, selected));
+
+    hit.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+    hit.dispatchEvent(new Event("pointerup", { bubbles: true, cancelable: true }));
+
+    expect(input.checked).toBe(true);
+    expect(selected.has("alice")).toBe(true);
+
+    wrapper.remove();
+  });
+
+  it("does not toggle twice when pointerup and click both fire", () => {
+    const cell = document.createElement("button");
+    cell.setAttribute("data-testid", "UserCell");
+    cell.type = "button";
+    cell.innerHTML = '<a href="/alice">@alice</a>';
+    const wrapper = document.createElement("div");
+    wrapper.append(cell);
+    document.body.append(wrapper);
+
+    const input = ensureUserCellCheckbox(cell);
+    const hit = cell.previousElementSibling as HTMLElement;
+    const selected = new Set<string>();
+    input.addEventListener("change", () => applyCheckboxChangeToSelection(input, selected));
+
+    hit.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+    hit.dispatchEvent(new Event("pointerup", { bubbles: true, cancelable: true }));
+    hit.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(input.checked).toBe(true);
+    expect(selected.has("alice")).toBe(true);
+
+    wrapper.remove();
+  });
+
   it("restores checked state from selectedHandles when list row is re-mounted", () => {
     const selected = new Set<string>(["bob"]);
     const cell = document.createElement("button");
@@ -179,5 +254,89 @@ describe("ensureUserCellCheckbox", () => {
     } as DOMRect);
     expect(listLoadedUserCells("all")).toHaveLength(2);
     vi.restoreAllMocks();
+  });
+
+  it("removes selected checkbox hit zones from cells filtered out in one-way mode", () => {
+    document.body.innerHTML = `
+      <div data-testid="primaryColumn">
+        <div id="mutual-row">
+          <button data-testid="UserCell">
+            <a href="/mutual">@mutual</a>
+            <span data-testid="userFollowIndicator">关注了你</span>
+          </button>
+        </div>
+        <div id="oneway-row">
+          <button data-testid="UserCell"><a href="/oneway">@oneway</a></button>
+        </div>
+      </div>
+    `;
+    const mutualCell = document.querySelector<HTMLElement>("#mutual-row [data-testid='UserCell']")!;
+    const onewayCell = document.querySelector<HTMLElement>("#oneway-row [data-testid='UserCell']")!;
+    const selected = new Set<string>(["mutual", "oneway"]);
+
+    syncCheckboxOnCell(mutualCell, selected, "all");
+    syncCheckboxOnCell(onewayCell, selected, "all");
+
+    expect(document.querySelectorAll(`[${CHECKBOX_HIT_ATTR}]`)).toHaveLength(2);
+
+    removeFilteredOutCheckboxes("one-way");
+    syncCheckboxOnCell(mutualCell, selected, "one-way");
+    syncCheckboxOnCell(onewayCell, selected, "one-way");
+
+    expect(mutualCell.previousElementSibling?.matches(`[${CHECKBOX_HIT_ATTR}]`) ?? false).toBe(false);
+    expect(onewayCell.previousElementSibling?.matches(`[${CHECKBOX_HIT_ATTR}]`)).toBe(true);
+    expect(document.querySelectorAll(`[${CHECKBOX_HIT_ATTR}]`)).toHaveLength(1);
+  });
+
+  it("removes orphan checkbox hit zones before syncing all mode again", () => {
+    document.body.innerHTML = `
+      <div data-testid="primaryColumn">
+        <div id="row">
+          <button data-testid="UserCell"><a href="/alice">@alice</a></button>
+        </div>
+      </div>
+    `;
+    const row = document.getElementById("row")!;
+    const cell = row.querySelector<HTMLElement>('[data-testid="UserCell"]')!;
+    const selected = new Set<string>();
+
+    syncCheckboxOnCell(cell, selected, "all");
+    const staleHit = document.createElement("label");
+    staleHit.setAttribute(CHECKBOX_HIT_ATTR, "true");
+    row.insertBefore(staleHit, row.firstChild);
+
+    expect(document.querySelectorAll(`[${CHECKBOX_HIT_ATTR}]`)).toHaveLength(2);
+
+    cleanupCheckboxArtifacts("all");
+    syncCheckboxOnCell(cell, selected, "all");
+
+    expect(cell.previousElementSibling?.matches(`[${CHECKBOX_HIT_ATTR}]`)).toBe(true);
+    expect(document.querySelectorAll(`[${CHECKBOX_HIT_ATTR}]`)).toHaveLength(1);
+  });
+
+  it("clears existing checked boxes without creating boxes for untouched rows", () => {
+    document.body.innerHTML = `
+      <div data-testid="primaryColumn">
+        <div id="selected-row">
+          <button data-testid="UserCell"><a href="/selected">@selected</a></button>
+        </div>
+        <div id="untouched-row">
+          <button data-testid="UserCell"><a href="/untouched">@untouched</a></button>
+        </div>
+      </div>
+    `;
+    const selectedCell = document.querySelector<HTMLElement>("#selected-row [data-testid='UserCell']")!;
+    const untouchedCell = document.querySelector<HTMLElement>("#untouched-row [data-testid='UserCell']")!;
+    const selected = new Set<string>(["selected"]);
+
+    syncCheckboxOnCell(selectedCell, selected, "all");
+    expect(document.querySelectorAll(`[${CHECKBOX_HIT_ATTR}]`)).toHaveLength(1);
+
+    clearExistingLoadedChecked("all", selected);
+
+    expect(selected.size).toBe(0);
+    expect(selectedCell.previousElementSibling?.matches(`[${CHECKBOX_HIT_ATTR}]`)).toBe(true);
+    expect(untouchedCell.previousElementSibling?.matches(`[${CHECKBOX_HIT_ATTR}]`) ?? false).toBe(false);
+    expect(document.querySelectorAll(`[${CHECKBOX_HIT_ATTR}]`)).toHaveLength(1);
   });
 });

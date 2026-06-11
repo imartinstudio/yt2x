@@ -161,11 +161,14 @@ const findCheckboxInput = (mount: UserCellMount, handle: string | null): HTMLInp
   return null;
 };
 
+const findUserCellForHit = (hit: HTMLElement): HTMLElement | null => {
+  const next = hit.nextElementSibling;
+  if (next instanceof HTMLElement && next.matches('[data-testid="UserCell"]')) return next;
+  return hit.parentElement?.querySelector<HTMLElement>('[data-testid="UserCell"]') ?? null;
+};
+
 const syncInputHandleFromCurrentCell = (hit: HTMLElement, input: HTMLInputElement): void => {
-  const domCell: HTMLElement | null =
-    (hit.nextElementSibling as HTMLElement | null) ??
-    hit.parentElement?.querySelector<HTMLElement>('[data-testid="UserCell"]') ??
-    null;
+  const domCell = findUserCellForHit(hit);
   if (domCell === null) return;
   const currentHandle = extractUserCellHandle(domCell);
   if (currentHandle !== null) input.dataset.xfmHandle = currentHandle;
@@ -193,7 +196,15 @@ const bindHitZoneInteraction = (hit: HTMLElement, input: HTMLInputElement): void
     "pointerdown",
     (event) => {
       stopHitZoneEvent(event);
-      hit.dataset.xfmPointerToggled = "true";
+    },
+    { capture: true },
+  );
+
+  hit.addEventListener(
+    "pointerup",
+    (event) => {
+      stopHitZoneEvent(event);
+      hit.dataset.xfmLastPointerToggleAt = String(Date.now());
       toggleInputFromHitZone(hit, input);
     },
     { capture: true },
@@ -203,10 +214,8 @@ const bindHitZoneInteraction = (hit: HTMLElement, input: HTMLInputElement): void
     "click",
     (event) => {
       stopHitZoneEvent(event);
-      if (hit.dataset.xfmPointerToggled === "true") {
-        delete hit.dataset.xfmPointerToggled;
-        return;
-      }
+      const lastPointerToggleAt = Number(hit.dataset.xfmLastPointerToggleAt ?? 0);
+      if (Date.now() - lastPointerToggleAt < 500) return;
       toggleInputFromHitZone(hit, input);
     },
     { capture: true },
@@ -311,6 +320,43 @@ export const removeUserCellCheckboxes = (root: ParentNode = document): void => {
   }
 };
 
+export const removeUserCellCheckbox = (cell: HTMLElement): void => {
+  const mount = resolveUserCellMount(cell);
+  findHitZone(mount)?.remove();
+  if (mount.mountEl.getAttribute(CHECKBOX_PAD_ATTR) !== "true") return;
+  mount.mountEl.style.removeProperty("padding-left");
+  mount.mountEl.style.removeProperty("position");
+  mount.mountEl.removeAttribute(CHECKBOX_PAD_ATTR);
+  mount.mountEl.removeAttribute(CHECKBOX_ROW_ATTR);
+};
+
+export const removeFilteredOutCheckboxes = (
+  mode: FollowingFilterMode,
+  root: ParentNode = document,
+): void => {
+  if (mode === "all") return;
+  const scope = listScope(root);
+  for (const cell of scope.querySelectorAll<HTMLElement>('[data-testid="UserCell"]')) {
+    if (shouldShowCheckboxOnCell(cell, mode)) continue;
+    removeUserCellCheckbox(cell);
+  }
+};
+
+export const cleanupCheckboxArtifacts = (
+  mode: FollowingFilterMode,
+  root: ParentNode = document,
+): void => {
+  const scope = listScope(root);
+  for (const hit of scope.querySelectorAll<HTMLElement>(`[${CHECKBOX_HIT_ATTR}]`)) {
+    const cell = hit.nextElementSibling;
+    if (!(cell instanceof HTMLElement) || !cell.matches('[data-testid="UserCell"]')) {
+      hit.remove();
+      continue;
+    }
+    if (!shouldShowCheckboxOnCell(cell, mode)) removeUserCellCheckbox(cell);
+  }
+};
+
 export const cellHasCheckbox = (cell: HTMLElement): boolean => {
   const mount = resolveUserCellMount(cell);
   return findCheckboxInput(mount, extractUserCellHandle(mount.userCell)) !== null;
@@ -379,7 +425,7 @@ export const applyCheckboxChangeToSelection = (
   // 从 DOM 验证 handle 是否与当前 cell 内容一致（防止虚拟列表回收导致串号）
   const hit = input.closest(`[${CHECKBOX_HIT_ATTR}]`);
   if (hit instanceof HTMLElement) {
-    const cell = hit.nextElementSibling ?? hit.parentElement?.querySelector('[data-testid="UserCell"]');
+    const cell = findUserCellForHit(hit);
     if (cell instanceof HTMLElement) {
       const domHandle = extractUserCellHandle(cell);
       if (domHandle !== null && domHandle !== handle) return;
@@ -413,6 +459,27 @@ const setCellsChecked = (
     if (selectedHandles === undefined || handle === null) continue;
     if (checked) selectedHandles.add(handle);
     else selectedHandles.delete(handle);
+  }
+};
+
+export const clearExistingLoadedChecked = (
+  mode: FollowingFilterMode,
+  selectedHandles?: Set<string>,
+  root: ParentNode = document,
+): void => {
+  for (const cell of listLoadedUserCells(mode, root)) {
+    const mount = resolveUserCellMount(cell);
+    const handle = normalizeHandle(extractUserCellHandle(mount.userCell));
+    const input = findOrReuseCheckboxInput(mount, handle);
+    if (input === null) continue;
+    if (input.checked) {
+      input.dataset.xfmSyncing = "true";
+      input.checked = false;
+      delete input.dataset.xfmSyncing;
+    }
+    const visual = input.parentElement?.querySelector<HTMLSpanElement>(`[${CHECKBOX_VISUAL_ATTR}]`);
+    if (visual) updateVisualSpanInstant(visual, false);
+    if (selectedHandles !== undefined && handle !== null) selectedHandles.delete(handle);
   }
 };
 
@@ -462,7 +529,10 @@ export const syncCheckboxOnCell = (
   selectedHandles: ReadonlySet<string>,
   mode: FollowingFilterMode,
 ): void => {
-  if (!shouldShowCheckboxOnCell(cell, mode)) return;
+  if (!shouldShowCheckboxOnCell(cell, mode)) {
+    removeUserCellCheckbox(cell);
+    return;
+  }
   const mount = resolveUserCellMount(cell);
   const handle = normalizeHandle(extractUserCellHandle(mount.userCell));
   if (handle === null) return;

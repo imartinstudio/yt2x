@@ -4,6 +4,7 @@ const UNFOLLOW_BUTTON_SELECTOR = '[data-testid$="-unfollow"]';
 const CONFIRM_UNFOLLOW_SELECTOR = '[data-testid="confirmationSheetConfirm"]';
 const FILTER_STYLE_ID = "xfm-following-filter-style";
 const FILTER_HTML_ATTR = "data-xfm-filter";
+const CHECKBOX_HIT_SELECTOR = "[data-xfm-follow-select-hit]";
 
 const FOLLOWS_YOU_LABELS = /^(Follows you|关注了你)$/u;
 const HANDLE_FROM_HREF = /^\/@?([A-Za-z0-9_]+)\/?$/u;
@@ -29,8 +30,16 @@ export {
 } from "./x-session.js";
 
 const filterCss = (mode: FollowingFilterMode): string => {
-  if (mode !== "one-way") return "";
-  return `html[${FILTER_HTML_ATTR}="one-way"] [data-testid="UserCell"]:has(${FOLLOWS_YOU_INDICATOR}){display:none!important}`;
+  const css: string[] = [];
+  if (mode === "one-way") {
+    css.push(
+      `html[${FILTER_HTML_ATTR}="one-way"] :not(section):not([data-testid="primaryColumn"]):has(> [data-testid="UserCell"]:only-child:has(${FOLLOWS_YOU_INDICATOR})){display:none!important}`,
+      `html[${FILTER_HTML_ATTR}="one-way"] :not(section):not([data-testid="primaryColumn"]):has(> ${CHECKBOX_HIT_SELECTOR} + [data-testid="UserCell"]:has(${FOLLOWS_YOU_INDICATOR})){display:none!important}`,
+      `html[${FILTER_HTML_ATTR}="one-way"] [data-testid="UserCell"]:has(${FOLLOWS_YOU_INDICATOR}){display:none!important}`,
+      `html[${FILTER_HTML_ATTR}="one-way"] ${CHECKBOX_HIT_SELECTOR}:has(+ [data-testid="UserCell"]:has(${FOLLOWS_YOU_INDICATOR})){display:none!important;pointer-events:none!important}`,
+    );
+  }
+  return css.join("\n");
 };
 
 export const setFollowingFilterMode = (mode: FollowingFilterMode): void => {
@@ -70,8 +79,9 @@ export const shouldShowCheckboxOnCell = (
 const parseHandleFromHref = (href: string): string | null => {
   const path = href.split("?")[0]?.split("#")[0] ?? "";
   const match = path.match(HANDLE_FROM_HREF);
-  if (match === null) return null;
-  const handle = match[1].toLowerCase();
+  const rawHandle = match?.[1];
+  if (rawHandle === undefined) return null;
+  const handle = rawHandle.toLowerCase();
   if (RESERVED_HANDLES.has(handle)) return null;
   return handle;
 };
@@ -86,7 +96,7 @@ export const extractUserCellHandle = (cell: Element): string | null => {
   }
   if (frequency.size === 0) return null;
   // 返回出现频率最高的 handle（profile handle 出现在头像+名称处，次数 > bio 中 @ 引用）
-  return [...frequency.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  return [...frequency.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 };
 
 export const findUnfollowButton = (cell: Element): HTMLElement | null =>
@@ -161,6 +171,7 @@ export const unfollowSelectedCells = async (
 
   for (let index = 0; index < cells.length; index += 1) {
     const cell = cells[index];
+    if (cell === undefined) continue;
     const handle = extractUserCellHandle(cell) ?? `#${index + 1}`;
     const ok = await unfollowUserCell(cell);
     if (ok) succeeded += 1;

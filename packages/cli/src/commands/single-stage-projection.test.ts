@@ -60,6 +60,14 @@ describe("projectSingleStage", () => {
     expect(args.article.targets).toEqual(["x-thread", "x-short"]);
   });
 
+  it("maps platform article targets for single-stage commands", () => {
+    const args = projectSingleStage("article", {
+      urls: ["https://example.com/video"],
+      platformTargets: "xiaohongshu,wechat",
+    });
+    expect(args.article.platformTargets).toEqual(["xiaohongshu", "wechat"]);
+  });
+
   it("maps legacy x-longform to article for single-stage commands", () => {
     const args = projectSingleStage("article", {
       urls: ["https://example.com/video"],

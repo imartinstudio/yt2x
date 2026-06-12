@@ -430,6 +430,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       maxChars: String(args.article.maxChars),
       rewriteMode: args.article.rewriteMode,
       targets: args.article.targets.join(","),
+      platformTargets: args.article.platformTargets.join(","),
     }) as Parameters<typeof executeNativeArticle>[0];
 
     const publishForId = (id: string) =>

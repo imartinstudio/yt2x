@@ -50,6 +50,14 @@ describe("parseCommanderPipelineFlags", () => {
     expect(args.article.targets).toEqual(["article", "x-thread", "x-short", "x-video-short"]);
   });
 
+  it("maps platform article targets", () => {
+    const args = parseCommanderPipelineFlags({
+      urls: ["https://example.com/video"],
+      platformTargets: "all-platforms",
+    });
+    expect(args.article.platformTargets).toEqual(["xiaohongshu", "wechat", "bilibili"]);
+  });
+
   it("maps video download options and auto-enables download for manual ranges", () => {
     const args = parseCommanderPipelineFlags({
       urls: ["https://example.com/video"],

@@ -1,10 +1,11 @@
-import { mkdir } from "node:fs/promises";
+import { access, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   DEFAULT_ARTICLE_OUT_DIR,
   DEFAULT_OUT_DIR,
   findPendingNativeArticleDirs,
+  generatePlatformArticleContent,
   generateXArticleContent,
   generateXShortContent,
   generateXThreadContent,
@@ -18,6 +19,7 @@ import {
   writeNativeShortBundle,
   writeNativeThreadBundle,
   writeNativeVideoShortBundle,
+  writePlatformArticleBundle,
   writeVisualSuggestions,
 } from "@yt2x/adapters-node";
 import {
@@ -29,7 +31,9 @@ import {
   isLlmError,
   manifestToAvailableVisuals,
   parseArticleOutputTargets,
+  parsePlatformArticleTargets,
   type ArticleOutputTarget,
+  type PlatformArticleTarget,
   type QualityIssue,
   type SceneManifest,
 } from "@yt2x/core";
@@ -103,9 +107,25 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
     return NATIVE_EXIT.CONFIG_MISSING;
   }
 
+  let platformTargets: PlatformArticleTarget[];
+  try {
+    platformTargets = parsePlatformArticleTargets(flags.platformTargets);
+  } catch (err: unknown) {
+    printCliErrorBlock({
+      command: "article",
+      reason: err instanceof Error ? err.message : String(err),
+      hints: ["Use --platform-targets xiaohongshu,wechat,bilibili or --platform-targets all-platforms."],
+      retryCommand: "pnpm yt2x article --video-id <videoId> --platform-targets xiaohongshu",
+    });
+    return NATIVE_EXIT.CONFIG_MISSING;
+  }
+
   let outputTargets: ArticleOutputTarget[];
   try {
-    outputTargets = parseArticleOutputTargets(flags.targets);
+    outputTargets =
+      flags.targets === undefined && platformTargets.length > 0
+        ? []
+        : parseArticleOutputTargets(flags.targets);
   } catch (err: unknown) {
     printCliErrorBlock({
       command: "article",
@@ -115,7 +135,6 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
     });
     return NATIVE_EXIT.CONFIG_MISSING;
   }
-
   const llm = resolveNativeLlm(flags);
   if (!llm.ok) {
     printCliErrorBlock({
@@ -165,6 +184,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       articleOutDir,
       platform,
       outputTargets,
+      platformTargets,
     },
     "yt2x article (native x): starting",
   );
@@ -188,21 +208,21 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       const writtenArtifacts: string[] = [];
       let articleDirForStatus: string | undefined;
       let resultFile: string | undefined;
+      let sourceArticleMd: string | undefined;
 
       // 读取 scene_manifest.json → available_visuals（所有格式共享）
-        const { readFile, access } = await import("node:fs/promises");
-        const sceneManifestPath = path.join(videoDir, "screenshots", "scene_manifest.json");
-        let availableVisuals = null;
-        try {
-          await access(sceneManifestPath);
-          const raw = await readFile(sceneManifestPath, "utf8");
-          const manifest = JSON.parse(raw) as SceneManifest;
-          availableVisuals = manifestToAvailableVisuals(manifest);
-        } catch {
-          // 无截图清单时保持纯文本
-        }
+      const sceneManifestPath = path.join(videoDir, "screenshots", "scene_manifest.json");
+      let availableVisuals = null;
+      try {
+        await access(sceneManifestPath);
+        const raw = await readFile(sceneManifestPath, "utf8");
+        const manifest = JSON.parse(raw) as SceneManifest;
+        availableVisuals = manifestToAvailableVisuals(manifest);
+      } catch {
+        // 无截图清单时保持纯文本
+      }
 
-    if (outputTargets.includes("article")) {
+      if (outputTargets.includes("article")) {
         const result = await generateXArticleContent({
           llm: llm.adapter,
           model: llm.model,
@@ -218,6 +238,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           result.visualPlan,
           availableVisuals,
         );
+        sourceArticleMd = renderedContent;
 
         const written = await writeNativeArticleBundle(
           articleOutDir,
@@ -369,8 +390,52 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           },
           "article generated (native x video short)",
         );
-        progress?.record(`article.${artifacts.videoId}`, Date.now() - stageT0);
       }
+
+      for (const platformTarget of platformTargets) {
+        const articlePath = path.join(articleOutDir, artifacts.videoId, "article.md");
+        sourceArticleMd ??= await readFile(articlePath, "utf8").catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `Platform target "${platformTarget}" requires an existing article.md at ${articlePath}. ` +
+              `Generate article first with --targets article, or include --targets article in this run. ${message}`,
+          );
+        });
+        const timestampedCuesPath = path.join(videoDir, "timestamped-cues.md");
+        const timestampedCuesMd = await readFile(timestampedCuesPath, "utf8").catch(() => undefined);
+        const result = await generatePlatformArticleContent({
+          llm: llm.adapter,
+          model: llm.model,
+          target: platformTarget,
+          artifacts,
+          articleMd: sourceArticleMd,
+          ...(timestampedCuesMd !== undefined ? { timestampedCuesMd } : {}),
+        });
+        const written = await writePlatformArticleBundle(
+          articleOutDir,
+          artifacts.videoId,
+          result.platformArticle,
+          { force: flags.force === true },
+        );
+        writtenArtifacts.push(`${platformTarget}-article.md`, `${platformTarget}-metadata.json`);
+        articleDirForStatus = written.articleDir;
+        resultFile ??= path.basename(written.articlePath);
+        addUsage(tokenTotals, result.usage);
+        logger.info(
+          {
+            videoId: result.videoId,
+            target: platformTarget,
+            articleDir: written.articleDir,
+            model: result.model,
+            finishReason: result.finishReason,
+            durationMs: result.durationMs,
+            usage: result.usage,
+          },
+          "article generated (native platform adaptation)",
+        );
+      }
+
+      progress?.record(`article.${artifacts.videoId}`, Date.now() - stageT0);
 
       const finishedAt = new Date().toISOString();
       const durationMs = Date.now() - t0;

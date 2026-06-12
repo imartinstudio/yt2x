@@ -184,4 +184,26 @@ describe("runNativePipeline", () => {
       targets: "x-thread,x-short",
     });
   });
+
+  it("passes platform article targets to native article stage", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-platform-targets-"));
+    const vid = "platformVid1";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+
+    const args = buildArgs({
+      control: { outDir: outRoot },
+      stages: { acquire: "skip", notes: "skip", article: "auto", publish: "skip" },
+      article: { targets: "article", platformTargets: "xiaohongshu,wechat" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(executeNativeArticleMock).toHaveBeenCalledOnce();
+    expect(executeNativeArticleMock.mock.calls[0]![0]).toMatchObject({
+      videoId: [vid],
+      targets: "article",
+      platformTargets: "xiaohongshu,wechat",
+    });
+  });
 });

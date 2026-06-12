@@ -20,6 +20,10 @@ export const registerArticleCommand = (program: Command): void => {
         "--targets <targets>",
         "Comma-separated output targets: article,x-thread,x-short,all",
       )
+      .option(
+        "--platform-targets <targets>",
+        "Comma-separated platform adaptations: xiaohongshu,wechat,bilibili,all-platforms",
+      )
       .option("--error-strategy <mode>", "On failure: stop|skip", "stop")
       .option(
         "--article-out-dir <path>",

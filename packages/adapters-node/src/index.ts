@@ -6,6 +6,7 @@ export * from "./deconstruct/index.js";
 export * from "./fs/process-status-store.js";
 export * from "./llm/index.js";
 export * from "./notes/index.js";
+export * from "./platform-article/index.js";
 export * from "./process/index.js";
 export * from "./short/index.js";
 export * from "./thread/index.js";

@@ -79,12 +79,20 @@
 | `video/full.*` / `video/clip.*` | 可选；从采集目录复制完整视频或手动片段供长文引用 |
 | `x-thread-visuals.json`         | 可选；串推配图计划（v0.2）                       |
 | `x-short-visual.json`           | 可选；短文配图计划（v0.2）                       |
+| `xiaohongshu-article.md`        | 计划；小红书图文笔记适配稿                       |
+| `xiaohongshu-metadata.json`     | 计划；小红书标题、核心标签和封面/配图建议        |
+| `wechat-article.md`             | 计划；微信公众号 Markdown 长文适配稿             |
+| `wechat-metadata.json`          | 计划；公众号标题候选、摘要、导语和封面图建议     |
+| `bilibili-article.md`           | 计划；哔哩哔哩标题、简介、分区和标签建议         |
+| `bilibili-metadata.json`        | 计划；哔哩哔哩标题、标签和章节时间线草案         |
 
 `article.md` 落盘时会固定补齐首屏素材与尾注：如果存在 `images/cover.*`，H1 后的第一张图就是封面；如果存在下载视频片段，首个 `##` 小节前会插入引用 `video/clip.*` 的 `<video>`；LLM 正文末尾应输出 3-5 个从主题提取的 X 话题标签，之后再追加固定格式 `👇完整视频：` 与原视频地址。
 
 `x-thread.md` / `x-short.md` 面向 X post 发布，生成阶段不得使用 Markdown 加粗、行内代码、代码块、有序列表、无序列表、Markdown 链接、引用或表格。对比、参数、步骤或结构化信息应写成纯文本短行。冒号式标题或标签必须在冒号后换行；数字序号、圈号序号和 emoji 数字序号都必须让序号单独占一行，内容从下一行开始。
 
 `x-thread.md` 发布读取时以行首 `1/`、`2/`、`3/` 这类编号作为 tweet 边界；单条 tweet 内部允许保留空行和纯文本结构，不会再按空行切成多条回复。发布前转换 hook 仍兼容旧 Markdown 产物，但新生成规则不再依赖 Markdown 转换。
+
+小红书、微信公众号和哔哩哔哩产物处于 v0.3 计划阶段，规格见 `docs/MULTI-PLATFORM-OUTPUT-TASK.md`。这些平台产物默认从 `article.md` 适配，只允许改变表达方式，不允许新增事实或改变观点结论；第一阶段只固化数据结构，不改变现有 `--targets all` 行为。
 
 ## 4. 视觉内容链路（v0.2）
 

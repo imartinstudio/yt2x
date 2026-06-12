@@ -22,7 +22,8 @@ const stripFence = (s: string): string => {
 };
 
 /**
- * 为已选中的 clip 生成帖子文案并写入 post-*.md 文件。
+ * 为所有候选 clip 生成帖子文案，全部写入 manifest JSON。
+ * 不写单独的 .md 文件——.md 文件只对选中的 clip 生成。
  */
 export const generateClipsPosts = async (
   input: GeneratePostsRunnerInput,
@@ -36,10 +37,11 @@ export const generateClipsPosts = async (
   ]);
 
   const manifest: DeconstructManifest = JSON.parse(manifestRaw);
-  const selected = manifest.clips.filter((c) => c.selected);
+  // 使用全部候选（不再过滤 selected）
+  const allClips = manifest.clips;
 
-  if (selected.length === 0) {
-    throw new Error("No selected clips found. Run `yt2x clips select` first.");
+  if (allClips.length === 0) {
+    throw new Error("No clips found in manifest. Run deconstruct first.");
   }
 
   // Extract article title and derive short series name
@@ -47,8 +49,8 @@ export const generateClipsPosts = async (
   const articleTitle = titleMatch?.[1] ?? manifest.source.videoId;
   const seriesName = deriveSeriesName(articleTitle);
 
-  // Build LLM input
-  const clipsInput: GeneratePostsInput["clips"] = selected.map((c) => ({
+  // Build LLM input — 传入全部候选
+  const clipsInput: GeneratePostsInput["clips"] = allClips.map((c) => ({
     id: c.id,
     title: c.title,
     summary: c.scores?.composite !== undefined
@@ -81,21 +83,19 @@ export const generateClipsPosts = async (
 
   const parsed = parseClipPosts(resp.content);
 
-  // Write post files + update manifest
-  const clipsDir = path.join(input.articleDir, "clips");
-  const postPaths: string[] = [];
+  // 全部候选的文案写入 manifest JSON（不写 .md 文件）
   const total = parsed.posts.length;
 
   for (let i = 0; i < parsed.posts.length; i++) {
     const post = parsed.posts[i]!;
-    const clip = selected[i]!;
+    const clip = allClips[i]!;
 
     // Build full post text
     const seriesLine = formatClipPostSeriesTitle({
       articleTitle,
       seriesName,
       index: i + 1,
-      total,
+      total: allClips.length,
     });
     const videoLine = `🎬 视频 ${clip.video}（${Math.round(clip.timecodes.durationSec)}s）`;
     const teaserLine = i < total - 1
@@ -119,35 +119,83 @@ export const generateClipsPosts = async (
     ];
     const postText = postLines.join("\n");
 
-    // Write .md file
-    const slug = clip.slug || `clip-${i + 1}`;
-    const postPath = path.join(clipsDir, `post-${i + 1}-${slug}.md`);
-    await writeFile(
-      postPath,
-      `---\nref: clips-manifest.json\nclipId: ${clip.id}\ntype: clip-post\nplatform: x\nseries: ${i + 1}/${total}\n---\n\n${postText}\n`,
-      "utf8",
-    );
-    postPaths.push(postPath);
-
-    // Update manifest entry
+    // Update manifest entry — 全部候选写入 JSON
     const manifestEntry = manifest.clips.find((c) => c.id === clip.id);
     if (manifestEntry) {
-      const fullText = postText;
-      manifestEntry.text = fullText;
-      manifestEntry.charCount = fullText.length;
+      manifestEntry.text = postText;
+      manifestEntry.charCount = postText.length;
       manifestEntry.firstLineChars = post.first_line.length;
       manifestEntry.nextTeaser = post.teaser_next;
     }
   }
 
-  // Write updated manifest
+  // Write updated manifest (all post text in JSON)
   manifest.generatedAt = new Date().toISOString();
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
 
+  // 只对已选中的 clip 生成 .md 文件
+  const postPaths = await writeSelectedPostFiles(manifest, articleTitle, seriesName, input.articleDir);
+
   return {
-    postCount: postPaths.length,
+    postCount: manifest.clips.filter((c) => c.selected === true).length,
     postPaths,
   };
+};
+
+/**
+ * 为 manifest 中 selected=true 的 clip 写入 post-*.md 文件。
+ * 可在 selection 之后单独调用，只生成选中 clip 的 .md。
+ */
+export const writeSelectedPostFiles = async (
+  manifest: DeconstructManifest,
+  articleTitle: string,
+  seriesName: string,
+  articleDir: string,
+): Promise<string[]> => {
+  const clipsDir = path.join(articleDir, "clips");
+  const postPaths: string[] = [];
+  const selected = manifest.clips.filter((c) => c.selected === true);
+
+  for (let i = 0; i < selected.length; i++) {
+    const clip = selected[i]!;
+    if (!clip.text) continue; // 文案未生成，跳过
+
+    const slug = clip.slug || clip.id;
+    const postPath = path.join(clipsDir, `post-${i + 1}-${slug}.md`);
+
+    // 更新系列标识行——选中 clip 重新编号
+    const originalText = clip.text;
+    const seriesMarker = formatClipPostSeriesTitle({
+      articleTitle,
+      seriesName,
+      index: i + 1,
+      total: selected.length,
+    });
+    // 替换原系列标识行（第一行）
+    const lines = originalText.split("\n");
+    lines[0] = seriesMarker;
+    const renumberedText = lines.join("\n");
+
+    await writeFile(
+      postPath,
+      `---\nref: clips-manifest.json\nclipId: ${clip.id}\ntype: clip-post\nplatform: x\nseries: ${i + 1}/${selected.length}\n---\n\n${renumberedText}\n`,
+      "utf8",
+    );
+    postPaths.push(postPath);
+  }
+
+  return postPaths;
+};
+
+/** angle → 戏剧性类型映射（与 core system prompt 表格一致） */
+const ANGLE_DRAMA_MAP: Record<string, string> = {
+  warning: "失控感——强调风险、后果、幸好及时止损。钩子要让人心里一紧。",
+  contrarian: "反常识——打破常规认知。钩子用对比制造冲击：'你以为…其实是…'",
+  tutorial: "高效感——强调速度、简化、一步到位。钩子聚焦'花了多久、省了多少'。",
+  practical: "主动性——强调 AI 自动/主动行为。钩子让人感觉'它自己在干活'。",
+  intro: "救赎感——从损失到恢复的转折。钩子先制造焦虑再给出解法。",
+  outro: "救赎感——从损失到恢复的转折。钩子先制造焦虑再给出解法。",
+  discussion: "反常识——制造认知冲突。钩子让人产生'跟我之前想的不一样'的疑惑。",
 };
 
 const buildPostUserPrompt = (input: GeneratePostsInput): string => {
@@ -156,23 +204,27 @@ const buildPostUserPrompt = (input: GeneratePostsInput): string => {
   parts.push(`## 文章`);
   parts.push(`标题：${input.articleTitle}`);
   parts.push(`系列名称：${input.seriesName}`);
-  parts.push(`路径：${input.articlePath}`);
-  parts.push(`系列标识行固定由程序生成，格式为「<emoji> <短标题> | N/N」。短标题必须呼应文章大标题，不能另起无关主题。`);
+  parts.push(`系列标识行固定由程序生成，格式为「<emoji> <短标题> | N/N」。你不要生成这一行。`);
   parts.push("");
 
   parts.push(`## 候选章节（共 ${input.clips.length} 个，按发帖顺序排列）`);
   for (let i = 0; i < input.clips.length; i++) {
     const c = input.clips[i]!;
+    const drama = ANGLE_DRAMA_MAP[c.angle] ?? "反常识——用对比制造冲击";
     parts.push("");
     parts.push(`### 第 ${i + 1} 篇`);
     parts.push(`标题：${c.title}`);
-    parts.push(`角度：${c.angle}`);
+    parts.push(`角度（angle）：${c.angle}`);
+    parts.push(`戏剧性类型：${drama}`);
     parts.push(`摘要：${c.summary}`);
     parts.push(`视频时长：${c.timecodes.durationSec}秒`);
     parts.push(`文件名：${c.video}`);
+    parts.push(`⚠️ 这一篇的钩子必须体现【${drama.split("——")[0]}】，参考 system prompt 中对应的钩子特征。`);
   }
   parts.push("");
-  parts.push("请为每个章节生成一条帖子文案。输出的 posts 数组顺序必须与输入顺序一致。");
+  parts.push(`请为以上 ${input.clips.length} 个章节各生成一条帖子文案。`);
+  parts.push("对每条帖子，先内部 draft 3 个钩子、自检打分、选最优——但最终 JSON 只包含选中的版本。");
+  parts.push("输出的 posts 数组顺序必须与输入顺序一致。");
 
   return parts.join("\n");
 };

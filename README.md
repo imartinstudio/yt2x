@@ -232,6 +232,15 @@ pnpm yt2x pipeline \
 | `x-short`  | `x-short.md`                  | 单条 X 短帖                         |
 | `all`      | 以上全部                      | 等价于三个 target 的自由组合        |
 
+多平台适配使用独立参数 `--platform-targets`，不会改变 `--targets all` 的含义：
+
+```bash
+pnpm yt2x article --video-id <videoId> --targets article --platform-targets xiaohongshu,wechat,bilibili
+pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --targets article --platform-targets all-platforms --publish review
+```
+
+平台产物从 `article.md` 适配生成；如果本次没有生成 `article.md`，文章目录中必须已有主稿。当前支持 `xiaohongshu`、`wechat`、`bilibili`，分别写入 `<platform>-article.md` 和 `<platform>-metadata.json`。
+
 发布阶段使用单数 `--target`，一次只处理一种目标。`article` 只支持 preview / dry-run，不调用 X API；`x-thread`、`x-short` 和 `x-thread-short` 可通过 X API 发布。`x-thread-short` 会把 `x-short.md` 作为首推，再把 `x-thread.md` 全部作为回复依次发布；`x-short` / `x-thread-short` 的首推会尽量附带封面图。真实发布 `x-thread` / `x-thread-short` 时，每两条推文之间默认随机等待 20-30 秒，可用 `--thread-delay <seconds|range>` 配置，例如 `--thread-delay 10`、`--thread-delay 5-15` 或 `--thread-delay 0`。旧的 `x-longform` 仍作为 `article` 的兼容别名解析，但不再推荐。
 
 `x-thread.md` 发布时以行首 `1/`、`2/`、`3/` 作为 tweet 边界，单条 tweet 内部的空行、列表和代码块会保留在同一条回复里。发布前会把 Markdown 转成 X 兼容文本：英文 / 数字加粗转为 Unicode bold，中文保持原字形。

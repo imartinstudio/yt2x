@@ -26,6 +26,7 @@ export type SingleStageFlags = {
   maxChars?: string;
   rewriteMode?: string;
   targets?: string;
+  platformTargets?: string;
   target?: string;
   threadSource?: string;
   publishDryRun?: boolean;

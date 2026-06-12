@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ArticleOutputTargetsSchema } from "@yt2x/core";
+import { ArticleOutputTargetsSchema, PlatformArticleTargetsSchema } from "@yt2x/core";
 import {
   ErrorStrategySchema,
   PlatformSchema,
@@ -97,6 +97,7 @@ export const ArticleOptionsSchema = z.object({
   maxChars: z.coerce.number().int().min(1).default(280),
   rewriteMode: RewriteModeSchema.default("rules"),
   targets: ArticleOutputTargetsSchema.default("all"),
+  platformTargets: PlatformArticleTargetsSchema.default([]),
 });
 export type ArticleOptions = z.infer<typeof ArticleOptionsSchema>;
 

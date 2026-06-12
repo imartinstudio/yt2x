@@ -24,6 +24,7 @@ export const registerPipelineCommand = (program: Command): void => {
     .option("--keyframes <n>", "Scene-detection keyframes (0 to skip; default 0)", "0")
     .option("--platform <name>", "Target platform (x|wechat|newsletter|...)", "x")
     .option("--targets <targets>", "Article output targets: article,x-thread,x-short,all")
+    .option("--platform-targets <targets>", "Platform adaptations: xiaohongshu,wechat,bilibili,all-platforms")
     .option("--max-chars <n>", "Article stage: hint max chars (legacy)", "280")
     .option("--publish-max-chars <n>", "Publish: per-tweet character limit for x-thread (default 500)")
     .option("--max-tweets <n>", "Publish: max tweets when using --thread (default 8, max 10)", "8")

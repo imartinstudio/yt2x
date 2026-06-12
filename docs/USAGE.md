@@ -222,25 +222,26 @@ pnpm yt2x llm ping --provider openai
 
 ### 文章与发布参数
 
-| 参数                        | 适用命令              | 说明                                                                                                |
-| --------------------------- | --------------------- | --------------------------------------------------------------------------------------------------- |
-| `--platform <name>`         | `article`、`pipeline` | 目标平台；当前主要支持 `x`。                                                                        |
-| `--rewrite-mode rules\|llm` | `pipeline`            | 长文标题 / 内容改写策略；默认 `rules`。                                                             |
-| `--targets <targets>`       | `article`、`pipeline` | 生成目标，支持 `article`、`x-thread`、`x-short`、`all` 和逗号分隔组合；`x-longform` 仅作旧别名。    |
-| `--article-out-dir <path>`  | `article`、`publish`  | 文章输出根目录，默认 `files/articles`。                                                             |
-| `--article-dir <path>`      | `publish`             | 显式指定文章目录，跳过按 `--video-id` 自动发现。                                                    |
-| `--profile <name>`          | `publish`             | X OAuth 凭证 profile，默认 `default`。                                                              |
-| `--dry-run`                 | `publish`             | 只生成 / 打印发布预览，不调用 X API。                                                               |
-| `--publish-dry-run`         | `pipeline`            | pipeline 发布阶段 dry-run。                                                                         |
-| `--target <target>`         | `publish`             | 发布目标，支持 `article`、`x-thread`、`x-short`、`x-thread-short`；`article` 只预览，不调用 X API。 |
-| `--thread-source <source>`  | `publish`             | `x-thread` 来源：`generated` 使用 `x-thread.md`，`article` 拆 `article.md`，`auto` 优先生成串推。   |
-| `--thread`                  | `publish`、`pipeline` | 兼容开关，等价于 `--target x-thread`。                                                              |
-| `--publish-max-chars <n>`   | `publish`、`pipeline` | `x-thread` 单条字数上限，默认 500；`x-short` 不设置固定字数上限。                                   |
-| `--max-chars <n>`           | `publish`、`pipeline` | `publish` 中是 `--publish-max-chars` 别名；`pipeline` 中也是文章阶段提示。                          |
-| `--max-tweets <n>`          | `publish`、`pipeline` | thread 模式最大推文数，`x-thread` 默认 8，`x-thread-short` 默认 10，最大 10。                       |
-| `--thread-delay <range>`    | `publish`、`pipeline` | thread 每两条之间的等待秒数，默认 `20-30`；固定值如 `10`，`0` 表示不等待。                          |
-| `--numbering`               | `publish`             | thread 模式下给每条推文加编号。                                                                     |
-| `--continue-on-failure`     | `publish`             | thread 发布时某条失败后继续尝试后续推文。                                                           |
+| 参数                           | 适用命令              | 说明                                                                                                   |
+| ------------------------------ | --------------------- | ------------------------------------------------------------------------------------------------------ |
+| `--platform <name>`            | `article`、`pipeline` | 目标平台；当前主要支持 `x`。                                                                           |
+| `--rewrite-mode rules\|llm`    | `pipeline`            | 长文标题 / 内容改写策略；默认 `rules`。                                                                |
+| `--targets <targets>`          | `article`、`pipeline` | 生成目标，支持 `article`、`x-thread`、`x-short`、`all` 和逗号分隔组合；`x-longform` 仅作旧别名。       |
+| `--platform-targets <targets>` | `article`、`pipeline` | 多平台适配目标，支持 `xiaohongshu`、`wechat`、`bilibili`、`all-platforms` 和逗号分隔组合；默认不生成。 |
+| `--article-out-dir <path>`     | `article`、`publish`  | 文章输出根目录，默认 `files/articles`。                                                                |
+| `--article-dir <path>`         | `publish`             | 显式指定文章目录，跳过按 `--video-id` 自动发现。                                                       |
+| `--profile <name>`             | `publish`             | X OAuth 凭证 profile，默认 `default`。                                                                 |
+| `--dry-run`                    | `publish`             | 只生成 / 打印发布预览，不调用 X API。                                                                  |
+| `--publish-dry-run`            | `pipeline`            | pipeline 发布阶段 dry-run。                                                                            |
+| `--target <target>`            | `publish`             | 发布目标，支持 `article`、`x-thread`、`x-short`、`x-thread-short`；`article` 只预览，不调用 X API。    |
+| `--thread-source <source>`     | `publish`             | `x-thread` 来源：`generated` 使用 `x-thread.md`，`article` 拆 `article.md`，`auto` 优先生成串推。      |
+| `--thread`                     | `publish`、`pipeline` | 兼容开关，等价于 `--target x-thread`。                                                                 |
+| `--publish-max-chars <n>`      | `publish`、`pipeline` | `x-thread` 单条字数上限，默认 500；`x-short` 不设置固定字数上限。                                      |
+| `--max-chars <n>`              | `publish`、`pipeline` | `publish` 中是 `--publish-max-chars` 别名；`pipeline` 中也是文章阶段提示。                             |
+| `--max-tweets <n>`             | `publish`、`pipeline` | thread 模式最大推文数，`x-thread` 默认 8，`x-thread-short` 默认 10，最大 10。                          |
+| `--thread-delay <range>`       | `publish`、`pipeline` | thread 每两条之间的等待秒数，默认 `20-30`；固定值如 `10`，`0` 表示不等待。                             |
+| `--numbering`                  | `publish`             | thread 模式下给每条推文加编号。                                                                        |
+| `--continue-on-failure`        | `publish`             | thread 发布时某条失败后继续尝试后续推文。                                                              |
 
 ## 目录约定
 
@@ -276,8 +277,12 @@ pnpm yt2x llm ping --provider openai
 
 ```bash
 pnpm yt2x article --video-id <videoId> --targets article,x-thread,x-short
+pnpm yt2x article --video-id <videoId> --targets article --platform-targets xiaohongshu,wechat,bilibili
 pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --targets all --publish review
+pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --targets article --platform-targets all-platforms --publish review
 ```
+
+`--platform-targets` 从 `article.md` 适配生成平台稿。如果本次没有包含 `--targets article`，对应文章目录中必须已经存在 `article.md`。产物命名为 `xiaohongshu-article.md` / `xiaohongshu-metadata.json`、`wechat-article.md` / `wechat-metadata.json`、`bilibili-article.md` / `bilibili-metadata.json`。
 
 发布阶段一次只发布一种目标：
 

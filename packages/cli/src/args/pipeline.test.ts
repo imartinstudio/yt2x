@@ -84,6 +84,28 @@ describe("PipelineArgsSchema", () => {
     expect(parsed.article.targets).toEqual(["x-thread", "x-short"]);
   });
 
+  it("defaults platform article targets to none", () => {
+    const parsed = PipelineArgsSchema.parse(baseInput);
+    expect(parsed.article.platformTargets).toEqual([]);
+  });
+
+  it("parses platform article target combinations", () => {
+    const parsed = PipelineArgsSchema.parse({
+      ...baseInput,
+      article: { platformTargets: "xiaohongshu,wechat" },
+    });
+    expect(parsed.article.platformTargets).toEqual(["xiaohongshu", "wechat"]);
+  });
+
+  it("rejects invalid platform article targets", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        article: { platformTargets: "douyin" },
+      }),
+    ).toThrow(/Invalid --platform-targets value/);
+  });
+
   it("rejects invalid article targets", () => {
     expect(() =>
       PipelineArgsSchema.parse({

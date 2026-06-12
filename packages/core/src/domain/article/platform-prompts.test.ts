@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPlatformArticleUserPrompt,
+  extractProtectedTitleTerms,
+  getCanonicalTitleSeed,
   getPlatformArticleSystemPrompt,
 } from "./platform-prompts.js";
 
@@ -36,6 +38,9 @@ describe("getPlatformArticleSystemPrompt", () => {
       expect(prompt).toMatch(/只基于输入的 article\.md/);
       expect(prompt).toMatch(/不新增事实/);
       expect(prompt).toMatch(/不能改变原文观点、结论和风险边界/);
+      expect(prompt).toMatch(/统一主标题/);
+      expect(prompt).toMatch(/Codex、Claude/);
+      expect(prompt).toMatch(/不能泛化成/);
     }
   });
 });
@@ -57,9 +62,24 @@ describe("buildPlatformArticleUserPrompt", () => {
     expect(prompt).toMatch(/## Video metadata/);
     expect(prompt).toMatch(/"id": "abc"/);
     expect(prompt).not.toMatch(/"formats"/);
+    expect(prompt).toMatch(/## Unified title constraints/);
+    expect(prompt).toMatch(/Unified main title seed: Article/);
     expect(prompt).toMatch(/## Source article\.md/);
     expect(prompt).toMatch(/# Article/);
     expect(prompt).toMatch(/strict JSON only/);
+  });
+
+  it("requires protected tool names from the source title in generated titles", () => {
+    const prompt = buildPlatformArticleUserPrompt(
+      {
+        metadata: { title: "Claude Code 和 Codex 的真实差异" },
+        articleMd: "# 如何选择编程助手\n\nBody",
+      },
+      { target: "bilibili" },
+    );
+    expect(prompt).toMatch(/Required title terms: Codex, Claude/);
+    expect(prompt).toMatch(/Every platform main title and cover headline must include these exact terms/);
+    expect(prompt).toMatch(/Do not broaden/);
   });
 
   it("includes timestamped cues only when provided", () => {
@@ -82,5 +102,20 @@ describe("buildPlatformArticleUserPrompt", () => {
     );
     expect(withCues).toMatch(/Optional timestamped cues/);
     expect(withCues).toMatch(/00:00 intro/);
+  });
+});
+
+describe("title helpers", () => {
+  it("prefers the article H1 as the canonical title seed", () => {
+    expect(
+      getCanonicalTitleSeed({
+        metadata: { title: "Metadata title" },
+        articleMd: "# Article title\n\nBody",
+      }),
+    ).toBe("Article title");
+  });
+
+  it("extracts protected title terms case-insensitively", () => {
+    expect(extractProtectedTitleTerms("用 claude 和 Codex 做代码重构")).toEqual(["Codex", "Claude"]);
   });
 });

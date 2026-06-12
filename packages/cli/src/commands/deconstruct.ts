@@ -1,4 +1,6 @@
+import { readFile } from "node:fs/promises";
 import type { Command } from "commander";
+import type { DeconstructManifest } from "@yt2x/core";
 import {
   readDeconstructArtifacts,
   runDeconstruct,
@@ -7,7 +9,9 @@ import {
   createLlmAdapter,
   selectClips,
   generateClipsPosts,
+  writeSelectedPostFiles,
   writeReports,
+  deriveSeriesName,
 } from "@yt2x/adapters-node";
 import { resolveLlmConfig, defaultCliLlmProvider } from "../config/env.js";
 import { logger } from "../logger.js";
@@ -94,26 +98,7 @@ export const runDeconstructCommand = async (
     }
   }
 
-  // Step 4: Clip video segments
-  logger.info({ sourceVideo: artifacts.videoPath, outputDir: `${articleDir}/clips` }, "Deconstruct: clipping video segments");
-
-  const clipResults = await clipCandidates(
-    artifacts.videoPath,
-    filtered.sections,
-    `${articleDir}/clips`,
-  );
-
-  const successCount = clipResults.filter((r) => r.success).length;
-  const failCount = clipResults.filter((r) => !r.success).length;
-
-  if (failCount > 0) {
-    logger.warn({ successCount, failCount }, "Deconstruct: some clips failed");
-    for (const fail of clipResults.filter((r) => !r.success)) {
-      logger.warn({ candidate: fail.candidate.title, error: fail.error }, "  clip failed");
-    }
-  }
-
-  // Step 5: Write manifest
+  // Step 4: Write manifest — 先不裁剪视频，保存全部候选元数据
   const output = await writeDeconstructOutput(
     articleDir,
     filtered.sections,
@@ -124,12 +109,31 @@ export const runDeconstructCommand = async (
 
   logger.info({ manifestPath: output.manifestPath, clipCount: output.clippedCount }, "Deconstruct: manifest written");
 
-  // Step 6: Auto-select (if --select is set)
+  // Step 5: Generate posts for ALL candidates — 先生成文案，基于文案质量筛选
+  logger.info({ model: llmConfig.model }, "Deconstruct: generating posts for all candidates");
+
+  const genLlmCfg: Parameters<typeof createLlmAdapter>[0] = {
+    provider: llmConfig.provider,
+    apiKey: llmConfig.apiKey ?? "",
+    baseUrl: llmConfig.baseUrl ?? "",
+  };
+  if (llmConfig.model !== undefined) genLlmCfg.defaultModel = llmConfig.model;
+  const genLlm = createLlmAdapter(genLlmCfg);
+
+  const genResult = await generateClipsPosts({
+    llm: genLlm,
+    model: llmConfig.model ?? "",
+    articleDir,
+  });
+
+  logger.info({ postCount: genResult.postCount }, "Deconstruct: posts generated for all candidates");
+
+  // Step 6: Auto-select (if --select is set) — 基于文案质量 + 综合评分筛选
   const selectCount = selectCountOverride ?? 0;
   if (selectCount > 0 && selectCount <= filtered.sections.length) {
-    logger.info({ selectCount }, "Deconstruct: auto-selecting top candidates");
+    logger.info({ selectCount }, "Deconstruct: selecting top candidates based on posts + scores");
 
-    // Sort by composite score descending
+    // Sort by composite score descending (posts are already generated, selection can now compare copy quality)
     const sorted = [...filtered.sections].sort(
       (a, b) => b.scores.composite - a.scores.composite,
     );
@@ -141,32 +145,50 @@ export const runDeconstructCommand = async (
       return String(idx + 1);
     });
 
-    logger.info({ keepIds }, "Deconstruct: selecting clips");
+    logger.info({ keepIds }, "Deconstruct: marking selected clips");
 
     await selectClips({
       articleDir,
       keep: keepIds,
     });
 
-    // Step 7: Auto-generate posts
-    logger.info({ model: llmConfig.model }, "Deconstruct: generating posts for selected clips");
+    // Step 6b: Write .md files only for selected clips
+    const manifestPath = `${articleDir}/clips/clips-manifest.json`;
+    const manifestRaw = await readFile(manifestPath, "utf8");
+    const postManifest = JSON.parse(manifestRaw) as DeconstructManifest;
+    const articleMdForPosts = await readFile(`${articleDir}/article.md`, "utf8");
+    const titleMatch2 = articleMdForPosts.match(/^#\s+(.+)$/m);
+    const articleTitle2 = titleMatch2?.[1] ?? artifacts.videoId;
+    const seriesName2 = deriveSeriesName(articleTitle2);
 
-    // Re-create LLM (fresh rate limit context)
-    const genLlmCfg: Parameters<typeof createLlmAdapter>[0] = {
-      provider: llmConfig.provider,
-      apiKey: llmConfig.apiKey ?? "",
-      baseUrl: llmConfig.baseUrl ?? "",
-    };
-    if (llmConfig.model !== undefined) genLlmCfg.defaultModel = llmConfig.model;
-    const genLlm = createLlmAdapter(genLlmCfg);
-
-    const genResult = await generateClipsPosts({
-      llm: genLlm,
-      model: llmConfig.model ?? "",
+    const selectedPostPaths = await writeSelectedPostFiles(
+      postManifest,
+      articleTitle2,
+      seriesName2,
       articleDir,
-    });
+    );
 
-    logger.info({ postCount: genResult.postCount }, "Deconstruct: posts generated");
+    logger.info({ mdCount: selectedPostPaths.length }, "Deconstruct: .md files written for selected clips");
+
+    // Step 7: Clip ONLY selected video segments — 节省裁剪时间和磁盘空间
+    logger.info({ sourceVideo: artifacts.videoPath, outputDir: `${articleDir}/clips` }, "Deconstruct: clipping selected video segments only");
+
+    const selectedSections = filtered.sections.filter((_, i) => keepIds.includes(String(i + 1)));
+    const clipResults = await clipCandidates(
+      artifacts.videoPath,
+      selectedSections,
+      `${articleDir}/clips`,
+    );
+
+    const successCount = clipResults.filter((r) => r.success).length;
+    const failCount = clipResults.filter((r) => !r.success).length;
+
+    if (failCount > 0) {
+      logger.warn({ successCount, failCount }, "Deconstruct: some clips failed");
+      for (const fail of clipResults.filter((r) => !r.success)) {
+        logger.warn({ candidate: fail.candidate.title, error: fail.error }, "  clip failed");
+      }
+    }
 
     // Generate reports (now with post text populated)
     await generateReports(articleDir, artifacts.articleMd);
@@ -176,8 +198,8 @@ export const runDeconstructCommand = async (
     console.log(`  ✅ 全自动拆解完成`);
     console.log(`  视频: ${artifacts.videoId} (${Math.round(artifacts.durationSec / 60)} min)`);
     console.log(`  候选: ${filtered.sections.length} → 选中 Top ${selectCount}`);
-    console.log(`  视频裁剪: ${successCount}/${clipResults.length}`);
-    console.log(`  帖子: ${genResult.postCount} 篇`);
+    console.log(`  文案: ${genResult.postCount} 篇 JSON（全部候选）→ 视频裁剪: ${successCount} 个（仅选中）`);
+    console.log(`  .md 文件: ${selectedPostPaths.length} 个（仅选中）`);
     console.log(`  输出: ${output.manifestPath}`);
     console.log("=".repeat(60));
     console.log("\n选中章节（按评分排序）：");
@@ -190,21 +212,21 @@ export const runDeconstructCommand = async (
       console.log(`      ${String(s.timecodes.startSec)}s → ${String(s.timecodes.endSec)}s`);
     }
     console.log();
-    console.log(`  帖子文件：`);
-    for (const p of genResult.postPaths) {
+    console.log(`  选中文案 .md 文件：`);
+    for (const p of selectedPostPaths) {
       console.log(`    ${p}`);
     }
     console.log();
   } else {
-    // Generate reports (candidates only, no post text yet)
+    // No auto-select: posts generated for all, no video clipping yet
     await generateReports(articleDir, artifacts.articleMd);
 
-    // Standard summary (no auto-select)
+    // Standard summary
     console.log("\n" + "=".repeat(60));
-    console.log(`  ✅ 章节拆解完成`);
+    console.log(`  ✅ 章节拆解完成（文案已生成，视频待裁剪）`);
     console.log(`  视频: ${artifacts.videoId} (${Math.round(artifacts.durationSec / 60)} min)`);
-    console.log(`  LLM: ${filtered.sections.length} 个候选章节`);
-    console.log(`  裁剪: ${successCount}/${clipResults.length} 个视频片段`);
+    console.log(`  候选: ${filtered.sections.length} 个章节`);
+    console.log(`  文案: ${genResult.postCount} 篇（全部候选，JSON only，未选无 .md）`);
     console.log(`  输出: ${output.manifestPath}`);
     if (selectCount > 0 && selectCount > filtered.sections.length) {
       console.log(`  ⚠️  --select ${selectCount} 超出候选数，已跳过自动选择`);
@@ -223,7 +245,7 @@ export const runDeconstructCommand = async (
       console.log(`      ${String(s.timecodes.startSec)}s → ${String(s.timecodes.endSec)}s  |  ${s.summary}`);
     }
     console.log();
-    console.log(`  提示：用 --select N 自动选 Top N 并生成帖子`);
+    console.log(`  提示：用 --select N 基于文案质量选 Top N，然后裁剪视频`);
     console.log();
   }
 

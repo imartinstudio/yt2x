@@ -12,7 +12,7 @@ export type ClipPost = z.infer<typeof ClipPostSchema>;
 
 /** 多条帖子 LLM 输出 */
 export const ClipPostListSchema = z.object({
-  posts: z.array(ClipPostSchema).min(1).max(10),
+  posts: z.array(ClipPostSchema).min(1).max(30),
 });
 
 export type ClipPostList = z.infer<typeof ClipPostListSchema>;

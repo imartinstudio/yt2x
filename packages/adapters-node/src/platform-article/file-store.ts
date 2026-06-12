@@ -31,11 +31,7 @@ const tagLine = (tags: readonly string[]): string => tags.map((tag) => `#${tag.r
 export const renderPlatformArticleMarkdown = (article: GeneratedPlatformArticle): string => {
   if (article.target === "xiaohongshu") {
     return [
-      "# 小红书笔记",
-      "",
-      "## 标题候选",
-      "",
-      ...article.titles.map((title, index) => `${index + 1}. ${title}`),
+      `# ${article.title}`,
       "",
       "## 正文",
       "",

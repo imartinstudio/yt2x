@@ -46,7 +46,7 @@ export const PLATFORM_ARTICLE_SPECS = {
     outputs: [
       {
         path: "xiaohongshu-article.md",
-        description: "小红书图文笔记文案，包含正文、标题候选和核心标签。",
+        description: "小红书图文笔记文案，包含统一标题、正文和核心标签。",
       },
       {
         path: "xiaohongshu-metadata.json",

@@ -36,7 +36,7 @@ const CoverSchema = z.object({
 
 const XiaohongshuArticleSchema = z.object({
   target: z.literal("xiaohongshu"),
-  titles: z.array(z.string().min(1)).min(1).max(8),
+  title: z.string().min(1),
   body: z.string().min(1),
   tags: z.array(z.string().min(1)).min(3).max(8),
   cover: CoverSchema,

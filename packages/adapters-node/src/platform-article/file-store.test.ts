@@ -18,12 +18,13 @@ describe("renderPlatformArticleMarkdown", () => {
   it("renders xiaohongshu markdown", () => {
     const md = renderPlatformArticleMarkdown({
       target: "xiaohongshu",
-      titles: ["t1", "t2", "t3", "t4", "t5"],
+      title: "t1",
       body: "body",
       tags: ["tag1", "#tag2", "tag3"],
       cover: { headline: "h", visual_prompt: "v" },
     });
-    expect(md).toMatch(/# 小红书笔记/);
+    expect(md).toMatch(/# t1/);
+    expect(md).not.toMatch(/标题候选/);
     expect(md).toMatch(/#tag1 #tag2 #tag3/);
   });
 

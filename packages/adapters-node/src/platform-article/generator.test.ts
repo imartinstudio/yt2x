@@ -16,7 +16,7 @@ const makeLlm = (
 
 const xiaohongshuJson = JSON.stringify({
   target: "xiaohongshu",
-  titles: ["t1", "t2", "t3", "t4", "t5"],
+  title: "t1",
   body: "body",
   tags: ["tag1", "tag2", "tag3"],
   cover: { headline: "h", subhead: "s", visual_prompt: "v" },

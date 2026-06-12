@@ -13,7 +13,7 @@ const generatePlatformArticleContentMock = vi.hoisted(() =>
     durationMs: 1,
     platformArticle: {
       target: "xiaohongshu",
-      titles: ["小红书标题"],
+      title: "小红书标题",
       body: "小红书正文",
       tags: ["AI", "效率", "工具"],
       cover: { headline: "封面标题", visual_prompt: "封面图建议" },

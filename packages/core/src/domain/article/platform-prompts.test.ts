@@ -10,7 +10,8 @@ describe("getPlatformArticleSystemPrompt", () => {
   it("builds the confirmed Xiaohongshu prompt rules", () => {
     const prompt = getPlatformArticleSystemPrompt("xiaohongshu");
     expect(prompt).toMatch(/种草型、强情绪、强钩子/);
-    expect(prompt).toMatch(/5 个标题候选/);
+    expect(prompt).toMatch(/1 个标题/);
+    expect(prompt).toMatch(/不要给备选标题/);
     expect(prompt).toMatch(/3-5 个核心标签/);
     expect(prompt).toMatch(/xiaohongshu-article.md/);
     expect(prompt).toMatch(/严格 JSON|JSON schema/);

@@ -8,7 +8,7 @@ import {
   parseSrt,
   validateClipEndings,
 } from "./generator.js";
-import { deriveSeriesName } from "./post-generator.js";
+import { chooseClipTitleEmoji, deriveSeriesName, formatClipPostSeriesTitle } from "./post-generator.js";
 
 describe("toSlug", () => {
   it("converts Chinese title to slug", () => {
@@ -148,10 +148,10 @@ describe("validateClipEndings", () => {
 });
 
 describe("deriveSeriesName", () => {
-  it("extracts topic before comma with ~20 char limit", () => {
+  it("extracts topic before comma with a short title limit", () => {
     const result = deriveSeriesName("10 个 Claude Code 插件，让你的项目效率翻 10 倍");
-    // Split on ， → "10 个 Claude Code 插件" truncated to 20 chars
-    expect(result.length).toBeLessThanOrEqual(22);
+    // Split on ， → "10 个 Claude Code 插件" without leaking the subtitle.
+    expect(result.length).toBeLessThanOrEqual(30);
     expect(result).toContain("Claude Code");
     expect(result).not.toContain("效率翻");
   });
@@ -160,7 +160,7 @@ describe("deriveSeriesName", () => {
     const result = deriveSeriesName("浏览器已死，Codex 和 Claude Code 才是知识工作的未来");
     expect(result).toContain("浏览器已死");
     // Short enough that suffix kicks in
-    expect(result.length).toBeLessThanOrEqual(22);
+    expect(result.length).toBeLessThanOrEqual(30);
   });
 
   it("handles markdown bold", () => {
@@ -171,5 +171,39 @@ describe("deriveSeriesName", () => {
     const result = deriveSeriesName("测试");
     expect(result).toContain("测试");
     expect(result).toContain("深度拆解");
+  });
+});
+
+describe("clip post series title", () => {
+  it("formats Claude titles with a semantic emoji and pipe progress", () => {
+    const articleTitle = "Claude Code 从 0 到 1 全攻略：90% 的用户只用了 10% 的功能";
+    expect(formatClipPostSeriesTitle({
+      articleTitle,
+      seriesName: deriveSeriesName(articleTitle),
+      index: 1,
+      total: 5,
+    })).toBe("🧠 Claude Code 从 0 到 1 全攻略 | 1/5");
+  });
+
+  it("uses a Codex-specific emoji when Codex is the only named tool", () => {
+    expect(formatClipPostSeriesTitle({
+      articleTitle: "Codex 全攻略：从 Fork 到 Automation",
+      seriesName: "Codex 全攻略",
+      index: 2,
+      total: 3,
+    })).toBe("🤖 Codex 全攻略 | 2/3");
+  });
+
+  it("uses a neutral emoji when multiple named tools are present", () => {
+    expect(chooseClipTitleEmoji("Claude Code 和 Codex 实战对比")).toBe("🧭");
+  });
+
+  it("falls back to a generic emoji without named tools", () => {
+    expect(formatClipPostSeriesTitle({
+      articleTitle: "AI 工作流从入门到落地",
+      seriesName: "AI 工作流",
+      index: 1,
+      total: 2,
+    })).toBe("🧩 AI 工作流 | 1/2");
   });
 });

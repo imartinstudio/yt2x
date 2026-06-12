@@ -91,7 +91,12 @@ export const generateClipsPosts = async (
     const clip = selected[i]!;
 
     // Build full post text
-    const seriesLine = `🧵 ${seriesName} ${i + 1}/${total}`;
+    const seriesLine = formatClipPostSeriesTitle({
+      articleTitle,
+      seriesName,
+      index: i + 1,
+      total,
+    });
     const videoLine = `🎬 视频 ${clip.video}（${Math.round(clip.timecodes.durationSec)}s）`;
     const teaserLine = i < total - 1
       ? post.teaser_next
@@ -152,6 +157,7 @@ const buildPostUserPrompt = (input: GeneratePostsInput): string => {
   parts.push(`标题：${input.articleTitle}`);
   parts.push(`系列名称：${input.seriesName}`);
   parts.push(`路径：${input.articlePath}`);
+  parts.push(`系列标识行固定由程序生成，格式为「<emoji> <短标题> | N/N」。短标题必须呼应文章大标题，不能另起无关主题。`);
   parts.push("");
 
   parts.push(`## 候选章节（共 ${input.clips.length} 个，按发帖顺序排列）`);
@@ -182,11 +188,42 @@ export const deriveSeriesName = (title: string): string => {
   // Try to extract the topic before common delimiters
   const delimiters = /[，,。.！!？?—‒–—:：]/;
   const firstPart = cleaned.split(delimiters)[0]?.trim() ?? cleaned;
-  // Truncate to ~20 chars max
-  const short = Array.from(firstPart).slice(0, 20).join("").trim();
+  // Keep enough room for essential qualifiers such as "从 0 到 1 全攻略".
+  const short = Array.from(firstPart).slice(0, 28).join("").trim();
   // Append a generic suffix if too short or looks incomplete
   if (short.length <= 4) return `${short}深度拆解`;
   return short;
+};
+
+const CLIP_TITLE_EMOJI_RULES = [
+  { key: "claude", emoji: "🧠", pattern: /\bClaude(?:\s+Code)?\b/i },
+  { key: "codex", emoji: "🤖", pattern: /\bCodex\b/i },
+  { key: "chatgpt", emoji: "💬", pattern: /\bChatGPT\b|\bGPT\b/i },
+  { key: "gemini", emoji: "💎", pattern: /\bGemini\b/i },
+  { key: "deepseek", emoji: "🔎", pattern: /\bDeepSeek\b/i },
+  { key: "cursor", emoji: "⌨️", pattern: /\bCursor\b/i },
+  { key: "copilot", emoji: "🛠️", pattern: /\b(?:GitHub\s+)?Copilot\b/i },
+] as const;
+
+export const chooseClipTitleEmoji = (title: string): string => {
+  const matches = CLIP_TITLE_EMOJI_RULES.filter((rule) => rule.pattern.test(title));
+  const uniqueKeys = new Set(matches.map((rule) => rule.key));
+  if (uniqueKeys.size === 1) return matches[0]!.emoji;
+  if (uniqueKeys.size > 1) return "🧭";
+  return "🧩";
+};
+
+export type FormatClipPostSeriesTitleInput = {
+  articleTitle: string;
+  seriesName: string;
+  index: number;
+  total: number;
+};
+
+export const formatClipPostSeriesTitle = (input: FormatClipPostSeriesTitleInput): string => {
+  const shortTitle = deriveSeriesName(input.seriesName);
+  const emoji = chooseClipTitleEmoji(input.articleTitle);
+  return `${emoji} ${shortTitle} | ${input.index}/${input.total}`;
 };
 
 const parseClipPosts = (raw: string): ClipPostList => {

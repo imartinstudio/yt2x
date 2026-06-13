@@ -175,35 +175,38 @@ describe("deriveSeriesName", () => {
 });
 
 describe("clip post series title", () => {
-  it("formats Claude titles with a semantic emoji and pipe progress", () => {
+  it("formats title with 🎬 emoji, series name, clip title, and progress", () => {
     const articleTitle = "Claude Code 从 0 到 1 全攻略：90% 的用户只用了 10% 的功能";
     expect(formatClipPostSeriesTitle({
       articleTitle,
       seriesName: deriveSeriesName(articleTitle),
+      clipTitle: "安装与登录",
       index: 1,
       total: 5,
-    })).toBe("🧠 Claude Code 从 0 到 1 全攻略 | 1/5");
+    })).toBe("🎬 Claude Code 从 0 到 1 全攻略：安装与登录 | 1/5");
   });
 
-  it("uses a Codex-specific emoji when Codex is the only named tool", () => {
+  it("formats with series name truncated and clip title", () => {
     expect(formatClipPostSeriesTitle({
       articleTitle: "Codex 全攻略：从 Fork 到 Automation",
       seriesName: "Codex 全攻略",
+      clipTitle: "三种工作模式",
       index: 2,
       total: 3,
-    })).toBe("🤖 Codex 全攻略 | 2/3");
+    })).toBe("🎬 Codex 全攻略：三种工作模式 | 2/3");
   });
 
   it("uses a neutral emoji when multiple named tools are present", () => {
     expect(chooseClipTitleEmoji("Claude Code 和 Codex 实战对比")).toBe("🧭");
   });
 
-  it("falls back to a generic emoji without named tools", () => {
+  it("falls back to format with 🎬 for generic content", () => {
     expect(formatClipPostSeriesTitle({
       articleTitle: "AI 工作流从入门到落地",
       seriesName: "AI 工作流",
+      clipTitle: "核心概念",
       index: 1,
       total: 2,
-    })).toBe("🧩 AI 工作流 | 1/2");
+    })).toBe("🎬 AI 工作流：核心概念 | 1/2");
   });
 });

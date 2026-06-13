@@ -134,126 +134,107 @@ export const runDeconstructCommand = async (
   }
   logger.info({ postCount: genResult.postCount }, "Deconstruct: posts generated for all candidates");
 
-  // Step 6: Auto-select (if --select is set) — 基于文案质量 + 综合评分筛选
-  const selectCount = selectCountOverride ?? 0;
-  if (selectCount > 0 && selectCount <= filtered.sections.length) {
-    logger.info({ selectCount }, "Deconstruct: selecting top candidates based on posts + scores");
+  // Step 6: Select & generate — 默认全量，--select N 选 Top N
+  const allMode = selectCountOverride === undefined;
+  const selectCount = allMode ? filtered.sections.length : (selectCountOverride ?? 0);
+  const effectiveCount = Math.min(selectCount, filtered.sections.length);
 
-    // Sort by composite score descending (posts are already generated, selection can now compare copy quality)
-    const sorted = [...filtered.sections].sort(
-      (a, b) => b.scores.composite - a.scores.composite,
-    );
-    const top = sorted.slice(0, selectCount);
-
-    // Get their 1-based clip IDs
-    const keepIds = top.map((s) => {
-      const idx = filtered.sections.indexOf(s);
-      return String(idx + 1);
-    });
-
-    logger.info({ keepIds }, "Deconstruct: marking selected clips");
-
-    await selectClips({
-      articleDir,
-      keep: keepIds,
-    });
-
-    // Step 6b: Write .md files only for selected clips
-    const manifestPath = `${articleDir}/clips/clips-manifest.json`;
-    const manifestRaw = await readFile(manifestPath, "utf8");
-    const postManifest = JSON.parse(manifestRaw) as DeconstructManifest;
-    const articleMdForPosts = await readFile(`${articleDir}/article.md`, "utf8");
-    const titleMatch2 = articleMdForPosts.match(/^#\s+(.+)$/m);
-    const articleTitle2 = titleMatch2?.[1] ?? artifacts.videoId;
-    const seriesName2 = deriveSeriesName(articleTitle2);
-
-    const selectedPostPaths = await writeSelectedPostFiles(
-      postManifest,
-      articleTitle2,
-      seriesName2,
-      articleDir,
-    );
-
-    logger.info({ mdCount: selectedPostPaths.length }, "Deconstruct: .md files written for selected clips");
-
-    // Step 7: Clip ONLY selected video segments — 节省裁剪时间和磁盘空间
-    logger.info({ sourceVideo: artifacts.videoPath, outputDir: `${articleDir}/clips` }, "Deconstruct: clipping selected video segments only");
-
-    const selectedSections = filtered.sections.filter((_, i) => keepIds.includes(String(i + 1)));
-    const clipResults = await clipCandidates(
-      artifacts.videoPath,
-      selectedSections,
-      `${articleDir}/clips`,
-    );
-
-    const successCount = clipResults.filter((r) => r.success).length;
-    const failCount = clipResults.filter((r) => !r.success).length;
-
-    if (failCount > 0) {
-      logger.warn({ successCount, failCount }, "Deconstruct: some clips failed");
-      for (const fail of clipResults.filter((r) => !r.success)) {
-        logger.warn({ candidate: fail.candidate.title, error: fail.error }, "  clip failed");
-      }
-    }
-
-    // Generate reports (now with post text populated)
-    await generateReports(articleDir, artifacts.articleMd);
-
-    // Summary for auto mode
-    console.log("\n" + "=".repeat(60));
-    console.log(`  ✅ 全自动拆解完成`);
-    console.log(`  视频: ${artifacts.videoId} (${Math.round(artifacts.durationSec / 60)} min)`);
-    console.log(`  候选: ${filtered.sections.length} → 选中 Top ${selectCount}`);
-    console.log(`  文案: ${genResult.postCount} 篇 JSON（全部候选）→ 视频裁剪: ${successCount} 个（仅选中）`);
-    console.log(`  .md 文件: ${selectedPostPaths.length} 个（仅选中）`);
-    console.log(`  输出: ${output.manifestPath}`);
-    console.log("=".repeat(60));
-    console.log("\n选中章节（按评分排序）：");
-
-    for (let i = 0; i < top.length; i++) {
-      const s = top[i]!;
-      console.log(
-        `  ${String(i + 1).padStart(2)}. ${String(s.scores.composite.toFixed(1))}⭐  [${s.angle}] ${s.title}`,
-      );
-      console.log(`      ${String(s.timecodes.startSec)}s → ${String(s.timecodes.endSec)}s`);
-    }
-    console.log();
-    console.log(`  选中文案 .md 文件：`);
-    for (const p of selectedPostPaths) {
-      console.log(`    ${p}`);
-    }
-    console.log();
+  if (allMode) {
+    logger.info({ count: effectiveCount }, "Deconstruct: generating all clips (default)");
+  } else if (selectCount > filtered.sections.length) {
+    logger.warn({ requested: selectCount, available: filtered.sections.length }, "Deconstruct: --select exceeds candidate count, using all");
   } else {
-    // No auto-select: posts generated for all, no video clipping yet
-    await generateReports(articleDir, artifacts.articleMd);
-
-    // Standard summary
-    console.log("\n" + "=".repeat(60));
-    console.log(`  ✅ 章节拆解完成（文案已生成，视频待裁剪）`);
-    console.log(`  视频: ${artifacts.videoId} (${Math.round(artifacts.durationSec / 60)} min)`);
-    console.log(`  候选: ${filtered.sections.length} 个章节`);
-    console.log(`  文案: ${genResult.postCount} 篇（全部候选，JSON only，未选无 .md）`);
-    console.log(`  输出: ${output.manifestPath}`);
-    if (selectCount > 0 && selectCount > filtered.sections.length) {
-      console.log(`  ⚠️  --select ${selectCount} 超出候选数，已跳过自动选择`);
-    }
-    console.log("=".repeat(60));
-    console.log("\n候选章节评分排序：");
-
-    const sorted = [...filtered.sections].sort(
-      (a, b) => b.scores.composite - a.scores.composite,
-    );
-    for (let i = 0; i < sorted.length; i++) {
-      const s = sorted[i]!;
-      console.log(
-        `  ${String(i + 1).padStart(2)}. ${String(s.scores.composite.toFixed(1))}⭐  [${s.angle}] ${s.title}`,
-      );
-      console.log(`      ${String(s.timecodes.startSec)}s → ${String(s.timecodes.endSec)}s  |  ${s.summary}`);
-    }
-    console.log();
-    console.log(`  提示：用 --select N 基于文案质量选 Top N，然后裁剪视频`);
-    console.log();
+    logger.info({ selectCount: effectiveCount }, "Deconstruct: selecting top candidates");
   }
+
+  // Sort by composite score descending
+  const sorted = [...filtered.sections].sort(
+    (a, b) => b.scores.composite - a.scores.composite,
+  );
+  const top = sorted.slice(0, effectiveCount);
+
+  // Get their 1-based clip IDs
+  const keepIds = top.map((s) => {
+    const idx = filtered.sections.indexOf(s);
+    return String(idx + 1);
+  });
+
+  await selectClips({
+    articleDir,
+    keep: keepIds,
+  });
+
+  // Write .md files for selected clips
+  const manifestPath = `${articleDir}/clips/clips-manifest.json`;
+  const manifestRaw = await readFile(manifestPath, "utf8");
+  const postManifest = JSON.parse(manifestRaw) as DeconstructManifest;
+  const articleMdForPosts = await readFile(`${articleDir}/article.md`, "utf8");
+  const titleMatch2 = articleMdForPosts.match(/^#\s+(.+)$/m);
+  const articleTitle2 = titleMatch2?.[1] ?? artifacts.videoId;
+  const seriesName2 = deriveSeriesName(articleTitle2);
+
+  const selectedPostPaths = await writeSelectedPostFiles(
+    postManifest,
+    articleTitle2,
+    seriesName2,
+    articleDir,
+  );
+
+  logger.info({ mdCount: selectedPostPaths.length }, "Deconstruct: .md files written");
+
+  // Clip selected video segments
+  const modeLabel = allMode ? "all" : `top ${effectiveCount}`;
+  logger.info({ sourceVideo: artifacts.videoPath, outputDir: `${articleDir}/clips`, mode: modeLabel }, "Deconstruct: clipping video segments");
+
+  const selectedSections = filtered.sections.filter((_, i) => keepIds.includes(String(i + 1)));
+  const clipResults = await clipCandidates(
+    artifacts.videoPath,
+    selectedSections,
+    `${articleDir}/clips`,
+  );
+
+  const successCount = clipResults.filter((r) => r.success).length;
+  const failCount = clipResults.filter((r) => !r.success).length;
+
+  if (failCount > 0) {
+    logger.warn({ successCount, failCount }, "Deconstruct: some clips failed");
+    for (const fail of clipResults.filter((r) => !r.success)) {
+      logger.warn({ candidate: fail.candidate.title, error: fail.error }, "  clip failed");
+    }
+  }
+
+  // Generate reports (now with post text populated)
+  await generateReports(articleDir, artifacts.articleMd);
+
+  // Summary
+  console.log("\n" + "=".repeat(60));
+  console.log(`  ✅ 拆解完成`);
+  console.log(`  视频: ${artifacts.videoId} (${Math.round(artifacts.durationSec / 60)} min)`);
+  console.log(`  候选: ${filtered.sections.length} → 生成 ${effectiveCount} 个`);
+  console.log(`  文案: ${genResult.postCount} 篇 JSON → 视频裁剪: ${successCount} 个`);
+  console.log(`  .md 文件: ${selectedPostPaths.length} 个`);
+  console.log(`  输出: ${output.manifestPath}`);
+  if (allMode) {
+    console.log(`  模式: 全量（默认）`);
+  } else {
+    console.log(`  模式: --select ${effectiveCount}`);
+  }
+  console.log("=".repeat(60));
+  console.log(`\n章节（按评分排序）：`);
+
+  for (let i = 0; i < top.length; i++) {
+    const s = top[i]!;
+    console.log(
+      `  ${String(i + 1).padStart(2)}. ${String(s.scores.composite.toFixed(1))}⭐  [${s.angle}] ${s.title}`,
+    );
+    console.log(`      ${String(s.timecodes.startSec)}s → ${String(s.timecodes.endSec)}s`);
+  }
+  console.log();
+  console.log(`  文案 .md 文件：`);
+  for (const p of selectedPostPaths) {
+    console.log(`    ${p}`);
+  }
+  console.log();
 
   return 0;
 };

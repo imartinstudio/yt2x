@@ -72,10 +72,10 @@ describe("generateClipsPosts", () => {
       expect(result.postCount).toBe(1);
 
       const postText = await readFile(result.postPaths[0]!, "utf8");
-      expect(postText).toContain("🧠 Claude Code 从 0 到 1 全攻略 | 1/1");
+      expect(postText).toContain("🎬 Claude Code 从 0 到 1 全攻略：开场爆论 | 1/1");
 
       const updatedManifest = JSON.parse(await readFile(path.join(clipsDir, "clips-manifest.json"), "utf8")) as DeconstructManifest;
-      expect(updatedManifest.clips[0]!.text?.startsWith("🧠 Claude Code 从 0 到 1 全攻略 | 1/1")).toBe(true);
+      expect(updatedManifest.clips[0]!.text?.startsWith("🎬 Claude Code 从 0 到 1 全攻略：开场爆论 | 1/1")).toBe(true);
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }

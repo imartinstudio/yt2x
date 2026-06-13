@@ -147,12 +147,12 @@ export const deriveSeriesName = (title: string): string => {
 export type FormatClipPostSeriesTitleInput = {
   articleTitle: string;
   seriesName: string;
+  clipTitle: string;
   index: number;
   total: number;
 };
 
 export const formatClipPostSeriesTitle = (input: FormatClipPostSeriesTitleInput): string => {
-  const shortTitle = deriveSeriesName(input.seriesName);
-  const emoji = chooseClipTitleEmoji(input.articleTitle);
-  return `${emoji} ${shortTitle} | ${input.index}/${input.total}`;
+  const shortSeries = deriveSeriesName(input.seriesName);
+  return `🎬 ${shortSeries}：${input.clipTitle} | ${input.index}/${input.total}`;
 };

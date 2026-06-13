@@ -3,7 +3,6 @@ import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import { DEFAULT_ARTICLE_OUT_DIR, DEFAULT_OUT_DIR, formatWechatArticle } from "@yt2x/adapters-node";
-import { executeNativeArticle } from "../orchestrator/native-article.js";
 
 type PlatformKey = "x" | "xiaohongshu" | "wechat" | "bilibili";
 
@@ -65,9 +64,9 @@ type DashboardPayload = {
 
 const PLATFORMS: Array<{ key: PlatformKey; label: string; primaryFile: string; files: string[] }> = [
   { key: "x", label: "X", primaryFile: "article.md", files: ["article.md", "x-thread.md", "x-short.md", "x-video-short.md"] },
-  { key: "xiaohongshu", label: "小红书", primaryFile: "xiaohongshu-article.md", files: ["xiaohongshu-article.md"] },
-  { key: "wechat", label: "公众号", primaryFile: "wechat-article.md", files: ["wechat-article.md"] },
-  { key: "bilibili", label: "B站", primaryFile: "bilibili-article.md", files: ["bilibili-article.md"] },
+  { key: "xiaohongshu", label: "小红书", primaryFile: "article.md", files: ["article.md"] },
+  { key: "wechat", label: "公众号", primaryFile: "article.md", files: ["article.md"] },
+  { key: "bilibili", label: "B站", primaryFile: "article.md", files: ["article.md"] },
 ];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -111,7 +110,7 @@ const fileExists = async (filePath: string): Promise<boolean> => {
 };
 
 const wechatFormatPaths = (articleDir: string): { formattedDir: string; htmlPath: string; previewPath: string } => {
-  const formattedDir = path.join(articleDir, "wechat-format", "wechat-article");
+  const formattedDir = path.join(articleDir, "wechat-format", "article");
   return {
     formattedDir,
     htmlPath: path.join(formattedDir, "article.html"),
@@ -325,6 +324,7 @@ const formatWechatForDashboard = async (
 ): Promise<{ theme: string; htmlPath: string; previewPath: string }> => {
   const result = await formatWechatArticle({
     articleDir: path.join(path.resolve(opts.articleOutDir), input.videoId),
+    sourceFile: "article.md",
     theme: input.theme,
     ...(opts.wechatFormatterDir !== undefined ? { formatterDir: opts.wechatFormatterDir } : {}),
   });
@@ -340,22 +340,6 @@ const formatWechatForDashboard = async (
     htmlPath: result.articleHtmlPath,
     previewPath: result.previewHtmlPath,
   };
-};
-
-const generateWechatArticleForDashboard = async (
-  opts: { articleOutDir: string; downloadsDir: string },
-  videoId: string,
-): Promise<void> => {
-  const code = await executeNativeArticle({
-    videoId: [videoId],
-    outDir: opts.downloadsDir,
-    articleOutDir: opts.articleOutDir,
-    platformTargets: "wechat",
-    showProgress: false,
-  });
-  if (code !== 0) {
-    throw new Error(`WeChat article generation failed with exit code ${code}. Check LLM configuration and source article files.`);
-  }
 };
 
 const platformFromString = (value: string | null): PlatformKey | null => {
@@ -772,9 +756,6 @@ const DASHBOARD_HTML = String.raw`<!doctype html>
       $("detail").querySelectorAll("[data-format-wechat]").forEach((btn) => {
         btn.addEventListener("click", () => formatWechat(video.videoId, btn.dataset.theme || "github"));
       });
-      $("detail").querySelectorAll("[data-generate-wechat]").forEach((btn) => {
-        btn.addEventListener("click", () => generateAndFormatWechat(video.videoId, btn.dataset.theme || "github"));
-      });
       $("detail").querySelectorAll("[data-copy-wechat-html]").forEach((btn) => {
         btn.addEventListener("click", () => copyWechatHtml(video.videoId));
       });
@@ -795,9 +776,7 @@ const DASHBOARD_HTML = String.raw`<!doctype html>
         ? [
           state.generated
             ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "github") + '">' + (state.formatStatus === "formatted" ? "重新排版" : "排版") + '</button>'
-            : video.platforms.x.generated
-              ? '<button class="secondary" data-generate-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "github") + '">生成并排版</button>'
-              : '<button class="secondary" disabled>缺主稿</button>',
+            : '<button class="secondary" disabled>缺主稿</button>',
           '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>复制 HTML</button>',
           '<a href="/api/wechat-format/file?videoId=' + encodeURIComponent(video.videoId) + '&kind=preview" target="_blank"><button class="secondary" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>打开预览</button></a>',
         ].join("")
@@ -855,7 +834,7 @@ const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     async function formatWechat(videoId, theme) {
-      toast("开始排版公众号稿...");
+      toast("开始排版公众号主稿...");
       const resp = await fetch("/api/wechat-format", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -868,23 +847,6 @@ const DASHBOARD_HTML = String.raw`<!doctype html>
         return;
       }
       toast("公众号排版完成");
-      await load();
-    }
-
-    async function generateAndFormatWechat(videoId, theme) {
-      toast("开始生成公众号稿并排版...");
-      const resp = await fetch("/api/wechat-generate-format", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ videoId, theme }),
-      });
-      if (!resp.ok) {
-        const payload = await resp.json().catch(() => ({}));
-        toast(payload.error || "生成或排版失败");
-        await load();
-        return;
-      }
-      toast("公众号稿已生成并排版");
       await load();
     }
 

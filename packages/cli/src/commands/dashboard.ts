@@ -955,37 +955,6 @@ const handleDashboardRequest = async (
     }
     return;
   }
-  if (req.method === "POST" && url.pathname === "/api/wechat-generate-format") {
-    const parsed = JSON.parse(await readBody(req)) as unknown;
-    if (!isRecord(parsed)) {
-      sendJson(res, 400, { error: "Invalid JSON body." });
-      return;
-    }
-    const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
-    const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : "github";
-    if (!isSafeVideoId(videoId)) {
-      sendJson(res, 400, { error: "Invalid videoId." });
-      return;
-    }
-    try {
-      const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
-      if (!(await fileExists(path.join(articleDir, "wechat-article.md")))) {
-        await generateWechatArticleForDashboard(opts, videoId);
-      }
-      const result = await formatWechatForDashboard(opts, { videoId, theme });
-      sendJson(res, 200, { ok: true, generated: true, ...result });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      await updateWechatFormatStatus(path.resolve(opts.indexPath), {
-        videoId,
-        status: "failed",
-        theme,
-        error: message,
-      });
-      sendJson(res, 500, { error: message });
-    }
-    return;
-  }
   if (req.method === "POST" && url.pathname === "/api/status") {
     const parsed = JSON.parse(await readBody(req)) as unknown;
     if (!isRecord(parsed)) {

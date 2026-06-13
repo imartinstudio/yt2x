@@ -33,6 +33,7 @@ export type WechatFormatterCheckResult = {
 
 export type FormatWechatArticleInput = {
   articleDir: string;
+  sourceFile?: string;
   formatterDir?: string;
   pythonBin?: string;
   theme?: string;
@@ -181,13 +182,25 @@ const requireWechatFormatter = async (
   };
 };
 
+const resolveSourceFile = (sourceFile: string | undefined): string => {
+  const file = sourceFile?.trim() || "article.md";
+  if (file.length === 0 || file.includes("/") || file.includes("\\") || path.basename(file) !== file) {
+    throw new Error(`Invalid WeChat source file: ${file}`);
+  }
+  if (path.extname(file) !== ".md") {
+    throw new Error(`WeChat source file must be a Markdown file: ${file}`);
+  }
+  return file;
+};
+
 export const formatWechatArticle = async (
   input: FormatWechatArticleInput,
 ): Promise<FormatWechatArticleResult> => {
   const articleDir = path.resolve(input.articleDir);
-  const inputPath = path.join(articleDir, "wechat-article.md");
+  const sourceFile = resolveSourceFile(input.sourceFile);
+  const inputPath = path.join(articleDir, sourceFile);
   if (!(await exists(inputPath))) {
-    throw new Error(`Missing WeChat article: ${inputPath}. Run \`pnpm yt2x article --video-id <videoId> --platform-targets wechat\` first.`);
+    throw new Error(`Missing WeChat source article: ${inputPath}. Run \`pnpm yt2x article --video-id <videoId>\` first, or pass a source file that exists.`);
   }
 
   const formatter = await requireWechatFormatter(input);

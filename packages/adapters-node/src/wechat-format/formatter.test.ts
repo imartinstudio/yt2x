@@ -63,11 +63,11 @@ describe("checkWechatFormatter", () => {
 });
 
 describe("formatWechatArticle", () => {
-  it("runs format.py against wechat-article.md with deterministic output dir", async () => {
+  it("runs format.py against article.md with deterministic output dir by default", async () => {
     const formatterDir = await makeFormatterDir();
     const articleDir = path.join(root, "articles", "video123");
     await mkdir(articleDir, { recursive: true });
-    await writeFile(path.join(articleDir, "wechat-article.md"), "# 微信稿\n\n正文");
+    await writeFile(path.join(articleDir, "article.md"), "# 主稿\n\n正文");
     const runner = okRunner();
 
     const result = await formatWechatArticle({
@@ -78,7 +78,7 @@ describe("formatWechatArticle", () => {
     });
 
     expect(result.outputBaseDir).toBe(path.join(articleDir, "wechat-format"));
-    expect(result.formattedDir).toBe(path.join(articleDir, "wechat-format", "wechat-article"));
+    expect(result.formattedDir).toBe(path.join(articleDir, "wechat-format", "article"));
     expect(result.articleHtmlPath).toBe(path.join(result.formattedDir, "article.html"));
     expect(result.previewHtmlPath).toBe(path.join(result.formattedDir, "preview.html"));
     expect(runner.run).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -87,7 +87,7 @@ describe("formatWechatArticle", () => {
       args: [
         path.join(formatterDir, "scripts", "format.py"),
         "--input",
-        path.join(articleDir, "wechat-article.md"),
+        path.join(articleDir, "article.md"),
         "--theme",
         "newspaper",
         "--output",
@@ -99,7 +99,24 @@ describe("formatWechatArticle", () => {
     }));
   });
 
-  it("fails clearly when wechat-article.md is missing", async () => {
+  it("can format an explicit legacy wechat-article.md source", async () => {
+    const formatterDir = await makeFormatterDir();
+    const articleDir = path.join(root, "articles", "video456");
+    await mkdir(articleDir, { recursive: true });
+    await writeFile(path.join(articleDir, "wechat-article.md"), "# 微信稿\n\n正文");
+
+    const result = await formatWechatArticle({
+      articleDir,
+      sourceFile: "wechat-article.md",
+      formatterDir,
+      runner: okRunner(),
+    });
+
+    expect(result.inputPath).toBe(path.join(articleDir, "wechat-article.md"));
+    expect(result.formattedDir).toBe(path.join(articleDir, "wechat-format", "wechat-article"));
+  });
+
+  it("fails clearly when article.md is missing", async () => {
     const formatterDir = await makeFormatterDir();
     const articleDir = path.join(root, "articles", "video123");
     await mkdir(articleDir, { recursive: true });
@@ -108,6 +125,6 @@ describe("formatWechatArticle", () => {
       articleDir,
       formatterDir,
       runner: okRunner(),
-    })).rejects.toThrow(/Missing WeChat article/);
+    })).rejects.toThrow(/Missing WeChat source article/);
   });
 });

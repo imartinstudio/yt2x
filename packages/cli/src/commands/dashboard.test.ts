@@ -12,12 +12,10 @@ describe("scanDashboardVideos", () => {
     const videoId = "video123";
     await mkdir(path.join(articleOutDir, videoId), { recursive: true });
     await mkdir(path.join(downloadsDir, videoId), { recursive: true });
-    await mkdir(path.join(articleOutDir, videoId, "wechat-format", "wechat-article"), { recursive: true });
+    await mkdir(path.join(articleOutDir, videoId, "wechat-format", "article"), { recursive: true });
     await writeFile(path.join(articleOutDir, videoId, "article.md"), "# **正式发布标题**\n\n正文");
-    await writeFile(path.join(articleOutDir, videoId, "xiaohongshu-article.md"), "# 小红书");
-    await writeFile(path.join(articleOutDir, videoId, "wechat-article.md"), "# 公众号");
-    await writeFile(path.join(articleOutDir, videoId, "wechat-format", "wechat-article", "article.html"), "<article>html</article>");
-    await writeFile(path.join(articleOutDir, videoId, "wechat-format", "wechat-article", "preview.html"), "<html>preview</html>");
+    await writeFile(path.join(articleOutDir, videoId, "wechat-format", "article", "article.html"), "<article>html</article>");
+    await writeFile(path.join(articleOutDir, videoId, "wechat-format", "article", "preview.html"), "<html>preview</html>");
     await writeFile(path.join(downloadsDir, videoId, "metadata.json"), JSON.stringify({ title: "真实标题" }));
     const indexPath = path.join(root, "publish-index.json");
     await writeFile(

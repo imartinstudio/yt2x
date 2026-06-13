@@ -286,7 +286,7 @@ export type FormatClipPostSeriesTitleInput = {
 
 export const formatClipPostSeriesTitle = (input: FormatClipPostSeriesTitleInput): string => {
   const shortSeries = deriveSeriesName(input.seriesName);
-  return `🎬 ${shortSeries}：${input.clipTitle} | ${input.index}/${input.total}`;
+  return `🎬 「${shortSeries}」${input.clipTitle} | ${input.index}/${input.total}`;
 };
 
 const parseClipPosts = (raw: string): ClipPostList => {

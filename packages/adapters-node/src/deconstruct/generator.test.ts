@@ -183,7 +183,7 @@ describe("clip post series title", () => {
       clipTitle: "安装与登录",
       index: 1,
       total: 5,
-    })).toBe("🎬 Claude Code 从 0 到 1 全攻略：安装与登录 | 1/5");
+    })).toBe("🎬 「Claude Code 从 0 到 1 全攻略」安装与登录 | 1/5");
   });
 
   it("formats with series name truncated and clip title", () => {
@@ -193,7 +193,7 @@ describe("clip post series title", () => {
       clipTitle: "三种工作模式",
       index: 2,
       total: 3,
-    })).toBe("🎬 Codex 全攻略：三种工作模式 | 2/3");
+    })).toBe("🎬 「Codex 全攻略」三种工作模式 | 2/3");
   });
 
   it("uses a neutral emoji when multiple named tools are present", () => {
@@ -207,6 +207,6 @@ describe("clip post series title", () => {
       clipTitle: "核心概念",
       index: 1,
       total: 2,
-    })).toBe("🎬 AI 工作流：核心概念 | 1/2");
+    })).toBe("🎬 「AI 工作流」核心概念 | 1/2");
   });
 });

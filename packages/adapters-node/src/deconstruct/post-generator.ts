@@ -13,6 +13,7 @@ export type GeneratePostsRunnerInput = {
 export type GeneratePostsRunnerResult = {
   postCount: number;
   postPaths: string[];
+  usage?: { promptTokens: number; completionTokens: number };
 };
 
 const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -136,10 +137,17 @@ export const generateClipsPosts = async (
   // 只对已选中的 clip 生成 .md 文件
   const postPaths = await writeSelectedPostFiles(manifest, articleTitle, seriesName, input.articleDir);
 
-  return {
-    postCount: manifest.clips.filter((c) => c.selected === true).length,
+  const result: GeneratePostsRunnerResult = {
+    postCount: total,
     postPaths,
   };
+  if (resp.usage !== undefined) {
+    result.usage = {
+      promptTokens: resp.usage.promptTokens,
+      completionTokens: resp.usage.completionTokens,
+    };
+  }
+  return result;
 };
 
 /**

@@ -27,8 +27,8 @@ describe("readDefaultLlmProviderFromEnv", () => {
 });
 
 describe("defaultCliLlmProvider", () => {
-  it("defaults to openai when unset", () => {
-    expect(defaultCliLlmProvider({})).toBe("openai");
+  it("defaults to deepseek when unset", () => {
+    expect(defaultCliLlmProvider({})).toBe("deepseek");
   });
 });
 

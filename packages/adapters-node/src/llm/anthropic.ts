@@ -16,7 +16,11 @@ import type { ChatMessage, ChatRequest, ChatResponse, LlmPort } from "@yt2x/core
  */
 
 const ANTHROPIC_VERSION = "2023-06-01";
+const ANTHROPIC_CACHE_BETA = "prompt-caching-2024-07-31";
 const DEFAULT_MAX_TOKENS = 4096;
+
+/** Minimum tokens required before a cache_control breakpoint (Anthropic requirement) */
+const CACHE_MIN_TOKENS = 1024;
 
 export type AnthropicConfig = {
   apiKey: string;
@@ -85,20 +89,55 @@ export const createAnthropicAdapter = (config: AnthropicConfig): LlmPort => {
       }
       const { system, rest } = splitSystem(req.messages);
 
+      // Build messages — add cache_control to last user message when system is cached
+      const messages = rest.map((m, i) => {
+        const isLastUser = m.role === "user" && i === rest.length - 1;
+        if (isLastUser && system !== undefined) {
+          return {
+            role: "user" as const,
+            content: [
+              { type: "text" as const, text: m.content, cache_control: { type: "ephemeral" as const } },
+            ],
+          };
+        }
+        return { role: m.role, content: m.content };
+      });
+
       const body: Record<string, unknown> = {
         model,
         max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
-        messages: rest.map((m) => ({ role: m.role, content: m.content })),
+        messages,
       };
-      if (system !== undefined) body.system = system;
+
+      // Cache system prompt when large enough to benefit (>1024 tokens ≈ ~1500 CJK chars)
+      if (system !== undefined) {
+        if (system.length > CACHE_MIN_TOKENS * 1.5) {
+          body.system = [
+            { type: "text", text: system, cache_control: { type: "ephemeral" } },
+          ];
+        } else {
+          body.system = system;
+        }
+      }
       if (req.temperature !== undefined) body.temperature = req.temperature;
       if (req.jsonMode === true) {
         // 没有原生 json mode，用"strict system + assistant 预填"组合
         const jsonNote = "Respond ONLY with a single JSON object. Do not include explanations.";
-        body.system = system === undefined ? jsonNote : `${system}\n\n${jsonNote}`;
+        const prevSystem = body.system;
+        if (prevSystem === undefined) {
+          body.system = jsonNote;
+        } else if (typeof prevSystem === "string") {
+          body.system = `${prevSystem}\n\n${jsonNote}`;
+        } else if (Array.isArray(prevSystem)) {
+          // 结构化 system（含 cache_control）：追加 text block
+          body.system = [
+            ...prevSystem,
+            { type: "text", text: jsonNote },
+          ];
+        }
         // 在 messages 末尾追加一条 assistant 起手 `{`，模型会续写。
         // 拼回时手动补上前缀。
-        (body.messages as Array<{ role: string; content: string }>).push({
+        (body.messages as Array<{ role: string; content: unknown }>).push({
           role: "assistant",
           content: "{",
         });
@@ -109,6 +148,7 @@ export const createAnthropicAdapter = (config: AnthropicConfig): LlmPort => {
         headers: {
           "x-api-key": config.apiKey,
           "anthropic-version": ANTHROPIC_VERSION,
+          "anthropic-beta": ANTHROPIC_CACHE_BETA,
         },
         body,
         provider: "anthropic",

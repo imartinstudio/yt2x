@@ -59,6 +59,9 @@ export const runDeconstructCommand = async (
       model: llmConfig.model ?? "",
       articleDir,
     });
+    if (result.usage !== undefined) {
+      logger.info({ usage: result.usage }, "Deconstruct: LLM usage (clip identification)");
+    }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ error: msg }, "Deconstruct: LLM call failed");
@@ -126,6 +129,9 @@ export const runDeconstructCommand = async (
     articleDir,
   });
 
+  if (genResult.usage !== undefined) {
+    logger.info({ usage: genResult.usage }, "Deconstruct: LLM usage (post generation)");
+  }
   logger.info({ postCount: genResult.postCount }, "Deconstruct: posts generated for all candidates");
 
   // Step 6: Auto-select (if --select is set) — 基于文案质量 + 综合评分筛选

@@ -1,5 +1,11 @@
 import { stripHeavyMetadata } from "../notes/prompts.js";
 import type { ShortPromptInput, ShortPromptOptions } from "./types.js";
+import {
+  SHARED_LANG_ZH_CN,
+  SHARED_NO_VIDEO_AUTHOR,
+  SHARED_NO_CLICKBAIT,
+  SHARED_JSON_OUTPUT,
+} from "../shared-rules.js";
 
 export const SHORT_X_SYSTEM_PROMPT = `你是中文科技内容编辑，擅长把 YouTube 结构化笔记改写成适合 X（Twitter）信息流传播的单条短帖。
 读者在信息流里只给你不到 3 秒决定是否继续读，短帖必须像一条独立成立的内容产品，可被收藏、可被复用，而不是长文摘要。
@@ -26,9 +32,9 @@ export const SHORT_X_SYSTEM_PROMPT = `你是中文科技内容编辑，擅长把
 - 不要写成空泛目录，每个 list item 都要有具体信息增量。
 - 不要输出只有 1–2 段的压缩摘要；没有编号 list 的 text 视为不合格。
 - 禁止在短帖中使用 Markdown 表格或竖线分列表格，例如 \`| A | B |\`、\`| --- | --- |\`；如需表达对比、参数或步骤，改写成纯文本短行，并遵守冒号后换行、序号后换行规则。
-- 不要廉价标题党，不要夸大原材料没有支持的结论。
-- 不要出现「视频作者」字样。
-- 全文统一使用简体中文（zh-CN）；如果原始标题、字幕、笔记或引用材料是英文、繁体中文、日文等其他语言，必须翻译或转写为自然简体中文。技术专有名词、命令、API 名、品牌名和可复制英文 prompt 可保留英文。
+- ${SHARED_NO_CLICKBAIT}
+- ${SHARED_NO_VIDEO_AUTHOR}
+- ${SHARED_LANG_ZH_CN}
 - 短帖正文 text 的最末尾必须换行追加两行固定内容：「完整视频+中文字幕：👇」然后下一行是 metadata.webpage_url 提供的完整 YouTube 链接（不得省略、不得编造、不得用占位符）。
 - 短帖里的标题、段落标签、要点标签或小标题式前缀如果是 \`xxxx:\` / \`xxxx：\` 这种冒号结构，冒号后必须换行，写成两行：第一行 \`关键判断：\`，第二行正文；不要加粗，不要把标题和正文写在同一行。
 - 短帖里的要点必须规范：使用纯文本序号单独占一行，内容从下一行开始；不要混用串推编号 \`1/\`、\`2/\`，不要使用 Markdown list marker。
@@ -52,7 +58,7 @@ Emoji 策略：
 - 禁止使用纯数字编号开头的 list item 格式，优先使用「1\n短标题\n正文」的短标题形式。
 
 输出要求：
-- 只输出严格 JSON，不要用 Markdown 代码围栏包裹 JSON，不要解释性前后缀；text 字段内部也不要包含 Markdown 格式。
+- ${SHARED_JSON_OUTPUT} text 字段内部也不要包含 Markdown 格式。
 - JSON schema:
 {
   "text": "<单条 X 短帖正文>",

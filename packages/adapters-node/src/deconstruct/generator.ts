@@ -8,6 +8,8 @@ import {
   type DeconstructLlmOutput,
   type LlmPort,
   type SectionCandidate,
+  estimateTokenCount,
+  checkTokenBudget,
 } from "@yt2x/core";
 
 export type RunDeconstructInput = {
@@ -126,12 +128,22 @@ export const runDeconstruct = async (
   const titleMatch = artifacts.articleMd.match(/^#\s+(.+)$/m);
   const videoTitle = titleMatch?.[1] ?? undefined;
 
+  // Condense SRT from ~40K tokens down to ~4-6K tokens (saves ~85%)
+  const condensedSrt = condenseSrtContent(artifacts.srtContent);
   const userPrompt = buildDeconstructUserPrompt({
     articleMd: artifacts.articleMd,
-    srtContent: artifacts.srtContent,
+    srtContent: condensedSrt,
     videoTitle,
     videoDurationSec: artifacts.durationSec,
   });
+
+  // Pre-flight token budget check
+  const estimatedTokens = estimateTokenCount(DECONSTRUCT_SYSTEM_PROMPT) + estimateTokenCount(userPrompt);
+  const budgetWarning = checkTokenBudget(estimatedTokens, input.model);
+  if (budgetWarning !== null) {
+    // Log warning but don't block — LLM may still handle it
+    console.warn(`⚠️  ${budgetWarning.message}`);
+  }
 
   const t0 = Date.now();
   const resp = await input.llm.chat({
@@ -274,6 +286,62 @@ export const parseSrt = (srtContent: string): SrtEntry[] => {
     entries.push({ index, startSec, endSec, text });
   }
   return entries;
+};
+
+/**
+ * 将完整 SRT 浓缩为轻量时间戳索引。
+ *
+ * 全量 SRT 可能有数万行（45 分钟 ≈ 4700 条），全部发给 LLM 会浪费大量 token。
+ * 浓缩后每约 8-12 秒输出一行带精确时间码的代表性文本，
+ * 将 ~40K token 的 SRT 降至 ~4-6K token，节省约 85%。
+ *
+ * LLM 拿到索引后可以：
+ * 1. 定位章节边界（通过时间码附近的关键词）
+ * 2. 估算起止秒数
+ * 3. 提取代表性原文作为 key_quote 候选
+ *
+ * 精确的结束时间码校验由 validateClipEndings 用全量 SRT 在 LLM 返回后完成。
+ */
+export const condenseSrtContent = (srtContent: string, windowSec = 10): string => {
+  const entries = parseSrt(srtContent);
+  if (entries.length === 0) return srtContent;
+
+  const lines: string[] = [];
+  let nextSampleSec = entries[0]!.startSec;
+  let lastIndex = 0;
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    if (entry.startSec >= nextSampleSec) {
+      // Collect nearby entries for context
+      const nearby = entries
+        .slice(Math.max(lastIndex, i - 1), Math.min(i + 2, entries.length))
+        .map((e) => e.text)
+        .join(" ");
+      const ts = secondsToSrtTimecode(entry.startSec);
+      lines.push(`[${ts}] ${nearby}`);
+      nextSampleSec = entry.startSec + windowSec;
+      lastIndex = i;
+    }
+  }
+
+  // Always include the very last entry
+  const last = entries[entries.length - 1]!;
+  if (last.startSec >= nextSampleSec - windowSec) {
+    const ts = secondsToSrtTimecode(last.startSec);
+    lines.push(`[${ts}] ${last.text}`);
+  }
+
+  return lines.join("\n");
+};
+
+/** 秒数 → SRT 时间码 (HH:MM:SS,mmm) */
+export const secondsToSrtTimecode = (sec: number): string => {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  const ms = Math.round((sec % 1) * 1000);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
 };
 
 /**

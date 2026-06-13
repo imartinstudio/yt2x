@@ -38,7 +38,7 @@ export const readDefaultLlmProviderFromEnv = (
 
 /** CLI 在未传 `--llm-provider` 时的默认 provider */
 export const defaultCliLlmProvider = (env: NodeJS.ProcessEnv = process.env): LlmProvider =>
-  readDefaultLlmProviderFromEnv(env) ?? "openai";
+  readDefaultLlmProviderFromEnv(env) ?? "deepseek";
 
 /**
  * 从环境变量解析 LLM API key。

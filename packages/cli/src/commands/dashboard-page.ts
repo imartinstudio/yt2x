@@ -57,14 +57,17 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   <div class="modal-overlay" id="themeModal">
     <section class="theme-modal" role="dialog" aria-modal="true" aria-labelledby="themeModalTitle">
       <div class="theme-modal-head">
-        <div>
-          <div class="theme-modal-title" id="themeModalTitle">选择公众号风格</div>
-          <div class="theme-modal-sub">点星标收藏，收藏风格会固定显示在顶部。</div>
+        <div class="head-left">
+          <div class="theme-modal-icon">🎨</div>
+          <div>
+            <div class="theme-modal-title" id="themeModalTitle">选择公众号排版风格</div>
+            <div class="theme-modal-sub">点星标收藏，收藏的风格会固定在顶部显示</div>
+          </div>
         </div>
         <button class="secondary" id="themeModalClose">关闭</button>
       </div>
       <div class="theme-search-wrap">
-        <input id="themeSearch" placeholder="搜索风格名称、ID 或描述" />
+        <input id="themeSearch" placeholder="搜索风格名称、ID 或描述…" />
       </div>
       <div class="theme-list" id="themeList">
         <div class="theme-empty">正在加载风格...</div>

@@ -323,24 +323,53 @@ const formatWechatForDashboard = async (
   opts: { articleOutDir: string; indexPath: string; wechatFormatterDir?: string },
   input: { videoId: string; theme: string },
 ): Promise<{ theme: string; htmlPath: string; previewPath: string }> => {
-  const result = await formatWechatArticle({
-    articleDir: path.join(path.resolve(opts.articleOutDir), input.videoId),
-    sourceFile: "article.md",
-    theme: input.theme,
-    ...(opts.wechatFormatterDir !== undefined ? { formatterDir: opts.wechatFormatterDir } : {}),
-  });
-  await updateWechatFormatStatus(path.resolve(opts.indexPath), {
-    videoId: input.videoId,
-    status: "formatted",
-    theme: result.theme,
-    htmlPath: result.articleHtmlPath,
-    previewPath: result.previewHtmlPath,
-  });
-  return {
-    theme: result.theme,
-    htmlPath: result.articleHtmlPath,
-    previewPath: result.previewHtmlPath,
-  };
+  const articleDir = path.join(path.resolve(opts.articleOutDir), input.videoId);
+  const articlePath = path.join(articleDir, "article.md");
+
+  // escape leading # in hashtag lines so the formatter doesn't treat them as markdown headings.
+  // a line starting with # followed by a word character (not whitespace) is a hashtag, not a heading.
+  let originalMarkdown = "";
+  let patched = false;
+  try {
+    originalMarkdown = await readFile(articlePath, "utf8");
+    const escaped = originalMarkdown.replace(/^(#[^\s#*_\n])/gm, "\\$1");
+    if (escaped !== originalMarkdown) {
+      await writeFile(articlePath, escaped, "utf8");
+      patched = true;
+    }
+  } catch {
+    // if we can't read/write, proceed anyway — the formatter will report the error
+  }
+
+  try {
+    const result = await formatWechatArticle({
+      articleDir,
+      sourceFile: "article.md",
+      theme: input.theme,
+      ...(opts.wechatFormatterDir !== undefined ? { formatterDir: opts.wechatFormatterDir } : {}),
+    });
+    await updateWechatFormatStatus(path.resolve(opts.indexPath), {
+      videoId: input.videoId,
+      status: "formatted",
+      theme: result.theme,
+      htmlPath: result.articleHtmlPath,
+      previewPath: result.previewHtmlPath,
+    });
+    return {
+      theme: result.theme,
+      htmlPath: result.articleHtmlPath,
+      previewPath: result.previewHtmlPath,
+    };
+  } finally {
+    // restore original markdown
+    if (patched && originalMarkdown.length > 0) {
+      try {
+        await writeFile(articlePath, originalMarkdown, "utf8");
+      } catch {
+        // best effort
+      }
+    }
+  }
 };
 
 type WechatTheme = {
@@ -424,9 +453,78 @@ const handleDashboardRequest = async (
     const paths = wechatFormatPaths(path.join(path.resolve(opts.articleOutDir), videoId));
     const filePath = kind === "html" ? paths.htmlPath : paths.previewPath;
     try {
-      sendText(res, 200, await readFile(filePath, "utf8"), "text/html; charset=utf-8");
+      let html = await readFile(filePath, "utf8");
+      if (kind === "preview") {
+        // preview: rewrite to API endpoint for local browser viewing
+        const imageBase = "/api/wechat-format/image?videoId=" + encodeURIComponent(videoId) + "&file=";
+        html = html.replace(/src="images\/([^"]+)"/g, (_match: string, file: string) => 'src="' + imageBase + encodeURIComponent(file) + '"');
+      } else {
+        // article.html: inline images as base64 so WeChat editor displays them on paste
+        const imageDir = path.join(path.resolve(opts.articleOutDir), videoId, "wechat-format", "article", "images");
+        const imgRegex = /src="images\/([^"]+)"/g;
+        const replacements: Array<{ match: string; file: string }> = [];
+        let m: RegExpExecArray | null;
+        while ((m = imgRegex.exec(html)) !== null) {
+          replacements.push({ match: m[0], file: m[1]! });
+        }
+        for (const { match, file } of replacements) {
+          try {
+            const imgPath = path.join(imageDir, file);
+            // validate path stays inside imageDir
+            if (!path.resolve(imgPath).startsWith(path.resolve(imageDir) + path.sep)) continue;
+            const data = await readFile(imgPath);
+            const ext = path.extname(file).toLowerCase();
+            const mimeTypes: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" };
+            const mime = mimeTypes[ext] ?? "image/png";
+            const dataUri = "data:" + mime + ";base64," + data.toString("base64");
+            html = html.replace(match, 'src="' + dataUri + '"');
+          } catch {
+            // image not found — leave original path unchanged
+          }
+        }
+      }
+      sendText(res, 200, html, "text/html; charset=utf-8");
     } catch {
       sendJson(res, 404, { error: "WeChat formatted file not found." });
+    }
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/wechat-format/image") {
+    const videoId = url.searchParams.get("videoId");
+    const file = url.searchParams.get("file");
+    if (videoId === null || !isSafeVideoId(videoId) || file === null || file.length === 0) {
+      sendJson(res, 400, { error: "Invalid videoId or file." });
+      return;
+    }
+    // prevent path traversal
+    if (file.includes("/") || file.includes("\\") || file.includes("..")) {
+      sendJson(res, 400, { error: "Invalid file name." });
+      return;
+    }
+    const imageDir = path.join(path.resolve(opts.articleOutDir), videoId, "wechat-format", "article", "images");
+    const imagePath = path.join(imageDir, file);
+    // ensure resolved path stays inside imageDir
+    if (!path.resolve(imagePath).startsWith(path.resolve(imageDir) + path.sep)) {
+      sendJson(res, 400, { error: "Invalid file path." });
+      return;
+    }
+    try {
+      const ext = path.extname(file).toLowerCase();
+      const mimeTypes: Record<string, string> = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+        ".bmp": "image/bmp",
+      };
+      const contentType = mimeTypes[ext] ?? "application/octet-stream";
+      const data = await readFile(imagePath);
+      res.writeHead(200, { "content-type": contentType, "cache-control": "public, max-age=3600" });
+      res.end(data);
+    } catch {
+      sendJson(res, 404, { error: "Image not found." });
     }
     return;
   }

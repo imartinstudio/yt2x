@@ -392,8 +392,18 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         toast("没有可复制的 HTML");
         return;
       }
-      await navigator.clipboard.writeText(await resp.text());
-      toast("已复制 HTML");
+      const html = await resp.text();
+      try {
+        // write as rich HTML so WeChat editor pastes rendered content (not raw code)
+        const blob = new Blob([html], { type: "text/html" });
+        const item = new ClipboardItem({ "text/html": blob });
+        await navigator.clipboard.write([item]);
+        toast("已复制 HTML");
+      } catch {
+        // fallback for browsers that don't support ClipboardItem
+        await navigator.clipboard.writeText(html);
+        toast("已复制 HTML（纯文本方式）");
+      }
     }
 
     function render() {

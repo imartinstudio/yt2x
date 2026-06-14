@@ -7,6 +7,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>yt2x Dashboard</title>
+  <!-- inline SVG favicon: teal "y" mark -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230e6f5c'/%3E%3Ctext x='16' y='24' text-anchor='middle' font-family='Georgia,serif' font-size='22' font-weight='bold' fill='white'%3Ey%3C/text%3E%3C/svg%3E" />
   <style>${DASHBOARD_STYLE}</style>
 </head>
 <body>

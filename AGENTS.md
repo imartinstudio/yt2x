@@ -10,7 +10,10 @@
 ## Token / 上下文节省规则
 
 - 默认只读取与当前问题相关的最小代码范围，避免整文件读取。
+- 动手前先查看 `docs/CODEMAP.md` 或对应 package 的 `AGENTS.md`，用它确定入口文件和最小测试命令。
 - 优先使用 `rg -n` 定位，再用 `sed -n` 读取命中附近 80-160 行。
+- 默认不要读取 `dist/`、`node_modules/`、`*.tsbuildinfo`、`files/` 产物目录、`docs/superpowers/` 临时计划、extension 截图/zip/icon 二进制，除非任务明确要求。
+- 默认不要通读 `docs/*-TASK.md`；只有用户点名该任务或 CODEMAP 指向该任务时再读。
 - 不要反复输出完整 `git diff`；需要检查时优先使用 `git diff --stat`，或只查看相关文件的小范围 diff。
 - 对大文件先用 `rg`、`nl -ba`、`sed -n` 精确定位，不用整文件 `cat`。
 - 浏览器自测只在用户明确要求、涉及 UI 行为、或代码改动需要验证时执行。
@@ -18,6 +21,32 @@
 - 截图只在视觉问题、用户提供截图、或最终验证确有必要时使用。
 - 避免重复读取已看过的大段源码；如需复查，读取具体函数或行号范围。
 - 最终回复只汇报关键改动和验证结果，不粘贴大段日志。
+- Dashboard 视觉改动优先修改 `dashboard-style.ts`；浏览器交互改动优先修改 `dashboard-client.ts`；HTML 结构改动才修改 `dashboard-page.ts`。
+- Dashboard 服务端扫描、状态和路由逻辑才修改 `dashboard.ts`。
+- 不要把新的大段 HTML/CSS/JS 继续塞回 `dashboard.ts`。如果单个文件接近 700 行，优先拆成更小的页面、样式、客户端脚本或服务端模块。
+- 浏览器验证 Dashboard 时优先检查稳定 selector（例如 `data-*`、`#themeModal`、`.theme-fav`），不要整页 DOM dump 或反复截图。
+- 讨论或修复 Dashboard 视觉问题时，先用 `rg -n` 定位对应 CSS/JS 片段，再读小范围上下文。
+
+## 常见任务路由
+
+- Dashboard 视觉问题：先读 `packages/cli/src/commands/dashboard-style.ts`。
+- Dashboard 浏览器交互：先读 `packages/cli/src/commands/dashboard-client.ts`。
+- Dashboard HTML 结构：先读 `packages/cli/src/commands/dashboard-page.ts`。
+- Dashboard API / 扫描 / 发布状态：先读 `packages/cli/src/commands/dashboard.ts` 和 `dashboard.test.ts`。
+- 公众号排版：先读 `packages/adapters-node/src/wechat-format/*`，再读 `packages/cli/src/commands/wechat-format.ts`。
+- 多平台长文规则：先读 `packages/core/src/domain/article/platform-prompts.ts`。
+- 主 `article.md` 生成规则：先读 `packages/core/src/domain/article/prompts.ts`。
+- pipeline 编排：先读 `packages/cli/src/orchestrator/native-pipeline.ts`。
+- X 发布：先读 `packages/cli/src/orchestrator/native-publish.ts` 和 `packages/core/src/domain/publish/*`。
+- X Articles 扩展：先读 `packages/x-article-extension/AGENTS.md`，再读对应 `src/content`、`src/dom` 或 `src/ui` 文件。
+- X following 扩展：先读 `packages/x-following-extension/AGENTS.md`，再读对应 `src/content`、`src/dom` 或 `src/ui` 文件。
+- 文档改动：先读 `docs/AGENTS.md` 和目标文档，不要扫描所有 docs。
+
+## 上下文预算等级
+
+- 小改动：目标文件 + 邻近测试 + 对应 package `AGENTS.md`，通常不超过 3-5 个文件。
+- 中等改动：再加一层调用方或被调用方，通常不超过 8 个文件。
+- 大改动：先写范围说明和文件清单，再读代码；不要边扫边扩大范围。
 
 ## 分支命名规范
 

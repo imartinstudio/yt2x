@@ -4,7 +4,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     let selectedId = null;
     let wechatThemes = [];
     let themeModalVideoId = null;
-    let selectedWechatTheme = "github";
+    let selectedWechatTheme = "notion-doc";
     let favoriteThemes = [];
     const favoriteThemeStorageKey = "yt2x.wechat.favoriteThemes";
 
@@ -103,6 +103,19 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       return '<span class="pill">无稿件</span>';
     }
 
+    function selectVideo(videoId) {
+      if (selectedId === videoId) return;
+      // remove old active without full re-render
+      const prev = document.querySelector("tr.active");
+      if (prev) prev.classList.remove("active");
+      selectedId = videoId;
+      // highlight new row
+      const next = document.querySelector('tr[data-id="' + CSS.escape(videoId) + '"]');
+      if (next) next.classList.add("active");
+      // only re-render detail panel
+      renderDetail();
+    }
+
     function renderRows(videos) {
       $("rows").innerHTML = videos.map((video) => [
         '<tr class="' + (video.videoId === selectedId ? "active" : "") + '" data-id="' + esc(video.videoId) + '">',
@@ -115,24 +128,36 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       ].join("")).join("");
       document.querySelectorAll("tr[data-id]").forEach((row) => {
         row.addEventListener("click", () => {
-          selectedId = row.dataset.id;
-          render();
+          selectVideo(row.dataset.id);
         });
       });
+    }
+
+    function swapDetailHTML(html) {
+      const detail = $("detail");
+      // save scroll position before swapping content
+      const scrollTop = detail.scrollTop;
+      // build a DocumentFragment and replace children atomically
+      const template = document.createElement("template");
+      template.innerHTML = html;
+      detail.replaceChildren(template.content);
+      // restore scroll position
+      detail.scrollTop = scrollTop;
     }
 
     function renderDetail() {
       const video = payload.videos.find((item) => item.videoId === selectedId);
       if (!video) {
-        $("detail").innerHTML = '<div class="empty">没有匹配的视频。</div>';
+        swapDetailHTML('<div class="empty">没有匹配的视频。</div>');
         return;
       }
-      $("detail").innerHTML = [
+      const html = [
         '<h2 class="detail-title">' + esc(video.title) + '</h2>',
         video.originalTitle ? '<div class="detail-original-title">原视频标题：' + esc(video.originalTitle) + '</div>' : "",
         '<div class="detail-meta">' + esc(video.videoId) + '<br>' + esc(video.articleDir || "无 article 目录") + '</div>',
         platformOrder.map((p) => renderPlatformCard(video, p)).join(""),
       ].join("");
+      swapDetailHTML(html);
       $("detail").querySelectorAll("[data-save]").forEach((btn) => {
         btn.addEventListener("click", () => savePlatform(video.videoId, btn.dataset.save, btn.dataset.value));
       });
@@ -161,7 +186,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       const wechatActions = platform === "wechat"
         ? [
           state.generated
-            ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "github") + '">' + (state.formatStatus === "formatted" ? "重新排版" : "排版") + '</button>'
+            ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">' + (state.formatStatus === "formatted" ? "重新排版" : "排版") + '</button>'
             : '<button class="secondary" disabled>缺主稿</button>',
           '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>复制 HTML</button>',
           '<a href="/api/wechat-format/file?videoId=' + encodeURIComponent(video.videoId) + '&kind=preview" target="_blank"><button class="secondary" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>打开预览</button></a>',
@@ -221,7 +246,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
 
     function openThemeModal(videoId, theme) {
       themeModalVideoId = videoId;
-      selectedWechatTheme = theme || "github";
+      selectedWechatTheme = theme || "notion-doc";
       $("themeSearch").value = "";
       renderThemeList();
       $("themeModal").classList.add("open");
@@ -239,12 +264,24 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     function themeCard(theme) {
       const favorite = isFavoriteTheme(theme.id);
       const selected = theme.id === selectedWechatTheme;
+      const preview = theme.description
+        ? theme.description.slice(0, 38) + (theme.description.length > 38 ? "…" : "")
+        : "预览效果 · 排版风格";
+      // generate a deterministic hue from the theme id for the accent swatch
+      let hash = 0;
+      for (let i = 0; i < theme.id.length; i++) hash = ((hash << 5) - hash) + theme.id.charCodeAt(i);
+      const hue = Math.abs(hash) % 360;
       return [
         '<div class="theme-card' + (selected ? " selected" : "") + '" data-select-theme="' + esc(theme.id) + '">',
-        '<button class="theme-fav' + (favorite ? " on" : "") + '" data-favorite-theme="' + esc(theme.id) + '" title="' + (favorite ? "取消收藏" : "收藏风格") + '">' + (favorite ? "★" : "☆") + '</button>',
+        '<div class="theme-card-ink" style="--card-hue:' + hue + '"></div>',
+        '<button class="theme-fav' + (favorite ? " on" : "") + '" data-favorite-theme="' + esc(theme.id) + '" title="' + (favorite ? "取消收藏" : "收藏风格") + '" aria-label="' + (favorite ? "取消收藏" : "收藏风格") + '">' + (favorite ? "★" : "☆") + '</button>',
+        '<div class="theme-card-body">',
         '<span class="theme-name">' + esc(theme.name || theme.id) + '</span>',
         '<span class="theme-id">' + esc(theme.id) + '</span>',
         theme.description ? '<span class="theme-desc">' + esc(theme.description) + '</span>' : "",
+        '<span class="theme-preview">' + esc(preview) + '</span>',
+        selected ? '<span class="theme-check">✓</span>' : "",
+        '</div>',
         '</div>',
       ].join("");
     }
@@ -262,14 +299,49 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     function bindThemeListEvents() {
       $("themeList").querySelectorAll("[data-select-theme]").forEach((card) => {
         card.addEventListener("click", () => {
+          if (selectedWechatTheme === card.dataset.selectTheme) return;
+          // update selected state without full rebuild
+          const prev = $("themeList").querySelector(".theme-card.selected");
+          if (prev) {
+            prev.classList.remove("selected");
+            const prevCheck = prev.querySelector(".theme-check");
+            if (prevCheck) prevCheck.remove();
+          }
           selectedWechatTheme = card.dataset.selectTheme;
-          renderThemeList();
+          card.classList.add("selected");
+          // add checkmark if not present
+          if (!card.querySelector(".theme-check")) {
+            const check = document.createElement("span");
+            check.className = "theme-check";
+            check.textContent = "✓";
+            card.querySelector(".theme-card-body")?.appendChild(check);
+          }
         });
       });
       $("themeList").querySelectorAll("[data-favorite-theme]").forEach((btn) => {
         btn.addEventListener("click", (event) => {
           event.stopPropagation();
-          toggleFavoriteTheme(btn.dataset.favoriteTheme);
+          const themeId = btn.dataset.favoriteTheme;
+          // toggle fav state directly on the DOM
+          const wasOn = btn.classList.contains("on");
+          if (wasOn) {
+            btn.classList.remove("on");
+            btn.textContent = "☆";
+            btn.title = "收藏风格";
+            btn.setAttribute("aria-label", "收藏风格");
+          } else {
+            btn.classList.add("on");
+            btn.textContent = "★";
+            btn.title = "取消收藏";
+            btn.setAttribute("aria-label", "取消收藏");
+          }
+          // persist to localStorage
+          if (wasOn) {
+            favoriteThemes = favoriteThemes.filter((item) => item !== themeId);
+          } else {
+            favoriteThemes = [themeId, ...favoriteThemes];
+          }
+          writeFavoriteThemes();
         });
       });
     }

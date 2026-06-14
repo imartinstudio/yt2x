@@ -14,6 +14,7 @@ import { registerNotesCommand } from "./commands/notes.js";
 import { registerPipelineCommand } from "./commands/pipeline.js";
 import { registerPublishCommand } from "./commands/publish.js";
 import { registerSubtitleCommand } from "./commands/subtitle.js";
+import { registerWechatFormatCommand } from "./commands/wechat-format.js";
 import { logger } from "./logger.js";
 
 const program = new Command();
@@ -40,6 +41,7 @@ registerClipsCommand(program);
 registerDashboardCommand(program);
 registerDeconstructCommand(program);
 registerLlmCommand(program);
+registerWechatFormatCommand(program);
 
 program.parseAsync().catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);

@@ -1,0 +1,26 @@
+# Search hygiene for agents and local development.
+# Use `rg -uu` or `find` when a task explicitly needs generated assets or binaries.
+
+files/
+dist/
+node_modules/
+coverage/
+
+*.tsbuildinfo
+*.zip
+*.tgz
+*.log
+
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.mp4
+*.mov
+
+packages/*/src/icons/
+packages/x-following-extension/screenshots/
+videos/*/renders/
+videos/*/assets/
+docs/superpowers/

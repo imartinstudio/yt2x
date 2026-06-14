@@ -19,17 +19,18 @@ pnpm install
 
 ## 常用命令
 
-| 命令                   | 作用                                                                                                  |
-| ---------------------- | ----------------------------------------------------------------------------------------------------- |
-| `pnpm yt2x --help`     | 列出所有子命令                                                                                        |
-| `pnpm yt2x acquire …`  | 下载元数据、字幕、可选关键帧；`--search "词:2"` 搜前 2 条；`--search-sort views` 按播放量降序后再取 N |
-| `pnpm yt2x notes …`    | 生成结构化笔记（native LLM；`--video-id` 或 `--all`）                                                 |
-| `pnpm yt2x article …`  | 生成长文、串推或短帖（`files/articles/<videoId>/`）                                                   |
-| `pnpm yt2x publish …`  | 发布到 X（OAuth 2.0 + v2）                                                                            |
-| `pnpm yt2x auth …`     | OAuth 2.0 PKCE 登录 / 登出 / 状态                                                                     |
-| `pnpm yt2x pipeline …` | **native acquire** + orchestrator 内 `notes`→`article`→`publish`                                      |
-| `pnpm yt2x llm …`      | LLM 连通性诊断                                                                                        |
-| `pnpm run ci`          | typecheck + lint + format:check + test                                                                |
+| 命令                        | 作用                                                                                                  |
+| --------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `pnpm yt2x --help`          | 列出所有子命令                                                                                        |
+| `pnpm yt2x acquire …`       | 下载元数据、字幕、可选关键帧；`--search "词:2"` 搜前 2 条；`--search-sort views` 按播放量降序后再取 N |
+| `pnpm yt2x notes …`         | 生成结构化笔记（native LLM；`--video-id` 或 `--all`）                                                 |
+| `pnpm yt2x article …`       | 生成长文、串推或短帖（`files/articles/<videoId>/`）                                                   |
+| `pnpm yt2x wechat-format …` | 将 `wechat-article.md` 交给外部 formatter 生成公众号 HTML / 预览页                                    |
+| `pnpm yt2x publish …`       | 发布到 X（OAuth 2.0 + v2）                                                                            |
+| `pnpm yt2x auth …`          | OAuth 2.0 PKCE 登录 / 登出 / 状态                                                                     |
+| `pnpm yt2x pipeline …`      | **native acquire** + orchestrator 内 `notes`→`article`→`publish`                                      |
+| `pnpm yt2x llm …`           | LLM 连通性诊断                                                                                        |
+| `pnpm run ci`               | typecheck + lint + format:check + test                                                                |
 
 `pipeline` 安全默认：`--publish review` 只预览发布内容并写 `publish-preview.json` / `process-status.json`，不会真实调用 X API；真实发帖必须显式传 **`--publish auto`**。只想跑到内容生成产物时继续使用 **`--publish skip`**。
 
@@ -283,6 +284,21 @@ pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --targets article --platform-targets a
 ```
 
 `--platform-targets` 从 `article.md` 适配生成平台稿。如果本次没有包含 `--targets article`，对应文章目录中必须已经存在 `article.md`。产物命名为 `xiaohongshu-article.md` / `xiaohongshu-metadata.json`、`wechat-article.md` / `wechat-metadata.json`、`bilibili-article.md` / `bilibili-metadata.json`。
+
+公众号排版可通过外部 [xiaohu-wechat-format](https://github.com/xiaohuailabs/xiaohu-wechat-format) checkout 完成本地 HTML 预览准备。先配置 formatter 路径，再检查依赖：
+
+```bash
+export WECHAT_FORMATTER_DIR=/path/to/xiaohu-wechat-format
+pnpm yt2x wechat-format check
+```
+
+已有 `wechat-article.md` 后执行排版：
+
+```bash
+pnpm yt2x wechat-format --video-id <videoId> --theme github
+```
+
+默认读取 `files/articles/<videoId>/wechat-article.md`，输出到 `files/articles/<videoId>/wechat-format/wechat-article/`，其中 `article.html` 用于复制到公众号编辑器，`preview.html` 用于本地预览。该命令只做本地排版，不推送公众号草稿箱。
 
 发布阶段一次只发布一种目标：
 

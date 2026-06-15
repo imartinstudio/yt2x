@@ -2,7 +2,21 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
-import { DEFAULT_ARTICLE_OUT_DIR, DEFAULT_OUT_DIR, formatWechatArticle } from "@yt2x/adapters-node";
+import {
+  DEFAULT_ARTICLE_OUT_DIR,
+  DEFAULT_OUT_DIR,
+  formatWechatArticle,
+  formatWechatCovers,
+  formatXiaohongshuLayout,
+  formatBilibiliText,
+  generatePlatformArticleContent,
+  writePlatformArticleBundle,
+  createLlmAdapter,
+  createImageGeneratorAdapter,
+  type LlmFactoryConfig,
+  type ImageGeneratorPort,
+} from "@yt2x/adapters-node";
+import { defaultCliLlmProvider, readLlmApiKeyFromEnv } from "../config/env.js";
 import { DASHBOARD_HTML } from "./dashboard-page.js";
 
 type PlatformKey = "x" | "xiaohongshu" | "wechat" | "bilibili";
@@ -65,9 +79,9 @@ type DashboardPayload = {
 
 const PLATFORMS: Array<{ key: PlatformKey; label: string; primaryFile: string; files: string[] }> = [
   { key: "x", label: "X", primaryFile: "article.md", files: ["article.md", "x-thread.md", "x-short.md", "x-video-short.md"] },
-  { key: "xiaohongshu", label: "小红书", primaryFile: "article.md", files: ["article.md"] },
-  { key: "wechat", label: "公众号", primaryFile: "article.md", files: ["article.md"] },
-  { key: "bilibili", label: "B站", primaryFile: "article.md", files: ["article.md"] },
+  { key: "xiaohongshu", label: "小红书", primaryFile: "xiaohongshu-article.md", files: ["xiaohongshu-article.md"] },
+  { key: "wechat", label: "公众号", primaryFile: "wechat-article.md", files: ["wechat-article.md"] },
+  { key: "bilibili", label: "B站", primaryFile: "bilibili-article.md", files: ["bilibili-article.md"] },
 ];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -388,7 +402,7 @@ const fileForPlatform = (platform: PlatformKey): string =>
 const handleDashboardRequest = async (
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { articleOutDir: string; downloadsDir: string; indexPath: string; wechatFormatterDir?: string },
+  opts: { articleOutDir: string; downloadsDir: string; indexPath: string; wechatFormatterDir?: string; imageGenerator?: ImageGeneratorPort },
 ): Promise<void> => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (req.method === "GET" && url.pathname === "/") {
@@ -492,6 +506,181 @@ const handleDashboardRequest = async (
     sendJson(res, 200, { ok: true });
     return;
   }
+  // ── auto-generate platform article via LLM if missing ──
+  const ensurePlatformArticle = async (videoId: string, targetPlatform: PlatformKey): Promise<string> => {
+    if (targetPlatform === "x") return "";
+    const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
+    const metadataFile = `${targetPlatform}-metadata.json`;
+
+    // already generated?
+    try { await readFile(path.join(articleDir, metadataFile)); return ""; } catch { /* nope */ }
+
+    const provider = defaultCliLlmProvider();
+    const apiKey = readLlmApiKeyFromEnv(provider);
+    if (apiKey === undefined) return "no-llm-key";
+
+    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+    const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
+    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
+    const llm = createLlmAdapter(cfg);
+    const model = cfg.defaultModel!;
+
+    let articleMdLocal = "";
+    try { articleMdLocal = await readFile(path.join(articleDir, "article.md"), "utf8"); } catch { return "no-article"; }
+
+    const downloadsDir = path.resolve(opts.downloadsDir);
+    let meta: { title?: string } = {};
+    try { const raw = await readFile(path.join(downloadsDir, videoId, "metadata.json"), "utf8"); meta = JSON.parse(raw) as { title?: string }; } catch { /* ok */ }
+
+    try {
+      const result = await generatePlatformArticleContent({
+        llm,
+        model,
+        target: targetPlatform,
+        artifacts: { videoDir: path.join(downloadsDir, videoId), videoId, structuredNotesMd: articleMdLocal, metadata: meta as unknown as Record<string, unknown> & { title: string } },
+        articleMd: articleMdLocal,
+      });
+      await writePlatformArticleBundle(path.resolve(opts.articleOutDir), videoId, result.platformArticle);
+      return ""; // success
+    } catch (err: unknown) {
+      return `LLM生成失败: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  };
+
+  // ── platform format dispatch ──
+  if (req.method === "POST" && url.pathname === "/api/platform-format") {
+    const parsed = JSON.parse(await readBody(req)) as unknown;
+    if (!isRecord(parsed)) {
+      sendJson(res, 400, { error: "Invalid JSON body." });
+      return;
+    }
+    const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
+    const platform = typeof parsed.platform === "string" ? platformFromString(parsed.platform) : null;
+    if (!isSafeVideoId(videoId) || platform === null) {
+      sendJson(res, 400, { error: "Invalid videoId or platform." });
+      return;
+    }
+    const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
+    let articleMd = "";
+    try { articleMd = await readFile(path.join(articleDir, "article.md"), "utf8"); } catch { /* empty */ }
+
+    try {
+      // auto-generate platform article via LLM if missing
+      const genStatus = platform === "xiaohongshu" || platform === "bilibili"
+        ? await ensurePlatformArticle(videoId, platform)
+        : "";
+
+      if (platform === "wechat") {
+        await formatWechatCovers({ articleDir, videoId, articleMd, ...(opts.imageGenerator !== undefined ? { imageGenerator: opts.imageGenerator } : {}) });
+        const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : "notion-doc";
+        const result = await formatWechatArticle({
+          articleDir,
+          sourceFile: "article.md",
+          theme,
+          ...(opts.wechatFormatterDir !== undefined ? { formatterDir: opts.wechatFormatterDir } : {}),
+        });
+        await updateWechatFormatStatus(path.resolve(opts.indexPath), { videoId, status: "formatted", theme: result.theme, htmlPath: result.articleHtmlPath, previewPath: result.previewHtmlPath });
+        sendJson(res, 200, { ok: true, platform: "wechat", theme: result.theme });
+      } else if (platform === "xiaohongshu") {
+        const hasIG = opts.imageGenerator !== undefined;
+        // pass LLM for sketch-knowledge-kit prompt orchestration
+        const llmCfg = (() => {
+          const p = defaultCliLlmProvider();
+          const key = readLlmApiKeyFromEnv(p);
+          if (key === undefined) return undefined;
+          const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
+          const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+          const cfg: LlmFactoryConfig = { provider: p, apiKey: key, baseUrl: baseUrlMap[p] ?? "https://api.openai.com/v1", defaultModel: modelMap[p] ?? "deepseek-v4-flash" };
+          return { llm: createLlmAdapter(cfg), model: cfg.defaultModel! };
+        })();
+        const result = await formatXiaohongshuLayout({
+          articleDir, videoId, articleMd,
+          ...(hasIG ? { imageGenerator: opts.imageGenerator } : {}),
+          ...(llmCfg !== undefined ? { llm: llmCfg.llm, llmModel: llmCfg.model } : {}),
+        });
+        sendJson(res, 200, { ok: true, platform: "xiaohongshu", hasImageGen: hasIG, hasLlm: llmCfg !== undefined, ...(genStatus ? { genStatus } : {}), ...result });
+      } else if (platform === "bilibili") {
+        const result = await formatBilibiliText({ articleDir, videoId, articleMd });
+        sendJson(res, 200, { ok: true, platform: "bilibili", ...(genStatus ? { genStatus } : {}), ...result });
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      sendJson(res, 500, { error: message });
+    }
+    return;
+  }
+
+  // serve xiaohongshu format HTML preview
+  if (req.method === "GET" && url.pathname === "/api/xiaohongshu-format/file") {
+    const videoId = url.searchParams.get("videoId");
+    if (videoId === null || !isSafeVideoId(videoId)) {
+      sendJson(res, 400, { error: "Invalid videoId." });
+      return;
+    }
+    const dir = path.join(path.resolve(opts.articleOutDir), videoId, "xiaohongshu-format");
+    const htmlPath = path.join(dir, "article.html");
+    try {
+      let html = await readFile(htmlPath, "utf8");
+      const imageBase = "/api/xiaohongshu-format/image?videoId=" + encodeURIComponent(videoId) + "&file=";
+      html = html.replace(/src="images\/([^"]+)"/g, (_match: string, file: string) => 'src="' + imageBase + encodeURIComponent(file) + '"');
+      sendText(res, 200, html, "text/html; charset=utf-8");
+    } catch {
+      sendJson(res, 404, { error: "Xiaohongshu format not found." });
+    }
+    return;
+  }
+
+  // serve xiaohongshu format images
+  if (req.method === "GET" && url.pathname === "/api/xiaohongshu-format/image") {
+    const videoId = url.searchParams.get("videoId");
+    const file = url.searchParams.get("file");
+    if (videoId === null || !isSafeVideoId(videoId) || file === null || file.length === 0 || file.includes("/") || file.includes("\\") || file.includes("..")) {
+      sendJson(res, 400, { error: "Invalid videoId or file." });
+      return;
+    }
+    const imagePath = path.join(path.resolve(opts.articleOutDir), videoId, "xiaohongshu-format", "images", file);
+    if (!path.resolve(imagePath).startsWith(path.join(path.resolve(opts.articleOutDir), videoId))) {
+      sendJson(res, 400, { error: "Invalid file path." });
+      return;
+    }
+    try {
+      const ext = path.extname(file).toLowerCase();
+      const mimeTypes: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" };
+      const data = await readFile(imagePath);
+      res.writeHead(200, { "content-type": mimeTypes[ext] ?? "application/octet-stream", "cache-control": "public, max-age=3600" });
+      res.end(data);
+    } catch {
+      sendJson(res, 404, { error: "Image not found." });
+    }
+    return;
+  }
+
+  // serve bilibili format text
+  if (req.method === "GET" && url.pathname === "/api/bilibili-format/file") {
+    const videoId = url.searchParams.get("videoId");
+    if (videoId === null || !isSafeVideoId(videoId)) {
+      sendJson(res, 400, { error: "Invalid videoId." });
+      return;
+    }
+    const mdPath = path.join(path.resolve(opts.articleOutDir), videoId, "bilibili-format", "video-info.md");
+    try {
+      sendText(res, 200, await readFile(mdPath, "utf8"), "text/markdown; charset=utf-8");
+    } catch {
+      sendJson(res, 404, { error: "Bilibili format not found." });
+    }
+    return;
+  }
+
+  // debug: check image generator status
+  if (req.method === "GET" && url.pathname === "/api/debug") {
+    sendJson(res, 200, {
+      imageGenerator: opts.imageGenerator !== undefined,
+      hasImageApiKey: (process.env["YT2X_IMAGE_API_KEY"] ?? "").length > 0,
+      hasOpenAiKey: (process.env["OPENAI_API_KEY"] ?? "").length > 0,
+    });
+    return;
+  }
+
   sendJson(res, 404, { error: "Not found." });
 };
 
@@ -510,11 +699,20 @@ export const registerDashboardCommand = (program: Command): void => {
       if (!Number.isInteger(port) || port <= 0 || port > 65535) {
         throw new Error(`Invalid --port: ${flags.port}`);
       }
+      // image generator: use dedicated env vars so it doesn't conflict with LLM text generation
+      let imageGenerator: ImageGeneratorPort | undefined;
+      const imageApiKey = process.env["YT2X_IMAGE_API_KEY"] ?? process.env["OPENAI_API_KEY"];
+      if (imageApiKey !== undefined && imageApiKey.length > 0) {
+        const imageBaseUrl = process.env["YT2X_IMAGE_BASE_URL"] ?? "https://api.openai.com/v1";
+        const imageModel = process.env["YT2X_IMAGE_MODEL"] ?? "dall-e-3";
+        imageGenerator = createImageGeneratorAdapter({ apiKey: imageApiKey, baseUrl: imageBaseUrl, defaultModel: imageModel });
+      }
       const opts = {
         articleOutDir: path.resolve(flags.articleOutDir),
         downloadsDir: path.resolve(flags.outDir),
         indexPath: path.resolve(flags.index),
         ...(flags.wechatFormatterDir !== undefined ? { wechatFormatterDir: path.resolve(flags.wechatFormatterDir) } : {}),
+        ...(imageGenerator !== undefined ? { imageGenerator } : {}),
       };
       const server = createServer((req, res) => {
         handleDashboardRequest(req, res, opts).catch((err: unknown) => {

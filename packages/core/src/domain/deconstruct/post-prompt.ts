@@ -46,6 +46,7 @@ export const CLIP_POST_SYSTEM_PROMPT = `你是 X (Twitter) 平台上的 Claude C
 | practical | 主动性 | "它自己就在干活了" | 强调 AI 的自动/主动行为 |
 | intro / outro | 救赎感 | "晚了 3 小时，一个按钮全回来了" | 强调从损失到恢复的转折 |
 | discussion | 反常识 | "这个观点跟我之前想的完全相反" | 制造认知冲突，引发讨论 |
+| demo | 演示感 | "看看它实际怎么做的" | 现场操作、屏幕录制风格、一步一步展示 |
 
 ## 正文展开规则
 
@@ -147,12 +148,12 @@ export const deriveSeriesName = (title: string): string => {
 export type FormatClipPostSeriesTitleInput = {
   articleTitle: string;
   seriesName: string;
+  clipTitle: string;
   index: number;
   total: number;
 };
 
 export const formatClipPostSeriesTitle = (input: FormatClipPostSeriesTitleInput): string => {
-  const shortTitle = deriveSeriesName(input.seriesName);
-  const emoji = chooseClipTitleEmoji(input.articleTitle);
-  return `${emoji} ${shortTitle} | ${input.index}/${input.total}`;
+  const shortSeries = deriveSeriesName(input.seriesName);
+  return `🎬 「${shortSeries}」${input.clipTitle} | ${input.index}/${input.total}`;
 };

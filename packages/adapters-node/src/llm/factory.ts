@@ -4,6 +4,7 @@ import {
   type OpenAICompatibleProviderId,
 } from "./openai-compatible.js";
 import { createAnthropicAdapter } from "./anthropic.js";
+import { createImageGenerator, type ImageGeneratorConfig, type ImageGeneratorPort } from "./image-generator.js";
 import type { Fetcher } from "./http.js";
 
 export type LlmProviderId = OpenAICompatibleProviderId | "anthropic";
@@ -16,6 +17,8 @@ export type LlmFactoryConfig = {
   timeoutMs?: number;
   fetcher?: Fetcher;
 };
+
+export type { ImageGeneratorConfig, ImageGeneratorPort };
 
 /**
  * 单一入口构造 LLM 适配器。CLI / 业务层只跟 `LlmPort` 打交道，
@@ -50,3 +53,6 @@ export const createLlmAdapter = (config: LlmFactoryConfig): LlmPort => {
   if (config.fetcher !== undefined) opts.fetcher = config.fetcher;
   return createOpenAICompatibleAdapter(opts);
 };
+
+export const createImageGeneratorAdapter = (config: ImageGeneratorConfig): ImageGeneratorPort =>
+  createImageGenerator(config);

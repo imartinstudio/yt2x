@@ -31,6 +31,7 @@ export const SectionAngle = z.enum([
   "intro",
   "outro",
   "discussion",
+  "demo",
 ]);
 export type SectionAngle = z.infer<typeof SectionAngle>;
 

@@ -582,7 +582,10 @@ const handleDashboardRequest = async (
           const llm = createLlmAdapter(cfg);
           await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
         }
-      } catch { /* orchestrate is optional, don't block format */ }
+      } catch (err: unknown) {
+        // orchestrate failed — log but don't block format
+        process.stderr.write(`orchestrate warning: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
 
       if (platform === "wechat") {
         await formatWechatCovers({ articleDir, videoId, articleMd, ...(opts.imageGenerator !== undefined ? { imageGenerator: opts.imageGenerator } : {}) });
@@ -741,7 +744,7 @@ const handleDashboardRequest = async (
     try {
       sendText(res, 200, await readFile(htmlPath, "utf8"), "text/html; charset=utf-8");
     } catch {
-      sendJson(res, 404, { error: "Orchestrate preview not found. Run orchestrate first." });
+      sendJson(res, 404, { error: "编排预览还没生成。点「排版」按钮，等排版完成后再点预览。" });
     }
     return;
   }

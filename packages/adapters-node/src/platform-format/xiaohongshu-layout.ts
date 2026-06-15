@@ -213,6 +213,17 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
   const sections = splitBodyIntoSections(body);
   const articleImages = extractArticleImages(input.articleMd);
 
+  // try to reuse X article cover as section-01
+  let coverReused = false;
+  const coverSources = ["cover.png", "cover.webp", "cover.jpg"];
+  for (const coverFile of coverSources) {
+    if (coverReused) break;
+    try {
+      await copyFile(path.join(sourceImageDir, coverFile), path.join(imageDir, "section-01.png"));
+      coverReused = true;
+    } catch { /* not found */ }
+  }
+
   const files: string[] = [];
   let imagesGenerated = 0;
   const sectionHasImage: boolean[] = [];

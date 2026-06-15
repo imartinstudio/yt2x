@@ -29,6 +29,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./platform-format": {
+      "types": "./dist/platform-format/index.d.ts",
+      "import": "./dist/platform-format/index.js"
+    },
+    "./platform-article": {
+      "types": "./dist/platform-article/index.d.ts",
+      "import": "./dist/platform-article/index.js"
+    },
+    "./llm": {
+      "types": "./dist/llm/index.d.ts",
+      "import": "./dist/llm/index.js"
     }
   },
   "scripts": {

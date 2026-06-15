@@ -778,6 +778,27 @@ const handleDashboardRequest = async (
     return;
   }
 
+  // serve article images (for previewExistingArticleImages light preview)
+  if (req.method === "GET" && url.pathname === "/api/file-image") {
+    const videoId = url.searchParams.get("videoId");
+    const file = url.searchParams.get("file");
+    if (videoId === null || !isSafeVideoId(videoId) || file === null || file.includes("/") || file.includes("..")) {
+      sendJson(res, 400, { error: "Invalid videoId or file." });
+      return;
+    }
+    const imagePath = path.join(path.resolve(opts.articleOutDir), videoId, "images", file);
+    try {
+      const ext = path.extname(file).toLowerCase();
+      const mimeTypes: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" };
+      const data = await readFile(imagePath);
+      res.writeHead(200, { "content-type": mimeTypes[ext] ?? "application/octet-stream", "cache-control": "public, max-age=3600" });
+      res.end(data);
+    } catch {
+      sendJson(res, 404, { error: "Image not found." });
+    }
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/debug") {
     sendJson(res, 200, {
       imageGenerator: opts.imageGenerator !== undefined,

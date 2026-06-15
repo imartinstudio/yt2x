@@ -232,7 +232,7 @@ export const previewExistingArticleImages = async (
   try { entries = await readdir(imageDir); } catch { return null; }
 
   const covers = entries.filter((f) => /^cover\.(png|webp|jpg|jpeg)/i.test(f));
-  const illustrations = entries.filter((f) => /^(scene|screenshot|img).*\.(png|webp|jpg|jpeg)/i.test(f));
+  const illustrations = entries.filter((f) => /\.(png|webp|jpg|jpeg)$/i.test(f) && !/^cover\./i.test(f));
 
   if (covers.length === 0 && illustrations.length === 0) return null;
 

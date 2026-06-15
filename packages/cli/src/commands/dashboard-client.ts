@@ -234,9 +234,11 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         : "";
       const xFormatActions = platform === "x"
         ? [
-          canFormat
-            ? '<button class="secondary" data-format-platform="x">' + formatLabel + '</button>'
-            : '<button class="secondary" disabled>缺稿件</button>',
+          state.published
+            ? '<button class="secondary" disabled title="已发布，无需再排版">已发布</button>'
+            : canFormat
+              ? '<button class="secondary" data-format-platform="x">' + formatLabel + '</button>'
+              : '<button class="secondary" disabled>缺稿件</button>',
           '<a href="' + orchPreviewLink + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";

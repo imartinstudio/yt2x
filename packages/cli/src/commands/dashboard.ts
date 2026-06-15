@@ -2,10 +2,20 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
-import { DEFAULT_ARTICLE_OUT_DIR, DEFAULT_OUT_DIR, formatWechatArticle } from "@yt2x/adapters-node";
-import { formatWechatCovers, formatXiaohongshuLayout, formatBilibiliText } from "@yt2x/adapters-node/platform-format";
-import { generatePlatformArticleContent, writePlatformArticleBundle } from "@yt2x/adapters-node/platform-article";
-import { createLlmAdapter, createImageGeneratorAdapter, type LlmFactoryConfig, type ImageGeneratorPort } from "@yt2x/adapters-node/llm";
+import {
+  DEFAULT_ARTICLE_OUT_DIR,
+  DEFAULT_OUT_DIR,
+  formatWechatArticle,
+  formatWechatCovers,
+  formatXiaohongshuLayout,
+  formatBilibiliText,
+  generatePlatformArticleContent,
+  writePlatformArticleBundle,
+  createLlmAdapter,
+  createImageGeneratorAdapter,
+  type LlmFactoryConfig,
+  type ImageGeneratorPort,
+} from "@yt2x/adapters-node";
 import { defaultCliLlmProvider, readLlmApiKeyFromEnv } from "../config/env.js";
 import { DASHBOARD_HTML } from "./dashboard-page.js";
 

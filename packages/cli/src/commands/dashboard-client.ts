@@ -173,25 +173,6 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       $("detail").querySelectorAll("[data-format-platform]").forEach((btn) => {
         btn.addEventListener("click", () => formatPlatform(video.videoId, btn.dataset.formatPlatform));
       });
-      $("detail").querySelectorAll("[data-orchestrate-platform]").forEach((btn) => {
-        btn.addEventListener("click", () => orchestratePlatform(video.videoId, btn.dataset.orchestratePlatform));
-      });
-    }
-
-    async function orchestratePlatform(videoId, platform) {
-      toast("开始" + (platformLabels[platform] || platform) + "编排...");
-      const resp = await fetch("/api/platform-orchestrate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ videoId, platform }),
-      });
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        toast(data.error || "编排失败");
-        return;
-      }
-      toast((platformLabels[platform] || platform) + "编排完成");
-      await load();
     }
 
     async function formatPlatform(videoId, platform) {
@@ -225,6 +206,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       // format button is enabled if platform article OR base article.md exists
       const canFormat = state.generated || video.platforms.x.generated;
       const formatLabel = state.formatStatus === "formatted" ? "重新排版" : "排版";
+      const orchPreviewLink = '<a href="/api/platform-orchestrate/preview?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform + '" target="_blank"><button class="secondary">编排预览</button></a>';
       const wechatActions = platform === "wechat"
         ? [
           canFormat
@@ -232,6 +214,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
             : '<button class="secondary" disabled>缺稿件</button>',
           '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>复制 HTML</button>',
           '<a href="/api/wechat-format/file?videoId=' + encodeURIComponent(video.videoId) + '&kind=preview" target="_blank"><button class="secondary" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>打开预览</button></a>',
+          orchPreviewLink,
         ].join("")
         : "";
       const platformFormatActions = platform === "xiaohongshu"
@@ -240,6 +223,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
             ? '<button class="secondary" data-format-platform="xiaohongshu">' + formatLabel + '</button>'
             : '<button class="secondary" disabled>缺稿件</button>',
           '<a href="/api/xiaohongshu-format/file?videoId=' + encodeURIComponent(video.videoId) + '" target="_blank"><button class="secondary">打开预览</button></a>',
+          orchPreviewLink,
         ].join("")
         : "";
       const bilibiliFormatActions = platform === "bilibili"
@@ -248,16 +232,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
             ? '<button class="secondary" data-format-platform="bilibili">' + formatLabel + '</button>'
             : '<button class="secondary" disabled>缺稿件</button>',
           '<a href="/api/bilibili-format/file?videoId=' + encodeURIComponent(video.videoId) + '" target="_blank"><button class="secondary">打开预览</button></a>',
-        ].join("")
-        : "";
-      // unified orchestrate button for all platforms
-      const orchPlatform = platform;
-      const orchestrateActions = (platform === "wechat" || platform === "xiaohongshu" || platform === "bilibili")
-        ? [
-          canFormat
-            ? '<button class="secondary" data-orchestrate-platform="' + orchPlatform + '">🎨 编排</button>'
-            : '<button class="secondary" disabled>缺稿件</button>',
-          '<a href="/api/platform-orchestrate/preview?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + orchPlatform + '" target="_blank"><button class="secondary">编排预览</button></a>',
+          orchPreviewLink,
         ].join("")
         : "";
       return [
@@ -282,7 +257,6 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         wechatActions,
         platformFormatActions,
         bilibiliFormatActions,
-        orchestrateActions,
         '</div>',
         '</section>',
       ].join("");

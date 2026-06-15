@@ -571,6 +571,21 @@ const handleDashboardRequest = async (
         ? await ensurePlatformArticle(videoId, platform)
         : "";
 
+      // run prompt orchestration for all platforms (cover + illustration prompts)
+      try {
+        const provider = defaultCliLlmProvider();
+        const apiKey = readLlmApiKeyFromEnv(provider);
+        if (apiKey !== undefined) {
+          const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
+          const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+          const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
+          const llm = createLlmAdapter(cfg);
+          if (platform !== "x") {
+            await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
+          }
+        }
+      } catch { /* orchestrate is optional, don't block format */ }
+
       if (platform === "wechat") {
         await formatWechatCovers({ articleDir, videoId, articleMd, ...(opts.imageGenerator !== undefined ? { imageGenerator: opts.imageGenerator } : {}) });
         const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : "notion-doc";

@@ -207,39 +207,42 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       const canFormat = state.generated || video.platforms.x.generated;
       const formatLabel = state.formatStatus === "formatted" ? "重新排版" : "排版";
       const orchPreviewLink = '/api/platform-orchestrate/preview?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform;
+      // when published, show existing images not prompts
+      const previewHref = state.published
+        ? orchPreviewLink + '&mode=published'
+        : orchPreviewLink;
+      // unified format button: disabled when published
+      const formatBtn = state.published
+        ? '<button class="secondary" disabled title="已发布，无需再排版">已发布</button>'
+        : canFormat
+          ? (platform === "wechat"
+              ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">' + formatLabel + '</button>'
+              : '<button class="secondary" data-format-platform="' + platform + '">' + formatLabel + '</button>')
+          : '<button class="secondary" disabled>缺稿件</button>';
+
       const wechatActions = platform === "wechat"
         ? [
-          canFormat
-            ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">' + formatLabel + '</button>'
-            : '<button class="secondary" disabled>缺稿件</button>',
+          formatBtn,
           '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>复制 HTML</button>',
-          '<a href="' + orchPreviewLink + '" target="_blank"><button class="secondary">打开预览</button></a>',
+          '<a href="' + (state.formatStatus === "formatted" ? '/api/wechat-format/file?videoId=' + encodeURIComponent(video.videoId) + '&kind=preview' : previewHref) + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
       const platformFormatActions = platform === "xiaohongshu"
         ? [
-          canFormat
-            ? '<button class="secondary" data-format-platform="xiaohongshu">' + formatLabel + '</button>'
-            : '<button class="secondary" disabled>缺稿件</button>',
-          '<a href="' + orchPreviewLink + '" target="_blank"><button class="secondary">打开预览</button></a>',
+          formatBtn,
+          '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
       const bilibiliFormatActions = platform === "bilibili"
         ? [
-          canFormat
-            ? '<button class="secondary" data-format-platform="bilibili">' + formatLabel + '</button>'
-            : '<button class="secondary" disabled>缺稿件</button>',
-          '<a href="' + orchPreviewLink + '" target="_blank"><button class="secondary">打开预览</button></a>',
+          formatBtn,
+          '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
       const xFormatActions = platform === "x"
         ? [
-          state.published
-            ? '<button class="secondary" disabled title="已发布，无需再排版">已发布</button>'
-            : canFormat
-              ? '<button class="secondary" data-format-platform="x">' + formatLabel + '</button>'
-              : '<button class="secondary" disabled>缺稿件</button>',
-          '<a href="' + orchPreviewLink + '" target="_blank"><button class="secondary">打开预览</button></a>',
+          formatBtn,
+          '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
       return [

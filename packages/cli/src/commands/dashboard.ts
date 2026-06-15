@@ -749,13 +749,27 @@ const handleDashboardRequest = async (
   if (req.method === "GET" && url.pathname === "/api/platform-orchestrate/preview") {
     const videoId = url.searchParams.get("videoId");
     const platform = url.searchParams.get("platform");
+    const mode = url.searchParams.get("mode");
     if (videoId === null || !isSafeVideoId(videoId) || platform === null) {
       sendJson(res, 400, { error: "Invalid videoId or platform." });
       return;
     }
     const dirMap: Record<string, string> = { x: "x-format", wechat: "wechat-format", xiaohongshu: "xiaohongshu-format", bilibili: "bilibili-format" };
     const dir = dirMap[platform] ?? `${platform}-format`;
-    const htmlPath = path.join(path.resolve(opts.articleOutDir), videoId, dir, "orchestrate.html");
+    const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
+
+    // published mode: show existing images, no prompts
+    if (mode === "published") {
+      const result = await previewExistingArticleImages(articleDir, platform);
+      if (result) {
+        sendText(res, 200, result.html, "text/html; charset=utf-8");
+      } else {
+        sendJson(res, 404, { error: "暂无图片预览。" });
+      }
+      return;
+    }
+
+    const htmlPath = path.join(articleDir, dir, "orchestrate.html");
     try {
       sendText(res, 200, await readFile(htmlPath, "utf8"), "text/html; charset=utf-8");
     } catch {

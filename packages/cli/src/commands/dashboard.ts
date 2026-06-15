@@ -571,22 +571,27 @@ const handleDashboardRequest = async (
         ? await ensurePlatformArticle(videoId, platform)
         : "";
 
-      // run prompt orchestration for all platforms (cover + illustration prompts)
-      const provider = defaultCliLlmProvider();
-      const apiKey = readLlmApiKeyFromEnv(provider);
-      if (apiKey === undefined) {
-        sendJson(res, 400, { error: "未配置 LLM API Key。请设置 DEEPSEEK_API_KEY 等环境变量。" });
-        return;
-      }
-      try {
-        const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
-        const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
-        const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
-        const llm = createLlmAdapter(cfg);
-        await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
-      } catch (err: unknown) {
-        sendJson(res, 500, { error: `编排失败: ${err instanceof Error ? err.message : String(err)}` });
-        return;
+      // run prompt orchestration (skip if already generated)
+      const dirMap: Record<string, string> = { x: "x-format", wechat: "wechat-format", xiaohongshu: "xiaohongshu-format", bilibili: "bilibili-format" };
+      const orchDir = path.join(articleDir, dirMap[platform] ?? `${platform}-format`);
+      const orchHtmlPath = path.join(orchDir, "orchestrate.html");
+      let orchExists = false;
+      try { await readFile(orchHtmlPath); orchExists = true; } catch { /* not yet */ }
+
+      if (!orchExists) {
+        const provider = defaultCliLlmProvider();
+        const apiKey = readLlmApiKeyFromEnv(provider);
+        if (apiKey !== undefined) {
+          try {
+            const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
+            const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+            const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
+            const llm = createLlmAdapter(cfg);
+            await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
+          } catch (err: unknown) {
+            process.stderr.write(`orchestrate warning: ${err instanceof Error ? err.message : String(err)}\n`);
+          }
+        }
       }
 
       if (platform === "wechat") {

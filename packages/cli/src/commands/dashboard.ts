@@ -9,6 +9,7 @@ import {
   formatWechatCovers,
   formatXiaohongshuLayout,
   formatBilibiliText,
+  orchestratePlatformPrompts,
   generatePlatformArticleContent,
   writePlatformArticleBundle,
   createLlmAdapter,
@@ -672,6 +673,63 @@ const handleDashboardRequest = async (
   }
 
   // debug: check image generator status
+  // ── platform prompt orchestration ──
+  if (req.method === "POST" && url.pathname === "/api/platform-orchestrate") {
+    const parsed = JSON.parse(await readBody(req)) as unknown;
+    if (!isRecord(parsed)) {
+      sendJson(res, 400, { error: "Invalid JSON body." });
+      return;
+    }
+    const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
+    const platform = typeof parsed.platform === "string" ? platformFromString(parsed.platform) : null;
+    if (!isSafeVideoId(videoId) || platform === null || platform === "x") {
+      sendJson(res, 400, { error: "Invalid videoId or platform. Orchestrate is for wechat/xiaohongshu/bilibili." });
+      return;
+    }
+    const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
+    let articleMd = "";
+    try { articleMd = await readFile(path.join(articleDir, "article.md"), "utf8"); } catch { /* empty */ }
+
+    // create LLM for prompt generation
+    const provider = defaultCliLlmProvider();
+    const apiKey = readLlmApiKeyFromEnv(provider);
+    if (apiKey === undefined) {
+      sendJson(res, 400, { error: "No LLM API key configured. Set DEEPSEEK_API_KEY or equivalent." });
+      return;
+    }
+    const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
+    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-chat" };
+    const llm = createLlmAdapter(cfg);
+
+    try {
+      const result = await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
+      sendJson(res, 200, { ok: true, platform, ...result });
+    } catch (err: unknown) {
+      sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  // serve orchestrate preview HTML
+  if (req.method === "GET" && url.pathname === "/api/platform-orchestrate/preview") {
+    const videoId = url.searchParams.get("videoId");
+    const platform = url.searchParams.get("platform");
+    if (videoId === null || !isSafeVideoId(videoId) || platform === null) {
+      sendJson(res, 400, { error: "Invalid videoId or platform." });
+      return;
+    }
+    const dirMap: Record<string, string> = { wechat: "wechat-format", xiaohongshu: "xiaohongshu-format", bilibili: "bilibili-format" };
+    const dir = dirMap[platform] ?? `${platform}-format`;
+    const htmlPath = path.join(path.resolve(opts.articleOutDir), videoId, dir, "orchestrate.html");
+    try {
+      sendText(res, 200, await readFile(htmlPath, "utf8"), "text/html; charset=utf-8");
+    } catch {
+      sendJson(res, 404, { error: "Orchestrate preview not found. Run orchestrate first." });
+    }
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/debug") {
     sendJson(res, 200, {
       imageGenerator: opts.imageGenerator !== undefined,

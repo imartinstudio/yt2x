@@ -12,3 +12,4 @@ export type {
 export { formatWechatCovers } from "./wechat-cover.js";
 export { formatXiaohongshuLayout } from "./xiaohongshu-layout.js";
 export { formatBilibiliText } from "./bilibili-text.js";
+export { orchestratePlatformPrompts } from "./prompt-orchestrator.js";

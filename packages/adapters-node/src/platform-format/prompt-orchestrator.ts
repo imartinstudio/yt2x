@@ -220,6 +220,81 @@ function copyAll() {
 </html>`;
 };
 
+// ── light preview from existing article images (no LLM) ──
+
+export const previewExistingArticleImages = async (
+  articleDir: string,
+  platform: string,
+): Promise<{ html: string; coverCount: number; illCount: number } | null> => {
+  const readdir = (await import("node:fs/promises")).readdir;
+  const imageDir = path.join(articleDir, "images");
+  let entries: string[] = [];
+  try { entries = await readdir(imageDir); } catch { return null; }
+
+  const covers = entries.filter((f) => /^cover\.(png|webp|jpg|jpeg)/i.test(f));
+  const illustrations = entries.filter((f) => /^(scene|screenshot|img).*\.(png|webp|jpg|jpeg)/i.test(f));
+
+  if (covers.length === 0 && illustrations.length === 0) return null;
+
+  const title = "已有图片预览";
+  const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[platform] ?? platform;
+
+  const coverCards = covers
+    .map(
+      (f) => `
+    <div class="card cover-card">
+      <div class="card-header"><span class="badge">封面</span></div>
+      <img src="/api/file-image?videoId=${encodeURIComponent(path.basename(articleDir))}&file=${encodeURIComponent(f)}" alt="${f}" style="width:100%;display:block;" />
+      <div class="card-label">${f}</div>
+    </div>`,
+    )
+    .join("\n");
+
+  const illCards = illustrations
+    .map(
+      (f) => `
+    <div class="card">
+      <div class="card-header"><span class="badge ill">插图</span></div>
+      <img src="/api/file-image?videoId=${encodeURIComponent(path.basename(articleDir))}&file=${encodeURIComponent(f)}" alt="${f}" style="width:100%;display:block;" />
+      <div class="card-label">${f}</div>
+    </div>`,
+    )
+    .join("\n");
+
+  const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${title} - ${platformLabel} 图片预览</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "PingFang SC", sans-serif; background: #f5f5f5; }
+.toolbar { position: fixed; top: 0; left: 0; right: 0; background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); border-bottom: 1px solid #e0e0e0; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; z-index: 100; }
+.toolbar h2 { font-size: 17px; color: #333; }
+.toolbar span { font-size: 12px; color: #999; }
+.container { max-width: 680px; margin: 72px auto 40px; padding: 0 16px; }
+.card { background: #fff; border-radius: 12px; overflow: hidden; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+.cover-card { border-left: 3px solid #E07030; }
+.card-header { padding: 12px 16px 4px; }
+.badge { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; background: #E07030; color: #fff; }
+.badge.ill { background: #0e6f5c; }
+.card-label { padding: 4px 16px 12px; font-size: 12px; color: #999; }
+.note { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 16px; font-size: 13px; color: #666; line-height: 1.6; }
+.note a { color: #E07030; }
+</style>
+</head>
+<body>
+<div class="toolbar"><h2>${title}</h2><span>${platformLabel} · 已有图片 ${covers.length} 封面 + ${illustrations.length} 插图</span></div>
+<div class="container">
+<div class="note">📌 以下图片来自文章已生成的封面和插图。如需通过 AI 重新生成 prompt 和图片，删除此预览后重新点「排版」。</div>
+${coverCards}${illCards}
+</div>
+</body>
+</html>`;
+
+  return { html, coverCount: covers.length, illCount: illustrations.length };
+};
+
 // ── main orchestrator ──
 
 export const orchestratePlatformPrompts = async (

@@ -10,6 +10,7 @@ import {
   formatXiaohongshuLayout,
   formatBilibiliText,
   orchestratePlatformPrompts,
+  previewExistingArticleImages,
   generatePlatformArticleContent,
   writePlatformArticleBundle,
   createLlmAdapter,
@@ -579,17 +580,24 @@ const handleDashboardRequest = async (
       try { await readFile(orchHtmlPath); orchExists = true; } catch { /* not yet */ }
 
       if (!orchExists) {
-        const provider = defaultCliLlmProvider();
-        const apiKey = readLlmApiKeyFromEnv(provider);
-        if (apiKey !== undefined) {
-          try {
-            const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
-            const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
-            const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
-            const llm = createLlmAdapter(cfg);
-            await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
-          } catch (err: unknown) {
-            process.stderr.write(`orchestrate warning: ${err instanceof Error ? err.message : String(err)}\n`);
+        // try light preview from existing article images first (no LLM)
+        const hasExisting = await previewExistingArticleImages(articleDir, platform);
+        if (hasExisting) {
+          await mkdir(path.dirname(orchHtmlPath), { recursive: true });
+          await writeFile(orchHtmlPath, hasExisting.html, "utf8");
+        } else {
+          const provider = defaultCliLlmProvider();
+          const apiKey = readLlmApiKeyFromEnv(provider);
+          if (apiKey !== undefined) {
+            try {
+              const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
+              const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+              const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
+              const llm = createLlmAdapter(cfg);
+              await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
+            } catch (err: unknown) {
+              process.stderr.write(`orchestrate warning: ${err instanceof Error ? err.message : String(err)}\n`);
+            }
           }
         }
       }

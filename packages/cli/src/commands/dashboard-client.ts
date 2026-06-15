@@ -232,6 +232,14 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
           '<a href="' + orchPreviewLink + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
+      const xFormatActions = platform === "x"
+        ? [
+          canFormat
+            ? '<button class="secondary" data-format-platform="x">' + formatLabel + '</button>'
+            : '<button class="secondary" disabled>缺稿件</button>',
+          '<a href="' + orchPreviewLink + '" target="_blank"><button class="secondary">打开预览</button></a>',
+        ].join("")
+        : "";
       return [
         '<section class="platform-card">',
         '<div class="platform-head">',
@@ -254,6 +262,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         wechatActions,
         platformFormatActions,
         bilibiliFormatActions,
+        xFormatActions,
         '</div>',
         '</section>',
       ].join("");

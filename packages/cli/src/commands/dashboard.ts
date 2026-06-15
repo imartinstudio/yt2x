@@ -580,9 +580,7 @@ const handleDashboardRequest = async (
           const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
           const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
           const llm = createLlmAdapter(cfg);
-          if (platform !== "x") {
-            await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
-          }
+          await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
         }
       } catch { /* orchestrate is optional, don't block format */ }
 
@@ -618,6 +616,9 @@ const handleDashboardRequest = async (
       } else if (platform === "bilibili") {
         const result = await formatBilibiliText({ articleDir, videoId, articleMd });
         sendJson(res, 200, { ok: true, platform: "bilibili", ...(genStatus ? { genStatus } : {}), ...result });
+      } else if (platform === "x") {
+        // X only needs orchestration (cover + illustration prompts), already done above
+        sendJson(res, 200, { ok: true, platform: "x", outputDir: path.join(articleDir, "x-format"), files: [] });
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -734,7 +735,7 @@ const handleDashboardRequest = async (
       sendJson(res, 400, { error: "Invalid videoId or platform." });
       return;
     }
-    const dirMap: Record<string, string> = { wechat: "wechat-format", xiaohongshu: "xiaohongshu-format", bilibili: "bilibili-format" };
+    const dirMap: Record<string, string> = { x: "x-format", wechat: "wechat-format", xiaohongshu: "xiaohongshu-format", bilibili: "bilibili-format" };
     const dir = dirMap[platform] ?? `${platform}-format`;
     const htmlPath = path.join(path.resolve(opts.articleOutDir), videoId, dir, "orchestrate.html");
     try {

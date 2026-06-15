@@ -1,7 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { LlmPort } from "@yt2x/core";
-import type { PlatformArticleTarget } from "@yt2x/core";
 import type { PlatformFormatInput, PlatformFormatResult } from "./types.js";
 
 // ── platform-specific spec ──
@@ -13,6 +12,13 @@ type PlatformSpec = {
 };
 
 const PLATFORM_SPECS: Record<string, PlatformSpec> = {
+  x: {
+    coverRatios: [
+      { label: "X 封面 5:2", size: "1500×600", description: "5:2 landscape — X article cover card, bold visual metaphor, thumbnail-friendly" },
+    ],
+    illustrationRatio: "16:9 landscape — X article inline illustrations",
+    outputDir: "x-format",
+  },
   wechat: {
     coverRatios: [
       { label: "公众号封面 1:1", size: "1024×1024", description: "1:1 square — WeChat primary cover, title centered, bold and thumbnail-friendly" },
@@ -217,7 +223,7 @@ function copyAll() {
 // ── main orchestrator ──
 
 export const orchestratePlatformPrompts = async (
-  input: PlatformFormatInput & { platform: PlatformArticleTarget; llm: LlmPort; llmModel: string },
+  input: PlatformFormatInput & { platform: string; llm: LlmPort; llmModel: string },
 ): Promise<PlatformFormatResult> => {
   const spec = PLATFORM_SPECS[input.platform];
   if (spec === undefined) throw new Error(`Unsupported platform: ${input.platform}`);
@@ -305,7 +311,7 @@ export const orchestratePlatformPrompts = async (
   files.push(promptsPath);
 
   // render HTML
-  const platformLabel = { wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[input.platform] ?? input.platform;
+  const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[input.platform] ?? input.platform;
   const html = renderPreviewHtml(title, platformLabel, spec, coverPrompts, illustrationPrompts);
   const htmlPath = path.join(outputDir, "orchestrate.html");
   await writeFile(htmlPath, html, "utf8");

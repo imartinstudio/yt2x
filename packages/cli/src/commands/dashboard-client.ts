@@ -206,15 +206,14 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       // format button is enabled if platform article OR base article.md exists
       const canFormat = state.generated || video.platforms.x.generated;
       const formatLabel = state.formatStatus === "formatted" ? "重新排版" : "排版";
-      const orchPreviewLink = '<a href="/api/platform-orchestrate/preview?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform + '" target="_blank"><button class="secondary">编排预览</button></a>';
+      const orchPreviewLink = '/api/platform-orchestrate/preview?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform;
       const wechatActions = platform === "wechat"
         ? [
           canFormat
             ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">' + formatLabel + '</button>'
             : '<button class="secondary" disabled>缺稿件</button>',
           '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>复制 HTML</button>',
-          '<a href="/api/wechat-format/file?videoId=' + encodeURIComponent(video.videoId) + '&kind=preview" target="_blank"><button class="secondary" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>打开预览</button></a>',
-          orchPreviewLink,
+          '<a href="' + orchPreviewLink + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
       const platformFormatActions = platform === "xiaohongshu"
@@ -222,8 +221,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
           canFormat
             ? '<button class="secondary" data-format-platform="xiaohongshu">' + formatLabel + '</button>'
             : '<button class="secondary" disabled>缺稿件</button>',
-          '<a href="/api/xiaohongshu-format/file?videoId=' + encodeURIComponent(video.videoId) + '" target="_blank"><button class="secondary">打开预览</button></a>',
-          orchPreviewLink,
+          '<a href="' + orchPreviewLink + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
       const bilibiliFormatActions = platform === "bilibili"
@@ -231,8 +229,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
           canFormat
             ? '<button class="secondary" data-format-platform="bilibili">' + formatLabel + '</button>'
             : '<button class="secondary" disabled>缺稿件</button>',
-          '<a href="/api/bilibili-format/file?videoId=' + encodeURIComponent(video.videoId) + '" target="_blank"><button class="secondary">打开预览</button></a>',
-          orchPreviewLink,
+          '<a href="' + orchPreviewLink + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
       return [

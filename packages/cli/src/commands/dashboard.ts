@@ -951,11 +951,12 @@ export const registerDashboardCommand = (program: Command): void => {
         const imageModel = process.env["YT2X_IMAGE_MODEL"] ?? "dall-e-3";
         imageGenerator = createImageGeneratorAdapter({ apiKey: imageApiKey, baseUrl: imageBaseUrl, defaultModel: imageModel });
       }
+      const wechatFormatterDir = flags.wechatFormatterDir ?? process.env["WECHAT_FORMATTER_DIR"];
       const opts = {
         articleOutDir: path.resolve(flags.articleOutDir),
         downloadsDir: path.resolve(flags.outDir),
         indexPath: path.resolve(flags.index),
-        ...(flags.wechatFormatterDir !== undefined ? { wechatFormatterDir: path.resolve(flags.wechatFormatterDir) } : {}),
+        ...(wechatFormatterDir !== undefined ? { wechatFormatterDir: path.resolve(wechatFormatterDir) } : {}),
         ...(imageGenerator !== undefined ? { imageGenerator } : {}),
       };
       const server = createServer((req, res) => {

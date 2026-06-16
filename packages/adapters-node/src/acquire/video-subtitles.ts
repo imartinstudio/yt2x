@@ -357,6 +357,9 @@ const isAlreadyTargetLanguage = (sourceLang: string, targetLang: string): boolea
   if (!isChineseLanguageCode(sourceLang) || !isChineseLanguageCode(targetLang)) return false;
 
   if (isSimplifiedChineseCode(targetLang)) {
+    // Bare "zh" is ambiguous — YouTube often tags Traditional Chinese subtitles as just "zh".
+    // Don't treat it as pre-matched; let translation run so opencc-js can convert if needed.
+    if (/^zh$/iu.test(sourceLang)) return false;
     return isSimplifiedChineseCode(sourceLang) && !isTraditionalChineseCode(sourceLang);
   }
 
@@ -586,6 +589,27 @@ export const runSubtitlePipeline = async (
       }
     } catch {
       // If we can't read the file, trust the language code
+    }
+  }
+
+  // Additionally, when the language code says "already Chinese" but the actual subtitle
+  // content is Traditional Chinese, force translation so we burn Simplified Chinese.
+  // detectSubtitleLanguage above can't distinguish Simplified from Traditional (both
+  // are in the same CJK Unicode range), so we use opencc-js TW→CN conversion as a
+  // detector: if the output differs from the input, the source is Traditional Chinese.
+  if (contentMatchesTargetLang && isSimplifiedChineseCode(subtitle.targetLang) && subResult.sourceSubtitle !== undefined) {
+    try {
+      const sampleText = await readFile(subResult.sourceSubtitle, "utf8");
+      const { simplifyChinese } = await import("./simplify-chinese.js");
+      const simplified = await simplifyChinese(sampleText.slice(0, 3_000));
+      if (simplified !== sampleText.slice(0, 3_000)) {
+        contentMatchesTargetLang = false;
+        warnings.push(
+          `source_language is ${manifest.source_language} but subtitle content appears to be Traditional Chinese; will translate to Simplified Chinese`,
+        );
+      }
+    } catch {
+      // If detection fails, trust the language code
     }
   }
 

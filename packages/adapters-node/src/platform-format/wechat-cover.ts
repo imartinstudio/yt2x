@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ImageGeneratorPort } from "../llm/image-generator.js";
 import type { PlatformFormatInput, PlatformFormatResult, WechatMetadata } from "./types.js";
@@ -20,6 +20,22 @@ const downloadImage = async (url: string, destPath: string, _fetcher = fetch): P
   }
   await mkdir(path.dirname(destPath), { recursive: true });
   await writeFile(destPath, buffer);
+};
+
+const tryReuseFromArticle = async (
+  articleDir: string,
+  sourceFile: string,
+  destPath: string,
+): Promise<boolean> => {
+  const sourcePath = path.join(articleDir, "images", sourceFile);
+  try {
+    await stat(sourcePath);
+    await mkdir(path.dirname(destPath), { recursive: true });
+    await copyFile(sourcePath, destPath);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const generateCoverIfMissing = async (
@@ -60,6 +76,7 @@ const generateCoverIfMissing = async (
 export const formatWechatCovers = async (input: PlatformFormatInput): Promise<PlatformFormatResult> => {
   const articleDir = path.resolve(input.articleDir);
   const imageDir = path.join(articleDir, "wechat-format", "article", "images");
+  const articleImageDir = path.join(articleDir, "images");
 
   let metadata: WechatMetadata | null = null;
   try {
@@ -72,33 +89,77 @@ export const formatWechatCovers = async (input: PlatformFormatInput): Promise<Pl
   let imagesGenerated = 0;
   const files: string[] = [];
 
-  if (metadata !== null && input.imageGenerator !== undefined) {
-    const visualPrompt = metadata.cover.visual_prompt || metadata.title;
-    const headline = metadata.cover.headline || metadata.title;
+  let headline = "";
+  let visualPrompt = "";
+  if (metadata !== null) {
+    headline = metadata.cover.headline || metadata.title;
+    visualPrompt = metadata.cover.visual_prompt || metadata.title;
+  } else {
+    const match = input.articleMd.match(/^#\s+(.+)$/m);
+    headline = match?.[1] ?? "";
+    visualPrompt = headline;
+  }
 
-    // 1:1 square cover (WeChat primary cover)
-    const cover1x1 = await generateCoverIfMissing(
-      imageDir,
-      COVER_1_1,
-      "1024x1024",
-      visualPrompt,
-      headline,
-      input.imageGenerator,
-    );
+  const cover1x1 = path.join(imageDir, COVER_1_1);
+  try {
+    await readFile(cover1x1);
     files.push(cover1x1);
-    imagesGenerated++;
+  } catch {
+    const reused = await tryReuseFromArticle(articleDir, "cover.png", cover1x1)
+      || await tryReuseFromArticle(articleDir, "cover.webp", cover1x1)
+      || await tryReuseFromArticle(articleDir, "cover.jpg", cover1x1)
+      || await tryReuseFromArticle(articleDir, "cover.jpeg", cover1x1);
+    if (reused) {
+      files.push(cover1x1);
+    } else if (input.imageGenerator !== undefined) {
+      const generated = await generateCoverIfMissing(
+        imageDir,
+        COVER_1_1,
+        "1024x1024",
+        visualPrompt,
+        headline,
+        input.imageGenerator,
+      );
+      files.push(generated);
+      imagesGenerated++;
+    }
+  }
 
-    // 16:9 wide cover (WeChat secondary / share cover)
-    const coverWide = await generateCoverIfMissing(
-      imageDir,
-      COVER_WIDE,
-      "1792x1024",
-      visualPrompt + " 宽屏横向构图。",
-      headline,
-      input.imageGenerator,
-    );
+  const coverWide = path.join(imageDir, COVER_WIDE);
+  try {
+    await readFile(coverWide);
     files.push(coverWide);
-    imagesGenerated++;
+  } catch {
+    let reused = false;
+    try {
+      const entries = await readdir(articleImageDir);
+      const sceneImage = entries.find((file) => /scene.*\.(png|jpg|jpeg|webp)$/i.test(file));
+      if (sceneImage !== undefined) {
+        reused = await tryReuseFromArticle(articleDir, sceneImage, coverWide);
+      }
+    } catch {
+      // No article image directory; fall through to cover reuse/generation.
+    }
+    if (!reused) {
+      reused = await tryReuseFromArticle(articleDir, "cover.png", coverWide)
+        || await tryReuseFromArticle(articleDir, "cover.webp", coverWide)
+        || await tryReuseFromArticle(articleDir, "cover.jpg", coverWide)
+        || await tryReuseFromArticle(articleDir, "cover.jpeg", coverWide);
+    }
+    if (reused) {
+      files.push(coverWide);
+    } else if (input.imageGenerator !== undefined) {
+      const generated = await generateCoverIfMissing(
+        imageDir,
+        COVER_WIDE,
+        "1792x1024",
+        visualPrompt + " 宽屏横向构图。",
+        headline,
+        input.imageGenerator,
+      );
+      files.push(generated);
+      imagesGenerated++;
+    }
   }
 
   return {

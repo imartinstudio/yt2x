@@ -9,6 +9,8 @@ import {
   formatWechatCovers,
   formatXiaohongshuLayout,
   formatBilibiliText,
+  orchestratePlatformPrompts,
+  previewExistingArticleImages,
   generatePlatformArticleContent,
   writePlatformArticleBundle,
   createLlmAdapter,
@@ -214,13 +216,14 @@ export const scanDashboardVideos = async (input: {
         if (hasArticleDir && (await fileExists(path.join(articleDir, file)))) files.push(file);
       }
       const state = saved[platform.key] ?? {};
+      const published = state.published === true;
       const formatPaths = platform.key === "wechat" && hasArticleDir ? wechatFormatPaths(articleDir) : null;
       const hasFormattedWechat = formatPaths !== null
         && (await fileExists(formatPaths.htmlPath))
         && (await fileExists(formatPaths.previewPath));
       platforms[platform.key] = {
-        generated: files.length > 0,
-        published: state.published === true,
+        generated: files.length > 0 || published || hasFormattedWechat,
+        published,
         url: typeof state.url === "string" ? state.url : "",
         note: typeof state.note === "string" ? state.note : "",
         files,
@@ -337,24 +340,53 @@ const formatWechatForDashboard = async (
   opts: { articleOutDir: string; indexPath: string; wechatFormatterDir?: string },
   input: { videoId: string; theme: string },
 ): Promise<{ theme: string; htmlPath: string; previewPath: string }> => {
-  const result = await formatWechatArticle({
-    articleDir: path.join(path.resolve(opts.articleOutDir), input.videoId),
-    sourceFile: "article.md",
-    theme: input.theme,
-    ...(opts.wechatFormatterDir !== undefined ? { formatterDir: opts.wechatFormatterDir } : {}),
-  });
-  await updateWechatFormatStatus(path.resolve(opts.indexPath), {
-    videoId: input.videoId,
-    status: "formatted",
-    theme: result.theme,
-    htmlPath: result.articleHtmlPath,
-    previewPath: result.previewHtmlPath,
-  });
-  return {
-    theme: result.theme,
-    htmlPath: result.articleHtmlPath,
-    previewPath: result.previewHtmlPath,
-  };
+  const articleDir = path.join(path.resolve(opts.articleOutDir), input.videoId);
+  const articlePath = path.join(articleDir, "article.md");
+
+  // escape leading # in hashtag lines so the formatter doesn't treat them as markdown headings.
+  // a line starting with # followed by a word character (not whitespace) is a hashtag, not a heading.
+  let originalMarkdown = "";
+  let patched = false;
+  try {
+    originalMarkdown = await readFile(articlePath, "utf8");
+    const escaped = originalMarkdown.replace(/^(#[^\s#*_\n])/gm, "\\$1");
+    if (escaped !== originalMarkdown) {
+      await writeFile(articlePath, escaped, "utf8");
+      patched = true;
+    }
+  } catch {
+    // if we can't read/write, proceed anyway — the formatter will report the error
+  }
+
+  try {
+    const result = await formatWechatArticle({
+      articleDir,
+      sourceFile: "article.md",
+      theme: input.theme,
+      ...(opts.wechatFormatterDir !== undefined ? { formatterDir: opts.wechatFormatterDir } : {}),
+    });
+    await updateWechatFormatStatus(path.resolve(opts.indexPath), {
+      videoId: input.videoId,
+      status: "formatted",
+      theme: result.theme,
+      htmlPath: result.articleHtmlPath,
+      previewPath: result.previewHtmlPath,
+    });
+    return {
+      theme: result.theme,
+      htmlPath: result.articleHtmlPath,
+      previewPath: result.previewHtmlPath,
+    };
+  } finally {
+    // restore original markdown
+    if (patched && originalMarkdown.length > 0) {
+      try {
+        await writeFile(articlePath, originalMarkdown, "utf8");
+      } catch {
+        // best effort
+      }
+    }
+  }
 };
 
 type WechatTheme = {
@@ -438,9 +470,78 @@ const handleDashboardRequest = async (
     const paths = wechatFormatPaths(path.join(path.resolve(opts.articleOutDir), videoId));
     const filePath = kind === "html" ? paths.htmlPath : paths.previewPath;
     try {
-      sendText(res, 200, await readFile(filePath, "utf8"), "text/html; charset=utf-8");
+      let html = await readFile(filePath, "utf8");
+      if (kind === "preview") {
+        // preview: rewrite to API endpoint for local browser viewing
+        const imageBase = "/api/wechat-format/image?videoId=" + encodeURIComponent(videoId) + "&file=";
+        html = html.replace(/src="images\/([^"]+)"/g, (_match: string, file: string) => 'src="' + imageBase + encodeURIComponent(file) + '"');
+      } else {
+        // article.html: inline images as base64 so WeChat editor displays them on paste
+        const imageDir = path.join(path.resolve(opts.articleOutDir), videoId, "wechat-format", "article", "images");
+        const imgRegex = /src="images\/([^"]+)"/g;
+        const replacements: Array<{ match: string; file: string }> = [];
+        let m: RegExpExecArray | null;
+        while ((m = imgRegex.exec(html)) !== null) {
+          replacements.push({ match: m[0], file: m[1]! });
+        }
+        for (const { match, file } of replacements) {
+          try {
+            const imgPath = path.join(imageDir, file);
+            // validate path stays inside imageDir
+            if (!path.resolve(imgPath).startsWith(path.resolve(imageDir) + path.sep)) continue;
+            const data = await readFile(imgPath);
+            const ext = path.extname(file).toLowerCase();
+            const mimeTypes: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" };
+            const mime = mimeTypes[ext] ?? "image/png";
+            const dataUri = "data:" + mime + ";base64," + data.toString("base64");
+            html = html.replace(match, 'src="' + dataUri + '"');
+          } catch {
+            // image not found — leave original path unchanged
+          }
+        }
+      }
+      sendText(res, 200, html, "text/html; charset=utf-8");
     } catch {
       sendJson(res, 404, { error: "WeChat formatted file not found." });
+    }
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/wechat-format/image") {
+    const videoId = url.searchParams.get("videoId");
+    const file = url.searchParams.get("file");
+    if (videoId === null || !isSafeVideoId(videoId) || file === null || file.length === 0) {
+      sendJson(res, 400, { error: "Invalid videoId or file." });
+      return;
+    }
+    // prevent path traversal
+    if (file.includes("/") || file.includes("\\") || file.includes("..")) {
+      sendJson(res, 400, { error: "Invalid file name." });
+      return;
+    }
+    const imageDir = path.join(path.resolve(opts.articleOutDir), videoId, "wechat-format", "article", "images");
+    const imagePath = path.join(imageDir, file);
+    // ensure resolved path stays inside imageDir
+    if (!path.resolve(imagePath).startsWith(path.resolve(imageDir) + path.sep)) {
+      sendJson(res, 400, { error: "Invalid file path." });
+      return;
+    }
+    try {
+      const ext = path.extname(file).toLowerCase();
+      const mimeTypes: Record<string, string> = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+        ".bmp": "image/bmp",
+      };
+      const contentType = mimeTypes[ext] ?? "application/octet-stream";
+      const data = await readFile(imagePath);
+      res.writeHead(200, { "content-type": contentType, "cache-control": "public, max-age=3600" });
+      res.end(data);
+    } catch {
+      sendJson(res, 404, { error: "Image not found." });
     }
     return;
   }
@@ -570,6 +671,43 @@ const handleDashboardRequest = async (
         ? await ensurePlatformArticle(videoId, platform)
         : "";
 
+      const formatDirByPlatform: Record<PlatformKey, string> = {
+        x: "x-format",
+        wechat: "wechat-format",
+        xiaohongshu: "xiaohongshu-format",
+        bilibili: "bilibili-format",
+      };
+      const orchestrateHtmlPath = path.join(articleDir, formatDirByPlatform[platform], "orchestrate.html");
+      let hasOrchestratePreview = false;
+      try {
+        await readFile(orchestrateHtmlPath);
+        hasOrchestratePreview = true;
+      } catch {
+        // Generate a preview below when possible.
+      }
+
+      if (!hasOrchestratePreview) {
+        const existingPreview = await previewExistingArticleImages(articleDir, platform);
+        if (existingPreview !== null) {
+          await mkdir(path.dirname(orchestrateHtmlPath), { recursive: true });
+          await writeFile(orchestrateHtmlPath, existingPreview.html, "utf8");
+        } else {
+          const provider = defaultCliLlmProvider();
+          const apiKey = readLlmApiKeyFromEnv(provider);
+          if (apiKey !== undefined) {
+            try {
+              const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
+              const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+              const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
+              const llm = createLlmAdapter(cfg);
+              await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
+            } catch (err: unknown) {
+              process.stderr.write(`orchestrate warning: ${err instanceof Error ? err.message : String(err)}\n`);
+            }
+          }
+        }
+      }
+
       if (platform === "wechat") {
         await formatWechatCovers({ articleDir, videoId, articleMd, ...(opts.imageGenerator !== undefined ? { imageGenerator: opts.imageGenerator } : {}) });
         const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : "notion-doc";
@@ -602,6 +740,8 @@ const handleDashboardRequest = async (
       } else if (platform === "bilibili") {
         const result = await formatBilibiliText({ articleDir, videoId, articleMd });
         sendJson(res, 200, { ok: true, platform: "bilibili", ...(genStatus ? { genStatus } : {}), ...result });
+      } else if (platform === "x") {
+        sendJson(res, 200, { ok: true, platform: "x", outputDir: path.join(articleDir, "x-format"), files: [] });
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -667,6 +807,110 @@ const handleDashboardRequest = async (
       sendText(res, 200, await readFile(mdPath, "utf8"), "text/markdown; charset=utf-8");
     } catch {
       sendJson(res, 404, { error: "Bilibili format not found." });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/platform-orchestrate") {
+    const parsed = JSON.parse(await readBody(req)) as unknown;
+    if (!isRecord(parsed)) {
+      sendJson(res, 400, { error: "Invalid JSON body." });
+      return;
+    }
+    const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
+    const platform = typeof parsed.platform === "string" ? platformFromString(parsed.platform) : null;
+    if (!isSafeVideoId(videoId) || platform === null) {
+      sendJson(res, 400, { error: "Invalid videoId or platform." });
+      return;
+    }
+    const provider = defaultCliLlmProvider();
+    const apiKey = readLlmApiKeyFromEnv(provider);
+    if (apiKey === undefined) {
+      sendJson(res, 400, { error: "No LLM API key configured." });
+      return;
+    }
+    const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
+    let articleMd = "";
+    try {
+      articleMd = await readFile(path.join(articleDir, "article.md"), "utf8");
+    } catch {
+      // Let the orchestrator fall back to an empty article.
+    }
+    const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
+    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
+    try {
+      const llm = createLlmAdapter(cfg);
+      const result = await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
+      sendJson(res, 200, { ok: true, platform, ...result });
+    } catch (err: unknown) {
+      sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/platform-orchestrate/preview") {
+    const videoId = url.searchParams.get("videoId");
+    const platformParam = url.searchParams.get("platform");
+    const mode = url.searchParams.get("mode");
+    const platform = platformParam === null ? null : platformFromString(platformParam);
+    if (videoId === null || !isSafeVideoId(videoId) || platform === null) {
+      sendJson(res, 400, { error: "Invalid videoId or platform." });
+      return;
+    }
+    const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
+    if (mode === "published") {
+      const existingPreview = await previewExistingArticleImages(articleDir, platform);
+      if (existingPreview !== null) {
+        sendText(res, 200, existingPreview.html, "text/html; charset=utf-8");
+      } else {
+        sendJson(res, 404, { error: "No images available for preview." });
+      }
+      return;
+    }
+    const formatDirByPlatform: Record<PlatformKey, string> = {
+      x: "x-format",
+      wechat: "wechat-format",
+      xiaohongshu: "xiaohongshu-format",
+      bilibili: "bilibili-format",
+    };
+    const htmlPath = path.join(articleDir, formatDirByPlatform[platform], "orchestrate.html");
+    try {
+      sendText(res, 200, await readFile(htmlPath, "utf8"), "text/html; charset=utf-8");
+    } catch {
+      sendJson(res, 404, { error: "Orchestration preview has not been generated." });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/file-image") {
+    const videoId = url.searchParams.get("videoId");
+    const file = url.searchParams.get("file");
+    if (videoId === null || !isSafeVideoId(videoId) || file === null || file.length === 0 || file.includes("/") || file.includes("\\") || file.includes("..")) {
+      sendJson(res, 400, { error: "Invalid videoId or file." });
+      return;
+    }
+    const imageDir = path.join(path.resolve(opts.articleOutDir), videoId, "images");
+    const imagePath = path.join(imageDir, file);
+    if (!path.resolve(imagePath).startsWith(path.resolve(imageDir) + path.sep)) {
+      sendJson(res, 400, { error: "Invalid file path." });
+      return;
+    }
+    try {
+      const ext = path.extname(file).toLowerCase();
+      const mimeTypes: Record<string, string> = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+      };
+      const data = await readFile(imagePath);
+      res.writeHead(200, { "content-type": mimeTypes[ext] ?? "application/octet-stream", "cache-control": "public, max-age=3600" });
+      res.end(data);
+    } catch {
+      sendJson(res, 404, { error: "Image not found." });
     }
     return;
   }

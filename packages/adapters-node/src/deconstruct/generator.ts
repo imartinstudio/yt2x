@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, symlink } from "node:fs/promises";
 import path from "node:path";
 import {
   buildDeconstructUserPrompt,
@@ -79,15 +79,43 @@ export const readDeconstructArtifacts = async (
     }
   }
   if (found === null) {
-    // Fallback: scan directory for any mp4/mkv
-    const files = await readdir(videoDir);
-    const mediaFile = files.find((f) => /\.(mp4|mkv|webm)$/i.test(f));
-    if (mediaFile === undefined) {
-      throw new Error(
-        `No video file found in ${videoDir}/. Cannot cut clips without a video source.`,
-      );
+    // Auto-link video from downloads directory.
+    // When no subtitle burning is needed, the article/video/ dir may only
+    // contain SRT files — the actual MP4 lives in downloads/<videoId>/video/.
+    // Create a symlink instead of copying to save disk space.
+    const downloadVideoDir = path.join(
+      path.dirname(path.dirname(resolved)),
+      "downloads",
+      videoId,
+      "video",
+    );
+    let linkedPath: string | null = null;
+    for (const vf of videoFiles) {
+      const src = path.join(downloadVideoDir, vf);
+      try {
+        await stat(src);
+        await mkdir(videoDir, { recursive: true });
+        const dest = path.join(videoDir, vf);
+        await symlink(src, dest);
+        linkedPath = dest;
+        break;
+      } catch {
+        continue;
+      }
     }
-    videoPath = path.join(videoDir, mediaFile);
+    if (linkedPath === null) {
+      // Fallback: scan article video directory for any mp4/mkv
+      const files = await readdir(videoDir);
+      const mediaFile = files.find((f) => /\.(mp4|mkv|webm)$/i.test(f));
+      if (mediaFile === undefined) {
+        throw new Error(
+          `No video file found in ${videoDir}/ or ${downloadVideoDir}/. Cannot cut clips without a video source.`,
+        );
+      }
+      videoPath = path.join(videoDir, mediaFile);
+    } else {
+      videoPath = linkedPath;
+    }
   } else {
     videoPath = found;
   }

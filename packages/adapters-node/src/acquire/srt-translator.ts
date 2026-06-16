@@ -27,7 +27,7 @@ const buildSystemPrompt = (sourceLang: string, targetLang: string): string =>
     "4. Return the SAME number of blocks you receive. No merging or splitting.",
     ...(isSimplifiedChineseTarget(targetLang)
       ? [
-          "5. The final subtitle text MUST be Simplified Chinese (zh-CN). Convert Traditional Chinese to Simplified Chinese.",
+          "5. The final subtitle text MUST be Simplified Chinese (zh-CN). Traditional Chinese output is FORBIDDEN. If you are unsure whether a character is Simplified or Traditional, choose Simplified. This is a hard requirement — do not violate it.",
           "6. Keep technical terms, product names, commands, and API names in English when that is more natural.",
           "7. Do not add explanations, notes, or any text outside the JSON array.",
         ]
@@ -44,7 +44,7 @@ const buildRepairPrompt = (sourceLang: string, targetLang: string, missingIndice
     "3. Do not skip any index. Do not add extra indices.",
     ...(isSimplifiedChineseTarget(targetLang)
       ? [
-          "4. The final subtitle text MUST be Simplified Chinese (zh-CN). Convert Traditional Chinese to Simplified Chinese.",
+          "4. The final subtitle text MUST be Simplified Chinese (zh-CN). Traditional Chinese output is FORBIDDEN. This is a hard requirement — do not violate it.",
           "5. Do not add explanations or any text outside the JSON array.",
         ]
       : ["4. Do not add explanations or any text outside the JSON array."]),
@@ -236,5 +236,15 @@ export const translateSrt = async (
     );
   }
 
-  return { srt: buildFinalSrt(cues, translated), warnings };
+  let finalSrt = buildFinalSrt(cues, translated);
+
+  // Post-process: ensure Simplified Chinese output regardless of model preference
+  try {
+    const { simplifyChinese } = await import("./simplify-chinese.js");
+    finalSrt = await simplifyChinese(finalSrt);
+  } catch {
+    // If conversion fails, keep original SRT
+  }
+
+  return { srt: finalSrt, warnings };
 };

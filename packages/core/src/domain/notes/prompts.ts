@@ -5,7 +5,7 @@ export const getNotesSystemPrompt = (options: NotesPromptOptions = {}): string =
   const langRule =
     lang === "en"
       ? "Output language: English"
-      : "Output language: Simplified Chinese (zh-CN). Translate from the original if needed, and convert Traditional Chinese source text to Simplified Chinese.";
+      : "Output language: Simplified Chinese (zh-CN). Translate from the original if needed, and convert Traditional Chinese source text to Simplified Chinese. Traditional Chinese output is forbidden. This is a hard requirement.";
   const h1Rule =
     lang === "en"
       ? "# <AI semantic translation of the video title into English; if the original title is already English, keep it; do NOT add marketing hooks, clickbait prefixes, or numeric promises>"
@@ -151,7 +151,7 @@ export const buildNotesUserPrompt = (
   const langHint =
     lang === "en"
       ? "Generate the structured-notes.md document following the schema. Output in English. Output ONLY the markdown document — no wrapper text, no code fences around the output."
-      : "Generate the structured-notes.md document following the schema. Output in Simplified Chinese (zh-CN). Translate Traditional Chinese and all non-Chinese source material into Simplified Chinese. Output ONLY the markdown document — no wrapper text, no code fences around the output.";
+      : "Generate the structured-notes.md document following the schema. Output in Simplified Chinese (zh-CN). Translate Traditional Chinese and all non-Chinese source material into Simplified Chinese. Traditional Chinese output is forbidden. This is a hard requirement. Output ONLY the markdown document — no wrapper text, no code fences around the output.";
 
   sections.push("");
   sections.push(langHint);

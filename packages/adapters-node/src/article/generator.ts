@@ -239,6 +239,14 @@ export const generateXArticleContent = async (
     visualPlan = validateArticleVisualPlan(content, input.availableVisuals);
   }
 
+  // Post-process: ensure Simplified Chinese output regardless of model preference
+  try {
+    const { simplifyChinese } = await import("../acquire/simplify-chinese.js");
+    content = await simplifyChinese(content);
+  } catch {
+    // If conversion fails, keep original content
+  }
+
   const result: GenerateXArticleResult = {
     content,
     visualPlan,

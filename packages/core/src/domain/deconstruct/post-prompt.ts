@@ -104,6 +104,10 @@ hashtags: "#ClaudeCode #AI编程效率"
 - ❌ "Claude Code 支持插件系统，你可以安装插件来扩展功能"
 - ❌ "这个功能很强大，能大幅提升开发效率"（万能废话）
 
+## 语言硬约束
+
+全文必须使用简体中文（zh-CN）。禁止输出繁体中文。所有文案（first_line、body、teaser_next、hashtags）必须为简体中文。技术专有名词、命令、API 名、品牌名可保留英文。这是硬性要求，不可违反。
+
 ## 输出格式
 只输出严格 JSON，不要 Markdown 代码围栏：
 

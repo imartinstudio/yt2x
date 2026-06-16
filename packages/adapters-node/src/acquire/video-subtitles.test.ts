@@ -211,7 +211,7 @@ describe("runSubtitlePipeline", () => {
     expect(result.manifest.source_language).toBe("zh-Hant");
     expect(result.manifest.translation_method).toBe("llm");
     expect(seenSystemPrompts[0]).toMatch(/Simplified Chinese/);
-    expect(seenSystemPrompts[0]).toMatch(/Convert Traditional Chinese/);
+    expect(seenSystemPrompts[0]).toMatch(/Traditional Chinese output is FORBIDDEN/);
   });
 });
 

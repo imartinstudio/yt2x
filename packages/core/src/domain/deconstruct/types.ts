@@ -78,6 +78,7 @@ export const ClipEntrySchema = z.object({
   articleSection: z.string().optional(),
   viralHook: z.string().optional(),
   nextTeaser: z.string().optional().describe("下一集预告文案"),
+  postTitle: z.string().optional().describe("LLM 生成的帖子标题"),
 });
 
 export type ClipEntry = z.infer<typeof ClipEntrySchema>;

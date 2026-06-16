@@ -194,7 +194,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
 
     function renderPlatformCard(video, platform) {
       const state = video.platforms[platform];
-      const formatLine = platform === "wechat"
+      const formatLine = (platform === "wechat" || platform === "x")
         ? '<div class="file-list">排版：' +
           (state.formatStatus === "formatted"
             ? "已排版" + (state.formatTheme ? " · " + esc(state.formatTheme) : "")
@@ -234,6 +234,12 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
           '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
+      const xFormatActions = platform === "x"
+        ? [
+          formatBtn,
+          '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>',
+        ].join("")
+        : "";
       return [
         '<section class="platform-card">',
         '<div class="platform-head">',
@@ -256,6 +262,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         wechatActions,
         platformFormatActions,
         bilibiliFormatActions,
+        xFormatActions,
         '</div>',
         '</section>',
       ].join("");

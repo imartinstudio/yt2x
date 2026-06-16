@@ -213,6 +213,132 @@ describe("runSubtitlePipeline", () => {
     expect(seenSystemPrompts[0]).toMatch(/Simplified Chinese/);
     expect(seenSystemPrompts[0]).toMatch(/Traditional Chinese output is FORBIDDEN/);
   });
+
+  it("translates when source_language is bare 'zh' but subtitle content is Traditional Chinese", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-bare-zh-"));
+    await mkdir(root, { recursive: true });
+    // YouTube often exports subtitles with just "zh" language tag even when
+    // the actual content is Traditional Chinese (zh-Hant).
+    await writeFile(
+      path.join(root, "Demo.video123.zh.srt"),
+      `1
+00:00:01,000 --> 00:00:02,000
+這是一段被標記為 zh 的繁體中文字幕
+`,
+      "utf8",
+    );
+
+    const seenSystemPrompts: string[] = [];
+    const llm: LlmPort = {
+      chat: async (req: ChatRequest): Promise<ChatResponse> => {
+        seenSystemPrompts.push(req.messages[0]!.content);
+        return {
+          content: JSON.stringify([{ index: 1, text: "这是一段被标记为 zh 的简体中文字幕" }]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const result = await runSubtitlePipeline({
+      videoDir: root,
+      subtitle: {
+        mode: "srt",
+        sourceLang: "en",
+        targetLang: "zh-CN",
+        source: "youtube",
+      },
+      llm,
+      llmModel: "test",
+      runner: {
+        run: async (spec) => ({
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 0,
+          command: spec.command,
+          args: spec.args ?? [],
+        }),
+      },
+    });
+
+    await expect(readFile(path.join(root, "video", "full.zh.srt"), "utf8")).resolves.toContain(
+      "这是一段被标记为 zh 的简体中文字幕",
+    );
+    expect(result.manifest.source_language).toBe("zh");
+    // isAlreadyTargetLanguage now returns false for bare "zh" when target is zh-CN,
+    // so translation is triggered by the language-code mismatch (not by opencc content detection).
+    expect(result.manifest.translation_method).toBe("llm");
+    expect(seenSystemPrompts[0]).toMatch(/Simplified Chinese/);
+    expect(seenSystemPrompts[0]).toMatch(/Traditional Chinese output is FORBIDDEN/);
+  });
+
+  it("translates when source_language claims zh-CN but subtitle content is Traditional Chinese", async () => {
+    // Defense-in-depth: even if the language tag says zh-CN, opencc-js detection
+    // catches Traditional Chinese content and forces translation.
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-fake-zhcn-"));
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      path.join(root, "Demo.video123.zh-CN.srt"),
+      `1
+00:00:01,000 --> 00:00:02,000
+這是一段被錯誤標記為 zh-CN 的繁體中文字幕
+`,
+      "utf8",
+    );
+
+    const seenSystemPrompts: string[] = [];
+    const llm: LlmPort = {
+      chat: async (req: ChatRequest): Promise<ChatResponse> => {
+        seenSystemPrompts.push(req.messages[0]!.content);
+        return {
+          content: JSON.stringify([{ index: 1, text: "这是一段被错误标记为 zh-CN 的简体中文字幕" }]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const result = await runSubtitlePipeline({
+      videoDir: root,
+      subtitle: {
+        mode: "srt",
+        sourceLang: "en",
+        targetLang: "zh-CN",
+        source: "youtube",
+      },
+      llm,
+      llmModel: "test",
+      runner: {
+        run: async (spec) => ({
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 0,
+          command: spec.command,
+          args: spec.args ?? [],
+        }),
+      },
+    });
+
+    await expect(readFile(path.join(root, "video", "full.zh.srt"), "utf8")).resolves.toContain(
+      "这是一段被错误标记为 zh-CN 的简体中文字幕",
+    );
+    expect(result.manifest.source_language).toBe("zh-CN");
+    // opencc-js detected Traditional Chinese content → forced translation
+    expect(result.manifest.translation_method).toBe("llm");
+    expect(result.manifest.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Traditional Chinese"),
+      ]),
+    );
+  });
 });
 
 describe("cleanupSrt", () => {

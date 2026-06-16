@@ -1,11 +1,11 @@
 import { z } from "zod";
 
-/** 单条帖子 LLM 输出 */
+/** 单条帖子 LLM 输出 — Martin AI Coding Workflow 四段结构 */
 export const ClipPostSchema = z.object({
-  first_line: z.string().describe("首句（X 信息流可见的前 150 字），必须是场景钩子，不是功能介绍"),
-  body: z.string().describe("2-4 句正文，包含具体细节或关键信息"),
-  teaser_next: z.string().describe("末尾钩子，预告下一篇，如「明天发：xx」"),
-  hashtags: z.string().describe("标签行，如 #Codex #AI编程效率"),
+  title: z.string().describe("10-20字标题，优先意外发现/真实体验/反常识结论/具体结果。禁止功能介绍、教程标题"),
+  conflict: z.string().describe("冲突/发现，1-3句。制造认知反差或分享意外发现。写法：发现→过程→感受，非功能→参数→结果"),
+  what_happened: z.string().describe("视频里发生了什么，1-3句。第一视角还原视频中的具体画面和动作"),
+  conclusion: z.string().describe("一句结论，记忆锚点式收尾。让读者记住一个核心观点"),
 });
 
 export type ClipPost = z.infer<typeof ClipPostSchema>;

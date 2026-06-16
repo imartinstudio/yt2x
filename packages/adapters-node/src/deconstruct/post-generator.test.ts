@@ -6,7 +6,7 @@ import type { DeconstructManifest, LlmPort } from "@yt2x/core";
 import { generateClipsPosts } from "./post-generator.js";
 
 describe("generateClipsPosts", () => {
-  it("writes clip posts with the global semantic title format", async () => {
+  it("writes clip posts with Martin AI Coding Workflow 4-segment format", async () => {
     const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-posts-"));
     try {
       const clipsDir = path.join(articleDir, "clips");
@@ -56,10 +56,10 @@ describe("generateClipsPosts", () => {
           content: JSON.stringify({
             posts: [
               {
-                first_line: "你以为 Claude Code 只能写网页？",
-                body: "这里展示的是完整工作流，不是单点技巧。",
-                teaser_next: "完整长文 👇",
-                hashtags: "#ClaudeCode #AI编程",
+                title: "我被 2GB 显存的模型上了一课",
+                conflict: "本来觉得 2GB 显存能干什么？跑个 embeddings 都费劲。结果它开始处理一个完整的网页项目。",
+                what_happened: "它打开浏览器、读取设计稿、生成组件代码——每一步都是自动的。86 秒，一个完整的页面出现在屏幕上。",
+                conclusion: "参数大小不是瓶颈，什么时候该用它才是。",
               },
             ],
           }),
@@ -72,10 +72,20 @@ describe("generateClipsPosts", () => {
       expect(result.postCount).toBe(1);
 
       const postText = await readFile(result.postPaths[0]!, "utf8");
-      expect(postText).toContain("🧠 Claude Code 从 0 到 1 全攻略 | 1/1");
+      // Series title line with new format
+      expect(postText).toContain("🎬 我被 2GB 显存的模型上了一课｜1/1");
+      // 4-segment structure — no hashtags, no teaser
+      expect(postText).toContain("本来觉得 2GB 显存能干什么？");
+      expect(postText).toContain("它打开浏览器、读取设计稿、生成组件代码");
+      expect(postText).toContain("参数大小不是瓶颈");
+      expect(postText).not.toContain("#ClaudeCode");
 
-      const updatedManifest = JSON.parse(await readFile(path.join(clipsDir, "clips-manifest.json"), "utf8")) as DeconstructManifest;
-      expect(updatedManifest.clips[0]!.text?.startsWith("🧠 Claude Code 从 0 到 1 全攻略 | 1/1")).toBe(true);
+      // Manifest updated
+      const updatedManifest = JSON.parse(
+        await readFile(path.join(clipsDir, "clips-manifest.json"), "utf8"),
+      ) as DeconstructManifest;
+      expect(updatedManifest.clips[0]!.text?.startsWith("🎬 我被 2GB 显存的模型上了一课｜1/1")).toBe(true);
+      expect(updatedManifest.clips[0]!.postTitle).toBe("我被 2GB 显存的模型上了一课");
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }

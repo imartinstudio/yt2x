@@ -8,7 +8,7 @@ import {
   parseSrt,
   validateClipEndings,
 } from "./generator.js";
-import { chooseClipTitleEmoji, deriveSeriesName, formatClipPostSeriesTitle } from "./post-generator.js";
+import { deriveSeriesName, formatClipPostSeriesTitle } from "@yt2x/core";
 
 describe("toSlug", () => {
   it("converts Chinese title to slug", () => {
@@ -175,35 +175,27 @@ describe("deriveSeriesName", () => {
 });
 
 describe("clip post series title", () => {
-  it("formats Claude titles with a semantic emoji and pipe progress", () => {
-    const articleTitle = "Claude Code 从 0 到 1 全攻略：90% 的用户只用了 10% 的功能";
+  it("formats with 🎬 emoji and full-width ｜ separator", () => {
     expect(formatClipPostSeriesTitle({
-      articleTitle,
-      seriesName: deriveSeriesName(articleTitle),
+      clipTitle: "我被 2GB 显存的模型上了一课",
       index: 1,
       total: 5,
-    })).toBe("🧠 Claude Code 从 0 到 1 全攻略 | 1/5");
+    })).toBe("🎬 我被 2GB 显存的模型上了一课｜1/5");
   });
 
-  it("uses a Codex-specific emoji when Codex is the only named tool", () => {
+  it("handles short titles correctly", () => {
     expect(formatClipPostSeriesTitle({
-      articleTitle: "Codex 全攻略：从 Fork 到 Automation",
-      seriesName: "Codex 全攻略",
+      clipTitle: "它开始自己干活了",
       index: 2,
       total: 3,
-    })).toBe("🤖 Codex 全攻略 | 2/3");
+    })).toBe("🎬 它开始自己干活了｜2/3");
   });
 
-  it("uses a neutral emoji when multiple named tools are present", () => {
-    expect(chooseClipTitleEmoji("Claude Code 和 Codex 实战对比")).toBe("🧭");
-  });
-
-  it("falls back to a generic emoji without named tools", () => {
+  it("handles single post series", () => {
     expect(formatClipPostSeriesTitle({
-      articleTitle: "AI 工作流从入门到落地",
-      seriesName: "AI 工作流",
+      clipTitle: "88 秒完成部署",
       index: 1,
-      total: 2,
-    })).toBe("🧩 AI 工作流 | 1/2");
+      total: 1,
+    })).toBe("🎬 88 秒完成部署｜1/1");
   });
 });

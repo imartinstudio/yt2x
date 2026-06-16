@@ -60,7 +60,7 @@ const buildSharedRules = (spec: PlatformArticleSpec): string => `通用约束：
 - 目标平台：${spec.displayName}。
 - 只基于输入的 article.md、metadata.json 和可选 timestamped-cues.md 适配，不新增事实、数据、案例、价格、链接或承诺。
 - 可以改变表达方式、标题角度和内容顺序，但不能改变原文观点、结论和风险边界。
-- 全文使用自然简体中文（zh-CN）；技术名词、命令、产品名可保留英文。
+- 全文必须使用简体中文（zh-CN）。禁止输出繁体中文。技术名词、命令、产品名可保留英文。这是硬性要求，不可违反。
 - 多平台标题必须围绕同一个「统一主标题」生成，不能每个平台换一个完全不同的标题角度。
 - 如果原始标题、统一主标题或 metadata 中出现 Codex、Claude、ChatGPT、Gemini、DeepSeek、Cursor、GitHub Copilot 等特指名词，主标题必须保留对应名词，不能泛化成「AI 工具」「智能体」「编程助手」等宽泛说法。
 - 标题必须体现内容适用范围和局限性，避免让读者误以为文章讨论的是更宽泛的产品、平台或方法。

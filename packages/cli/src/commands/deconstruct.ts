@@ -11,7 +11,6 @@ import {
   generateClipsPosts,
   writeSelectedPostFiles,
   writeReports,
-  deriveSeriesName,
 } from "@yt2x/adapters-node";
 import { resolveLlmConfig, defaultCliLlmProvider } from "../config/env.js";
 import { logger } from "../logger.js";
@@ -162,15 +161,8 @@ export const runDeconstructCommand = async (
     const manifestPath = `${articleDir}/clips/clips-manifest.json`;
     const manifestRaw = await readFile(manifestPath, "utf8");
     const postManifest = JSON.parse(manifestRaw) as DeconstructManifest;
-    const articleMdForPosts = await readFile(`${articleDir}/article.md`, "utf8");
-    const titleMatch2 = articleMdForPosts.match(/^#\s+(.+)$/m);
-    const articleTitle2 = titleMatch2?.[1] ?? artifacts.videoId;
-    const seriesName2 = deriveSeriesName(articleTitle2);
-
     const selectedPostPaths = await writeSelectedPostFiles(
       postManifest,
-      articleTitle2,
-      seriesName2,
       articleDir,
     );
 

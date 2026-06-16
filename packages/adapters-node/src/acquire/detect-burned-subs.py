@@ -129,8 +129,10 @@ def ocr_bottom_region(image_path: str) -> str:
     bottom = bottom.resize((max(w * scale, 1), max(bottom.height * scale, 1)))
     bottom = ImageOps.autocontrast(bottom.convert("L"))
 
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        ocr_path = tmp.name
+    ocr_dir = os.path.expanduser("~/tmp")
+    os.makedirs(ocr_dir, exist_ok=True)
+    ocr_fd, ocr_path = tempfile.mkstemp(suffix=".png", dir=ocr_dir)
+    os.close(ocr_fd)
     try:
         bottom.save(ocr_path)
         for languages in ocr_language_candidates():
@@ -147,11 +149,16 @@ def ocr_bottom_region(image_path: str) -> str:
                     "1",
                 ],
                 capture_output=True,
-                text=True,
                 timeout=20,
             )
-            if result.returncode == 0 and (result.stdout or "").strip():
-                return (result.stdout or "").strip()
+            # decode stdout manually; ignore stderr decode errors
+            stdout_text = ""
+            try:
+                stdout_text = result.stdout.decode("utf-8") if result.stdout else ""
+            except UnicodeDecodeError:
+                stdout_text = result.stdout.decode("utf-8", errors="replace") if result.stdout else ""
+            if result.returncode == 0 and stdout_text.strip():
+                return stdout_text.strip()
         return ""
     finally:
         try:
@@ -192,7 +199,7 @@ def main() -> None:
 
     video_path = sys.argv[1]
     sample_count = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-    threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.04
+    threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.018
     min_burned_frames = 2
 
     ocr_available = shutil.which("tesseract") is not None
@@ -228,7 +235,9 @@ def main() -> None:
     scores: list[float] = []
     candidate_frames: list[str] = []
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Use a temp dir outside sandbox — tesseract subprocess can't read /tmp/claude-501/
+    tmpdir = tempfile.mkdtemp(dir=os.path.expanduser("~/tmp"), prefix="burned-subs-")
+    try:
         for i, t in enumerate(timestamps):
             frame_path = os.path.join(tmpdir, f"frame-{i:02d}.jpg")
             result = subprocess.run(
@@ -258,41 +267,43 @@ def main() -> None:
             except Exception:
                 continue
 
-    if not scores:
-        print(json.dumps({"error": "failed to extract any frames"}))
-        sys.exit(1)
+        if not scores:
+            print(json.dumps({"error": "failed to extract any frames"}))
+            sys.exit(1)
 
-    burned_frame_count = sum(1 for s in scores if s > threshold)
-    has_burned = burned_frame_count >= min_burned_frames
+        burned_frame_count = sum(1 for s in scores if s > threshold)
+        has_burned = burned_frame_count >= min_burned_frames
 
-    has_chinese = False
-    ocr_samples: list[str] = []
-    if has_burned and ocr_available:
-        for frame_path in candidate_frames[:3]:
-            text = ocr_bottom_region(frame_path)
-            if text:
-                ocr_samples.append(text[:120])
-            if looks_like_chinese_subtitle(text):
-                has_chinese = True
-                break
+        has_chinese = False
+        ocr_samples: list[str] = []
+        if has_burned and ocr_available:
+            for frame_path in candidate_frames[:3]:
+                text = ocr_bottom_region(frame_path)
+                if text:
+                    ocr_samples.append(text[:120])
+                if looks_like_chinese_subtitle(text):
+                    has_chinese = True
+                    break
 
-    should_skip = has_chinese
+        should_skip = has_chinese
 
-    print(
-        json.dumps(
-            {
-                "hasBurnedSubtitles": has_burned,
-                "hasChineseBurnedSubtitles": has_chinese,
-                "shouldSkipBurn": should_skip,
-                "scores": [round(s, 4) for s in scores],
-                "burnedFrameCount": burned_frame_count,
-                "threshold": threshold,
-                "ocrAvailable": ocr_available,
-                **({"ocrSamples": ocr_samples} if ocr_samples else {}),
-            }
+        print(
+            json.dumps(
+                {
+                    "hasBurnedSubtitles": has_burned,
+                    "hasChineseBurnedSubtitles": has_chinese,
+                    "shouldSkipBurn": should_skip,
+                    "scores": [round(s, 4) for s in scores],
+                    "burnedFrameCount": burned_frame_count,
+                    "threshold": threshold,
+                    "ocrAvailable": ocr_available,
+                    **({"ocrSamples": ocr_samples} if ocr_samples else {}),
+                }
+            )
         )
-    )
-    sys.exit(0)
+        sys.exit(0)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":

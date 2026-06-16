@@ -282,6 +282,6 @@ Block four
     });
 
     expect(systemPrompt).toMatch(/Simplified Chinese/);
-    expect(systemPrompt).toMatch(/Convert Traditional Chinese/);
+    expect(systemPrompt).toMatch(/Traditional Chinese output is FORBIDDEN/);
   });
 });

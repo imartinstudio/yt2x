@@ -7,6 +7,7 @@ import {
   type LlmPort,
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
+import { parseJsonWithRepairs, salvageLooseJsonTextField } from "../llm/parse-json.js";
 
 export type GenerateXShortInput = {
   llm: LlmPort;
@@ -55,12 +56,20 @@ const stripJsonFenceWrapper = (s: string): string => {
 };
 
 export const parseGeneratedShortPostJson = (jsonText: string): GeneratedShortPost => {
+  const cleaned = stripJsonFenceWrapper(jsonText.trim());
   let parsed: unknown;
+
+  // Try repaired JSON first (handles trailing commas, unescaped chars, etc.)
   try {
-    parsed = JSON.parse(stripJsonFenceWrapper(jsonText.trim()));
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Short post LLM response is not valid JSON: ${message}`);
+    parsed = parseJsonWithRepairs(cleaned);
+  } catch {
+    // Fall back to salvage: extract the "text" field by regex
+    const salvaged = salvageLooseJsonTextField(cleaned, "text");
+    if (salvaged !== null && salvaged.trim().length > 0) {
+      parsed = { text: salvaged, angle: "discussion", risk: "low" };
+    } else {
+      throw new Error(`Short post LLM response is not valid JSON and could not be salvaged`);
+    }
   }
 
   const result = GeneratedShortPostSchema.safeParse(parsed);

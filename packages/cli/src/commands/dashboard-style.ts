@@ -531,8 +531,8 @@ export const DASHBOARD_STYLE = String.raw`    :root {
     .theme-preview {
       margin-top: auto;
       padding-top: 9px;
-      font-size: 10px;
-      color: #b5af9c;
+      font-size: 11px;
+      color: #8d8976;
       font-family: Georgia, "Times New Roman", "Songti SC", serif;
       font-style: italic;
       letter-spacing: 0.02em;

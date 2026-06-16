@@ -206,29 +206,32 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       // format button is enabled if platform article OR base article.md exists
       const canFormat = state.generated || video.platforms.x.generated;
       const formatLabel = state.formatStatus === "formatted" ? "重新排版" : "排版";
+      const orchPreviewLink = '/api/platform-orchestrate/preview?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform;
+      const previewHref = state.published ? orchPreviewLink + '&mode=published' : orchPreviewLink;
+      const formatBtn = state.published
+        ? '<button class="secondary" disabled title="已发布，无需再排版">已发布</button>'
+        : canFormat
+          ? (platform === "wechat"
+              ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">' + formatLabel + '</button>'
+              : '<button class="secondary" data-format-platform="' + platform + '">' + formatLabel + '</button>')
+          : '<button class="secondary" disabled>缺稿件</button>';
       const wechatActions = platform === "wechat"
         ? [
-          canFormat
-            ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">' + formatLabel + '</button>'
-            : '<button class="secondary" disabled>缺稿件</button>',
+          formatBtn,
           '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>复制 HTML</button>',
-          '<a href="/api/wechat-format/file?videoId=' + encodeURIComponent(video.videoId) + '&kind=preview" target="_blank"><button class="secondary" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>打开预览</button></a>',
+          '<a href="' + (state.formatStatus === "formatted" ? '/api/wechat-format/file?videoId=' + encodeURIComponent(video.videoId) + '&kind=preview' : previewHref) + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
       const platformFormatActions = platform === "xiaohongshu"
         ? [
-          canFormat
-            ? '<button class="secondary" data-format-platform="xiaohongshu">' + formatLabel + '</button>'
-            : '<button class="secondary" disabled>缺稿件</button>',
-          '<a href="/api/xiaohongshu-format/file?videoId=' + encodeURIComponent(video.videoId) + '" target="_blank"><button class="secondary">打开预览</button></a>',
+          formatBtn,
+          '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
       const bilibiliFormatActions = platform === "bilibili"
         ? [
-          canFormat
-            ? '<button class="secondary" data-format-platform="bilibili">' + formatLabel + '</button>'
-            : '<button class="secondary" disabled>缺稿件</button>',
-          '<a href="/api/bilibili-format/file?videoId=' + encodeURIComponent(video.videoId) + '" target="_blank"><button class="secondary">打开预览</button></a>',
+          formatBtn,
+          '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>',
         ].join("")
         : "";
       return [
@@ -433,8 +436,18 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         toast("没有可复制的 HTML");
         return;
       }
-      await navigator.clipboard.writeText(await resp.text());
-      toast("已复制 HTML");
+      const html = await resp.text();
+      try {
+        // write as rich HTML so WeChat editor pastes rendered content (not raw code)
+        const blob = new Blob([html], { type: "text/html" });
+        const item = new ClipboardItem({ "text/html": blob });
+        await navigator.clipboard.write([item]);
+        toast("已复制 HTML");
+      } catch {
+        // fallback for browsers that don't support ClipboardItem
+        await navigator.clipboard.writeText(html);
+        toast("已复制 HTML（纯文本方式）");
+      }
     }
 
     function render() {

@@ -181,7 +181,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       formattingSet.add(platform);
       // Disable only this platform's format button
       var btn = document.querySelector('[data-format-platform="' + platform + '"]');
-      if (btn) { btn.disabled = true; btn.textContent = "排版中..."; }
+      if (btn) { btn.disabled = true; btn.classList.add("loading"); btn.innerHTML = '排版中<span class="dots"><span>.</span><span>.</span><span>.</span></span>'; }
       try {
         const resp = await fetch("/api/platform-format", {
           method: "POST",

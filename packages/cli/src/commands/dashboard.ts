@@ -861,9 +861,8 @@ const handleDashboardRequest = async (
       const promptsPath = path.join(articleDir, formatDirs[platform] ?? "", "prompts.json");
       const promptsRaw = await readFile(promptsPath, "utf8");
       const prompts = JSON.parse(promptsRaw) as { illustrationPrompts?: Array<{ index: number; prompt: string }> };
-      if (prompts.illustrationPrompts?.length) {
-        promptMap = new Map(prompts.illustrationPrompts.map((il) => [il.index, il.prompt]));
-      }
+      // prompts.json exists = user has formatted. Even if empty (all sections have images), don't show "尚未排版".
+      promptMap = new Map((prompts.illustrationPrompts ?? []).map((il) => [il.index, il.prompt]));
     } catch { /* no prompts yet */ }
 
     const livePreview = await previewExistingArticleImages(articleDir, platform, promptMap);

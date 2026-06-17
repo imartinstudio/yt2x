@@ -122,7 +122,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         '<td><div class="title">' + esc(video.title) + '</div>' +
           (video.originalTitle ? '<div class="original-title">' + esc(video.originalTitle) + '</div>' : "") +
           '<div class="video-id" title="点击复制" onclick="event.stopPropagation();navigator.clipboard.writeText(\'' + esc(video.videoId) + '\');this.classList.add(\'copied\');setTimeout(()=>this.classList.remove(\'copied\'),1500)">' + esc(video.videoId) + '</div></td>',
-        '<td class="date">' + esc(fmtDate(video.updatedAt)) + '</td>',
+        '<td class="date">' + esc(fmtDate(video.originalDate || video.updatedAt)) + '</td>',
         platformOrder.map((p) => '<td class="platform-cell">' + platformPill(video.platforms[p]) + '</td>').join(""),
         '</tr>',
       ].join("")).join("");

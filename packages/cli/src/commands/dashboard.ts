@@ -49,6 +49,7 @@ type DashboardVideo = {
   videoId: string;
   title: string;
   originalTitle: string | null;
+  originalDate: string | null;
   updatedAt: string | null;
   articleDir: string | null;
   downloadDir: string | null;
@@ -244,10 +245,21 @@ export const scanDashboardVideos = async (input: {
       .sort()
       .at(-1) ?? null;
 
+    // Read download time: use download dir creation time (birthtime on macOS, ctime elsewhere)
+    let originalDate: string | null = null;
+    if (hasDownloadDir) {
+      try {
+        const s = await stat(downloadDir);
+        const ts = s.birthtimeMs ?? s.ctimeMs;
+        originalDate = new Date(ts).toISOString();
+      } catch { /* no stat */ }
+    }
+
     videos.push({
       videoId,
       title,
       originalTitle: originalTitle !== null && originalTitle !== title ? originalTitle : null,
+      originalDate,
       updatedAt,
       articleDir: hasArticleDir ? articleDir : null,
       downloadDir: hasDownloadDir ? downloadDir : null,
@@ -255,7 +267,7 @@ export const scanDashboardVideos = async (input: {
     });
   }
 
-  videos.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+  videos.sort((a, b) => (b.originalDate ?? b.updatedAt ?? "").localeCompare(a.originalDate ?? a.updatedAt ?? ""));
   return { generatedAt: new Date().toISOString(), articleOutDir, downloadsDir, indexPath, videos };
 };
 

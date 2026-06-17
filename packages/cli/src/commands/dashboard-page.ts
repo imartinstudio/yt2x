@@ -42,7 +42,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <thead>
           <tr>
             <th>视频</th>
-            <th>更新时间</th>
+            <th>下载时间</th>
             <th>X</th>
             <th>小红书</th>
             <th>公众号</th>

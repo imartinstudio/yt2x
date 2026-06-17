@@ -277,7 +277,7 @@ export const previewExistingArticleImages = async (
   const videoId = path.basename(articleDir);
   const imgUrl = (f: string) => "/api/file-image?videoId=" + encodeURIComponent(videoId) + "&file=" + encodeURIComponent(f);
   const imgExists = (f: string) => imageSet.has(f);
-  const imgRefRe = /!\[.*?\]\(images\/([^)]+)\)/;
+  const imgRefRe = /!\[.*?\]\(images\/([^)]+)\)/g;
 
   // XHS image galleries require 3:4 portrait (1080×1440).
   // X's 16:9 landscape cover/illustrations are NOT suitable — never reuse X images for XHS.

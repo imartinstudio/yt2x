@@ -152,6 +152,10 @@ export const DASHBOARD_STYLE = String.raw`    :root {
       margin-top: 2px;
       cursor: pointer;
       transition: color .2s;
+      display: inline-block;
+      max-width: fit-content;
+      padding: 1px 4px;
+      border-radius: 3px;
     }
     .video-id:hover { color: #333; }
     .video-id::after { content: " 📋"; opacity: 0; transition: opacity .2s; font-size: 10px; }

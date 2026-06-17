@@ -121,7 +121,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         '<tr class="' + (video.videoId === selectedId ? "active" : "") + '" data-id="' + esc(video.videoId) + '">',
         '<td><div class="title">' + esc(video.title) + '</div>' +
           (video.originalTitle ? '<div class="original-title">' + esc(video.originalTitle) + '</div>' : "") +
-          '<div class="video-id">' + esc(video.videoId) + '</div></td>',
+          '<div class="video-id" title="点击复制" onclick="event.stopPropagation();navigator.clipboard.writeText(\'' + esc(video.videoId) + '\');this.classList.add(\'copied\');setTimeout(()=>this.classList.remove(\'copied\'),1500)">' + esc(video.videoId) + '</div></td>',
         '<td class="date">' + esc(fmtDate(video.updatedAt)) + '</td>',
         platformOrder.map((p) => '<td class="platform-cell">' + platformPill(video.platforms[p]) + '</td>').join(""),
         '</tr>',
@@ -175,70 +175,63 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       });
     }
 
+    const formattingSet = new Set();
     async function formatPlatform(videoId, platform) {
-      toast("开始" + (platformLabels[platform] || platform) + "排版...");
-      const resp = await fetch("/api/platform-format", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ videoId, platform }),
-      });
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        toast(data.error || "排版失败");
-        await load();
-        return;
+      if (formattingSet.has(platform)) return;
+      formattingSet.add(platform);
+      // Disable only this platform's format button
+      var btn = document.querySelector('[data-format-platform="' + platform + '"]');
+      if (btn) { btn.disabled = true; btn.textContent = "排版中..."; }
+      try {
+        const resp = await fetch("/api/platform-format", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ videoId, platform }),
+        });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          toast(data.error || "排版失败");
+        } else {
+          toast((platformLabels[platform] || platform) + "排版完成");
+        }
+      } catch {
+        toast("排版请求失败");
       }
-      toast((platformLabels[platform] || platform) + "排版完成");
+      formattingSet.delete(platform);
       await load();
     }
 
     function renderPlatformCard(video, platform) {
       const state = video.platforms[platform];
-      const formatLine = (platform === "wechat" || platform === "x")
-        ? '<div class="file-list">排版：' +
-          (state.formatStatus === "formatted"
-            ? "已排版" + (state.formatTheme ? " · " + esc(state.formatTheme) : "")
-            : state.formatStatus === "failed"
-              ? "失败 · " + esc(state.formatError || "未知错误")
-              : "未排版") +
-          '</div>'
-        : "";
-      // format button is enabled if platform article OR base article.md exists
+      // Format status line — all platforms
+      const formatLine = '<div class="file-list">排版：' +
+        (state.formatStatus === "formatted"
+          ? "已排版" + (state.formatTheme ? " · " + esc(state.formatTheme) : "")
+          : state.formatStatus === "failed"
+            ? "失败 · " + esc(state.formatError || "未知错误")
+            : "未排版") +
+        '</div>';
+
+      // Format button: enabled if this platform has content OR base article.md exists
       const canFormat = state.generated || video.platforms.x.generated;
       const formatLabel = state.formatStatus === "formatted" ? "重新排版" : "排版";
       const orchPreviewLink = '/api/platform-orchestrate/preview?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform;
       const previewHref = state.published ? orchPreviewLink + '&mode=published' : orchPreviewLink;
+
+      // Published: disabled. No content: disabled. WeChat: theme modal. Others: direct format.
       const formatBtn = state.published
         ? '<button class="secondary" disabled title="已发布，无需再排版">已发布</button>'
-        : canFormat
-          ? (platform === "wechat"
-              ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">' + formatLabel + '</button>'
-              : '<button class="secondary" data-format-platform="' + platform + '">' + formatLabel + '</button>')
-          : '<button class="secondary" disabled>缺稿件</button>';
-      const wechatActions = platform === "wechat"
-        ? [
-          formatBtn,
-          '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>复制 HTML</button>',
-          '<a href="' + (state.formatStatus === "formatted" ? '/api/wechat-format/file?videoId=' + encodeURIComponent(video.videoId) + '&kind=preview' : previewHref) + '" target="_blank"><button class="secondary">打开预览</button></a>',
-        ].join("")
-        : "";
-      const platformFormatActions = platform === "xiaohongshu"
-        ? [
-          formatBtn,
-          '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>',
-        ].join("")
-        : "";
-      const bilibiliFormatActions = platform === "bilibili"
-        ? [
-          formatBtn,
-          '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>',
-        ].join("")
-        : "";
-      const xFormatActions = platform === "x"
-        ? [
-          formatBtn,
-          '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>',
-        ].join("")
+        : !canFormat
+          ? '<button class="secondary" disabled>缺稿件</button>'
+          : platform === "wechat"
+            ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">' + formatLabel + '</button>'
+            : '<button class="secondary" data-format-platform="' + platform + '">' + formatLabel + '</button>';
+
+      const previewBtn = '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>';
+
+      // Platform-specific extra actions
+      const extraActions = platform === "wechat"
+        ? '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>复制 HTML</button>'
         : "";
       return [
         '<section class="platform-card">',
@@ -259,10 +252,9 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         '<button data-save="' + platform + '" data-value="' + String(state.published) + '">保存状态</button>',
         '<button class="secondary" data-copy="' + platform + '" ' + (state.generated ? "" : "disabled") + '>复制稿件</button>',
         '<a href="/api/file?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform + '" target="_blank"><button class="secondary" ' + (state.generated ? "" : "disabled") + '>打开稿件</button></a>',
-        wechatActions,
-        platformFormatActions,
-        bilibiliFormatActions,
-        xFormatActions,
+        formatBtn,
+        previewBtn,
+        extraActions,
         '</div>',
         '</section>',
       ].join("");

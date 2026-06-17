@@ -7,7 +7,6 @@ import {
   DEFAULT_OUT_DIR,
   formatWechatArticle,
   formatWechatCovers,
-  formatXiaohongshuLayout,
   formatBilibiliText,
   orchestratePlatformPrompts,
   previewExistingArticleImages,
@@ -304,10 +303,11 @@ const updatePlatformStatus = async (
   await writePublishIndex(indexPath, index);
 };
 
-const updateWechatFormatStatus = async (
+const updatePlatformFormatStatus = async (
   indexPath: string,
   input: {
     videoId: string;
+    platform: PlatformKey;
     status: "formatted" | "failed";
     theme?: string;
     htmlPath?: string;
@@ -319,7 +319,7 @@ const updateWechatFormatStatus = async (
   index.videos ??= {};
   index.videos[input.videoId] ??= {};
   index.videos[input.videoId]!.platforms ??= {};
-  const current = index.videos[input.videoId]!.platforms!.wechat ?? {};
+  const current = index.videos[input.videoId]!.platforms![input.platform] ?? {};
   const next: Partial<PlatformState> = {
     ...current,
     formatStatus: input.status,
@@ -332,9 +332,21 @@ const updateWechatFormatStatus = async (
   if (formatTheme !== undefined) next.formatTheme = formatTheme;
   if (htmlPath !== undefined) next.htmlPath = htmlPath;
   if (previewPath !== undefined) next.previewPath = previewPath;
-  index.videos[input.videoId]!.platforms!.wechat = next;
+  index.videos[input.videoId]!.platforms![input.platform] = next;
   await writePublishIndex(indexPath, index);
 };
+
+const updateWechatFormatStatus = async (
+  indexPath: string,
+  input: {
+    videoId: string;
+    status: "formatted" | "failed";
+    theme?: string;
+    htmlPath?: string;
+    previewPath?: string;
+    error?: string;
+  },
+): Promise<void> => updatePlatformFormatStatus(indexPath, { ...input, platform: "wechat" });
 
 const formatWechatForDashboard = async (
   opts: { articleOutDir: string; indexPath: string; wechatFormatterDir?: string },
@@ -671,39 +683,21 @@ const handleDashboardRequest = async (
         ? await ensurePlatformArticle(videoId, platform)
         : "";
 
-      const formatDirByPlatform: Record<PlatformKey, string> = {
-        x: "x-format",
-        wechat: "wechat-format",
-        xiaohongshu: "xiaohongshu-format",
-        bilibili: "bilibili-format",
-      };
-      const orchestrateHtmlPath = path.join(articleDir, formatDirByPlatform[platform], "orchestrate.html");
-      let hasOrchestratePreview = false;
-      try {
-        await readFile(orchestrateHtmlPath);
-        hasOrchestratePreview = true;
-      } catch {
-        // Generate a preview below when possible.
-      }
-
-      if (!hasOrchestratePreview) {
-        const existingPreview = await previewExistingArticleImages(articleDir, platform);
-        if (existingPreview !== null) {
-          await mkdir(path.dirname(orchestrateHtmlPath), { recursive: true });
-          await writeFile(orchestrateHtmlPath, existingPreview.html, "utf8");
-        } else {
-          const provider = defaultCliLlmProvider();
-          const apiKey = readLlmApiKeyFromEnv(provider);
-          if (apiKey !== undefined) {
-            try {
-              const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
-              const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
-              const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
-              const llm = createLlmAdapter(cfg);
-              await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
-            } catch (err: unknown) {
-              process.stderr.write(`orchestrate warning: ${err instanceof Error ? err.message : String(err)}\n`);
-            }
+      // Always regenerate prompts when user clicks "排版" — don't skip because of cache
+      // B站不需要 LLM prompt 生成（Q10B）；X 和小红书需要
+      const needsLlmPrompts = platform === "x" || platform === "xiaohongshu";
+      if (needsLlmPrompts) {
+        const provider = defaultCliLlmProvider();
+        const apiKey = readLlmApiKeyFromEnv(provider);
+        if (apiKey !== undefined) {
+          try {
+            const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
+            const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+            const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
+            const llm = createLlmAdapter(cfg);
+            await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
+          } catch (err: unknown) {
+            process.stderr.write(`orchestrate warning: ${err instanceof Error ? err.message : String(err)}\n`);
           }
         }
       }
@@ -720,27 +714,15 @@ const handleDashboardRequest = async (
         await updateWechatFormatStatus(path.resolve(opts.indexPath), { videoId, status: "formatted", theme: result.theme, htmlPath: result.articleHtmlPath, previewPath: result.previewHtmlPath });
         sendJson(res, 200, { ok: true, platform: "wechat", theme: result.theme });
       } else if (platform === "xiaohongshu") {
-        const hasIG = opts.imageGenerator !== undefined;
-        // pass LLM for sketch-knowledge-kit prompt orchestration
-        const llmCfg = (() => {
-          const p = defaultCliLlmProvider();
-          const key = readLlmApiKeyFromEnv(p);
-          if (key === undefined) return undefined;
-          const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
-          const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
-          const cfg: LlmFactoryConfig = { provider: p, apiKey: key, baseUrl: baseUrlMap[p] ?? "https://api.openai.com/v1", defaultModel: modelMap[p] ?? "deepseek-v4-flash" };
-          return { llm: createLlmAdapter(cfg), model: cfg.defaultModel! };
-        })();
-        const result = await formatXiaohongshuLayout({
-          articleDir, videoId, articleMd,
-          ...(hasIG ? { imageGenerator: opts.imageGenerator } : {}),
-          ...(llmCfg !== undefined ? { llm: llmCfg.llm, llmModel: llmCfg.model } : {}),
-        });
-        sendJson(res, 200, { ok: true, platform: "xiaohongshu", hasImageGen: hasIG, hasLlm: llmCfg !== undefined, ...(genStatus ? { genStatus } : {}), ...result });
+        // Q9B: Only generate prompts, user manually generates 3:4 images
+        await updatePlatformFormatStatus(path.resolve(opts.indexPath), { videoId, platform: "xiaohongshu", status: "formatted" });
+        sendJson(res, 200, { ok: true, platform: "xiaohongshu", ...(genStatus ? { genStatus } : {}) });
       } else if (platform === "bilibili") {
         const result = await formatBilibiliText({ articleDir, videoId, articleMd });
+        await updatePlatformFormatStatus(path.resolve(opts.indexPath), { videoId, platform: "bilibili", status: "formatted" });
         sendJson(res, 200, { ok: true, platform: "bilibili", ...(genStatus ? { genStatus } : {}), ...result });
       } else if (platform === "x") {
+        await updatePlatformFormatStatus(path.resolve(opts.indexPath), { videoId, platform: "x", status: "formatted" });
         sendJson(res, 200, { ok: true, platform: "x", outputDir: path.join(articleDir, "x-format"), files: [] });
       }
     } catch (err: unknown) {
@@ -859,6 +841,8 @@ const handleDashboardRequest = async (
       return;
     }
     const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
+
+    // Published mode: show actual images
     if (mode === "published") {
       const existingPreview = await previewExistingArticleImages(articleDir, platform);
       if (existingPreview !== null) {
@@ -868,17 +852,25 @@ const handleDashboardRequest = async (
       }
       return;
     }
-    const formatDirByPlatform: Record<PlatformKey, string> = {
-      x: "x-format",
-      wechat: "wechat-format",
-      xiaohongshu: "xiaohongshu-format",
-      bilibili: "bilibili-format",
-    };
-    const htmlPath = path.join(articleDir, formatDirByPlatform[platform], "orchestrate.html");
+
+    // Live preview: always read article + images directly
+    // Load prompts.json for this platform to inject prompt placeholders
+    const formatDirs: Record<string, string> = { x: "x-format", xiaohongshu: "xiaohongshu-format", bilibili: "bilibili-format" };
+    let promptMap: Map<number, string> | undefined;
     try {
-      sendText(res, 200, await readFile(htmlPath, "utf8"), "text/html; charset=utf-8");
-    } catch {
-      sendJson(res, 404, { error: "Orchestration preview has not been generated." });
+      const promptsPath = path.join(articleDir, formatDirs[platform] ?? "", "prompts.json");
+      const promptsRaw = await readFile(promptsPath, "utf8");
+      const prompts = JSON.parse(promptsRaw) as { illustrationPrompts?: Array<{ index: number; prompt: string }> };
+      if (prompts.illustrationPrompts?.length) {
+        promptMap = new Map(prompts.illustrationPrompts.map((il) => [il.index, il.prompt]));
+      }
+    } catch { /* no prompts yet */ }
+
+    const livePreview = await previewExistingArticleImages(articleDir, platform, promptMap);
+    if (livePreview !== null) {
+      sendText(res, 200, livePreview.html, "text/html; charset=utf-8");
+    } else {
+      sendJson(res, 404, { error: "No article content available for preview." });
     }
     return;
   }

@@ -76,7 +76,7 @@ const COVER_SYSTEM_PROMPT = [
   `Output ONLY the English prompt, 150-300 words. No markdown, no JSON.`,
 ].join("\n");
 
-const ILLUSTRATION_SYSTEM_PROMPT = [
+const _ILLUSTRATION_SYSTEM_PROMPT = [
   `You are creating illustration prompts following the sketch-knowledge-kit visual system.`,
   ``,
   `Visual identity: Warm paper texture. Black marker/ink linework, hand-drawn. Anthropic orange (#E07030) as accent only. Hand-drawn typography. Generous whitespace. Slight scanned feel. Clean, educational editorial quality.`,
@@ -92,27 +92,15 @@ const ILLUSTRATION_SYSTEM_PROMPT = [
 ].join("\n");
 
 const splitBodyIntoSections = (body: string): string[] => {
-  const raw = body.split(/\n\n(?=#|【|[A-Z一-鿿]{2,}[：:])/);
-  if (raw.length >= 3) return raw.filter((s) => s.trim().length > 0);
-  const parts = body.split(/\n{2,}/).filter((s) => s.trim().length > 0);
-  if (parts.length <= 2) return parts;
-  const merged: string[] = [];
-  let buf = "";
-  for (const part of parts) {
-    if (buf.length + part.length < 400) {
-      buf = buf.length > 0 ? buf + "\n\n" + part : part;
-    } else {
-      if (buf.length > 0) merged.push(buf);
-      buf = part;
-    }
-  }
-  if (buf.length > 0) merged.push(buf);
-  return merged;
+  // Split only on ## headings (and # title). Don't split on CJK patterns.
+  const headingRe = /^(?=##\s)/m;
+  const raw = body.split(headingRe);
+  return raw.map((s) => s.trim()).filter((s) => s.length > 0);
 };
 
 // ── HTML render ──
 
-const renderPreviewHtml = (
+const _renderPreviewHtml = (
   title: string,
   platformLabel: string,
   platformSpec: PlatformSpec,
@@ -230,74 +218,132 @@ function copyAll() {
 export const previewExistingArticleImages = async (
   articleDir: string,
   platform: string,
+  promptMap?: Map<number, string>,
 ): Promise<{ html: string; coverCount: number; illCount: number } | null> => {
-  const readdir = (await import("node:fs/promises")).readdir;
+  const { readdir, readFile: rf } = await import("node:fs/promises");
   const imageDir = path.join(articleDir, "images");
   let entries: string[] = [];
-  try { entries = await readdir(imageDir); } catch { return null; }
+  try { entries = await readdir(imageDir); } catch { entries = []; }
+  const imageSet = new Set(entries);
 
-  const covers = entries.filter((f) => /^cover\.(png|webp|jpg|jpeg)/i.test(f));
-  const illustrations = entries.filter((f) => /\.(png|webp|jpg|jpeg)$/i.test(f) && !/^cover\./i.test(f));
+  // Read article text
+  const articleFiles: Record<string, string> = { x: "article.md", xiaohongshu: "xiaohongshu-article.md", bilibili: "bilibili-article.md", wechat: "article.md" };
+  const articleFile = articleFiles[platform] ?? "article.md";
+  let articleText = "";
+  try { articleText = await rf(path.join(articleDir, articleFile), "utf8"); } catch {
+    try { articleText = await rf(path.join(articleDir, "article.md"), "utf8"); } catch { /* no text */ }
+  }
+  if (!articleText) return null;
 
-  if (covers.length === 0 && illustrations.length === 0) return null;
-
-  const title = "已有图片预览";
+  // Parse title
+  const titleMatch = articleText.match(/^#\s+(.+)$/m);
+  const title = titleMatch?.[1] ?? "文章预览";
+  const articleTitleClean = title.replace(/\*\*/g, "");
   const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[platform] ?? platform;
+  const videoId = path.basename(articleDir);
+  const imgUrl = (f: string) => "/api/file-image?videoId=" + encodeURIComponent(videoId) + "&file=" + encodeURIComponent(f);
+  const imgExists = (f: string) => imageSet.has(f);
+  const imgRefRe = /!\[.*?\]\(images\/([^)]+)\)/;
 
-  const coverCards = covers
-    .map(
-      (f) => `
-    <div class="card cover-card">
-      <div class="card-header"><span class="badge">封面</span></div>
-      <img src="/api/file-image?videoId=${encodeURIComponent(path.basename(articleDir))}&file=${encodeURIComponent(f)}" alt="${f}" style="width:100%;display:block;" />
-      <div class="card-label">${f}</div>
-    </div>`,
-    )
-    .join("\n");
+  // Parse sections by ## headings, tracking image references per section
+  const sections: Array<{ heading: string; body: string; images: string[] }> = [];
+  let curHeading = "";
+  let curBody: string[] = [];
+  let curImages: string[] = [];
+  let afterTitle = false;
+  const lines = articleText.split("\n");
+  for (const line of lines) {
+    if (/^#\s/.test(line) && !afterTitle) { afterTitle = true; continue; }
+    if (/^##\s/.test(line)) {
+      if (curBody.length > 0 || curHeading || curImages.length > 0) {
+        sections.push({ heading: curHeading, body: curBody.join("\n").trim(), images: [...curImages] });
+      }
+      curHeading = line.replace(/^##\s+/, "").replace(/\*\*/g, "");
+      curBody = []; curImages = [];
+    } else if (afterTitle) {
+      const m = imgRefRe.exec(line);
+      if (m) { curImages.push(m[1]!); } else { curBody.push(line); }
+    }
+  }
+  if (curBody.length > 0 || curHeading || curImages.length > 0) {
+    sections.push({ heading: curHeading, body: curBody.join("\n").trim(), images: [...curImages] });
+  }
 
-  const illCards = illustrations
-    .map(
-      (f) => `
-    <div class="card">
-      <div class="card-header"><span class="badge ill">插图</span></div>
-      <img src="/api/file-image?videoId=${encodeURIComponent(path.basename(articleDir))}&file=${encodeURIComponent(f)}" alt="${f}" style="width:100%;display:block;" />
-      <div class="card-label">${f}</div>
-    </div>`,
-    )
-    .join("\n");
+  // First image in article = cover
+  const allImgs: string[] = [];
+  for (const sec of sections) { for (const img of sec.images) { if (imgExists(img)) allImgs.push(img); } }
+  const coverImg = allImgs.length > 0 ? allImgs[0]! : null;
+  const usedImgs = new Set<string>(coverImg ? [coverImg] : []);
 
-  const html = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${title} - ${platformLabel} 图片预览</title>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, "PingFang SC", sans-serif; background: #f5f5f5; }
-.toolbar { position: fixed; top: 0; left: 0; right: 0; background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); border-bottom: 1px solid #e0e0e0; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; z-index: 100; }
-.toolbar h2 { font-size: 17px; color: #333; }
-.toolbar span { font-size: 12px; color: #999; }
-.container { max-width: 680px; margin: 72px auto 40px; padding: 0 16px; }
-.card { background: #fff; border-radius: 12px; overflow: hidden; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
-.cover-card { border-left: 3px solid #E07030; }
-.card-header { padding: 12px 16px 4px; }
-.badge { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; background: #E07030; color: #fff; }
-.badge.ill { background: #0e6f5c; }
-.card-label { padding: 4px 16px 12px; font-size: 12px; color: #999; }
-.note { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 16px; font-size: 13px; color: #666; line-height: 1.6; }
-.note a { color: #E07030; }
-</style>
-</head>
-<body>
-<div class="toolbar"><h2>${title}</h2><span>${platformLabel} · 已有图片 ${covers.length} 封面 + ${illustrations.length} 插图</span></div>
-<div class="container">
-<div class="note">📌 以下图片来自文章已生成的封面和插图。如需通过 AI 重新生成 prompt 和图片，删除此预览后重新点「排版」。</div>
-${coverCards}${illCards}
-</div>
-</body>
-</html>`;
+  // Render: cover then sections with text + inline images
+  const isXhs = platform === "xiaohongshu";
+  const coverHtml = coverImg
+    ? '<div class="cover-wrap"><img src="' + imgUrl(coverImg) + '" alt="封面" class="cover-img" /><div class="img-label">封面</div></div>'
+    : "";
 
-  return { html, coverCount: covers.length, illCount: illustrations.length };
+  const sectionHtml = sections.map(function (sec, i) {
+    const h = sec.heading ? '<h3 class="sec-heading">' + sec.heading + '</h3>' : "";
+    const b = sec.body
+      ? '<div class="sec-body">' + sec.body.replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>") + '</div>'
+      : "";
+    const imgs = sec.images.filter(function (f) { return imgExists(f) && !usedImgs.has(f); });
+    const imgHtml = imgs.map(function (f) { usedImgs.add(f); return '<img src="' + imgUrl(f) + '" alt="' + f + '" class="sec-img" /><div class="img-label">' + f + '</div>'; }).join("");
+
+    // Show prompt placeholder if section has prompt but no image
+    const secPrompt = promptMap?.get(i);
+    const promptHtml = (secPrompt && imgs.length === 0)
+      ? '<div class="ph-box">' + secPrompt.replace(/</g, "&lt;").slice(0, 200) + '</div>' +
+        '<div class="ph-row"><span class="ph-label">📷 待生成</span>' +
+        '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + secPrompt.replace(/"/g, "&quot;") + '">📋 复制</button>' +
+        '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt) + '" target="_blank">🤖 ChatGPT</a></span></div>'
+      : "";
+    if (isXhs) {
+      return '<div class="section">' + imgHtml + promptHtml + '<div class="sec-content">' + h + b + '</div></div>';
+    }
+    return '<div class="sec-block">' + h + '<div class="sec-body">' + b + '</div>' + imgHtml + promptHtml + '</div>';
+  }).join("");
+
+  // Count covers/illustrations for stats
+  const coverCount = coverImg ? 1 : 0;
+  const illCount = entries.filter(function (f) { return /\.(png|webp|jpg|jpeg)$/i.test(f) && !/^cover\./i.test(f); }).length;
+
+  // Q6B: Show "请先排版" note when no prompts and no section images (cover alone doesn't count)
+  const hasSectionImages = allImgs.length > 1; // > 1 means images beyond just the cover
+  const needsFormatNote = !promptMap && !hasSectionImages;
+
+  const isXhsCss = isXhs
+    ? "body{background:#f0ebe3}.container{max-width:420px;margin:64px auto 40px;padding:0 12px}.section{background:#fff;border-radius:10px;overflow:hidden;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.06)}.sec-content{padding:16px 18px}.sec-img{width:100%;display:block}"
+    : "body{background:#f5f5f5}.container{max-width:680px;margin:64px auto 40px;padding:0 16px}.article-body{background:#fff;padding:32px 28px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);line-height:1.9}.sec-block+.sec-block{margin-top:28px}.sec-img{width:100%;display:block;margin:12px 0}";
+
+  const h = [];
+  h.push('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">');
+  h.push("<title>" + articleTitleClean + " - " + platformLabel + "</title>");
+  h.push("<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:#333}");
+  h.push(".toolbar{position:fixed;top:0;left:0;right:0;background:rgba(255,255,255,.95);backdrop-filter:blur(20px);border-bottom:1px solid #e0e0e0;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;z-index:100}");
+  h.push(".toolbar h2{font-size:15px;color:#333;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toolbar span{font-size:12px;color:#999}");
+  h.push(isXhsCss);
+  h.push(".cover-wrap{background:#fff;border-radius:8px;overflow:hidden;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}.cover-img{width:100%;display:block}");
+  h.push(".sec-img{max-width:100%;height:auto;display:block}.cover-img{max-width:100%;height:auto;display:block}.sec-heading{font-size:16px;font-weight:700;color:#111;margin-bottom:8px}");
+  h.push(".sec-body{font-size:14px;line-height:1.9;color:#444}.sec-body p{margin-bottom:12px}.sec-body b,.sec-body strong{color:#111}");
+  h.push(".img-label{padding:6px 12px;font-size:11px;color:#bbb;text-align:right;background:#fafafa}");
+  h.push(".ph-box{background:linear-gradient(135deg,#faf8f3,#f5f1e8);border:2px dashed #e0d8c8;padding:16px 18px;font-size:12px;color:#666;line-height:1.6;white-space:pre-wrap;max-height:160px;overflow-y:auto}");
+  h.push(".ph-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#fafafa;border-top:1px solid #f0f0f0}");
+  h.push(".ph-label{font-size:11px;color:#999}");
+  h.push(".ph-btns{display:flex;gap:6px}");
+  h.push(".ph-copy,.ph-chatgpt{padding:3px 10px;font-size:11px;border-radius:4px;cursor:pointer;text-decoration:none;display:inline-block}");
+  h.push(".ph-copy{border:1px solid #ddd;background:#fff;color:#666}.ph-copy:hover{background:#f0f0f0}");
+  h.push(".ph-chatgpt{border:1px solid #74aa9c;background:#74aa9c;color:#fff}.ph-chatgpt:hover{background:#5c9082}");
+  h.push(".note{background:#fff;border-radius:8px;padding:14px 20px;margin-bottom:16px;font-size:13px;color:#888;line-height:1.6}</style></head>");
+  h.push("<body><div class='toolbar'><h2>" + articleTitleClean + "</h2><span>" + platformLabel + " · 图文预览</span></div>");
+  const noteHtml = needsFormatNote
+    ? '<div class="note" style="background:#fff3e0;border:1px solid #E07030;text-align:center;font-size:14px;color:#E07030">📌 尚未排版，请先点击「排版」生成 prompt 和图片占位。</div>'
+    : '<div class="note">📌 以下为文章图文预览。封面在上，正文按文章顺序展示，插图按 markdown 位置内联。</div>';
+  h.push('<div class="container">' + noteHtml);
+  h.push(coverHtml);
+  h.push(isXhs ? sectionHtml : '<div class="article-body">' + sectionHtml + '</div>');
+  h.push("</div></body></html>");
+
+  return { html: h.join("\n"), coverCount, illCount };
 };
 
 // ── main orchestrator ──
@@ -325,7 +371,7 @@ export const orchestratePlatformPrompts = async (
 
   if (!title) {
     const match = input.articleMd.match(/^#\s+(.+)$/m);
-    title = match?.[1] ?? "";
+    title = (match?.[1] ?? "").replace(/\*\*/g, "");
   }
 
   const sections = splitBodyIntoSections(body);
@@ -356,27 +402,99 @@ export const orchestratePlatformPrompts = async (
     coverPrompts.push({ label: coverSpec.label, prompt, size: coverSpec.size });
   }
 
-  // generate illustration prompts
-  const illustrationPrompts: Array<{ index: number; text: string; prompt: string }> = [];
-  for (let i = 0; i < sections.length; i++) {
-    const sectionText = sections[i]!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 400);
+  // Find which sections already have images in the article markdown
+  const imgRefRe2 = /!\[.*?\]\(images\/([^)]+)\)/;
+  const sectionHasImage = sections.map((s) => imgRefRe2.test(s));
+  const sectionsNeedingPrompts = sections
+    .map((s, i) => ({ text: s, index: i }))
+    .filter((_, i) => !sectionHasImage[i]);
 
-    const userPrompt = [
-      `Create a sketch-knowledge-kit illustration prompt for section #${i + 1} of a ${spec.label} article.`,
+  // Generate illustration prompts ONLY for sections that don't already have images
+  const allSectionsText = sectionsNeedingPrompts
+    .map((s) => `[Section ${s.index + 1}] ${s.text.slice(0, 300)}`)
+    .join("\n\n---\n\n");
+
+  const illustrationPrompts: Array<{ index: number; text: string; prompt: string }> = [];
+
+  if (sectionsNeedingPrompts.length > 0) {
+    const batchUserPrompt = [
+      `You are creating illustration prompts for a ${spec.label} article following the sketch-knowledge-kit visual system.`,
       ``,
       `Article topic: ${title}`,
-      `Platform illustration ratio: ${spec.illustrationRatio}`,
+      `Sections needing illustrations: ${sectionsNeedingPrompts.length} (${sectionHasImage.filter(Boolean).length} sections already have images and are skipped)`,
+      `Illustration ratio: ${spec.illustrationRatio}`,
       ``,
-      `Section content:`,
-      `${sectionText}`,
+      `TASK:`,
+      `1. Review the sections below.`,
+      `2. Decide which sections TRULY need an illustration — default to SKIP. Only pick a section if a visual would significantly improve understanding.`,
+      `3. For each picked section, create one English prompt (150-300 words).`,
+      `4. Most sections do NOT need illustrations. Err on the side of skipping.`,
+      ``,
+      `PICK ONLY sections with genuinely visual content: UI screenshots, before/after comparisons, dashboards, config panels, architecture diagrams.`,
+      `SKIP everything else: concepts, introductions, conclusions, risk warnings, code blocks, prompt templates, lists, text explanations, usage tips.`,
+      ``,
+      `Return a JSON array. Each item: {"index": <section number from the list below>, "prompt": "<english prompt>"}.`,
+      `Return ONLY the JSON array, no markdown, no explanation.`,
+      ``,
+      `SECTIONS:`,
+      allSectionsText,
     ].join("\n");
 
-    let prompt = "";
-    try {
-      prompt = await callLlm(input.llm, input.llmModel, ILLUSTRATION_SYSTEM_PROMPT, userPrompt);
-    } catch { /* empty */ }
+    const BATCH_SYSTEM_PROMPT = [
+      `You select and create illustration prompts for article sections that need images.`,
+      `Visual: sketch-knowledge-kit — warm paper, black marker, orange accent, hand-drawn.`,
+      `Be selective: only pick sections with concrete visual content.`,
+    ].join("\n");
 
-    illustrationPrompts.push({ index: i, text: sectionText, prompt });
+    try {
+      const batchResp = await input.llm.chat({
+        model: input.llmModel,
+        messages: [
+          { role: "system", content: BATCH_SYSTEM_PROMPT },
+          { role: "user", content: batchUserPrompt },
+        ],
+        temperature: 0.7,
+        maxTokens: 4096,
+      });
+      const raw = (batchResp.content ?? "").replace(/```(?:json)?\s*/g, "").replace(/```/g, "").trim();
+      const jsonMatch = raw.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]) as Array<{ index: number; prompt: string }>;
+          for (const item of parsed) {
+            const idx = item.index - 1;
+            if (idx >= 0 && idx < sections.length && item.prompt && item.prompt.trim()) {
+              illustrationPrompts.push({
+                index: idx,
+                text: sections[idx]!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 300),
+                prompt: item.prompt.trim(),
+              });
+            }
+          }
+        } catch (jsonErr: unknown) {
+          process.stderr.write("batch illustration JSON parse error: " + (jsonErr instanceof Error ? jsonErr.message : String(jsonErr)) + "\n");
+          // Fallback: try to salvage individual prompts from raw text
+          const matches = raw.match(/\{[^}]*"index"\s*:\s*(\d+)[^}]*"prompt"\s*:\s*"([^"]*(?:\\.[^"]*)*)"[^}]*\}/g);
+          if (matches) {
+            for (const m of matches) {
+              try {
+                const item = JSON.parse(m) as { index: number; prompt: string };
+                const idx = item.index - 1;
+                if (idx >= 0 && idx < sections.length && item.prompt && item.prompt.trim()) {
+                  illustrationPrompts.push({
+                    index: idx,
+                    text: sections[idx]!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 300),
+                    prompt: item.prompt.trim(),
+                  });
+                }
+              } catch { /* skip malformed item */ }
+            }
+          }
+        }
+      }
+    } catch (err: unknown) {
+      process.stderr.write("batch illustration prompt error: " + (err instanceof Error ? err.message : String(err)) + "\n");
+    }
   }
 
   // save prompts.json
@@ -390,9 +508,107 @@ export const orchestratePlatformPrompts = async (
   await writeFile(promptsPath, JSON.stringify(promptsData, null, 2), "utf8");
   files.push(promptsPath);
 
-  // render HTML
+  // Build prompt lookup: section index → prompt text
+  const promptMap = new Map<number, string>();
+  for (const il of illustrationPrompts) { promptMap.set(il.index, il.prompt); }
+
+  // Render HTML: article sections with inline prompt placeholders
   const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[input.platform] ?? input.platform;
-  const html = renderPreviewHtml(title, platformLabel, spec, coverPrompts, illustrationPrompts);
+  const promptActions = function (promptText: string, label: string, sizeHint: string) {
+    const encoded = encodeURIComponent(promptText);
+    return '<div class="ph-box">' + promptText.replace(/</g, "&lt;") + '</div>' +
+      '<div class="ph-row"><span class="ph-label">' + label + ' · ' + sizeHint + '</span>' +
+      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + promptText.replace(/"/g, "&quot;").replace(/\n/g, "\\n") + '">📋 复制</button>' +
+      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encoded + '" target="_blank">🤖 ChatGPT</a></span></div>';
+  };
+
+  // Extract image filenames from markdown sections
+  const sectionImages: string[][] = sections.map(function (s) {
+    const imgs: string[] = [];
+    let m: RegExpExecArray | null;
+    const re = /!\[.*?\]\(images\/([^)]+)\)/g;
+    while ((m = re.exec(s)) !== null) { imgs.push(m[1]!); }
+    return imgs;
+  });
+
+  const isXhs2 = input.platform === "xiaohongshu";
+  const videoId2 = path.basename(articleDir);
+  const imgUrl2 = function (f: string) { return "/api/file-image?videoId=" + encodeURIComponent(videoId2) + "&file=" + encodeURIComponent(f); };
+
+  // Cover: use existing image from markdown if present, otherwise prompt placeholder
+  let coverHtml = "";
+  if (coverPrompts.length > 0) {
+    const firstSectionImgs = sectionImages[0] ?? [];
+    const coverFile = firstSectionImgs.length > 0 ? firstSectionImgs[0]! : null;
+    if (coverFile) {
+      coverHtml = '<div class="cover-wrap"><img src="' + imgUrl2(coverFile) + '" alt="封面" class="cover-img" /><div class="img-label">封面</div></div>';
+    } else {
+      coverHtml = '<div class="cover-wrap">' + promptActions(coverPrompts[0]!.prompt, '封面', coverPrompts[0]!.size) + '</div>';
+    }
+  }
+
+  const sectionBlocks = sections.map(function (secText: string, i: number) {
+    const promptText = promptMap.get(i);
+    const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 500);
+    const headingMatch = clean.match(/^(.+?)[：:\n]/);
+    const heading = headingMatch ? headingMatch[1]!.slice(0, 40) : "";
+    const body = heading ? clean.slice(heading.length).replace(/^[：:\s]+/, "") : clean;
+    const headingHtml = heading ? '<h3 class="sec-heading">' + heading + '</h3>' : "";
+    const bodyClean = body
+      .replace(/!\[.*?\]\(images\/[^)]+\)/g, "")
+      .replace(/```[\s\S]*?```/g, "")
+      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+      .replace(/\n/g, "<br>");
+    const bodyHtml = bodyClean ? '<div class="sec-body">' + bodyClean + '</div>' : "";
+
+    // Existing images from markdown
+    const existingImgs = sectionImages[i]!.map(function (f) {
+      return '<img src="' + imgUrl2(f) + '" alt="' + f + '" class="sec-img" /><div class="img-label">' + f + '</div>';
+    }).join("");
+
+    // Prompt placeholder for sections needing one
+    const promptHtml = promptText
+      ? promptActions(promptText, '📷 插图 ' + (i + 1), isXhs2 ? '3:4' : '16:9')
+      : "";
+
+    if (isXhs2) {
+      return '<div class="section">' + existingImgs + promptHtml + '<div class="sec-content">' + headingHtml + bodyHtml + '</div></div>';
+    }
+    return '<div class="sec-block">' + headingHtml + '<div class="sec-body">' + bodyHtml + '</div>' + existingImgs + promptHtml + '</div>';
+  }).join("");
+
+  const isXhsCss2 = isXhs2
+    ? "body{background:#f0ebe3}.container{max-width:420px;margin:64px auto 40px;padding:0 12px}.section{background:#fff;border-radius:10px;overflow:hidden;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.06)}.sec-content{padding:16px 18px}"
+    : "body{background:#f5f5f5}.container{max-width:680px;margin:64px auto 40px;padding:0 16px}.article-body{background:#fff;padding:32px 28px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);line-height:1.9}.sec-block+.sec-block{margin-top:28px}";
+
+  const h2: string[] = [];
+  h2.push('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">');
+  h2.push("<title>" + title + " - " + platformLabel + " 编排</title>");
+  h2.push("<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:#333}");
+  h2.push(".toolbar{position:fixed;top:0;left:0;right:0;background:rgba(255,255,255,.95);backdrop-filter:blur(20px);border-bottom:1px solid #e0e0e0;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;z-index:100}");
+  h2.push(".toolbar h2{font-size:15px;color:#333;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toolbar span{font-size:12px;color:#999}");
+  h2.push(isXhsCss2);
+  h2.push(".cover-wrap{background:#fff;border-radius:8px;overflow:hidden;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}");
+  h2.push(".sec-img{max-width:100%;height:auto;display:block}.cover-img{max-width:100%;height:auto;display:block}.sec-heading{font-size:16px;font-weight:700;color:#111;margin-bottom:8px}");
+  h2.push(".sec-body{font-size:14px;line-height:1.9;color:#444}.sec-body p{margin-bottom:12px}");
+  h2.push(".ph-box{background:linear-gradient(135deg,#faf8f3,#f5f1e8);border:2px dashed #e0d8c8;padding:16px 18px;font-size:12px;color:#666;line-height:1.6;white-space:pre-wrap;max-height:160px;overflow-y:auto}");
+  h2.push(".ph-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#fafafa;border-top:1px solid #f0f0f0}");
+  h2.push(".ph-label{font-size:11px;color:#999}");
+  h2.push(".ph-btns{display:flex;gap:6px}");
+  h2.push(".ph-copy,.ph-chatgpt{padding:3px 10px;font-size:11px;border-radius:4px;cursor:pointer;text-decoration:none;display:inline-block}");
+  h2.push(".ph-copy{border:1px solid #ddd;background:#fff;color:#666}.ph-copy:hover{background:#f0f0f0}");
+  h2.push(".ph-chatgpt{border:1px solid #74aa9c;background:#74aa9c;color:#fff}.ph-chatgpt:hover{background:#5c9082}");
+  h2.push(".copy-bar{text-align:center;padding:16px}.copy-bar button{padding:10px 24px;border:2px solid #E07030;background:#fff;color:#E07030;border-radius:8px;cursor:pointer;font-weight:600}</style></head>");
+  h2.push("<body><div class='toolbar'><h2>" + title + "</h2><span>" + platformLabel + " · " + illustrationPrompts.length + " 图 / " + sections.length + " 节</span></div>");
+  h2.push('<div class="container"><div class="note" style="background:#fff;border-radius:8px;padding:14px 20px;margin-bottom:16px;font-size:13px;color:#888;line-height:1.6">📌 以下为文章图文编排预览。虚线框为待生成图片的 prompt 占位。</div>');
+  h2.push(coverHtml);
+  h2.push(isXhs2 ? sectionBlocks : '<div class="article-body">' + sectionBlocks + '</div>');
+  const allPromptsJson = JSON.stringify({ coverPrompts, illustrationPrompts });
+  h2.push('<div class="copy-bar"><button onclick="var t=document.getElementById(\'all-prompts-data\').textContent;navigator.clipboard.writeText(t);this.textContent=\'✅ 已复制\';setTimeout(function(){this.textContent=\'📋 复制全部 Prompt JSON\'}.bind(this),2000)">📋 复制全部 Prompt JSON</button>');
+  h2.push('<script id="all-prompts-data" type="application/json">' + allPromptsJson.replace(/</g, "\\u003c") + '</script>');
+  h2.push("</body></html>");
+
+  const html = h2.join("\n");
   const htmlPath = path.join(outputDir, "orchestrate.html");
   await writeFile(htmlPath, html, "utf8");
   files.push(htmlPath);

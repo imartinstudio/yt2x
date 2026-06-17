@@ -6,6 +6,8 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     let themeModalVideoId = null;
     let selectedWechatTheme = "notion-doc";
     let favoriteThemes = [];
+    let sortField = "originalDate";
+    let sortDir = -1; // -1 = desc, 1 = asc, 0 = none
     const favoriteThemeStorageKey = "yt2x.wechat.favoriteThemes";
 
     const $ = (id) => document.getElementById(id);
@@ -69,7 +71,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       const q = $("search").value.trim().toLowerCase();
       const platform = $("platformFilter").value;
       const status = $("statusFilter").value;
-      return payload.videos.filter((video) => {
+      let list = payload.videos.filter((video) => {
         const blob = [
           video.videoId,
           video.title,
@@ -82,6 +84,14 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         if (status === "unpublished" && !platforms.some((p) => video.platforms[p].generated && !video.platforms[p].published)) return false;
         return true;
       });
+      if (sortDir !== 0 && sortField) {
+        list = list.sort((a, b) => {
+          const va = a[sortField] ?? "";
+          const vb = b[sortField] ?? "";
+          return sortDir * va.localeCompare(vb);
+        });
+      }
+      return list;
     }
 
     function renderSummary(videos) {
@@ -123,6 +133,8 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
           (video.originalTitle ? '<div class="original-title">' + esc(video.originalTitle) + '</div>' : "") +
           '<div class="video-id" title="点击复制" onclick="event.stopPropagation();navigator.clipboard.writeText(\'' + esc(video.videoId) + '\');this.classList.add(\'copied\');setTimeout(()=>this.classList.remove(\'copied\'),1500)">' + esc(video.videoId) + '</div></td>',
         '<td class="date">' + esc(fmtDate(video.originalDate || video.updatedAt)) + '</td>',
+        '<td class="date">' + esc(fmtDate(video.uploadDate)) + '</td>',
+        '<td class="date">' + esc(fmtDate(video.updatedAt)) + '</td>',
         platformOrder.map((p) => '<td class="platform-cell">' + platformPill(video.platforms[p]) + '</td>').join(""),
         '</tr>',
       ].join("")).join("");
@@ -467,6 +479,32 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     $("themeModal").addEventListener("click", (event) => {
       if (event.target === $("themeModal")) closeThemeModal();
     });
+    // Sort click handler
+    document.querySelectorAll("th.sortable").forEach((th) => {
+      th.addEventListener("click", () => {
+        const field = th.dataset.sort;
+        if (sortField === field) {
+          sortDir = sortDir === -1 ? 1 : sortDir === 1 ? 0 : -1;
+        } else {
+          sortField = field;
+          sortDir = -1;
+        }
+        render();
+      });
+    });
+    // Update sort indicators
+    function updateSortIndicators() {
+      document.querySelectorAll("th.sortable").forEach((th) => {
+        const field = th.dataset.sort;
+        th.classList.remove("sort-asc", "sort-desc");
+        if (field === sortField && sortDir !== 0) {
+          th.classList.add(sortDir === 1 ? "sort-asc" : "sort-desc");
+        }
+      });
+    }
+    const origRender = render;
+    render = function() { origRender(); updateSortIndicators(); };
+
     Promise.all([loadWechatThemes(), load()]).catch((err) => {
-      $("rows").innerHTML = '<tr><td colspan="6">加载失败：' + esc(err.message) + '</td></tr>';
+      $("rows").innerHTML = '<tr><td colspan="8">加载失败：' + esc(err.message) + '</td></tr>';
     });`;

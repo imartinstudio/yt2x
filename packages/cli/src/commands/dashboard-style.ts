@@ -134,6 +134,43 @@ export const DASHBOARD_STYLE = String.raw`    :root {
       text-transform: uppercase;
       letter-spacing: .08em;
     }
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+    }
+    th.sortable:hover { color: #202019; }
+    /* unsorted: faint diamond lozenge — same 7×7 footprint as sorted chevrons */
+    th.sortable::after {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-left: 4px;
+      border: 1.5px solid currentColor;
+      transform: rotate(45deg) translateY(-1px);
+      opacity: .18;
+      vertical-align: middle;
+      transition: opacity .25s ease, border-color .25s ease, transform .3s cubic-bezier(.34,1.56,.64,1);
+    }
+    th.sortable:hover::after { opacity: .35; }
+    /* sorted desc: thin downward chevron — same footprint as diamond */
+    th.sortable.sort-desc::after {
+      width: 6px;
+      height: 6px;
+      border: solid var(--accent);
+      border-width: 0 1.5px 1.5px 0;
+      transform: rotate(45deg) translateY(-1px);
+      opacity: 1;
+    }
+    /* sorted asc: thin upward chevron — same footprint as diamond */
+    th.sortable.sort-asc::after {
+      width: 6px;
+      height: 6px;
+      border: solid var(--accent);
+      border-width: 0 1.5px 1.5px 0;
+      transform: rotate(-135deg) translateY(-1px);
+      opacity: 1;
+    }
     tr { cursor: pointer; }
     tr:hover td { background: #fffdf8; }
     tr.active td { background: #e9f3ee; }

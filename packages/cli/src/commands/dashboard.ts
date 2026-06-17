@@ -50,6 +50,7 @@ type DashboardVideo = {
   title: string;
   originalTitle: string | null;
   originalDate: string | null;
+  uploadDate: string | null;
   updatedAt: string | null;
   articleDir: string | null;
   downloadDir: string | null;
@@ -247,12 +248,23 @@ export const scanDashboardVideos = async (input: {
 
     // Read download time: use download dir creation time (birthtime on macOS, ctime elsewhere)
     let originalDate: string | null = null;
+    let uploadDate: string | null = null;
     if (hasDownloadDir) {
       try {
         const s = await stat(downloadDir);
         const ts = s.birthtimeMs ?? s.ctimeMs;
         originalDate = new Date(ts).toISOString();
       } catch { /* no stat */ }
+      // Read upload_date from metadata (format: YYYYMMDD)
+      try {
+        const meta = await readJson(path.join(downloadDir, "metadata.json"));
+        if (isRecord(meta) && typeof meta["upload_date"] === "string") {
+          const d = meta["upload_date"].trim();
+          if (/^\d{8}$/.test(d)) {
+            uploadDate = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+          }
+        }
+      } catch { /* no metadata */ }
     }
 
     videos.push({
@@ -260,6 +272,7 @@ export const scanDashboardVideos = async (input: {
       title,
       originalTitle: originalTitle !== null && originalTitle !== title ? originalTitle : null,
       originalDate,
+      uploadDate,
       updatedAt,
       articleDir: hasArticleDir ? articleDir : null,
       downloadDir: hasDownloadDir ? downloadDir : null,

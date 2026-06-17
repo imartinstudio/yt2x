@@ -76,7 +76,7 @@ const COVER_SYSTEM_PROMPT = [
   `Output ONLY the English prompt, 150-300 words. No markdown, no JSON.`,
 ].join("\n");
 
-const ILLUSTRATION_SYSTEM_PROMPT = [
+const _ILLUSTRATION_SYSTEM_PROMPT = [
   `You are creating illustration prompts following the sketch-knowledge-kit visual system.`,
   ``,
   `Visual identity: Warm paper texture. Black marker/ink linework, hand-drawn. Anthropic orange (#E07030) as accent only. Hand-drawn typography. Generous whitespace. Slight scanned feel. Clean, educational editorial quality.`,
@@ -91,28 +91,41 @@ const ILLUSTRATION_SYSTEM_PROMPT = [
   `Output ONLY the English prompt, 150-300 words. No markdown, no JSON.`,
 ].join("\n");
 
-const splitBodyIntoSections = (body: string): string[] => {
-  const raw = body.split(/\n\n(?=#|【|[A-Z一-鿿]{2,}[：:])/);
-  if (raw.length >= 3) return raw.filter((s) => s.trim().length > 0);
-  const parts = body.split(/\n{2,}/).filter((s) => s.trim().length > 0);
-  if (parts.length <= 2) return parts;
-  const merged: string[] = [];
-  let buf = "";
-  for (const part of parts) {
-    if (buf.length + part.length < 400) {
-      buf = buf.length > 0 ? buf + "\n\n" + part : part;
-    } else {
-      if (buf.length > 0) merged.push(buf);
-      buf = part;
+const splitBodyIntoSections = (body: string, platform?: string): string[] => {
+  // XHS articles use **bold** headers + --- dividers, NOT ## headings.
+  // Detect XHS format: has **bold** markers and fewer ## headings than --- dividers.
+  const isXhsFormat = platform === "xiaohongshu" || (
+    (body.match(/\*\*[^*]+\*\*/g)?.length ?? 0) >= 2 &&
+    (body.match(/^##\s/gm)?.length ?? 0) < (body.match(/^---$/gm)?.length ?? 0)
+  );
+
+  if (isXhsFormat) {
+    // Split on --- dividers, then on **bold** headers within each block
+    const rawSections = body.split(/\n---\n/);
+    const sections: string[] = [];
+    for (const raw of rawSections) {
+      const trimmed = raw.trim();
+      if (!trimmed) continue;
+      // Split on lines that START with **bold header**
+      const subBlocks = trimmed.split(/\n(?=\*\*[^*]+\*\*)/);
+      for (const block of subBlocks) {
+        const b = block.trim();
+        if (!b) continue;
+        sections.push(b);
+      }
     }
+    return sections.length > 0 ? sections : [body.trim()].filter((s) => s.length > 0);
   }
-  if (buf.length > 0) merged.push(buf);
-  return merged;
+
+  // Standard format: split on ## headings
+  const headingRe = /^(?=##\s)/m;
+  const raw = body.split(headingRe);
+  return raw.map((s) => s.trim()).filter((s) => s.length > 0);
 };
 
 // ── HTML render ──
 
-const renderPreviewHtml = (
+const _renderPreviewHtml = (
   title: string,
   platformLabel: string,
   platformSpec: PlatformSpec,
@@ -230,74 +243,299 @@ function copyAll() {
 export const previewExistingArticleImages = async (
   articleDir: string,
   platform: string,
+  promptMap?: Map<number, string>,
 ): Promise<{ html: string; coverCount: number; illCount: number } | null> => {
-  const readdir = (await import("node:fs/promises")).readdir;
+  const { readdir, readFile: rf } = await import("node:fs/promises");
   const imageDir = path.join(articleDir, "images");
   let entries: string[] = [];
-  try { entries = await readdir(imageDir); } catch { return null; }
+  try { entries = await readdir(imageDir); } catch { entries = []; }
+  const imageSet = new Set(entries);
 
-  const covers = entries.filter((f) => /^cover\.(png|webp|jpg|jpeg)/i.test(f));
-  const illustrations = entries.filter((f) => /\.(png|webp|jpg|jpeg)$/i.test(f) && !/^cover\./i.test(f));
+  // Read article text
+  const articleFiles: Record<string, string> = { x: "article.md", xiaohongshu: "xiaohongshu-article.md", bilibili: "bilibili-article.md", wechat: "article.md" };
+  const articleFile = articleFiles[platform] ?? "article.md";
+  let articleText = "";
+  let fellBackToMainArticle = false;
+  try { articleText = await rf(path.join(articleDir, articleFile), "utf8"); } catch {
+    try { articleText = await rf(path.join(articleDir, "article.md"), "utf8"); fellBackToMainArticle = true; } catch { /* no text */ }
+  }
+  if (!articleText) return null;
 
-  if (covers.length === 0 && illustrations.length === 0) return null;
+  // When XHS preview falls back to article.md (X's article), strip X image references
+  // because XHS image galleries require 3:4 portrait — X's 16:9 images don't fit.
+  if (platform === "xiaohongshu" && fellBackToMainArticle) {
+    articleText = articleText.replace(/!\[.*?\]\(images\/[^)]+\)\n?/g, "");
+    // also remove standalone cover/pairing image blocks in frontmatter-like regions
+    articleText = articleText.replace(/\*\*封面\/配图建议\*\*[\s\S]*?(?=\*\*[^*]+\*\*|$)/g, "");
+  }
 
-  const title = "已有图片预览";
+  // Parse title
+  const titleMatch = articleText.match(/^#\s+(.+)$/m);
+  const title = titleMatch?.[1] ?? "文章预览";
+  const articleTitleClean = title.replace(/\*\*/g, "");
   const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[platform] ?? platform;
+  const videoId = path.basename(articleDir);
+  const imgUrl = (f: string) => "/api/file-image?videoId=" + encodeURIComponent(videoId) + "&file=" + encodeURIComponent(f);
+  const imgExists = (f: string) => imageSet.has(f);
+  const imgRefRe = /!\[.*?\]\(images\/([^)]+)\)/g;
 
-  const coverCards = covers
-    .map(
-      (f) => `
-    <div class="card cover-card">
-      <div class="card-header"><span class="badge">封面</span></div>
-      <img src="/api/file-image?videoId=${encodeURIComponent(path.basename(articleDir))}&file=${encodeURIComponent(f)}" alt="${f}" style="width:100%;display:block;" />
-      <div class="card-label">${f}</div>
-    </div>`,
-    )
-    .join("\n");
+  // XHS image galleries require 3:4 portrait (1080×1440).
+  // X's 16:9 landscape cover/illustrations are NOT suitable — never reuse X images for XHS.
+  // Only show images explicitly referenced in the XHS article text itself.
 
-  const illCards = illustrations
-    .map(
-      (f) => `
-    <div class="card">
-      <div class="card-header"><span class="badge ill">插图</span></div>
-      <img src="/api/file-image?videoId=${encodeURIComponent(path.basename(articleDir))}&file=${encodeURIComponent(f)}" alt="${f}" style="width:100%;display:block;" />
-      <div class="card-label">${f}</div>
-    </div>`,
-    )
-    .join("\n");
+  // Parse sections. For XHS articles (which use **bold** headers + --- dividers), use different logic.
+  const isXhsArticle = platform === "xiaohongshu";
+  const sections: Array<{ heading: string; body: string; images: string[] }> = [];
+  let curHeading = "";
+  let curBody: string[] = [];
+  let curImages: string[] = [];
+  let afterTitle = false;
+  const lines = articleText.split("\n");
 
-  const html = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${title} - ${platformLabel} 图片预览</title>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, "PingFang SC", sans-serif; background: #f5f5f5; }
-.toolbar { position: fixed; top: 0; left: 0; right: 0; background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); border-bottom: 1px solid #e0e0e0; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; z-index: 100; }
-.toolbar h2 { font-size: 17px; color: #333; }
-.toolbar span { font-size: 12px; color: #999; }
-.container { max-width: 680px; margin: 72px auto 40px; padding: 0 16px; }
-.card { background: #fff; border-radius: 12px; overflow: hidden; margin-bottom: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
-.cover-card { border-left: 3px solid #E07030; }
-.card-header { padding: 12px 16px 4px; }
-.badge { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; background: #E07030; color: #fff; }
-.badge.ill { background: #0e6f5c; }
-.card-label { padding: 4px 16px 12px; font-size: 12px; color: #999; }
-.note { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 16px; font-size: 13px; color: #666; line-height: 1.6; }
-.note a { color: #E07030; }
-</style>
-</head>
-<body>
-<div class="toolbar"><h2>${title}</h2><span>${platformLabel} · 已有图片 ${covers.length} 封面 + ${illustrations.length} 插图</span></div>
-<div class="container">
-<div class="note">📌 以下图片来自文章已生成的封面和插图。如需通过 AI 重新生成 prompt 和图片，删除此预览后重新点「排版」。</div>
-${coverCards}${illCards}
-</div>
-</body>
-</html>`;
+  if (isXhsArticle) {
+    // XHS: split on `---` first, then on `**bold headers**` within each block
+    const rawSections = articleText.split(/\n---\n/);
+    for (const raw of rawSections) {
+      const trimmed = raw.trim();
+      if (!trimmed) continue;
+      // Split on lines that START with **bold header**
+      const subBlocks = trimmed.split(/\n(?=\*\*[^*]+\*\*)/);
+      for (const block of subBlocks) {
+        const b = block.trim();
+        if (!b) continue;
+        const boldMatch = b.match(/^\*\*(.+?)\*\*/);
+        const heading = boldMatch
+          ? boldMatch[1]!.replace(/[*_#`~]/g, "").trim()
+          : "";
+        const body = boldMatch ? b.slice(boldMatch[0]!.length).trim() : b;
+        const imgs: string[] = [];
+        let m: RegExpExecArray | null;
+        while ((m = imgRefRe.exec(b)) !== null) { imgs.push(m[1]!); }
+        sections.push({ heading, body, images: imgs });
+      }
+    }
+  } else {
+    // X / Bilibili: split on ## headings
+    for (const line of lines) {
+      if (/^#\s/.test(line) && !afterTitle) { afterTitle = true; continue; }
+      if (/^##\s/.test(line)) {
+        if (curBody.length > 0 || curHeading || curImages.length > 0) {
+          sections.push({ heading: curHeading, body: curBody.join("\n").trim(), images: [...curImages] });
+        }
+        curHeading = line.replace(/^##\s+/, "").replace(/\*\*/g, "");
+        curBody = []; curImages = [];
+      } else if (afterTitle) {
+        const m = imgRefRe.exec(line);
+        if (m) { curImages.push(m[1]!); } else { curBody.push(line); }
+      }
+    }
+    if (curBody.length > 0 || curHeading || curImages.length > 0) {
+      sections.push({ heading: curHeading, body: curBody.join("\n").trim(), images: [...curImages] });
+    }
+  }
 
-  return { html, coverCount: covers.length, illCount: illustrations.length };
+  // First image in article = cover
+  const allImgs: string[] = [];
+  for (const sec of sections) { for (const img of sec.images) { if (imgExists(img)) allImgs.push(img); } }
+  const coverImg = allImgs.length > 0 ? allImgs[0]! : null;
+  const usedImgs = new Set<string>(coverImg ? [coverImg] : []);
+
+  // Count covers/illustrations for stats
+  const coverCount = coverImg ? 1 : 0;
+  const illCount = entries.filter(function (f) { return /\.(png|webp|jpg|jpeg)$/i.test(f) && !/^cover\./i.test(f); }).length;
+  const hasSectionImages = allImgs.length > 1;
+  const needsFormatNote = !promptMap && !hasSectionImages;
+
+  const promptActions = function (promptText: string, opts?: { name?: string; label?: string }) {
+    const nameHtml = opts?.name
+      ? '<div class="ph-name">' + opts.name.replace(/</g, "&lt;") + '</div>'
+      : '';
+    const labelText = opts?.label ?? '📷 待生成 · 3:4';
+    return '<div class="ph-box">' + promptText.replace(/</g, "&lt;").slice(0, 200) + '</div>' +
+      nameHtml +
+      '<div class="ph-row"><span class="ph-label">' + labelText + '</span>' +
+      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + promptText.replace(/"/g, "&quot;").replace(/\n/g, "\\n") + '">📋 复制</button>' +
+      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(promptText) + '" target="_blank">🤖 ChatGPT</a></span></div>';
+  };
+
+  const isXhs = platform === "xiaohongshu";
+  let sectionHtml = "";
+
+  if (isXhs) {
+    // ── XHS layout: image gallery (top) + longform article (bottom) ──
+
+    // Try reading prompts.json for cover prompt + illustration filenames
+    let xhsCoverPrompt = "";
+    let xhsCoverFilename = "cover.png";
+    let xhsCoverName = "封面";
+    const xhsIllNames = new Map<number, string>();
+    try {
+      const promptsPath = path.join(articleDir, "xiaohongshu-format", "prompts.json");
+      const promptsRaw = await rf(promptsPath, "utf8");
+      const prompts = JSON.parse(promptsRaw) as {
+        coverPrompts?: Array<{ prompt: string; filename?: string; name?: string }>;
+        illustrationPrompts?: Array<{ index: number; prompt: string; filename?: string; name?: string }>;
+      };
+      xhsCoverPrompt = prompts.coverPrompts?.[0]?.prompt ?? "";
+      xhsCoverFilename = prompts.coverPrompts?.[0]?.filename ?? "cover.png";
+      xhsCoverName = prompts.coverPrompts?.[0]?.name ?? "封面";
+      for (const il of (prompts.illustrationPrompts ?? [])) {
+        if (typeof il.name === "string" && il.name.trim().length > 0) {
+          xhsIllNames.set(il.index, il.name.trim());
+        }
+      }
+    } catch { /* no prompts.json yet */ }
+
+    // Gallery: collect cover + all section images + prompt placeholders
+    const galleryItems: string[] = [];
+    if (coverImg) {
+      galleryItems.push('<div class="xhs-slide"><img src="' + imgUrl(coverImg) + '" alt="封面" class="xhs-slide-img" /><div class="img-label">封面 · ' + xhsCoverFilename + '</div></div>');
+    } else if (xhsCoverPrompt) {
+      galleryItems.push('<div class="xhs-slide xhs-slide-placeholder xhs-slide-cover">' + promptActions(xhsCoverPrompt, { name: xhsCoverName, label: '🎨 封面 · 3:4' }) + '</div>');
+    }
+    for (let i = 0; i < sections.length; i++) {
+      const sec = sections[i]!;
+      const imgs = sec.images.filter(function (f) { return imgExists(f) && !usedImgs.has(f); });
+      for (const f of imgs) {
+        galleryItems.push('<div class="xhs-slide"><img src="' + imgUrl(f) + '" alt="' + f + '" class="xhs-slide-img" /><div class="img-label">' + f + '</div></div>');
+        usedImgs.add(f);
+      }
+      // Prompt placeholder for sections without images
+      const secPrompt = promptMap?.get(i);
+      if (secPrompt && imgs.length === 0) {
+        const nm = xhsIllNames.get(i) ?? ('插图 ' + (i + 1));
+        galleryItems.push('<div class="xhs-slide xhs-slide-placeholder">' + promptActions(secPrompt, { name: nm, label: '📷 3:4 竖版' }) + '</div>');
+      }
+    }
+    const galleryHtml = galleryItems.length > 0
+      ? '<div class="xhs-gallery"><div class="xhs-gallery-label">📷 图集 · ' + galleryItems.length + ' 张</div><div class="xhs-gallery-scroll">' + galleryItems.join("") + '</div></div>'
+      : "";
+
+    // Article text: collect all headings + body text
+    const articleBlocks: string[] = [];
+    for (const sec of sections) {
+      const h = sec.heading ? '<h3 class="xhs-sec-heading">' + sec.heading + '</h3>' : "";
+      const b = sec.body
+        ? '<div class="xhs-sec-body">' + sec.body.replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>") + '</div>'
+        : "";
+      if (h || b) articleBlocks.push('<div class="xhs-article-block">' + h + b + '</div>');
+    }
+    const articleHtml = articleBlocks.length > 0
+      ? '<div class="xhs-article">' + articleBlocks.join("") + '</div>'
+      : "";
+
+    sectionHtml = galleryHtml + articleHtml;
+  } else {
+    // ── X / Bilibili / WeChat: inline images per section ──
+    const coverHtml = coverImg
+      ? '<div class="cover-wrap"><img src="' + imgUrl(coverImg) + '" alt="封面" class="cover-img" /><div class="img-label">封面</div></div>'
+      : "";
+
+    sectionHtml = coverHtml + sections.map(function (sec, i) {
+      const h = sec.heading ? '<h3 class="sec-heading">' + sec.heading + '</h3>' : "";
+      const b = sec.body
+        ? '<div class="sec-body">' + sec.body.replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>") + '</div>'
+        : "";
+      const imgs = sec.images.filter(function (f) { return imgExists(f) && !usedImgs.has(f); });
+      const imgHtml = imgs.map(function (f) { usedImgs.add(f); return '<img src="' + imgUrl(f) + '" alt="' + f + '" class="sec-img" /><div class="img-label">' + f + '</div>'; }).join("");
+      const secPrompt = promptMap?.get(i);
+      const promptHtml = (secPrompt && imgs.length === 0)
+        ? '<div class="ph-box">' + secPrompt.replace(/</g, "&lt;").slice(0, 200) + '</div>' +
+          '<div class="ph-row"><span class="ph-label">📷 待生成</span>' +
+          '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + secPrompt.replace(/"/g, "&quot;") + '">📋 复制</button>' +
+          '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt) + '" target="_blank">🤖 ChatGPT</a></span></div>'
+        : "";
+      return '<div class="sec-block">' + h + '<div class="sec-body">' + b + '</div>' + imgHtml + promptHtml + '</div>';
+    }).join("");
+  }
+
+  // CSS
+  const isXhsCss = isXhs
+    ? [
+      "body{background:#fbf7f0;color:#2c2416}",
+      "body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(255,36,66,.03) 0%,transparent 70%);pointer-events:none;z-index:0}",
+      ".container{max-width:420px;margin:72px auto 48px;padding:0 16px;position:relative;z-index:1}",
+      // gallery
+      ".xhs-gallery{margin-bottom:24px}",
+      ".xhs-gallery-label{font-family:'Georgia','Noto Serif SC','Songti SC',serif;font-size:11px;color:#b8a99a;margin-bottom:12px;padding:0 4px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;display:flex;align-items:center;gap:8px}",
+      ".xhs-gallery-label::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,#d9cbb8,transparent)}",
+      ".xhs-gallery-scroll{display:flex;flex-direction:column;gap:12px}",
+      ".xhs-slide{background:#fffdf8;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);position:relative;transition:transform .2s ease,box-shadow .2s ease}",
+      ".xhs-slide:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(44,36,22,.08),0 2px 6px rgba(44,36,22,.05)}",
+      ".xhs-slide-placeholder{background:linear-gradient(168deg,#fffdf8 0%,#fdf9f2 40%,#faf4ea 100%);border:2px dashed #e8d5c0;padding:18px 14px 12px}",
+      ".xhs-slide-placeholder .ph-box{margin:0;width:100%;aspect-ratio:3/4;max-height:none;border-color:#e8d5c0;background:rgba(255,252,247,.7);overflow-y:auto;display:flex;align-items:center}",
+      ".xhs-slide-img{width:100%;display:block}",
+      // article
+      ".xhs-article{background:#fffdf8;border-radius:14px;padding:28px 20px;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);line-height:1.95;position:relative}",
+      ".xhs-article::before{content:'';position:absolute;top:0;left:20px;right:20px;height:3px;background:linear-gradient(90deg,#ff2442,#ff6b81,#ff2442);border-radius:0 0 3px 3px;opacity:.7}",
+      ".xhs-article-block+.xhs-article-block{margin-top:32px}",
+      ".xhs-sec-heading{font-family:'Georgia','Noto Serif SC','Songti SC',serif;font-size:17px;font-weight:700;color:#1a1008;margin-bottom:10px;letter-spacing:.01em;position:relative;padding-left:12px}",
+      ".xhs-sec-heading::before{content:'';position:absolute;left:0;top:4px;bottom:4px;width:3px;background:#ff2442;border-radius:2px}",
+      ".xhs-sec-body{font-size:14px;color:#4a3f33;letter-spacing:.01em}",
+      ".xhs-sec-body p{margin-bottom:14px}",
+      ".xhs-sec-body b,.xhs-sec-body strong{color:#1a1008;font-weight:650}",
+      // common
+      ".sec-heading{font-family:'Georgia','Noto Serif SC',serif;font-size:17px;font-weight:700;color:#1a1008;margin-bottom:10px}",
+      ".sec-body{font-size:14px;line-height:1.95;color:#4a3f33}",
+      ".sec-body p{margin-bottom:14px}",
+      ".img-label{padding:8px 14px;font-size:10px;color:#b8a99a;text-align:right;background:linear-gradient(180deg,rgba(255,252,247,0),#faf4ea);font-family:'Georgia',serif;letter-spacing:.03em}",
+      ".ph-box{background:linear-gradient(165deg,#fffdf8,#fdf9f2);border:2px dashed #e8d5c0;padding:18px 16px;font-size:12px;color:#6b5e4f;line-height:1.7;white-space:pre-wrap;max-height:200px;overflow-y:auto;border-radius:8px;font-family:'Georgia','Noto Serif SC',serif}",
+      ".ph-name{font-size:14px;color:#1a1008;font-weight:700;padding:10px 14px 0;text-align:center;letter-spacing:.02em}",
+      ".ph-row{display:flex;align-items:center;justify-content:space-between;padding:6px 14px 4px}",
+      ".ph-label{font-size:10px;color:#b8a99a;font-family:'SF Mono','ui-monospace',monospace;letter-spacing:.03em}",
+      ".ph-btns{display:flex;gap:8px}",
+      ".ph-copy,.ph-chatgpt{padding:4px 12px;font-size:11px;border-radius:6px;cursor:pointer;text-decoration:none;display:inline-block;font-weight:600;transition:all .15s ease}",
+      ".ph-copy{border:1px solid #d9cbb8;background:#fffdf8;color:#6b5e4f}.ph-copy:hover{background:#faf4ea;border-color:#c4a98a}",
+      ".ph-chatgpt{background:#ff2442;border:1px solid #ff2442;color:#fff}.ph-chatgpt:hover{background:#e01e38;border-color:#e01e38;box-shadow:0 2px 8px rgba(255,36,66,.25)}",
+      // toolbar overrides
+      ".toolbar{border-bottom-color:#e8d5c0;background:rgba(251,247,240,.92)}",
+      ".toolbar h2{font-family:'Georgia','Noto Serif SC',serif}",
+      ".note{background:#fffdf8;border:1px solid #e8d5c0;border-radius:10px;padding:14px 18px;margin-bottom:18px;font-size:12px;color:#8b8172;line-height:1.7;text-align:center}",
+    ].join("")
+    : [
+      "body{background:#f5f5f5}",
+      ".container{max-width:680px;margin:64px auto 40px;padding:0 16px}",
+      ".article-body{background:#fff;padding:32px 28px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);line-height:1.9}",
+      ".sec-block+.sec-block{margin-top:28px}",
+      ".sec-img{width:100%;display:block;margin:12px 0}",
+      ".cover-wrap{background:#fff;border-radius:8px;overflow:hidden;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}",
+      ".cover-img{width:100%;display:block}",
+      ".sec-heading{font-size:16px;font-weight:700;color:#111;margin-bottom:8px}",
+      ".sec-body{font-size:14px;line-height:1.9;color:#444}",
+      ".sec-body p{margin-bottom:12px}",
+      ".sec-body b,.sec-body strong{color:#111}",
+      ".img-label{padding:6px 12px;font-size:11px;color:#bbb;text-align:right;background:#fafafa}",
+      ".ph-box{background:linear-gradient(135deg,#faf8f3,#f5f1e8);border:2px dashed #e0d8c8;padding:16px 18px;font-size:12px;color:#666;line-height:1.6;white-space:pre-wrap;max-height:160px;overflow-y:auto}",
+      ".ph-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#fafafa;border-top:1px solid #f0f0f0}",
+      ".ph-label{font-size:11px;color:#999}",
+      ".ph-btns{display:flex;gap:6px}",
+      ".ph-copy,.ph-chatgpt{padding:3px 10px;font-size:11px;border-radius:4px;cursor:pointer;text-decoration:none;display:inline-block}",
+      ".ph-copy{border:1px solid #ddd;background:#fff;color:#666}.ph-copy:hover{background:#f0f0f0}",
+      ".ph-chatgpt{border:1px solid #74aa9c;background:#74aa9c;color:#fff}.ph-chatgpt:hover{background:#5c9082}",
+    ].join("");
+
+  const h = [];
+  h.push('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">');
+  h.push("<title>" + articleTitleClean + " - " + platformLabel + "</title>");
+  h.push("<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:#333}");
+  h.push(".toolbar{position:fixed;top:0;left:0;right:0;background:rgba(255,255,255,.95);backdrop-filter:blur(20px);border-bottom:1px solid #e0e0e0;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;z-index:100}");
+  h.push(".toolbar h2{font-size:15px;color:#333;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toolbar span{font-size:12px;color:#999}");
+  h.push(isXhsCss);
+  if (!isXhs) {
+    h.push(".note{background:#fff;border-radius:8px;padding:14px 20px;margin-bottom:16px;font-size:13px;color:#888;line-height:1.6}");
+  }
+  h.push("</style></head>");
+  h.push("<body><div class='toolbar'><h2>" + articleTitleClean + "</h2><span>" + platformLabel + (isXhs ? " · 图集+正文" : " · 图文预览") + "</span></div>");
+  const noteHtml = needsFormatNote
+    ? '<div class="note" style="background:#fff3e0;border:1px solid #E07030;text-align:center;font-size:14px;color:#E07030">📌 尚未排版，请先点击「排版」生成 prompt 和图片占位。</div>'
+    : isXhs
+      ? '<div class="note">📌 上图集 + 下正文。图片为 3:4 竖版，适合小红书图集滑动浏览。</div>'
+      : '<div class="note">📌 以下为文章图文预览。封面在上，正文按文章顺序展示，插图按 markdown 位置内联。</div>';
+  h.push('<div class="container">' + noteHtml);
+  h.push(isXhs ? sectionHtml : '<div class="article-body">' + sectionHtml + '</div>');
+  h.push("</div></body></html>");
+
+  return { html: h.join("\n"), coverCount, illCount };
 };
 
 // ── main orchestrator ──
@@ -325,15 +563,18 @@ export const orchestratePlatformPrompts = async (
 
   if (!title) {
     const match = input.articleMd.match(/^#\s+(.+)$/m);
-    title = match?.[1] ?? "";
+    title = (match?.[1] ?? "").replace(/\*\*/g, "");
   }
 
-  const sections = splitBodyIntoSections(body);
+  const sections = splitBodyIntoSections(body, input.platform);
   const files: string[] = [];
 
   // generate cover prompts
-  const coverPrompts: Array<{ label: string; prompt: string; size: string }> = [];
+  const coverPrompts: Array<{ label: string; prompt: string; size: string; filename: string; name: string }> = [];
   for (const coverSpec of spec.coverRatios) {
+    const slug = title.replace(/[^a-zA-Z0-9一-鿿]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).toLowerCase() || "cover";
+    const coverFilename = `cover-${slug}.png`;
+    const coverName = title.slice(0, 20) || "封面";
     const systemPrompt = COVER_SYSTEM_PROMPT;
     const userPrompt = [
       `Create a cover image prompt for ${coverSpec.label}.`,
@@ -353,30 +594,153 @@ export const orchestratePlatformPrompts = async (
     if (!prompt) {
       prompt = `Editorial cover illustration. sketch-knowledge-kit style — warm paper, black marker, orange accent. Title: "${title}". ${coverSpec.description}. Clean, minimal, educational.`;
     }
-    coverPrompts.push({ label: coverSpec.label, prompt, size: coverSpec.size });
+    coverPrompts.push({ label: coverSpec.label, prompt, size: coverSpec.size, filename: coverFilename, name: coverName });
   }
 
-  // generate illustration prompts
-  const illustrationPrompts: Array<{ index: number; text: string; prompt: string }> = [];
-  for (let i = 0; i < sections.length; i++) {
-    const sectionText = sections[i]!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 400);
+  // Find which sections already have images in the article markdown
+  const imgRefRe2 = /!\[.*?\]\(images\/([^)]+)\)/;
+  const sectionHasImage = sections.map((s) => imgRefRe2.test(s));
+  const sectionsNeedingPrompts = sections
+    .map((s, i) => ({ text: s, index: i }))
+    .filter((_, i) => !sectionHasImage[i]);
 
-    const userPrompt = [
-      `Create a sketch-knowledge-kit illustration prompt for section #${i + 1} of a ${spec.label} article.`,
+  // Generate illustration prompts ONLY for sections that don't already have images
+  const allSectionsText = sectionsNeedingPrompts
+    .map((s) => `[Section ${s.index + 1}] ${s.text.slice(0, 300)}`)
+    .join("\n\n---\n\n");
+
+  const illustrationPrompts: Array<{ index: number; text: string; prompt: string; filename: string; name: string }> = [];
+
+  if (sectionsNeedingPrompts.length > 0) {
+    const isXhsPlatform = input.platform === "xiaohongshu";
+    const batchUserPrompt = [
+      `You are creating illustration prompts for a ${spec.label} article following the sketch-knowledge-kit visual system.`,
       ``,
       `Article topic: ${title}`,
-      `Platform illustration ratio: ${spec.illustrationRatio}`,
+      `Sections needing illustrations: ${sectionsNeedingPrompts.length} (${sectionHasImage.filter(Boolean).length} sections already have images and are skipped)`,
+      `Required aspect ratio: ${spec.illustrationRatio}. EVERY prompt MUST specify this exact ratio and dimensions.`,
       ``,
-      `Section content:`,
-      `${sectionText}`,
+      `TASK:`,
+      `1. Review the sections below.`,
+      `2. Decide which sections TRULY need an illustration.`,
+      isXhsPlatform
+        ? `3. For each picked section, create one English prompt (150-300 words). Xiaohongshu is an image-gallery-first platform — aim for 6-9 illustrations total (cover + 5-8 body illustrations). Pick sections with the most visual potential: comparisons, workflows, layouts, configs, before/after, architecture. Even text-heavy sections can be illustrated with clever visual metaphors. Default to INCLUDE rather than SKIP.`
+        : `3. For each picked section, create one English prompt (150-300 words).`,
+      isXhsPlatform
+        ? `4. Cover the article comprehensively — each major topic deserves a visual.`
+        : `4. Most sections do NOT need illustrations. Err on the side of skipping.`,
+      ``,
+      `CRITICAL — Aspect ratio: Every "prompt" string MUST end with exactly this sentence: "Aspect ratio: ${spec.illustrationRatio}.". Do NOT omit it. Do NOT change it.`,
+      ``,
+      isXhsPlatform
+        ? `PICK generously: UI screenshots, before/after comparisons, dashboards, config panels, architecture diagrams, concept metaphors, workflow maps, tables as diagrams, code-to-output transformations. Only SKIP sections that are pure text conclusions, disclaimers, or tag lists.`
+        : `PICK ONLY sections with genuinely visual content: UI screenshots, before/after comparisons, dashboards, config panels, architecture diagrams.`,
+      isXhsPlatform
+        ? ``
+        : `SKIP everything else: concepts, introductions, conclusions, risk warnings, code blocks, prompt templates, lists, text explanations, usage tips.`,
+      ``,
+      `Return a JSON array. Each item: {"index": <N>, "filename": "<short-english-slug>.png", "name": "<中文简短描述>", "prompt": "<english prompt>"}.`,
+      `Filename rules: short English slug (2-5 words), lowercase, hyphens, ends with .png. Examples: "install-guide.png", "three-panel-layout.png".`,
+      `Name rules: short Chinese description (5-15 chars) summarizing the image topic. Examples: "安装流程图", "三栏布局对比", "Git 工作树并行开发".`,
+      `Return ONLY the JSON array, no markdown, no explanation.`,
+      ``,
+      `SECTIONS:`,
+      allSectionsText,
     ].join("\n");
 
-    let prompt = "";
-    try {
-      prompt = await callLlm(input.llm, input.llmModel, ILLUSTRATION_SYSTEM_PROMPT, userPrompt);
-    } catch { /* empty */ }
+    const BATCH_SYSTEM_PROMPT = [
+      `You select and create illustration prompts for article sections that need images.`,
+      `Visual: sketch-knowledge-kit — warm paper, black marker, orange accent, hand-drawn.`,
+      isXhsPlatform
+        ? `Xiaohongshu is an image-gallery platform. Generate prompts for 6-9 sections that have the most visual potential.`
+        : `Be selective: only pick sections with concrete visual content.`,
+      `CRITICAL: Every prompt MUST end with the exact sentence specifying the required aspect ratio.`,
+      `CRITICAL: Return ONLY a valid JSON array. Escape all double quotes inside prompt strings as \\". Do NOT use unescaped double quotes within string values.`,
+      `Each item MUST include "filename" and "name" fields. Example: [{"index":1,"filename":"install-guide.png","name":"安装流程图","prompt":"A hand-drawn illustration... Aspect ratio: 3:4 portrait (1080×1440 pixels)."}]`,
+    ].join("\n");
 
-    illustrationPrompts.push({ index: i, text: sectionText, prompt });
+    try {
+      const batchResp = await input.llm.chat({
+        model: input.llmModel,
+        messages: [
+          { role: "system", content: BATCH_SYSTEM_PROMPT },
+          { role: "user", content: batchUserPrompt },
+        ],
+        temperature: 0.7,
+        maxTokens: isXhsPlatform ? 16384 : 4096,
+      });
+      const raw = (batchResp.content ?? "").replace(/```(?:json)?\s*/g, "").replace(/```/g, "").trim();
+      const jsonMatch = raw.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]) as Array<{ index: number; prompt: string; filename?: string; name?: string }>;
+          for (const item of parsed) {
+            const idx = item.index - 1;
+            if (idx >= 0 && idx < sections.length && item.prompt && item.prompt.trim()) {
+              const filename = typeof item.filename === "string" && item.filename.trim().length > 0
+                ? item.filename.trim()
+                : `illus-${String(idx + 1).padStart(2, "0")}.png`;
+              const name = typeof item.name === "string" && item.name.trim().length > 0
+                ? item.name.trim()
+                : `插图 ${idx + 1}`;
+              illustrationPrompts.push({
+                index: idx,
+                text: sections[idx]!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 300),
+                prompt: item.prompt.trim(),
+                filename,
+                name,
+              });
+            }
+          }
+        } catch (jsonErr: unknown) {
+          process.stderr.write("batch illustration JSON parse error: " + (jsonErr instanceof Error ? jsonErr.message : String(jsonErr)) + "\n");
+          // Fallback: try to salvage individual {index, filename, prompt} objects
+          const objPattern = /\{\s*"index"\s*:\s*(\d+)\s*,[^}]*"prompt"\s*:\s*"([\s\S]*?)"\s*\}/g;
+          let fallbackMatch: RegExpExecArray | null;
+          while ((fallbackMatch = objPattern.exec(raw)) !== null) {
+            try {
+              const idx = parseInt(fallbackMatch[1]!, 10) - 1;
+              const prompt = fallbackMatch[2]!.replace(/\\"/g, '"').replace(/\\n/g, '\n');
+              // Try to extract filename from the match if present
+              const fnMatch = fallbackMatch[0].match(/"filename"\s*:\s*"([^"]+)"/);
+              const filename = fnMatch?.[1] ?? `illus-${String(idx + 1).padStart(2, "0")}.png`;
+              const nmMatch = fallbackMatch[0].match(/"name"\s*:\s*"([^"]+)"/);
+              const name = nmMatch?.[1] ?? `插图 ${idx + 1}`;
+              if (idx >= 0 && idx < sections.length && prompt.trim().length > 0) {
+                illustrationPrompts.push({
+                  index: idx,
+                  text: sections[idx]!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 300),
+                  prompt: prompt.trim(),
+                  filename,
+                  name,
+                });
+              }
+            } catch { /* skip malformed item */ }
+          }
+        }
+      }
+    } catch (err: unknown) {
+      process.stderr.write("batch illustration prompt error: " + (err instanceof Error ? err.message : String(err)) + "\n");
+    }
+  }
+
+  // Post-process: ensure every prompt includes the required aspect ratio
+  const ratioSuffix = spec.illustrationRatio.includes("3:4")
+    ? " Aspect ratio: 3:4 portrait (1080×1440 pixels)."
+    : spec.illustrationRatio.includes("16:9")
+      ? " Aspect ratio: 16:9 landscape."
+      : "";
+  if (ratioSuffix) {
+    for (const il of illustrationPrompts) {
+      if (!il.prompt.includes("Aspect ratio") && !il.prompt.includes("aspect ratio")) {
+        il.prompt = il.prompt.trimEnd() + ratioSuffix;
+      }
+    }
+    for (const cp of coverPrompts) {
+      if (!cp.prompt.includes("Aspect ratio") && !cp.prompt.includes("aspect ratio")) {
+        cp.prompt = cp.prompt.trimEnd() + ratioSuffix;
+      }
+    }
   }
 
   // save prompts.json
@@ -390,9 +754,206 @@ export const orchestratePlatformPrompts = async (
   await writeFile(promptsPath, JSON.stringify(promptsData, null, 2), "utf8");
   files.push(promptsPath);
 
-  // render HTML
+  // Build prompt lookup: section index → prompt text
+  const promptMap = new Map<number, string>();
+  const nameMap = new Map<number, string>();
+  for (const il of illustrationPrompts) {
+    promptMap.set(il.index, il.prompt);
+    nameMap.set(il.index, il.name);
+  }
+
+  // Render HTML: article sections with inline prompt placeholders
   const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[input.platform] ?? input.platform;
-  const html = renderPreviewHtml(title, platformLabel, spec, coverPrompts, illustrationPrompts);
+  const promptActions = function (promptText: string, label: string, sizeHint: string, name?: string) {
+    const encoded = encodeURIComponent(promptText);
+    const nameHtml = name
+      ? '<div class="ph-name">' + name.replace(/</g, "&lt;") + '</div>'
+      : '';
+    return '<div class="ph-box">' + promptText.replace(/</g, "&lt;") + '</div>' +
+      nameHtml +
+      '<div class="ph-row"><span class="ph-label">' + label + ' · ' + sizeHint + '</span>' +
+      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + promptText.replace(/"/g, "&quot;").replace(/\n/g, "\\n") + '">📋 复制</button>' +
+      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encoded + '" target="_blank">🤖 ChatGPT</a></span></div>';
+  };
+
+  // Extract image filenames from markdown sections
+  const sectionImages: string[][] = sections.map(function (s) {
+    const imgs: string[] = [];
+    let m: RegExpExecArray | null;
+    const re = /!\[.*?\]\(images\/([^)]+)\)/g;
+    while ((m = re.exec(s)) !== null) { imgs.push(m[1]!); }
+    return imgs;
+  });
+
+  const isXhs2 = input.platform === "xiaohongshu";
+  const videoId2 = path.basename(articleDir);
+  const imgUrl2 = function (f: string) { return "/api/file-image?videoId=" + encodeURIComponent(videoId2) + "&file=" + encodeURIComponent(f); };
+
+  let sectionBlocks: string;
+
+  if (isXhs2) {
+    // ── XHS layout: image gallery (top) + longform article (bottom) ──
+    const galleryItems: string[] = [];
+
+    // Cover
+    if (coverPrompts.length > 0) {
+      const firstSectionImgs = sectionImages[0] ?? [];
+      const coverFile = firstSectionImgs.length > 0 ? firstSectionImgs[0]! : null;
+      const coverNm = coverPrompts[0]!.name ?? "封面";
+      if (coverFile) {
+        galleryItems.push('<div class="xhs-slide"><img src="' + imgUrl2(coverFile) + '" alt="封面" class="xhs-slide-img" /><div class="img-label">封面</div></div>');
+      } else {
+        galleryItems.push('<div class="xhs-slide xhs-slide-placeholder">' + promptActions(coverPrompts[0]!.prompt, '🎨 封面', coverPrompts[0]!.size, coverNm) + '</div>');
+      }
+    }
+
+    // Section images + prompt placeholders
+    const allSectionImgs = new Set<string>();
+    for (const imgs of sectionImages) { for (const f of imgs) { allSectionImgs.add(f); } }
+    for (let i = 0; i < sections.length; i++) {
+      const imgs = sectionImages[i]!;
+      for (const f of imgs) {
+        galleryItems.push('<div class="xhs-slide"><img src="' + imgUrl2(f) + '" alt="' + f + '" class="xhs-slide-img" /><div class="img-label">' + f + '</div></div>');
+      }
+      // Prompt placeholder for sections that have a prompt but no image
+      const promptText = promptMap.get(i);
+      if (promptText && imgs.length === 0) {
+        const nm = nameMap.get(i) ?? ('插图 ' + (i + 1));
+        galleryItems.push('<div class="xhs-slide xhs-slide-placeholder">' + promptActions(promptText, '📷 3:4 竖版', '3:4', nm) + '</div>');
+      }
+    }
+
+    const galleryHtml = galleryItems.length > 0
+      ? '<div class="xhs-gallery"><div class="xhs-gallery-label">📷 图集 · ' + galleryItems.length + ' 张</div><div class="xhs-gallery-scroll">' + galleryItems.join("") + '</div></div>'
+      : "";
+
+    // Article text
+    const articleBlocks: string[] = [];
+    for (let i = 0; i < sections.length; i++) {
+      const secText = sections[i]!;
+      const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 500);
+      const headingMatch = clean.match(/^(.+?)[：:\n]/);
+      const heading = headingMatch ? headingMatch[1]!.slice(0, 40) : "";
+      const body = heading ? clean.slice(heading.length).replace(/^[：:\s]+/, "") : clean;
+      const headingHtml = heading ? '<h3 class="xhs-sec-heading">' + heading + '</h3>' : "";
+      const bodyClean = body
+        .replace(/!\[.*?\]\(images\/[^)]+\)/g, "")
+        .replace(/```[\s\S]*?```/g, "")
+        .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+        .replace(/\n/g, "<br>");
+      const bodyHtml = bodyClean ? '<div class="xhs-sec-body">' + bodyClean + '</div>' : "";
+      if (headingHtml || bodyHtml) articleBlocks.push('<div class="xhs-article-block">' + headingHtml + bodyHtml + '</div>');
+    }
+    const articleHtml = articleBlocks.length > 0
+      ? '<div class="xhs-article">' + articleBlocks.join("") + '</div>'
+      : "";
+
+    sectionBlocks = galleryHtml + articleHtml;
+  } else {
+    // ── X / Bilibili / WeChat: inline images per section ──
+    let coverHtml = "";
+    if (coverPrompts.length > 0) {
+      const firstSectionImgs = sectionImages[0] ?? [];
+      const coverFile = firstSectionImgs.length > 0 ? firstSectionImgs[0]! : null;
+      if (coverFile) {
+        coverHtml = '<div class="cover-wrap"><img src="' + imgUrl2(coverFile) + '" alt="封面" class="cover-img" /><div class="img-label">封面</div></div>';
+      } else {
+        coverHtml = '<div class="cover-wrap">' + promptActions(coverPrompts[0]!.prompt, '封面', coverPrompts[0]!.size) + '</div>';
+      }
+    }
+    sectionBlocks = coverHtml + sections.map(function (secText: string, i: number) {
+      const promptText = promptMap.get(i);
+      const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 500);
+      const headingMatch = clean.match(/^(.+?)[：:\n]/);
+      const heading = headingMatch ? headingMatch[1]!.slice(0, 40) : "";
+      const body = heading ? clean.slice(heading.length).replace(/^[：:\s]+/, "") : clean;
+      const headingHtml = heading ? '<h3 class="sec-heading">' + heading + '</h3>' : "";
+      const bodyClean = body
+        .replace(/!\[.*?\]\(images\/[^)]+\)/g, "")
+        .replace(/```[\s\S]*?```/g, "")
+        .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+        .replace(/\n/g, "<br>");
+      const bodyHtml = bodyClean ? '<div class="sec-body">' + bodyClean + '</div>' : "";
+      const existingImgs = sectionImages[i]!.map(function (f) {
+        return '<img src="' + imgUrl2(f) + '" alt="' + f + '" class="sec-img" /><div class="img-label">' + f + '</div>';
+      }).join("");
+      const promptHtml = promptText
+        ? promptActions(promptText, '📷 插图 ' + (i + 1), '16:9')
+        : "";
+      return '<div class="sec-block">' + headingHtml + '<div class="sec-body">' + bodyHtml + '</div>' + existingImgs + promptHtml + '</div>';
+    }).join("");
+  }
+
+  const isXhsCss2 = isXhs2
+    ? [
+      "body{background:#fbf7f0;color:#2c2416}",
+      "body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(255,36,66,.03) 0%,transparent 70%);pointer-events:none;z-index:0}",
+      ".container{max-width:420px;margin:72px auto 48px;padding:0 16px;position:relative;z-index:1}",
+      ".xhs-gallery{margin-bottom:24px}",
+      ".xhs-gallery-label{font-family:'Georgia','Noto Serif SC','Songti SC',serif;font-size:11px;color:#b8a99a;margin-bottom:12px;padding:0 4px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;display:flex;align-items:center;gap:8px}",
+      ".xhs-gallery-label::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,#d9cbb8,transparent)}",
+      ".xhs-gallery-scroll{display:flex;flex-direction:column;gap:12px}",
+      ".xhs-slide{background:#fffdf8;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);position:relative;transition:transform .2s ease,box-shadow .2s ease}",
+      ".xhs-slide:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(44,36,22,.08),0 2px 6px rgba(44,36,22,.05)}",
+      ".xhs-slide-placeholder{background:linear-gradient(168deg,#fffdf8 0%,#fdf9f2 40%,#faf4ea 100%);border:2px dashed #e8d5c0;padding:18px 14px 12px}",
+      ".xhs-slide-placeholder .ph-box{margin:0;width:100%;aspect-ratio:3/4;max-height:none;border-color:#e8d5c0;background:rgba(255,252,247,.7);overflow-y:auto;display:flex;align-items:center}",
+      ".xhs-slide-img{width:100%;display:block}",
+      ".xhs-article{background:#fffdf8;border-radius:14px;padding:28px 20px;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);line-height:1.95;position:relative}",
+      ".xhs-article::before{content:'';position:absolute;top:0;left:20px;right:20px;height:3px;background:linear-gradient(90deg,#ff2442,#ff6b81,#ff2442);border-radius:0 0 3px 3px;opacity:.7}",
+      ".xhs-article-block+.xhs-article-block{margin-top:32px}",
+      ".xhs-sec-heading{font-family:'Georgia','Noto Serif SC','Songti SC',serif;font-size:17px;font-weight:700;color:#1a1008;margin-bottom:10px;letter-spacing:.01em;position:relative;padding-left:12px}",
+      ".xhs-sec-heading::before{content:'';position:absolute;left:0;top:4px;bottom:4px;width:3px;background:#ff2442;border-radius:2px}",
+      ".xhs-sec-body{font-size:14px;color:#4a3f33;letter-spacing:.01em}",
+      ".xhs-sec-body p{margin-bottom:14px}",
+      ".xhs-sec-body b,.xhs-sec-body strong{color:#1a1008;font-weight:650}",
+      ".sec-heading{font-family:'Georgia','Noto Serif SC',serif;font-size:17px;font-weight:700;color:#1a1008;margin-bottom:10px}",
+      ".sec-body{font-size:14px;line-height:1.95;color:#4a3f33}",
+      ".sec-body p{margin-bottom:14px}",
+      ".sec-img{max-width:100%;height:auto;display:block}",
+      ".cover-img{max-width:100%;height:auto;display:block}",
+      ".img-label{padding:8px 14px;font-size:10px;color:#b8a99a;text-align:right;background:linear-gradient(180deg,rgba(255,252,247,0),#faf4ea);font-family:'Georgia',serif;letter-spacing:.03em}",
+    ].join("")
+    : [
+      "body{background:#f5f5f5}",
+      ".container{max-width:680px;margin:64px auto 40px;padding:0 16px}",
+      ".article-body{background:#fff;padding:32px 28px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);line-height:1.9}",
+      ".sec-block+.sec-block{margin-top:28px}",
+      ".sec-heading{font-size:16px;font-weight:700;color:#111;margin-bottom:8px}",
+      ".sec-body{font-size:14px;line-height:1.9;color:#444}",
+      ".sec-body p{margin-bottom:12px}",
+      ".sec-img{max-width:100%;height:auto;display:block;margin:12px 0}",
+      ".cover-wrap{background:#fff;border-radius:8px;overflow:hidden;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}",
+      ".cover-img{max-width:100%;height:auto;display:block}",
+      ".img-label{padding:6px 12px;font-size:11px;color:#bbb;text-align:right;background:#fafafa}",
+    ].join("");
+
+  const h2: string[] = [];
+  h2.push('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">');
+  h2.push("<title>" + title + " - " + platformLabel + " 编排</title>");
+  h2.push("<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:#333}");
+  h2.push(".toolbar{position:fixed;top:0;left:0;right:0;background:rgba(255,255,255,.95);backdrop-filter:blur(20px);border-bottom:1px solid #e0e0e0;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;z-index:100}");
+  h2.push(".toolbar h2{font-size:15px;color:#333;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toolbar span{font-size:12px;color:#999}");
+  h2.push(isXhsCss2);
+  h2.push(".ph-box{background:linear-gradient(165deg,#fffdf8,#fdf9f2);border:2px dashed #e8d5c0;padding:18px 16px;font-size:12px;color:#6b5e4f;line-height:1.7;white-space:pre-wrap;max-height:200px;overflow-y:auto;border-radius:8px}");
+  h2.push(".ph-name{font-size:14px;color:#1a1008;font-weight:700;padding:10px 14px 0;text-align:center;letter-spacing:.02em}");
+  h2.push(".ph-row{display:flex;align-items:center;justify-content:space-between;padding:6px 14px 4px}");
+  h2.push(".ph-label{font-size:10px;color:#b8a99a;font-family:'SF Mono','ui-monospace',monospace;letter-spacing:.03em}");
+  h2.push(".ph-btns{display:flex;gap:8px}");
+  h2.push(".ph-copy,.ph-chatgpt{padding:4px 12px;font-size:11px;border-radius:6px;cursor:pointer;text-decoration:none;display:inline-block;font-weight:600;transition:all .15s ease}");
+  h2.push(".ph-copy{border:1px solid #d9cbb8;background:#fffdf8;color:#6b5e4f}.ph-copy:hover{background:#faf4ea;border-color:#c4a98a}");
+  h2.push(".ph-chatgpt{background:#ff2442;border:1px solid #ff2442;color:#fff}.ph-chatgpt:hover{background:#e01e38;border-color:#e01e38;box-shadow:0 2px 8px rgba(255,36,66,.25)}");
+  h2.push(".copy-bar{text-align:center;padding:16px}.copy-bar button{padding:10px 24px;border:2px solid #E07030;background:#fff;color:#E07030;border-radius:8px;cursor:pointer;font-weight:600}</style></head>");
+  h2.push("<body><div class='toolbar'><h2>" + title + "</h2><span>" + platformLabel + (isXhs2 ? " · 图集+" + illustrationPrompts.length + "图/" + sections.length + "节" : " · " + illustrationPrompts.length + "图/" + sections.length + "节") + "</span></div>");
+  h2.push('<div class="container"><div class="note" style="background:#fff;border-radius:8px;padding:14px 20px;margin-bottom:16px;font-size:13px;color:#888;line-height:1.6">');
+  h2.push(isXhs2 ? '📌 上图集 + 下正文。虚线框为待生成图片的 3:4 prompt 占位，适合小红书图集滑动浏览。' : '📌 以下为文章图文编排预览。虚线框为待生成图片的 prompt 占位。');
+  h2.push('</div>');
+  h2.push(isXhs2 ? sectionBlocks : '<div class="article-body">' + sectionBlocks + '</div>');
+  const allPromptsJson = JSON.stringify({ coverPrompts, illustrationPrompts });
+  h2.push('<div class="copy-bar"><button onclick="var t=document.getElementById(\'all-prompts-data\').textContent;navigator.clipboard.writeText(t);this.textContent=\'✅ 已复制\';setTimeout(function(){this.textContent=\'📋 复制全部 Prompt JSON\'}.bind(this),2000)">📋 复制全部 Prompt JSON</button>');
+  h2.push('<script id="all-prompts-data" type="application/json">' + allPromptsJson.replace(/</g, "\\u003c") + '</script>');
+  h2.push("</body></html>");
+
+  const html = h2.join("\n");
   const htmlPath = path.join(outputDir, "orchestrate.html");
   await writeFile(htmlPath, html, "utf8");
   files.push(htmlPath);

@@ -81,6 +81,11 @@ export const DASHBOARD_STYLE = String.raw`    :root {
       cursor: pointer;
     }
     button.secondary { background: transparent; color: var(--ink); border-color: var(--line); }
+    button.loading { opacity: .7; cursor: wait; }
+    .dots span { animation: dotPulse 1.4s infinite; font-weight: 700; }
+    .dots span:nth-child(2) { animation-delay: .2s; }
+    .dots span:nth-child(3) { animation-delay: .4s; }
+    @keyframes dotPulse { 0%,80%,100% { opacity: 0; } 40% { opacity: 1; } }
     button.ghost { background: transparent; color: var(--muted); border-color: transparent; padding: 6px 7px; }
 
     main {
@@ -145,7 +150,14 @@ export const DASHBOARD_STYLE = String.raw`    :root {
       color: #8d8b80;
       font-size: 11px;
       margin-top: 2px;
+      cursor: pointer;
+      transition: color .2s;
     }
+    .video-id:hover { color: #333; }
+    .video-id::after { content: " 📋"; opacity: 0; transition: opacity .2s; font-size: 10px; }
+    .video-id:hover::after { opacity: .5; }
+    .video-id.copied { color: #0e6f5c; }
+    .video-id.copied::after { content: " ✅ 已复制"; opacity: 1; }
     .date { color: var(--muted); white-space: nowrap; font-size: 12px; }
     .pill {
       display: inline-flex;

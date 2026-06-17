@@ -351,7 +351,7 @@ export const previewExistingArticleImages = async (
       ? '<div class="ph-name">' + opts.name.replace(/</g, "&lt;") + '</div>'
       : '';
     const labelText = opts?.label ?? '📷 待生成 · 3:4';
-    return '<div class="ph-box">' + promptText.replace(/</g, "&lt;").slice(0, 200) + '</div>' +
+    return '<div class="ph-box">' + promptText.replace(/</g, "&lt;") + '</div>' +
       nameHtml +
       '<div class="ph-row"><span class="ph-label">' + labelText + '</span>' +
       '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + promptText.replace(/"/g, "&quot;").replace(/\n/g, "\\n") + '">📋 复制</button>' +
@@ -440,7 +440,7 @@ export const previewExistingArticleImages = async (
       const imgHtml = imgs.map(function (f) { usedImgs.add(f); return '<img src="' + imgUrl(f) + '" alt="' + f + '" class="sec-img" /><div class="img-label">' + f + '</div>'; }).join("");
       const secPrompt = promptMap?.get(i);
       const promptHtml = (secPrompt && imgs.length === 0)
-        ? '<div class="ph-box">' + secPrompt.replace(/</g, "&lt;").slice(0, 200) + '</div>' +
+        ? '<div class="ph-box">' + secPrompt.replace(/</g, "&lt;") + '</div>' +
           '<div class="ph-row"><span class="ph-label">📷 待生成</span>' +
           '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + secPrompt.replace(/"/g, "&quot;") + '">📋 复制</button>' +
           '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt) + '" target="_blank">🤖 ChatGPT</a></span></div>'
@@ -463,7 +463,7 @@ export const previewExistingArticleImages = async (
       ".xhs-slide{background:#fffdf8;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);position:relative;transition:transform .2s ease,box-shadow .2s ease}",
       ".xhs-slide:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(44,36,22,.08),0 2px 6px rgba(44,36,22,.05)}",
       ".xhs-slide-placeholder{background:linear-gradient(168deg,#fffdf8 0%,#fdf9f2 40%,#faf4ea 100%);border:2px dashed #e8d5c0;padding:18px 14px 12px}",
-      ".xhs-slide-placeholder .ph-box{margin:0;width:100%;aspect-ratio:3/4;max-height:none;border-color:#e8d5c0;background:rgba(255,252,247,.7);overflow-y:auto;display:flex;align-items:center}",
+      ".xhs-slide-placeholder .ph-box{margin:0;width:100%;aspect-ratio:3/4;max-height:none;border-color:#e8d5c0;background:rgba(255,252,247,.7);overflow-y:auto;padding:12px 12px;font-size:11px;line-height:1.55}",
       ".xhs-slide-img{width:100%;display:block}",
       // article
       ".xhs-article{background:#fffdf8;border-radius:14px;padding:28px 20px;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);line-height:1.95;position:relative}",
@@ -896,7 +896,7 @@ export const orchestratePlatformPrompts = async (
       ".xhs-slide{background:#fffdf8;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);position:relative;transition:transform .2s ease,box-shadow .2s ease}",
       ".xhs-slide:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(44,36,22,.08),0 2px 6px rgba(44,36,22,.05)}",
       ".xhs-slide-placeholder{background:linear-gradient(168deg,#fffdf8 0%,#fdf9f2 40%,#faf4ea 100%);border:2px dashed #e8d5c0;padding:18px 14px 12px}",
-      ".xhs-slide-placeholder .ph-box{margin:0;width:100%;aspect-ratio:3/4;max-height:none;border-color:#e8d5c0;background:rgba(255,252,247,.7);overflow-y:auto;display:flex;align-items:center}",
+      ".xhs-slide-placeholder .ph-box{margin:0;width:100%;aspect-ratio:3/4;max-height:none;border-color:#e8d5c0;background:rgba(255,252,247,.7);overflow-y:auto;padding:12px 12px;font-size:11px;line-height:1.55}",
       ".xhs-slide-img{width:100%;display:block}",
       ".xhs-article{background:#fffdf8;border-radius:14px;padding:28px 20px;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);line-height:1.95;position:relative}",
       ".xhs-article::before{content:'';position:absolute;top:0;left:20px;right:20px;height:3px;background:linear-gradient(90deg,#ff2442,#ff6b81,#ff2442);border-radius:0 0 3px 3px;opacity:.7}",

@@ -57,6 +57,7 @@ type DashboardVideo = {
   platforms: Record<
     PlatformKey,
     {
+      status: "empty" | "draft" | "formatted" | "published" | "failed";
       generated: boolean;
       published: boolean;
       url: string;
@@ -222,17 +223,27 @@ export const scanDashboardVideos = async (input: {
       const hasFormattedWechat = formatPaths !== null
         && (await fileExists(formatPaths.htmlPath))
         && (await fileExists(formatPaths.previewPath));
+      const generated = files.length > 0 || published || hasFormattedWechat;
+      const fmtStatus: "none" | "formatted" | "failed" = state.formatStatus === "failed"
+        ? "failed"
+        : state.formatStatus === "formatted" || hasFormattedWechat
+          ? "formatted"
+          : "none";
+      // Derive unified status: published > failed > formatted > draft > empty
+      let pstatus: "empty" | "draft" | "formatted" | "published" | "failed" = "empty";
+      if (published) pstatus = "published";
+      else if (fmtStatus === "failed") pstatus = "failed";
+      else if (fmtStatus === "formatted") pstatus = "formatted";
+      else if (generated) pstatus = "draft";
+
       platforms[platform.key] = {
-        generated: files.length > 0 || published || hasFormattedWechat,
+        status: pstatus,
+        generated,
         published,
         url: typeof state.url === "string" ? state.url : "",
         note: typeof state.note === "string" ? state.note : "",
         files,
-        formatStatus: state.formatStatus === "failed"
-          ? "failed"
-          : state.formatStatus === "formatted" || hasFormattedWechat
-            ? "formatted"
-            : "none",
+        formatStatus: fmtStatus,
         formatTheme: typeof state.formatTheme === "string" ? state.formatTheme : "",
         formattedAt: typeof state.formattedAt === "string" ? state.formattedAt : null,
         htmlPath: typeof state.htmlPath === "string" ? state.htmlPath : formatPaths?.htmlPath ?? "",
@@ -508,6 +519,27 @@ const handleDashboardRequest = async (
     const filePath = kind === "html" ? paths.htmlPath : paths.previewPath;
     try {
       let html = await readFile(filePath, "utf8");
+
+      // Inject prompt placeholders if prompts.json exists (no images → generated prompts)
+      const promptsPath = path.join(path.dirname(filePath), "..", "prompts.json");
+      try {
+        const promptsRaw = await readFile(promptsPath, "utf8");
+        const prompts = JSON.parse(promptsRaw) as {
+          coverPrompts?: Array<{ prompt: string; label?: string; size?: string }>;
+          illustrationPrompts?: Array<{ index: number; name?: string; prompt: string }>;
+        };
+        const coverCards = (prompts.coverPrompts ?? []).map(function (cp, _i) {
+          return '<div class="wx-prompt-card"><div class="wx-prompt-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/</g, "&lt;") : '') + '</div><div class="wx-prompt-box">' + cp.prompt.replace(/</g, "&lt;") + '</div><div class="wx-prompt-actions"><button onclick="navigator.clipboard.writeText(this.dataset.p)" data-p="' + cp.prompt.replace(/"/g, "&quot;") + '">📋 复制</button><a href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt) + '" target="_blank">🤖 ChatGPT</a></div></div>';
+        }).join("");
+        const illCards = (prompts.illustrationPrompts ?? []).map(function (ip, i) {
+          return '<div class="wx-prompt-card"><div class="wx-prompt-label">📷 ' + (ip.name ?? '插图 ' + (i + 1)) + '</div><div class="wx-prompt-box">' + ip.prompt.replace(/</g, "&lt;") + '</div><div class="wx-prompt-actions"><button onclick="navigator.clipboard.writeText(this.dataset.p)" data-p="' + ip.prompt.replace(/"/g, "&quot;") + '">📋 复制</button><a href="https://chatgpt.com/?q=' + encodeURIComponent(ip.prompt) + '" target="_blank">🤖 ChatGPT</a></div></div>';
+        }).join("");
+        if (coverCards || illCards) {
+          const promptsBar = '<div id="wx-prompts-bar"><div class="wx-prompts-header">📌 图片生成 Prompt（' + ((prompts.coverPrompts?.length ?? 0) + (prompts.illustrationPrompts?.length ?? 0)) + ' 张）</div><div class="wx-prompts-grid">' + coverCards + illCards + '</div></div><style>#wx-prompts-bar{background:#fffdf8;border:2px dashed #e8d5c0;border-radius:10px;padding:16px;margin:16px 0;font-family:-apple-system,sans-serif}.wx-prompts-header{font-size:14px;font-weight:700;color:#1a1008;margin-bottom:12px}.wx-prompts-grid{display:flex;flex-direction:column;gap:10px}.wx-prompt-card{background:#faf7f2;border-radius:8px;padding:12px}.wx-prompt-label{font-size:12px;font-weight:600;color:#555;margin-bottom:6px}.wx-prompt-box{font-size:11px;color:#666;line-height:1.6;max-height:120px;overflow-y:auto;white-space:pre-wrap;background:#fff;border:1px solid #eee;padding:8px;border-radius:4px;margin-bottom:6px}.wx-prompt-actions{display:flex;gap:6px}.wx-prompt-actions button,.wx-prompt-actions a{font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;text-decoration:none;border:1px solid #ddd;background:#fff;color:#555}.wx-prompt-actions a{background:#ff2442;color:#fff;border-color:#ff2442}</style>';
+          html = html.replace("<body", "<body>\n" + promptsBar);
+        }
+      } catch { /* no prompts.json */ }
+
       if (kind === "preview") {
         // preview: rewrite to API endpoint for local browser viewing
         const imageBase = "/api/wechat-format/image?videoId=" + encodeURIComponent(videoId) + "&file=";
@@ -657,9 +689,9 @@ const handleDashboardRequest = async (
     const apiKey = readLlmApiKeyFromEnv(provider);
     if (apiKey === undefined) return "no-llm-key";
 
-    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-pro", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
     const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
-    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
+    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-pro" };
     const llm = createLlmAdapter(cfg);
     const model = cfg.defaultModel!;
 
@@ -708,17 +740,26 @@ const handleDashboardRequest = async (
         ? await ensurePlatformArticle(videoId, platform)
         : "";
 
-      // Always regenerate prompts when user clicks "排版" — don't skip because of cache
-      // B站不需要 LLM prompt 生成（Q10B）；X 和小红书需要
-      const needsLlmPrompts = platform === "x" || platform === "xiaohongshu";
-      if (needsLlmPrompts) {
-        const provider = defaultCliLlmProvider();
-        const apiKey = readLlmApiKeyFromEnv(provider);
+      // X / XHS / WeChat (no images): generate prompts via orchestratePlatformPrompts
+      const needsPrompts = platform === "x" || platform === "xiaohongshu";
+      if (needsPrompts) {
+        // Prefer Anthropic-compatible DeepSeek endpoint (supports [1m] extended thinking)
+        let provider = defaultCliLlmProvider();
+        let apiKey = readLlmApiKeyFromEnv(provider);
+        const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.deepseek.com/anthropic" };
+        const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-pro", moonshot: "moonshot-v1-8k", anthropic: "deepseek-v4-pro[1m]" };
+
+        // If ANTHROPIC_AUTH_TOKEN is set and points to DeepSeek, use Anthropic protocol
+        const anthropicToken = process.env["ANTHROPIC_AUTH_TOKEN"];
+        const anthropicUrl = process.env["ANTHROPIC_BASE_URL"];
+        if (anthropicToken && anthropicUrl?.includes("deepseek")) {
+          provider = "anthropic";
+          apiKey = anthropicToken;
+        }
+
         if (apiKey !== undefined) {
           try {
-            const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
-            const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
-            const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
+            const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-pro" };
             const llm = createLlmAdapter(cfg);
             await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
           } catch (err: unknown) {
@@ -728,7 +769,31 @@ const handleDashboardRequest = async (
       }
 
       if (platform === "wechat") {
-        await formatWechatCovers({ articleDir, videoId, articleMd, ...(opts.imageGenerator !== undefined ? { imageGenerator: opts.imageGenerator } : {}) });
+        // Check if article already has images
+        const imgRefGlobal = /!\[.*?\]\(images\/([^)]+)\)/g;
+        const hasImages = imgRefGlobal.test(articleMd);
+
+        if (hasImages) {
+          // Use existing images
+          await formatWechatCovers({ articleDir, videoId, articleMd, ...(opts.imageGenerator !== undefined ? { imageGenerator: opts.imageGenerator } : {}) });
+        } else {
+          // No images — generate prompts via sketch-knowledge-kit
+          let provider2 = defaultCliLlmProvider();
+          let apiKey2 = readLlmApiKeyFromEnv(provider2);
+          const baseUrlMap2: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.deepseek.com/anthropic" };
+          const modelMap2: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-pro", moonshot: "moonshot-v1-8k", anthropic: "deepseek-v4-pro[1m]" };
+          const anthropicToken = process.env["ANTHROPIC_AUTH_TOKEN"];
+          const anthropicUrl = process.env["ANTHROPIC_BASE_URL"];
+          if (anthropicToken && anthropicUrl?.includes("deepseek")) {
+            provider2 = "anthropic";
+            apiKey2 = anthropicToken;
+          }
+          if (apiKey2 !== undefined) {
+            const cfg: LlmFactoryConfig = { provider: provider2, apiKey: apiKey2, baseUrl: baseUrlMap2[provider2] ?? "https://api.openai.com/v1", defaultModel: modelMap2[provider2] ?? "deepseek-v4-pro" };
+            const llm = createLlmAdapter(cfg);
+            await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform: "wechat", llm, llmModel: cfg.defaultModel! });
+          }
+        }
         const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : "notion-doc";
         const result = await formatWechatArticle({
           articleDir,
@@ -739,7 +804,6 @@ const handleDashboardRequest = async (
         await updateWechatFormatStatus(path.resolve(opts.indexPath), { videoId, status: "formatted", theme: result.theme, htmlPath: result.articleHtmlPath, previewPath: result.previewHtmlPath });
         sendJson(res, 200, { ok: true, platform: "wechat", theme: result.theme });
       } else if (platform === "xiaohongshu") {
-        // Q9B: Only generate prompts, user manually generates 3:4 images
         await updatePlatformFormatStatus(path.resolve(opts.indexPath), { videoId, platform: "xiaohongshu", status: "formatted" });
         sendJson(res, 200, { ok: true, platform: "xiaohongshu", ...(genStatus ? { genStatus } : {}) });
       } else if (platform === "bilibili") {
@@ -844,8 +908,8 @@ const handleDashboardRequest = async (
       // Let the orchestrator fall back to an empty article.
     }
     const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
-    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
-    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
+    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-pro", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-pro" };
     try {
       const llm = createLlmAdapter(cfg);
       const result = await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
@@ -880,7 +944,7 @@ const handleDashboardRequest = async (
 
     // Live preview: always read article + images directly
     // Load prompts.json for this platform to inject prompt placeholders
-    const formatDirs: Record<string, string> = { x: "x-format", xiaohongshu: "xiaohongshu-format", bilibili: "bilibili-format" };
+    const formatDirs: Record<string, string> = { x: "x-format", xiaohongshu: "xiaohongshu-format", wechat: "wechat-format", bilibili: "bilibili-format" };
     let promptMap: Map<number, string> | undefined;
     try {
       const promptsPath = path.join(articleDir, formatDirs[platform] ?? "", "prompts.json");

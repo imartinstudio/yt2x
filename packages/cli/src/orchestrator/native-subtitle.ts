@@ -55,7 +55,8 @@ export const executeNativeSubtitle = async (flags: SubtitleFlags): Promise<numbe
     ...(flags.subtitleFile !== undefined ? { file: flags.subtitleFile } : {}),
   };
 
-  const skipBurnIfChineseBurned = flags.noSkipBurnIfChineseBurned !== true;
+  // Commander --no-xxx option: flag name is "skipBurnIfChineseBurned", default true, --no- sets it to false
+  const skipBurnIfChineseBurned = (flags as unknown as Record<string, unknown>)["skipBurnIfChineseBurned"] !== false;
   const articleOutDir =
     flags.articleOutDir !== undefined
       ? path.resolve(flags.articleOutDir)

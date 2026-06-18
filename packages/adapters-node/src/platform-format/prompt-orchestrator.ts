@@ -182,7 +182,7 @@ const _renderPreviewHtml = (
         <span class="badge ill">插图 ${il.index + 1}</span>
         <span class="ratio">${platformSpec.illustrationRatio}</span>
       </div>
-      <div class="card-text">${il.text.replace(/\n/g, "<br>").slice(0, 200)}…</div>
+      <div class="card-text">${il.text.replace(/\n/g, "<br>")}…</div>
       <div class="prompt-box">${il.prompt.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
       <div class="card-actions">
         <button class="copy-btn" onclick="copyText(${idx})">📋 复制 Prompt</button>
@@ -379,8 +379,8 @@ export const previewExistingArticleImages = async (
     return '<div class="ph-box">' + promptText.replace(/</g, "&lt;") + modelHtml + '</div>' +
       nameHtml +
       '<div class="ph-row"><span class="ph-label">' + labelText + '</span>' +
-      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + promptText.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/\n/g, "\\n") + '">📋 复制</button>' +
-      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(promptText.slice(0, 200)) + '" target="_blank">🤖 ChatGPT</a></span></div>';
+      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '">📋 复制</button>' +
+      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(promptText) + '" target="_blank">🤖 ChatGPT</a></span></div>';
   };
 
   const isXhs = platform === "xiaohongshu";
@@ -472,7 +472,7 @@ export const previewExistingArticleImages = async (
     const coverHtml = coverImg
       ? '<div class="cover-wrap"><img src="' + imgUrl(coverImg) + '" alt="封面" class="cover-img" /><div class="img-label">封面</div></div>'
       : nonXhsCoverPrompts.map(function (cp) {
-          return '<div class="cover-wrap"><div class="ph-box ph-box-cover">' + cp.prompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div><div class="ph-row"><span class="ph-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/</g, "&lt;") : '') + '</span><span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + cp.prompt.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/\n/g, "\\n") + '">📋 复制</button><a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt.slice(0, 200)) + '" target="_blank">🤖 ChatGPT</a></span></div></div>';
+          return '<div class="cover-wrap"><div class="ph-box ph-box-cover">' + cp.prompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div><div class="ph-row"><span class="ph-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/</g, "&lt;") : '') + '</span><span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '">📋 复制</button><a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt) + '" target="_blank">🤖 ChatGPT</a></span></div></div>';
         }).join("");
 
     // Count total prompt placeholders for X/bilibili preview counter
@@ -491,8 +491,8 @@ export const previewExistingArticleImages = async (
       const promptHtml = (secPrompt && imgs.length === 0)
         ? '<div class="ph-box">' + secPrompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div>' +
           '<div class="ph-row"><span class="ph-label">📷 待生成</span>' +
-          '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + secPrompt.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/\n/g, "\\n") + '">📋 复制</button>' +
-          '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt.slice(0, 200)) + '" target="_blank">🤖 ChatGPT</a></span></div>'
+          '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(secPrompt, "utf8").toString("base64") + '">📋 复制</button>' +
+          '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt) + '" target="_blank">🤖 ChatGPT</a></span></div>'
         : "";
       let blockHtml = '<div class="sec-block">' + h + '<div class="sec-body">' + b + '</div>' + imgHtml + promptHtml + '</div>';
       if (promptHtml) {
@@ -788,14 +788,14 @@ export const orchestratePlatformPrompts = async (
   // Render HTML: article sections with inline prompt placeholders
   const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[input.platform] ?? input.platform;
   const promptActions = function (promptText: string, label: string, sizeHint: string, name?: string) {
-    const encoded = encodeURIComponent(promptText.slice(0, 200));
+    const encoded = encodeURIComponent(promptText);
     const nameHtml = name
       ? '<div class="ph-name">' + name.replace(/</g, "&lt;") + '</div>'
       : '';
     return '<div class="ph-box">' + promptText.replace(/</g, "&lt;") + '</div>' +
       nameHtml +
       '<div class="ph-row"><span class="ph-label">' + label + ' · ' + sizeHint + '</span>' +
-      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + promptText.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/\n/g, "\\n") + '">📋 复制</button>' +
+      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '">📋 复制</button>' +
       '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encoded + '" target="_blank">🤖 ChatGPT</a></span></div>';
   };
 
@@ -856,7 +856,7 @@ export const orchestratePlatformPrompts = async (
     const articleBlocks: string[] = [];
     for (let i = 0; i < sections.length; i++) {
       const secText = sections[i]!;
-      const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 500);
+      const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "");
       const headingMatch = clean.match(/^(.+?)[：:\n]/);
       const heading = headingMatch ? headingMatch[1]!.slice(0, 40) : "";
       const body = heading ? clean.slice(heading.length).replace(/^[：:\s]+/, "") : clean;
@@ -891,7 +891,7 @@ export const orchestratePlatformPrompts = async (
 
     sectionBlocks = (coverHtml ? coverHtml.replace(/<\/div>$/, '<div class="slide-counter">' + (++promptCounter2) + '/' + totalPrompts2 + '</div></div>') : "") + sections.map(function (secText: string, i: number) {
       const promptText = promptMap.get(i);
-      const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 500);
+      const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "");
       const headingMatch = clean.match(/^(.+?)[：:\n]/);
       const heading = headingMatch ? headingMatch[1]!.slice(0, 40) : "";
       const body = heading ? clean.slice(heading.length).replace(/^[：:\s]+/, "") : clean;

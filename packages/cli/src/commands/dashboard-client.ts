@@ -6,6 +6,8 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     let themeModalVideoId = null;
     let selectedWechatTheme = "notion-doc";
     let favoriteThemes = [];
+    let sortField = "originalDate";
+    let sortDir = -1; // -1 = desc, 1 = asc, 0 = none
     const favoriteThemeStorageKey = "yt2x.wechat.favoriteThemes";
 
     const $ = (id) => document.getElementById(id);
@@ -69,7 +71,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       const q = $("search").value.trim().toLowerCase();
       const platform = $("platformFilter").value;
       const status = $("statusFilter").value;
-      return payload.videos.filter((video) => {
+      let list = payload.videos.filter((video) => {
         const blob = [
           video.videoId,
           video.title,
@@ -77,11 +79,19 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         ].join("\n").toLowerCase();
         if (q && !blob.includes(q)) return false;
         const platforms = platform === "all" ? platformOrder : [platform];
-        if (status === "generated" && !platforms.some((p) => video.platforms[p].generated)) return false;
-        if (status === "published" && !platforms.some((p) => video.platforms[p].published)) return false;
-        if (status === "unpublished" && !platforms.some((p) => video.platforms[p].generated && !video.platforms[p].published)) return false;
+        if (status === "generated" && !platforms.some((p) => video.platforms[p].status !== "empty")) return false;
+        if (status === "published" && !platforms.some((p) => video.platforms[p].status === "published")) return false;
+        if (status === "unpublished" && !platforms.some((p) => video.platforms[p].status !== "empty" && video.platforms[p].status !== "published")) return false;
         return true;
       });
+      if (sortDir !== 0 && sortField) {
+        list = list.sort((a, b) => {
+          const va = a[sortField] ?? "";
+          const vb = b[sortField] ?? "";
+          return sortDir * va.localeCompare(vb);
+        });
+      }
+      return list;
     }
 
     function renderSummary(videos) {
@@ -97,10 +107,10 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       ].map(([label, value]) => '<div class="metric"><b>' + value + '</b><span>' + label + '</span></div>').join("");
     }
 
+    const statusLabels = { empty: "无稿件", draft: "待排版", formatted: "已排版", published: "已发布", failed: "排版失败" };
     function platformPill(state) {
-      if (state.published) return '<span class="pill published">已发布</span>';
-      if (state.generated) return '<span class="pill generated">未发布</span>';
-      return '<span class="pill">无稿件</span>';
+      const cls = "pill pill-" + (state.status || "empty");
+      return '<span class="' + cls + '">' + (statusLabels[state.status] || "无稿件") + '</span>';
     }
 
     function selectVideo(videoId) {
@@ -122,6 +132,8 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         '<td><div class="title">' + esc(video.title) + '</div>' +
           (video.originalTitle ? '<div class="original-title">' + esc(video.originalTitle) + '</div>' : "") +
           '<div class="video-id" title="点击复制" onclick="event.stopPropagation();navigator.clipboard.writeText(\'' + esc(video.videoId) + '\');this.classList.add(\'copied\');setTimeout(()=>this.classList.remove(\'copied\'),1500)">' + esc(video.videoId) + '</div></td>',
+        '<td class="date">' + esc(fmtDate(video.originalDate || video.updatedAt)) + '</td>',
+        '<td class="date">' + esc(fmtDate(video.uploadDate)) + '</td>',
         '<td class="date">' + esc(fmtDate(video.updatedAt)) + '</td>',
         platformOrder.map((p) => '<td class="platform-cell">' + platformPill(video.platforms[p]) + '</td>').join(""),
         '</tr>',
@@ -203,58 +215,92 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
 
     function renderPlatformCard(video, platform) {
       const state = video.platforms[platform];
-      // Format status line — all platforms
-      const formatLine = '<div class="file-list">排版：' +
-        (state.formatStatus === "formatted"
-          ? "已排版" + (state.formatTheme ? " · " + esc(state.formatTheme) : "")
-          : state.formatStatus === "failed"
-            ? "失败 · " + esc(state.formatError || "未知错误")
-            : "未排版") +
-        '</div>';
-
-      // Format button: enabled if this platform has content OR base article.md exists
-      const canFormat = state.generated || video.platforms.x.generated;
-      const formatLabel = state.formatStatus === "formatted" ? "重新排版" : "排版";
+      const st = state.status;
       const orchPreviewLink = '/api/platform-orchestrate/preview?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform;
-      const previewHref = state.published ? orchPreviewLink + '&mode=published' : orchPreviewLink;
+      const previewHref = st === "published" ? orchPreviewLink + '&mode=published' : orchPreviewLink;
 
-      // Published: disabled. No content: disabled. WeChat: theme modal. Others: direct format.
-      const formatBtn = state.published
-        ? '<button class="secondary" disabled title="已发布，无需再排版">已发布</button>'
-        : !canFormat
-          ? '<button class="secondary" disabled>缺稿件</button>'
-          : platform === "wechat"
-            ? '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">' + formatLabel + '</button>'
-            : '<button class="secondary" data-format-platform="' + platform + '">' + formatLabel + '</button>';
+      // Status line
+      const statusSteps = [
+        { key: "empty", label: "无稿件" },
+        { key: "draft", label: "已有稿件" },
+        { key: "formatted", label: "已排版" },
+        { key: "published", label: "已发布" },
+      ];
+      const currentIdx = statusSteps.findIndex(function(s) { return s.key === st; });
+      const statusLine = '<div class="status-steps">' + statusSteps.map(function(step, i) {
+        var cls = "status-step";
+        if (i < currentIdx) cls += " done";
+        else if (i === currentIdx) cls += " current";
+        if (st === "failed") cls += " failed";
+        return '<span class="' + cls + '">' + step.label + '</span>';
+      }).join('<span class="status-arrow">→</span>') + '</div>';
 
-      const previewBtn = '<a href="' + previewHref + '" target="_blank"><button class="secondary">打开预览</button></a>';
+      // Error line for failed
+      const errorLine = st === "failed"
+        ? '<div class="format-error">' + esc(state.formatError || "排版失败") + '</div>'
+        : '';
 
-      // Platform-specific extra actions
-      const extraActions = platform === "wechat"
-        ? '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '" ' + (state.formatStatus === "formatted" ? "" : "disabled") + '>复制 HTML</button>'
-        : "";
+      // Primary action button
+      var primaryBtn = "";
+      if (st === "empty") {
+        // XHS/Bilibili can generate from base article if X has content
+        if ((platform === "xiaohongshu" || platform === "bilibili") && video.platforms.x.generated) {
+          primaryBtn = '<button class="primary-btn" data-format-platform="' + platform + '">排版</button>';
+        } else {
+          primaryBtn = '<button class="secondary" disabled>缺稿件</button>';
+        }
+      } else if (st === "draft") {
+        if (platform === "wechat") {
+          primaryBtn = '<button class="primary-btn" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">排版</button>';
+        } else {
+          primaryBtn = '<button class="primary-btn" data-format-platform="' + platform + '">排版</button>';
+        }
+      } else if (st === "formatted") {
+        if (platform === "wechat") {
+          primaryBtn = '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">重新排版</button>';
+        } else {
+          primaryBtn = '<button class="secondary" data-format-platform="' + platform + '">重新排版</button>';
+        }
+      } else if (st === "failed") {
+        if (platform === "wechat") {
+          primaryBtn = '<button class="primary-btn" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">重新排版</button>';
+        } else {
+          primaryBtn = '<button class="primary-btn" data-format-platform="' + platform + '">重新排版</button>';
+        }
+      } else if (st === "published") {
+        primaryBtn = '<button class="secondary" disabled title="已发布">已发布</button>';
+      }
+
+      // Platform-specific extra
+      var extraActions = "";
+      if (platform === "wechat" && (st === "formatted" || st === "published")) {
+        extraActions = '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '">复制 HTML</button>';
+      }
+
       return [
         '<section class="platform-card">',
         '<div class="platform-head">',
-        '<div>',
-        '<div class="platform-name">' + platformLabels[platform] + '</div>',
-        '<div class="file-list">' + (state.files.length ? state.files.map(esc).join(" · ") : "未生成稿件") + '</div>',
-        formatLine,
-        '</div>',
+        '<div class="platform-name">' + platformLabels[platform] + ' <span class="status-text status-' + st + '">' + (statusLabels[st] || st) + '</span></div>',
         '<div class="switch">',
-        '<button data-save="' + platform + '" data-value="false" class="' + (!state.published ? "on" : "") + '">未发布</button>',
-        '<button data-save="' + platform + '" data-value="true" class="' + (state.published ? "on" : "") + '">已发布</button>',
+        '<button data-save="' + platform + '" data-value="false" class="' + (st !== "published" ? "on" : "") + '">待发布</button>',
+        '<button data-save="' + platform + '" data-value="true" class="' + (st === "published" ? "on" : "") + '">已发布</button>',
         '</div>',
         '</div>',
+        statusLine,
+        errorLine,
         '<input data-url="' + platform + '" placeholder="发布链接" value="' + esc(state.url) + '" />',
         '<textarea data-note="' + platform + '" placeholder="备注">' + esc(state.note) + '</textarea>',
         '<div class="actions">',
+        '<div class="action-row">',
         '<button data-save="' + platform + '" data-value="' + String(state.published) + '">保存状态</button>',
-        '<button class="secondary" data-copy="' + platform + '" ' + (state.generated ? "" : "disabled") + '>复制稿件</button>',
-        '<a href="/api/file?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform + '" target="_blank"><button class="secondary" ' + (state.generated ? "" : "disabled") + '>打开稿件</button></a>',
-        formatBtn,
-        previewBtn,
+        st !== "empty" ? '<button class="secondary" data-copy="' + platform + '">复制稿件</button>' : '',
         extraActions,
+        '</div>',
+        '<div class="action-row">',
+        primaryBtn,
+        st !== "empty" ? '<a href="/api/file?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform + '" target="_blank"><button class="secondary">打开稿件</button></a>' : '',
+        st !== "empty" ? '<a href="' + previewHref + '" target="_blank"><button class="secondary">预览</button></a>' : '',
+        '</div>',
         '</div>',
         '</section>',
       ].join("");
@@ -467,6 +513,32 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     $("themeModal").addEventListener("click", (event) => {
       if (event.target === $("themeModal")) closeThemeModal();
     });
+    // Sort click handler
+    document.querySelectorAll("th.sortable").forEach((th) => {
+      th.addEventListener("click", () => {
+        const field = th.dataset.sort;
+        if (sortField === field) {
+          sortDir = sortDir === -1 ? 1 : sortDir === 1 ? 0 : -1;
+        } else {
+          sortField = field;
+          sortDir = -1;
+        }
+        render();
+      });
+    });
+    // Update sort indicators
+    function updateSortIndicators() {
+      document.querySelectorAll("th.sortable").forEach((th) => {
+        const field = th.dataset.sort;
+        th.classList.remove("sort-asc", "sort-desc");
+        if (field === sortField && sortDir !== 0) {
+          th.classList.add(sortDir === 1 ? "sort-asc" : "sort-desc");
+        }
+      });
+    }
+    const origRender = render;
+    render = function() { origRender(); updateSortIndicators(); };
+
     Promise.all([loadWechatThemes(), load()]).catch((err) => {
-      $("rows").innerHTML = '<tr><td colspan="6">加载失败：' + esc(err.message) + '</td></tr>';
+      $("rows").innerHTML = '<tr><td colspan="8">加载失败：' + esc(err.message) + '</td></tr>';
     });`;

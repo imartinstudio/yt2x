@@ -134,6 +134,43 @@ export const DASHBOARD_STYLE = String.raw`    :root {
       text-transform: uppercase;
       letter-spacing: .08em;
     }
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+    }
+    th.sortable:hover { color: #202019; }
+    /* unsorted: faint diamond lozenge — same 7×7 footprint as sorted chevrons */
+    th.sortable::after {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-left: 4px;
+      border: 1.5px solid currentColor;
+      transform: rotate(45deg) translateY(-1px);
+      opacity: .18;
+      vertical-align: middle;
+      transition: opacity .25s ease, border-color .25s ease, transform .3s cubic-bezier(.34,1.56,.64,1);
+    }
+    th.sortable:hover::after { opacity: .35; }
+    /* sorted desc: thin downward chevron — same footprint as diamond */
+    th.sortable.sort-desc::after {
+      width: 6px;
+      height: 6px;
+      border: solid var(--accent);
+      border-width: 0 1.5px 1.5px 0;
+      transform: rotate(45deg) translateY(-1px);
+      opacity: 1;
+    }
+    /* sorted asc: thin upward chevron — same footprint as diamond */
+    th.sortable.sort-asc::after {
+      width: 6px;
+      height: 6px;
+      border: solid var(--accent);
+      border-width: 0 1.5px 1.5px 0;
+      transform: rotate(-135deg) translateY(-1px);
+      opacity: 1;
+    }
     tr { cursor: pointer; }
     tr:hover td { background: #fffdf8; }
     tr.active td { background: #e9f3ee; }
@@ -152,6 +189,10 @@ export const DASHBOARD_STYLE = String.raw`    :root {
       margin-top: 2px;
       cursor: pointer;
       transition: color .2s;
+      display: inline-block;
+      max-width: fit-content;
+      padding: 1px 4px;
+      border-radius: 3px;
     }
     .video-id:hover { color: #333; }
     .video-id::after { content: " 📋"; opacity: 0; transition: opacity .2s; font-size: 10px; }
@@ -171,9 +212,47 @@ export const DASHBOARD_STYLE = String.raw`    :root {
       color: var(--muted);
       background: #fffdf8;
     }
-    .pill.generated { color: var(--warn); border-color: #e3b49c; background: #fff3ec; }
-    .pill.published { color: var(--ok); border-color: #9bcdb7; background: #edf8f2; }
+    .pill-empty { color: #8d8b80; border-color: #d9d5c8; background: #f8f7f2; }
+    .pill-draft { color: var(--warn); border-color: #e3b49c; background: #fff3ec; }
+    .pill-formatted { color: #0e6f5c; border-color: #9bcdb7; background: #edf8f2; }
+    .pill-published { color: #1a6b4a; border-color: #6abf8b; background: #e2f5e8; font-weight: 650; }
+    .pill-failed { color: #c7512f; border-color: #e3b49c; background: #fff0ec; }
     .platform-cell { min-width: 74px; }
+    /* status progress steps */
+    .status-steps {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin: 8px 0;
+      font-size: 11px;
+    }
+    .status-step {
+      color: #c4beb0;
+      transition: color .2s;
+    }
+    .status-step.done { color: #8d8b80; }
+    .status-step.current { color: var(--ink); font-weight: 650; }
+    .status-step.failed { color: var(--accent-2); }
+    .status-arrow { color: #d9d5c8; font-size: 9px; }
+    .format-error { font-size: 11px; color: var(--accent-2); margin: 4px 0; background: #fff0ec; padding: 6px 10px; border-radius: 6px; }
+    .primary-btn {
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+      border-radius: 6px;
+      padding: 9px 14px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .primary-btn:hover { background: #0b5e4d; border-color: #0b5e4d; }
+    .status-text { font-size: 12px; font-weight: 400; margin-left: 6px; }
+    .status-empty { color: #8d8b80; }
+    .status-draft { color: var(--warn); }
+    .status-formatted { color: #0e6f5c; }
+    .status-published { color: #0e6f5c; font-weight: 650; }
+    .status-failed { color: var(--accent-2); }
 
     aside {
       border-left: 1px solid var(--line);
@@ -241,7 +320,8 @@ export const DASHBOARD_STYLE = String.raw`    :root {
       background: var(--accent);
       color: #fff;
     }
-    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 9px 0; }
+    .actions { display: flex; flex-direction: column; gap: 6px; margin: 9px 0; }
+    .action-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .file-list { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
     .empty { color: var(--muted); padding: 32px; text-align: center; }
     /* ═══════════════════════════════════════════

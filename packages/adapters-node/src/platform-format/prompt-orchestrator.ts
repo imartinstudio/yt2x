@@ -18,7 +18,7 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
     coverRatios: [
       { label: "X 封面 5:2", size: "1500×600", description: "5:2 landscape — X article cover card, bold visual metaphor, thumbnail-friendly" },
     ],
-    illustrationRatio: "16:9 landscape — X article inline illustrations",
+    illustrationRatio: "16:9 landscape",
     outputDir: "x-format",
   },
   wechat: {
@@ -27,7 +27,7 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
       { label: "公众号封面 1:1", size: "1024×1024", description: "1:1 square — WeChat primary cover, title centered, bold and thumbnail-friendly" },
       { label: "公众号封面 16:9", size: "1792×1024", description: "16:9 landscape — WeChat share cover, horizontal composition, title centered with side margins" },
     ],
-    illustrationRatio: "varies — match the section's natural layout",
+    illustrationRatio: "16:9 landscape (primary) or 1:1 square",
     outputDir: "wechat-format",
   },
   xiaohongshu: {
@@ -35,7 +35,7 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
     coverRatios: [
       { label: "小红书封面 3:4", size: "1080×1440", description: "3:4 portrait/vertical — Xiaohongshu feed cover, eye-catching, title prominent" },
     ],
-    illustrationRatio: "3:4 portrait/vertical (1080×1440)",
+    illustrationRatio: "3:4 portrait (1080×1440 pixels)",
     outputDir: "xiaohongshu-format",
   },
   bilibili: {
@@ -43,14 +43,14 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
     coverRatios: [
       { label: "B站视频封面 16:9", size: "1920×1080", description: "16:9 landscape — Bilibili video cover, bold title, thumbnail-friendly, high contrast" },
     ],
-    illustrationRatio: "varies — timeline keyframe style",
+    illustrationRatio: "16:9 landscape",
     outputDir: "bilibili-format",
   },
 };
 
 // ── LLM prompt generation ──
 
-const callLlm = async (llm: LlmPort, model: string, systemPrompt: string, userPrompt: string): Promise<string> => {
+const _callLlm = async (llm: LlmPort, model: string, systemPrompt: string, userPrompt: string): Promise<string> => {
   const resp = await llm.chat({
     model,
     messages: [
@@ -64,16 +64,38 @@ const callLlm = async (llm: LlmPort, model: string, systemPrompt: string, userPr
 };
 
 const COVER_SYSTEM_PROMPT = [
-  `You are creating cover image-generation prompts following the sketch-knowledge-kit visual system.`,
+  `Create a cover image-generation prompt following the sketch-knowledge-kit visual system.`,
+  `Fill in EVERY field below with specific, concrete content from the article. Leave NO field empty. Use EXACT Chinese label text for every element.`,
   ``,
-  `Visual identity: Warm paper texture. Black marker/ink linework, hand-drawn quality. Anthropic orange (#E07030) as accent only. Hand-drawn typography. Generous whitespace. Slight scanned feel. Clean, minimal, educational editorial quality.`,
+  `REQUIRED STRUCTURE — fill all fields:`,
   ``,
-  `The cover captures the TOTAL VIEW of the article — a conceptual map, the overarching thesis, designed to be shareable and saved.`,
-  `Do NOT create a UI walkthrough or detailed tutorial illustration. The cover is a single powerful visual metaphor.`,
+  `Canvas: [ratio], [exact pixel dimensions].`,
   ``,
-  `CRITICAL: Every prompt MUST specify the exact aspect ratio and dimensions.`,
+  `Article: "[full Chinese title]". Subtitle: "[key takeaway in Chinese]". Platform: [platform].`,
   ``,
-  `Output ONLY the English prompt, 150-300 words. No markdown, no JSON.`,
+  `Knowledge structure: [pick one: pipeline / timeline / comparison / hub-and-spoke / hierarchy / mind-map / process-flow]. Why: [1 sentence].`,
+  ``,
+  `Visual metaphor — describe a SINGLE cohesive scene with every element labeled in Chinese:`,
+  `- Dominant central element: [what it is] labeled "[Chinese text]"`,
+  `- Supporting elements (3-6): each with exact [what] and "[Chinese label]"`,
+  `- Flow/connection between elements: [describe arrows/lines and their labels]`,
+  ``,
+  `Composition — exact layout:`,
+  `- Title placement: [top/center/bottom], hand-drawn [bold/thin] marker, "[exact title text]", [size relative to canvas]`,
+  `- Subtitle placement: [position], hand-drawn, "[exact subtitle]"`,
+  `- Key labels: list EVERY hand-drawn Chinese label that appears, with its position`,
+  ``,
+  `Color system:`,
+  `- Paper: #F5F0E8 with grain texture + scan noise`,
+  `- Linework: black fine-tip marker, slight stroke variation`,
+  `- Orange (#E67E22): used on exactly these 2-4 elements: [list them]`,
+  `- Whitespace: approximately [X]% empty paper`,
+  ``,
+  `Typography: ALL text hand-drawn sketch-note style, marker-bleed effect, slight baseline irregularity. No computer fonts.`,
+  ``,
+  `Avoid: dark backgrounds, tech gradients, code editor windows, glossy UI, 3D shadows, real logos, sans-serif fonts, pure white #FFF, photographs, AI/robot clipart.`,
+  ``,
+  `Output ONLY the filled prompt. No JSON, no markdown, no explanation.`,
 ].join("\n");
 
 const _ILLUSTRATION_SYSTEM_PROMPT = [
@@ -160,7 +182,7 @@ const _renderPreviewHtml = (
         <span class="badge ill">插图 ${il.index + 1}</span>
         <span class="ratio">${platformSpec.illustrationRatio}</span>
       </div>
-      <div class="card-text">${il.text.replace(/\n/g, "<br>").slice(0, 200)}…</div>
+      <div class="card-text">${il.text.replace(/\n/g, "<br>")}…</div>
       <div class="prompt-box">${il.prompt.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
       <div class="card-actions">
         <button class="copy-btn" onclick="copyText(${idx})">📋 复制 Prompt</button>
@@ -346,15 +368,18 @@ export const previewExistingArticleImages = async (
   const hasSectionImages = allImgs.length > 1;
   const needsFormatNote = !promptMap && !hasSectionImages;
 
-  const promptActions = function (promptText: string, opts?: { name?: string; label?: string }) {
+  const promptActions = function (promptText: string, opts?: { name?: string; label?: string; model?: string }) {
     const nameHtml = opts?.name
       ? '<div class="ph-name">' + opts.name.replace(/</g, "&lt;") + '</div>'
       : '';
+    const modelHtml = opts?.model
+      ? '<div class="prompt-model">' + opts.model.replace(/</g, "&lt;") + '</div>'
+      : '';
     const labelText = opts?.label ?? '📷 待生成 · 3:4';
-    return '<div class="ph-box">' + promptText.replace(/</g, "&lt;").slice(0, 200) + '</div>' +
+    return '<div class="ph-box">' + promptText.replace(/</g, "&lt;") + modelHtml + '</div>' +
       nameHtml +
       '<div class="ph-row"><span class="ph-label">' + labelText + '</span>' +
-      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + promptText.replace(/"/g, "&quot;").replace(/\n/g, "\\n") + '">📋 复制</button>' +
+      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '">📋 复制</button>' +
       '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(promptText) + '" target="_blank">🤖 ChatGPT</a></span></div>';
   };
 
@@ -368,14 +393,17 @@ export const previewExistingArticleImages = async (
     let xhsCoverPrompt = "";
     let xhsCoverFilename = "cover.png";
     let xhsCoverName = "封面";
+    let xhsModel = "";
     const xhsIllNames = new Map<number, string>();
     try {
       const promptsPath = path.join(articleDir, "xiaohongshu-format", "prompts.json");
       const promptsRaw = await rf(promptsPath, "utf8");
       const prompts = JSON.parse(promptsRaw) as {
+        model?: string;
         coverPrompts?: Array<{ prompt: string; filename?: string; name?: string }>;
         illustrationPrompts?: Array<{ index: number; prompt: string; filename?: string; name?: string }>;
       };
+      xhsModel = prompts.model ?? "";
       xhsCoverPrompt = prompts.coverPrompts?.[0]?.prompt ?? "";
       xhsCoverFilename = prompts.coverPrompts?.[0]?.filename ?? "cover.png";
       xhsCoverName = prompts.coverPrompts?.[0]?.name ?? "封面";
@@ -391,7 +419,7 @@ export const previewExistingArticleImages = async (
     if (coverImg) {
       galleryItems.push('<div class="xhs-slide"><img src="' + imgUrl(coverImg) + '" alt="封面" class="xhs-slide-img" /><div class="img-label">封面 · ' + xhsCoverFilename + '</div></div>');
     } else if (xhsCoverPrompt) {
-      galleryItems.push('<div class="xhs-slide xhs-slide-placeholder xhs-slide-cover">' + promptActions(xhsCoverPrompt, { name: xhsCoverName, label: '🎨 封面 · 3:4' }) + '</div>');
+      galleryItems.push('<div class="xhs-slide xhs-slide-placeholder xhs-slide-cover">' + promptActions(xhsCoverPrompt, { name: xhsCoverName, label: '🎨 封面 · 3:4', model: xhsModel }) + '</div>');
     }
     for (let i = 0; i < sections.length; i++) {
       const sec = sections[i]!;
@@ -404,11 +432,13 @@ export const previewExistingArticleImages = async (
       const secPrompt = promptMap?.get(i);
       if (secPrompt && imgs.length === 0) {
         const nm = xhsIllNames.get(i) ?? ('插图 ' + (i + 1));
-        galleryItems.push('<div class="xhs-slide xhs-slide-placeholder">' + promptActions(secPrompt, { name: nm, label: '📷 3:4 竖版' }) + '</div>');
+        galleryItems.push('<div class="xhs-slide xhs-slide-placeholder">' + promptActions(secPrompt, { name: nm, label: '📷 3:4 竖版', model: xhsModel }) + '</div>');
       }
     }
-    const galleryHtml = galleryItems.length > 0
-      ? '<div class="xhs-gallery"><div class="xhs-gallery-label">📷 图集 · ' + galleryItems.length + ' 张</div><div class="xhs-gallery-scroll">' + galleryItems.join("") + '</div></div>'
+    // Inject slide counter into each gallery item before closing xhs-slide div
+    const totalSlides = galleryItems.length;
+    const galleryHtml = totalSlides > 0
+      ? '<div class="xhs-gallery"><div class="xhs-gallery-label">📷 图集 · ' + totalSlides + ' 张</div><div class="xhs-gallery-scroll">' + galleryItems.map(function (item, idx) { return item.replace(/<\/div>$/, '<div class="slide-counter">' + (idx + 1) + '/' + totalSlides + '</div></div>'); }).join("") + '</div></div>'
       : "";
 
     // Article text: collect all headings + body text
@@ -427,11 +457,30 @@ export const previewExistingArticleImages = async (
     sectionHtml = galleryHtml + articleHtml;
   } else {
     // ── X / Bilibili / WeChat: inline images per section ──
+    // Try reading prompts.json for cover prompt placeholder
+    let nonXhsCoverPrompts: Array<{ prompt: string; label?: string }> = [];
+    let nonXhsModel = "";
+    try {
+      const formatDir = platform === "x" ? "x-format" : platform === "wechat" ? "wechat-format" : "bilibili-format";
+      const ppath = path.join(articleDir, formatDir, "prompts.json");
+      const praw = await rf(ppath, "utf8");
+      const pd = JSON.parse(praw) as { model?: string; coverPrompts?: Array<{ prompt: string; label?: string }> };
+      nonXhsCoverPrompts = pd.coverPrompts ?? [];
+      nonXhsModel = pd.model ?? "";
+    } catch { /* no prompts.json */ }
+
     const coverHtml = coverImg
       ? '<div class="cover-wrap"><img src="' + imgUrl(coverImg) + '" alt="封面" class="cover-img" /><div class="img-label">封面</div></div>'
-      : "";
+      : nonXhsCoverPrompts.map(function (cp) {
+          return '<div class="cover-wrap"><div class="ph-box ph-box-cover">' + cp.prompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div><div class="ph-row"><span class="ph-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/</g, "&lt;") : '') + '</span><span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '">📋 复制</button><a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt) + '" target="_blank">🤖 ChatGPT</a></span></div></div>';
+        }).join("");
 
-    sectionHtml = coverHtml + sections.map(function (sec, i) {
+    // Count total prompt placeholders for X/bilibili preview counter
+    let promptCounter = 0;
+    const coverPromptCount = nonXhsCoverPrompts.length;
+    const totalPrompts = coverPromptCount + sections.filter(function (_s, i) { return promptMap?.has(i); }).length;
+
+    sectionHtml = (coverHtml ? coverHtml.replace(/<\/div>$/, '<div class="slide-counter">' + (++promptCounter) + '/' + totalPrompts + '</div></div>') : "") + sections.map(function (sec, i) {
       const h = sec.heading ? '<h3 class="sec-heading">' + sec.heading + '</h3>' : "";
       const b = sec.body
         ? '<div class="sec-body">' + sec.body.replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>") + '</div>'
@@ -440,12 +489,16 @@ export const previewExistingArticleImages = async (
       const imgHtml = imgs.map(function (f) { usedImgs.add(f); return '<img src="' + imgUrl(f) + '" alt="' + f + '" class="sec-img" /><div class="img-label">' + f + '</div>'; }).join("");
       const secPrompt = promptMap?.get(i);
       const promptHtml = (secPrompt && imgs.length === 0)
-        ? '<div class="ph-box">' + secPrompt.replace(/</g, "&lt;").slice(0, 200) + '</div>' +
+        ? '<div class="ph-box">' + secPrompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div>' +
           '<div class="ph-row"><span class="ph-label">📷 待生成</span>' +
-          '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + secPrompt.replace(/"/g, "&quot;") + '">📋 复制</button>' +
+          '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(secPrompt, "utf8").toString("base64") + '">📋 复制</button>' +
           '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt) + '" target="_blank">🤖 ChatGPT</a></span></div>'
         : "";
-      return '<div class="sec-block">' + h + '<div class="sec-body">' + b + '</div>' + imgHtml + promptHtml + '</div>';
+      let blockHtml = '<div class="sec-block">' + h + '<div class="sec-body">' + b + '</div>' + imgHtml + promptHtml + '</div>';
+      if (promptHtml) {
+        blockHtml = blockHtml.replace(/<\/div>$/, '<div class="slide-counter">' + (++promptCounter) + '/' + totalPrompts + '</div></div>');
+      }
+      return blockHtml;
     }).join("");
   }
 
@@ -463,7 +516,7 @@ export const previewExistingArticleImages = async (
       ".xhs-slide{background:#fffdf8;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);position:relative;transition:transform .2s ease,box-shadow .2s ease}",
       ".xhs-slide:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(44,36,22,.08),0 2px 6px rgba(44,36,22,.05)}",
       ".xhs-slide-placeholder{background:linear-gradient(168deg,#fffdf8 0%,#fdf9f2 40%,#faf4ea 100%);border:2px dashed #e8d5c0;padding:18px 14px 12px}",
-      ".xhs-slide-placeholder .ph-box{margin:0;width:100%;aspect-ratio:3/4;max-height:none;border-color:#e8d5c0;background:rgba(255,252,247,.7);overflow-y:auto;display:flex;align-items:center}",
+      ".xhs-slide-placeholder .ph-box{margin:0;width:100%;aspect-ratio:3/4;max-height:none;border-color:#e8d5c0;background:rgba(255,252,247,.7);overflow-y:auto;padding:12px 12px;font-size:11px;line-height:1.55}",
       ".xhs-slide-img{width:100%;display:block}",
       // article
       ".xhs-article{background:#fffdf8;border-radius:14px;padding:28px 20px;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);line-height:1.95;position:relative}",
@@ -481,6 +534,9 @@ export const previewExistingArticleImages = async (
       ".img-label{padding:8px 14px;font-size:10px;color:#b8a99a;text-align:right;background:linear-gradient(180deg,rgba(255,252,247,0),#faf4ea);font-family:'Georgia',serif;letter-spacing:.03em}",
       ".ph-box{background:linear-gradient(165deg,#fffdf8,#fdf9f2);border:2px dashed #e8d5c0;padding:18px 16px;font-size:12px;color:#6b5e4f;line-height:1.7;white-space:pre-wrap;max-height:200px;overflow-y:auto;border-radius:8px;font-family:'Georgia','Noto Serif SC',serif}",
       ".ph-name{font-size:14px;color:#1a1008;font-weight:700;padding:10px 14px 0;text-align:center;letter-spacing:.02em}",
+      ".prompt-model{position:absolute;bottom:6px;right:10px;font-size:9px;color:#b8a99a;font-style:italic;opacity:.7}",
+      ".xhs-slide-placeholder .ph-box{position:relative}",
+      ".slide-counter{position:absolute;bottom:6px;left:10px;font-size:10px;color:#b8a99a;font-family:'Georgia',serif;opacity:.6}",
       ".ph-row{display:flex;align-items:center;justify-content:space-between;padding:6px 14px 4px}",
       ".ph-label{font-size:10px;color:#b8a99a;font-family:'SF Mono','ui-monospace',monospace;letter-spacing:.03em}",
       ".ph-btns{display:flex;gap:8px}",
@@ -505,13 +561,18 @@ export const previewExistingArticleImages = async (
       ".sec-body p{margin-bottom:12px}",
       ".sec-body b,.sec-body strong{color:#111}",
       ".img-label{padding:6px 12px;font-size:11px;color:#bbb;text-align:right;background:#fafafa}",
-      ".ph-box{background:linear-gradient(135deg,#faf8f3,#f5f1e8);border:2px dashed #e0d8c8;padding:16px 18px;font-size:12px;color:#666;line-height:1.6;white-space:pre-wrap;max-height:160px;overflow-y:auto}",
+      ".ph-box{background:linear-gradient(135deg,#faf8f3,#f5f1e8);border:2px dashed #e0d8c8;padding:18px 18px;font-size:12px;color:#666;line-height:1.65;white-space:pre-wrap;max-height:360px;overflow-y:auto;border-radius:6px}",
+      ".ph-box-cover{max-height:480px;font-size:13px}",
       ".ph-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#fafafa;border-top:1px solid #f0f0f0}",
       ".ph-label{font-size:11px;color:#999}",
       ".ph-btns{display:flex;gap:6px}",
       ".ph-copy,.ph-chatgpt{padding:3px 10px;font-size:11px;border-radius:4px;cursor:pointer;text-decoration:none;display:inline-block}",
       ".ph-copy{border:1px solid #ddd;background:#fff;color:#666}.ph-copy:hover{background:#f0f0f0}",
       ".ph-chatgpt{border:1px solid #74aa9c;background:#74aa9c;color:#fff}.ph-chatgpt:hover{background:#5c9082}",
+      ".ph-name{font-size:13px;color:#1a1a1a;font-weight:650;padding:4px 12px 0;text-align:center}",
+      ".prompt-model{text-align:right;font-size:9px;color:#999;font-style:italic;margin-top:4px;opacity:.7}",
+      ".cover-wrap .ph-box{position:relative}",
+      ".slide-counter{font-size:10px;color:#999;font-family:'Georgia',serif;opacity:.6;text-align:right;padding:4px 12px 0}",
     ].join("");
 
   const h = [];
@@ -576,7 +637,7 @@ export const orchestratePlatformPrompts = async (
     const coverFilename = `cover-${slug}.png`;
     const coverName = title.slice(0, 20) || "封面";
     const systemPrompt = COVER_SYSTEM_PROMPT;
-    const userPrompt = [
+    const _userPrompt = [
       `Create a cover image prompt for ${coverSpec.label}.`,
       `${coverSpec.description}.`,
       ``,
@@ -589,164 +650,126 @@ export const orchestratePlatformPrompts = async (
 
     let prompt = "";
     try {
-      prompt = await callLlm(input.llm, input.llmModel, systemPrompt, userPrompt);
-    } catch { /* empty */ }
+      const coverUserPrompt = [
+        `Create a cover image prompt for ${coverSpec.label}.`,
+        `${coverSpec.description}.`,
+        ``,
+        `Article title: ${title}`,
+        `Platform: ${spec.label}`,
+        ``,
+        `The cover should capture the OVERALL thesis of the article as a single powerful visual metaphor.`,
+        ``,
+        `ARTICLE TEXT (for context):`,
+        body.slice(0, 3000),
+      ].join("\n");
+
+      const coverResp = await input.llm.chat({
+        model: input.llmModel,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: coverUserPrompt },
+        ],
+        temperature: 0.7,
+        maxTokens: 4096,
+      });
+      prompt = (coverResp.content ?? "").trim();
+    } catch (err: unknown) {
+      process.stderr.write(`cover prompt error: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
     if (!prompt) {
       prompt = `Editorial cover illustration. sketch-knowledge-kit style — warm paper, black marker, orange accent. Title: "${title}". ${coverSpec.description}. Clean, minimal, educational.`;
     }
     coverPrompts.push({ label: coverSpec.label, prompt, size: coverSpec.size, filename: coverFilename, name: coverName });
   }
 
-  // Find which sections already have images in the article markdown
-  const imgRefRe2 = /!\[.*?\]\(images\/([^)]+)\)/;
-  const sectionHasImage = sections.map((s) => imgRefRe2.test(s));
-  const sectionsNeedingPrompts = sections
-    .map((s, i) => ({ text: s, index: i }))
-    .filter((_, i) => !sectionHasImage[i]);
-
-  // Generate illustration prompts ONLY for sections that don't already have images
-  const allSectionsText = sectionsNeedingPrompts
-    .map((s) => `[Section ${s.index + 1}] ${s.text.slice(0, 300)}`)
-    .join("\n\n---\n\n");
-
+  // Generate illustration prompts: one call with full article.
+  // No section splitting. No truncation. LLM reads everything and decides.
   const illustrationPrompts: Array<{ index: number; text: string; prompt: string; filename: string; name: string }> = [];
+  const imgRefRe2 = /!\[.*?\]\(images\/([^)]+)\)/;
 
-  if (sectionsNeedingPrompts.length > 0) {
-    const isXhsPlatform = input.platform === "xiaohongshu";
-    const batchUserPrompt = [
-      `You are creating illustration prompts for a ${spec.label} article following the sketch-knowledge-kit visual system.`,
+  try {
+    const illUserPrompt = [
+      `Read this complete article and create illustration prompts following the sketch-knowledge-kit visual system for ${spec.label}.`,
       ``,
-      `Article topic: ${title}`,
-      `Sections needing illustrations: ${sectionsNeedingPrompts.length} (${sectionHasImage.filter(Boolean).length} sections already have images and are skipped)`,
-      `Required aspect ratio: ${spec.illustrationRatio}. EVERY prompt MUST specify this exact ratio and dimensions.`,
+      `Article: ${title}`,
+      `Required ratio: ${spec.illustrationRatio}`,
       ``,
-      `TASK:`,
-      `1. Review the sections below.`,
-      `2. Decide which sections TRULY need an illustration.`,
-      isXhsPlatform
-        ? `3. For each picked section, create one English prompt (150-300 words). Xiaohongshu is an image-gallery-first platform — aim for 6-9 illustrations total (cover + 5-8 body illustrations). Pick sections with the most visual potential: comparisons, workflows, layouts, configs, before/after, architecture. Even text-heavy sections can be illustrated with clever visual metaphors. Default to INCLUDE rather than SKIP.`
-        : `3. For each picked section, create one English prompt (150-300 words).`,
-      isXhsPlatform
-        ? `4. Cover the article comprehensively — each major topic deserves a visual.`
-        : `4. Most sections do NOT need illustrations. Err on the side of skipping.`,
-      ``,
-      `CRITICAL — Aspect ratio: Every "prompt" string MUST end with exactly this sentence: "Aspect ratio: ${spec.illustrationRatio}.". Do NOT omit it. Do NOT change it.`,
-      ``,
-      isXhsPlatform
-        ? `PICK generously: UI screenshots, before/after comparisons, dashboards, config panels, architecture diagrams, concept metaphors, workflow maps, tables as diagrams, code-to-output transformations. Only SKIP sections that are pure text conclusions, disclaimers, or tag lists.`
-        : `PICK ONLY sections with genuinely visual content: UI screenshots, before/after comparisons, dashboards, config panels, architecture diagrams.`,
-      isXhsPlatform
-        ? ``
-        : `SKIP everything else: concepts, introductions, conclusions, risk warnings, code blocks, prompt templates, lists, text explanations, usage tips.`,
-      ``,
-      `Return a JSON array. Each item: {"index": <N>, "filename": "<short-english-slug>.png", "name": "<中文简短描述>", "prompt": "<english prompt>"}.`,
-      `Filename rules: short English slug (2-5 words), lowercase, hyphens, ends with .png. Examples: "install-guide.png", "three-panel-layout.png".`,
-      `Name rules: short Chinese description (5-15 chars) summarizing the image topic. Examples: "安装流程图", "三栏布局对比", "Git 工作树并行开发".`,
-      `Return ONLY the JSON array, no markdown, no explanation.`,
-      ``,
-      `SECTIONS:`,
-      allSectionsText,
+      `FULL ARTICLE TEXT:`,
+      body,
     ].join("\n");
 
-    const BATCH_SYSTEM_PROMPT = [
-      `You select and create illustration prompts for article sections that need images.`,
-      `Visual: sketch-knowledge-kit — warm paper, black marker, orange accent, hand-drawn.`,
-      isXhsPlatform
-        ? `Xiaohongshu is an image-gallery platform. Generate prompts for 6-9 sections that have the most visual potential.`
-        : `Be selective: only pick sections with concrete visual content.`,
-      `CRITICAL: Every prompt MUST end with the exact sentence specifying the required aspect ratio.`,
-      `CRITICAL: Return ONLY a valid JSON array. Escape all double quotes inside prompt strings as \\". Do NOT use unescaped double quotes within string values.`,
-      `Each item MUST include "filename" and "name" fields. Example: [{"index":1,"filename":"install-guide.png","name":"安装流程图","prompt":"A hand-drawn illustration... Aspect ratio: 3:4 portrait (1080×1440 pixels)."}]`,
+    const illSystemPrompt = [
+      `Create illustration prompts following sketch-knowledge-kit. Fill EVERY field below with exact Chinese labels. No generic descriptions.`,
+      ``,
+      `For each section you pick, the prompt must fill this exact structure:`,
+      ``,
+      `Canvas: ${spec.illustrationRatio}, [exact pixels].`,
+      `Section: "[Chinese heading]". Mode: [before-after / walkthrough / single-feature / conceptual-diagram].`,
+      `Scene — every element labeled in Chinese:`,
+      `- Left: [element] labeled "[Chinese]"`,
+      `- Center: [element] labeled "[Chinese]"`,
+      `- Right: [element] labeled "[Chinese]"`,
+      `- Arrows between: [describe] labeled "[Chinese]"`,
+      `Orange (#E67E22) on exactly 1-2 elements: [list them].`,
+      `Labels: section heading as hand-drawn Chinese title. 1-3 key Chinese terms as handwritten labels with positions.`,
+      `Color: #F5F0E8 paper+grain, black fine-tip marker, orange only on specified elements. 70%+ whitespace.`,
+      `Avoid: dark bg, screenshots, OS chrome, glossy UI, 3D, gradients, computer fonts, pure white, photos.`,
+      ``,
+      `DECISION RULES: Pick sections with comparisons, workflows, architecture, before/after, processes. Skip conclusions, disclaimers, tags, code blocks.`,
+      ``,
+      `Every prompt MUST end with: "Aspect ratio: ${spec.illustrationRatio}."`,
+      `Return JSON array: [{"index": <1-based N>, "filename": "<slug>.png", "name": "<Chinese description>", "prompt": "<filled template above>"}].`,
+      `Return ONLY JSON. No markdown.`,
     ].join("\n");
 
-    try {
-      const batchResp = await input.llm.chat({
-        model: input.llmModel,
-        messages: [
-          { role: "system", content: BATCH_SYSTEM_PROMPT },
-          { role: "user", content: batchUserPrompt },
-        ],
-        temperature: 0.7,
-        maxTokens: isXhsPlatform ? 16384 : 4096,
-      });
-      const raw = (batchResp.content ?? "").replace(/```(?:json)?\s*/g, "").replace(/```/g, "").trim();
-      const jsonMatch = raw.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[0]) as Array<{ index: number; prompt: string; filename?: string; name?: string }>;
-          for (const item of parsed) {
-            const idx = item.index - 1;
-            if (idx >= 0 && idx < sections.length && item.prompt && item.prompt.trim()) {
-              const filename = typeof item.filename === "string" && item.filename.trim().length > 0
-                ? item.filename.trim()
-                : `illus-${String(idx + 1).padStart(2, "0")}.png`;
-              const name = typeof item.name === "string" && item.name.trim().length > 0
-                ? item.name.trim()
-                : `插图 ${idx + 1}`;
-              illustrationPrompts.push({
-                index: idx,
-                text: sections[idx]!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 300),
-                prompt: item.prompt.trim(),
-                filename,
-                name,
-              });
-            }
-          }
-        } catch (jsonErr: unknown) {
-          process.stderr.write("batch illustration JSON parse error: " + (jsonErr instanceof Error ? jsonErr.message : String(jsonErr)) + "\n");
-          // Fallback: try to salvage individual {index, filename, prompt} objects
-          const objPattern = /\{\s*"index"\s*:\s*(\d+)\s*,[^}]*"prompt"\s*:\s*"([\s\S]*?)"\s*\}/g;
-          let fallbackMatch: RegExpExecArray | null;
-          while ((fallbackMatch = objPattern.exec(raw)) !== null) {
-            try {
-              const idx = parseInt(fallbackMatch[1]!, 10) - 1;
-              const prompt = fallbackMatch[2]!.replace(/\\"/g, '"').replace(/\\n/g, '\n');
-              // Try to extract filename from the match if present
-              const fnMatch = fallbackMatch[0].match(/"filename"\s*:\s*"([^"]+)"/);
-              const filename = fnMatch?.[1] ?? `illus-${String(idx + 1).padStart(2, "0")}.png`;
-              const nmMatch = fallbackMatch[0].match(/"name"\s*:\s*"([^"]+)"/);
-              const name = nmMatch?.[1] ?? `插图 ${idx + 1}`;
-              if (idx >= 0 && idx < sections.length && prompt.trim().length > 0) {
-                illustrationPrompts.push({
-                  index: idx,
-                  text: sections[idx]!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 300),
-                  prompt: prompt.trim(),
-                  filename,
-                  name,
-                });
-              }
-            } catch { /* skip malformed item */ }
-          }
+    const resp = await input.llm.chat({
+      model: input.llmModel,
+      messages: [
+        { role: "system", content: illSystemPrompt },
+        { role: "user", content: illUserPrompt },
+      ],
+      temperature: 0.7,
+      maxTokens: 16384,
+    });
+
+    const raw = (resp.content ?? "").replace(/```(?:json)?\s*/g, "").replace(/```/g, "").trim();
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as Array<{ index: number; prompt: string; filename?: string; name?: string }>;
+      for (const item of parsed) {
+        const idx = item.index - 1;
+        if (idx >= 0 && idx < sections.length && item.prompt?.trim() && !imgRefRe2.test(sections[idx]!)) {
+          illustrationPrompts.push({
+            index: idx,
+            text: sections[idx]!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 300),
+            prompt: item.prompt.trim(),
+            filename: item.filename?.trim() || `illus-${String(idx + 1).padStart(2, "0")}.png`,
+            name: item.name?.trim() || `插图 ${idx + 1}`,
+          });
         }
       }
-    } catch (err: unknown) {
-      process.stderr.write("batch illustration prompt error: " + (err instanceof Error ? err.message : String(err)) + "\n");
     }
+  } catch (err: unknown) {
+    process.stderr.write(`illustration prompt error: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 
-  // Post-process: ensure every prompt includes the required aspect ratio
-  const ratioSuffix = spec.illustrationRatio.includes("3:4")
-    ? " Aspect ratio: 3:4 portrait (1080×1440 pixels)."
-    : spec.illustrationRatio.includes("16:9")
-      ? " Aspect ratio: 16:9 landscape."
-      : "";
-  if (ratioSuffix) {
-    for (const il of illustrationPrompts) {
-      if (!il.prompt.includes("Aspect ratio") && !il.prompt.includes("aspect ratio")) {
-        il.prompt = il.prompt.trimEnd() + ratioSuffix;
-      }
-    }
-    for (const cp of coverPrompts) {
-      if (!cp.prompt.includes("Aspect ratio") && !cp.prompt.includes("aspect ratio")) {
-        cp.prompt = cp.prompt.trimEnd() + ratioSuffix;
-      }
-    }
+  // Post-process: force correct aspect ratio on every prompt
+  const illRatioSuffix = spec.illustrationRatio ? ` Aspect ratio: ${spec.illustrationRatio}.` : "";
+  for (const il of illustrationPrompts) {
+    // Strip any existing aspect-ratio text (LLM may have generated wrong one), then append correct
+    il.prompt = il.prompt.replace(/\s*Aspect ratio:.*?\.?\s*$/i, "").trimEnd();
+    if (illRatioSuffix) il.prompt += illRatioSuffix;
+  }
+  for (const cp of coverPrompts) {
+    cp.prompt = cp.prompt.replace(/\s*Aspect ratio:.*?\.?\s*$/i, "").trimEnd();
+    if (cp.size) cp.prompt += ` Aspect ratio: ${cp.label} (${cp.size}).`;
   }
 
   // save prompts.json
   const promptsData = {
     platform: input.platform,
     title,
+    model: input.llmModel,
     coverPrompts,
     illustrationPrompts,
   };
@@ -772,7 +795,7 @@ export const orchestratePlatformPrompts = async (
     return '<div class="ph-box">' + promptText.replace(/</g, "&lt;") + '</div>' +
       nameHtml +
       '<div class="ph-row"><span class="ph-label">' + label + ' · ' + sizeHint + '</span>' +
-      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(this.dataset.prompt)" data-prompt="' + promptText.replace(/"/g, "&quot;").replace(/\n/g, "\\n") + '">📋 复制</button>' +
+      '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '">📋 复制</button>' +
       '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encoded + '" target="_blank">🤖 ChatGPT</a></span></div>';
   };
 
@@ -823,15 +846,17 @@ export const orchestratePlatformPrompts = async (
       }
     }
 
-    const galleryHtml = galleryItems.length > 0
-      ? '<div class="xhs-gallery"><div class="xhs-gallery-label">📷 图集 · ' + galleryItems.length + ' 张</div><div class="xhs-gallery-scroll">' + galleryItems.join("") + '</div></div>'
+    // Inject slide counter into each gallery item before closing xhs-slide div
+    const totalSlides = galleryItems.length;
+    const galleryHtml = totalSlides > 0
+      ? '<div class="xhs-gallery"><div class="xhs-gallery-label">📷 图集 · ' + totalSlides + ' 张</div><div class="xhs-gallery-scroll">' + galleryItems.map(function (item, idx) { return item.replace(/<\/div>$/, '<div class="slide-counter">' + (idx + 1) + '/' + totalSlides + '</div></div>'); }).join("") + '</div></div>'
       : "";
 
     // Article text
     const articleBlocks: string[] = [];
     for (let i = 0; i < sections.length; i++) {
       const secText = sections[i]!;
-      const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 500);
+      const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "");
       const headingMatch = clean.match(/^(.+?)[：:\n]/);
       const heading = headingMatch ? headingMatch[1]!.slice(0, 40) : "";
       const body = heading ? clean.slice(heading.length).replace(/^[：:\s]+/, "") : clean;
@@ -861,9 +886,12 @@ export const orchestratePlatformPrompts = async (
         coverHtml = '<div class="cover-wrap">' + promptActions(coverPrompts[0]!.prompt, '封面', coverPrompts[0]!.size) + '</div>';
       }
     }
-    sectionBlocks = coverHtml + sections.map(function (secText: string, i: number) {
+    let promptCounter2 = 0;
+    const totalPrompts2 = (coverHtml ? 1 : 0) + sections.filter(function (_s, i) { return promptMap.has(i); }).length;
+
+    sectionBlocks = (coverHtml ? coverHtml.replace(/<\/div>$/, '<div class="slide-counter">' + (++promptCounter2) + '/' + totalPrompts2 + '</div></div>') : "") + sections.map(function (secText: string, i: number) {
       const promptText = promptMap.get(i);
-      const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 500);
+      const clean = secText.replace(/^#+\s*/gm, "").replace(/\*\*/g, "");
       const headingMatch = clean.match(/^(.+?)[：:\n]/);
       const heading = headingMatch ? headingMatch[1]!.slice(0, 40) : "";
       const body = heading ? clean.slice(heading.length).replace(/^[：:\s]+/, "") : clean;
@@ -880,7 +908,11 @@ export const orchestratePlatformPrompts = async (
       const promptHtml = promptText
         ? promptActions(promptText, '📷 插图 ' + (i + 1), '16:9')
         : "";
-      return '<div class="sec-block">' + headingHtml + '<div class="sec-body">' + bodyHtml + '</div>' + existingImgs + promptHtml + '</div>';
+      let blockHtml2 = '<div class="sec-block">' + headingHtml + '<div class="sec-body">' + bodyHtml + '</div>' + existingImgs + promptHtml + '</div>';
+      if (promptHtml) {
+        blockHtml2 = blockHtml2.replace(/<\/div>$/, '<div class="slide-counter">' + (++promptCounter2) + '/' + totalPrompts2 + '</div></div>');
+      }
+      return blockHtml2;
     }).join("");
   }
 
@@ -896,7 +928,7 @@ export const orchestratePlatformPrompts = async (
       ".xhs-slide{background:#fffdf8;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);position:relative;transition:transform .2s ease,box-shadow .2s ease}",
       ".xhs-slide:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(44,36,22,.08),0 2px 6px rgba(44,36,22,.05)}",
       ".xhs-slide-placeholder{background:linear-gradient(168deg,#fffdf8 0%,#fdf9f2 40%,#faf4ea 100%);border:2px dashed #e8d5c0;padding:18px 14px 12px}",
-      ".xhs-slide-placeholder .ph-box{margin:0;width:100%;aspect-ratio:3/4;max-height:none;border-color:#e8d5c0;background:rgba(255,252,247,.7);overflow-y:auto;display:flex;align-items:center}",
+      ".xhs-slide-placeholder .ph-box{margin:0;width:100%;aspect-ratio:3/4;max-height:none;border-color:#e8d5c0;background:rgba(255,252,247,.7);overflow-y:auto;padding:12px 12px;font-size:11px;line-height:1.55}",
       ".xhs-slide-img{width:100%;display:block}",
       ".xhs-article{background:#fffdf8;border-radius:14px;padding:28px 20px;box-shadow:0 4px 24px rgba(44,36,22,.06),0 1px 3px rgba(44,36,22,.04);line-height:1.95;position:relative}",
       ".xhs-article::before{content:'';position:absolute;top:0;left:20px;right:20px;height:3px;background:linear-gradient(90deg,#ff2442,#ff6b81,#ff2442);border-radius:0 0 3px 3px;opacity:.7}",
@@ -936,6 +968,7 @@ export const orchestratePlatformPrompts = async (
   h2.push(isXhsCss2);
   h2.push(".ph-box{background:linear-gradient(165deg,#fffdf8,#fdf9f2);border:2px dashed #e8d5c0;padding:18px 16px;font-size:12px;color:#6b5e4f;line-height:1.7;white-space:pre-wrap;max-height:200px;overflow-y:auto;border-radius:8px}");
   h2.push(".ph-name{font-size:14px;color:#1a1008;font-weight:700;padding:10px 14px 0;text-align:center;letter-spacing:.02em}");
+  h2.push(".slide-counter{font-size:10px;color:#999;font-family:'Georgia',serif;opacity:.6;text-align:right;padding:4px 12px 0}");
   h2.push(".ph-row{display:flex;align-items:center;justify-content:space-between;padding:6px 14px 4px}");
   h2.push(".ph-label{font-size:10px;color:#b8a99a;font-family:'SF Mono','ui-monospace',monospace;letter-spacing:.03em}");
   h2.push(".ph-btns{display:flex;gap:8px}");

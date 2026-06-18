@@ -42,7 +42,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <thead>
           <tr>
             <th>视频</th>
-            <th>更新时间</th>
+            <th class="sortable" data-sort="originalDate">下载时间</th>
+            <th class="sortable" data-sort="uploadDate">上传时间</th>
+            <th class="sortable" data-sort="updatedAt">更新时间</th>
             <th>X</th>
             <th>小红书</th>
             <th>公众号</th>

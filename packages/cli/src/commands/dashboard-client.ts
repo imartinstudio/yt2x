@@ -1,7 +1,7 @@
 export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", xiaohongshu: "小红书", wechat: "公众号", bilibili: "B站" };
     const platformOrder = ["x", "xiaohongshu", "wechat", "bilibili"];
     let payload = null;
-    let selectedId = null;
+    let selectedId = localStorage.getItem("yt2x.selectedVideoId");
     let wechatThemes = [];
     let themeModalVideoId = null;
     let selectedWechatTheme = "notion-doc";
@@ -23,6 +23,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     async function load() {
       const resp = await fetch("/api/videos");
       payload = await resp.json();
+      if (selectedId && !payload.videos.some((v) => v.videoId === selectedId)) selectedId = null;
       if (!selectedId && payload.videos.length > 0) selectedId = payload.videos[0].videoId;
       $("sourceLine").textContent = payload.videos.length + " 个视频 · " + payload.articleOutDir;
       render();
@@ -119,6 +120,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       const prev = document.querySelector("tr.active");
       if (prev) prev.classList.remove("active");
       selectedId = videoId;
+      localStorage.setItem("yt2x.selectedVideoId", videoId);
       // highlight new row
       const next = document.querySelector('tr[data-id="' + CSS.escape(videoId) + '"]');
       if (next) next.classList.add("active");

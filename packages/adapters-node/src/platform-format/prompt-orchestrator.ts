@@ -268,9 +268,15 @@ export const previewExistingArticleImages = async (
   promptMap?: Map<number, string>,
 ): Promise<{ html: string; coverCount: number; illCount: number } | null> => {
   const { readdir, readFile: rf } = await import("node:fs/promises");
-  const imageDir = path.join(articleDir, "images");
+  // X uses images/; other platforms use <format-dir>/images/ with fallback to images/
+  const platformImageDir = platform === "x" ? "images" : `${platform === "xiaohongshu" ? "xiaohongshu-format" : platform === "wechat" ? "wechat-format" : "bilibili-format"}/images`;
+  const imageDir = path.join(articleDir, platformImageDir);
+  const fallbackDir = platform !== "x" ? path.join(articleDir, "images") : null;
   let entries: string[] = [];
   try { entries = await readdir(imageDir); } catch { entries = []; }
+  if (fallbackDir) {
+    try { entries.push(...(await readdir(fallbackDir)).filter((f) => !entries.includes(f))); } catch { /* no fallback */ }
+  }
   const imageSet = new Set(entries);
 
   // Read article text
@@ -297,7 +303,8 @@ export const previewExistingArticleImages = async (
   const articleTitleClean = title.replace(/\*\*/g, "");
   const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[platform] ?? platform;
   const videoId = path.basename(articleDir);
-  const imgUrl = (f: string) => "/api/file-image?videoId=" + encodeURIComponent(videoId) + "&file=" + encodeURIComponent(f);
+  const platformSubdir = platform === "x" ? "" : (platform === "xiaohongshu" ? "xiaohongshu-format" : platform === "wechat" ? "wechat-format" : "bilibili-format");
+  const imgUrl = (f: string) => "/api/file-image?videoId=" + encodeURIComponent(videoId) + "&file=" + encodeURIComponent(f) + (platformSubdir ? "&subdir=" + encodeURIComponent(platformSubdir) : "");
   const imgExists = (f: string) => imageSet.has(f);
   const imgRefRe = /!\[.*?\]\(images\/([^)]+)\)/g;
 
@@ -698,26 +705,36 @@ export const orchestratePlatformPrompts = async (
       body,
     ].join("\n");
 
+    const isXhsIll = input.platform === "xiaohongshu";
     const illSystemPrompt = [
-      `Create illustration prompts following sketch-knowledge-kit. Fill EVERY field below with exact Chinese labels. No generic descriptions.`,
+      isXhsIll
+        ? `Xiaohongshu images are NOTE CARDS, not illustrations. Each 3:4 image is a self-contained knowledge card the reader can study — like a well-designed notebook page.`
+        : `Create illustration prompts following sketch-knowledge-kit. Fill EVERY field below with exact Chinese labels. No generic descriptions.`,
       ``,
-      `For each section you pick, the prompt must fill this exact structure:`,
+      isXhsIll
+        ? `CRITICAL: NOT a simplified visual metaphor. An INFORMATION-DENSE page with 40-60% handwritten Chinese text. Only 20-30% whitespace. The reader should be able to READ the image.`
+        : `For each section you pick, the prompt must fill this exact structure:`,
       ``,
-      `Canvas: ${spec.illustrationRatio}, [exact pixels].`,
-      `Section: "[Chinese heading]". Mode: [before-after / walkthrough / single-feature / conceptual-diagram].`,
-      `Scene — every element labeled in Chinese:`,
-      `- Left: [element] labeled "[Chinese]"`,
-      `- Center: [element] labeled "[Chinese]"`,
-      `- Right: [element] labeled "[Chinese]"`,
-      `- Arrows between: [describe] labeled "[Chinese]"`,
-      `Orange (#E67E22) on exactly 1-2 elements: [list them].`,
-      `Labels: section heading as hand-drawn Chinese title. 1-3 key Chinese terms as handwritten labels with positions.`,
-      `Color: #F5F0E8 paper+grain, black fine-tip marker, orange only on specified elements. 70%+ whitespace.`,
-      `Avoid: dark bg, screenshots, OS chrome, glossy UI, 3D, gradients, computer fonts, pure white, photos.`,
+      isXhsIll
+        ? `Canvas: 3:4 portrait, 1080x1440px. Section: "[Chinese heading]". This is a Xiaohongshu knowledge card.`
+        : `Canvas: ${spec.illustrationRatio}, [exact pixels].`,
+      isXhsIll
+        ? `LAYOUT (top to bottom): 1. TITLE (top 10-15%): Bold hand-drawn Chinese heading, orange underline. 2. CORE ARGUMENT (15-20%): 2-3 sentences summarizing the thesis. 3. DETAILED CONTENT (40-50%): Numbered steps, before/after comparisons, bullet takeaways, concrete examples — ALL in readable hand-drawn Chinese. Each point a complete thought. 4. BOTTOM BAR (5-10%): Horizontal line + article short title in small script.`
+        : `Section: "[Chinese heading]". Mode: [before-after / walkthrough / single-feature / conceptual-diagram].`,
+      isXhsIll
+        ? `STYLE: #F5F0E8 paper+grain. Black marker for borders/dividers/icons. Orange (#E67E22) ONLY on title underline + 1-2 highlight boxes. ALL text hand-drawn Chinese, varying sizes. Simple hand-drawn icons.`
+        : `Scene — every element labeled in Chinese: Left/Center/Right/Arrows with exact "[Chinese]" labels. Orange on 1-2 elements. Labels: heading + 1-3 key terms.`,
+      isXhsIll
+        ? `Avoid: dark bg, screenshots, glossy UI, 3D, computer fonts, pure white.`
+        : `Color: #F5F0E8 paper+grain, black marker, orange only on specified elements. 70%+ whitespace. Avoid: dark bg, screenshots, OS chrome, glossy UI, 3D, gradients, computer fonts, pure white, photos.`,
       ``,
-      `DECISION RULES: Pick sections with comparisons, workflows, architecture, before/after, processes. Skip conclusions, disclaimers, tags, code blocks.`,
+      isXhsIll
+        ? `Pick ALL major sections. Default to INCLUDE. Skip only pure tag lists and disclaimers.`
+        : `DECISION RULES: Pick sections with comparisons, workflows, architecture, before/after, processes. Skip conclusions, disclaimers, tags, code blocks.`,
       ``,
-      `Every prompt MUST end with: "Aspect ratio: ${spec.illustrationRatio}."`,
+      isXhsIll
+        ? `Every prompt MUST end with: "Aspect ratio: 3:4 portrait (1080x1440 pixels)."`
+        : `Every prompt MUST end with: "Aspect ratio: ${spec.illustrationRatio}."`,
       `Return JSON array: [{"index": <1-based N>, "filename": "<slug>.png", "name": "<Chinese description>", "prompt": "<filled template above>"}].`,
       `Return ONLY JSON. No markdown.`,
     ].join("\n");
@@ -810,7 +827,8 @@ export const orchestratePlatformPrompts = async (
 
   const isXhs2 = input.platform === "xiaohongshu";
   const videoId2 = path.basename(articleDir);
-  const imgUrl2 = function (f: string) { return "/api/file-image?videoId=" + encodeURIComponent(videoId2) + "&file=" + encodeURIComponent(f); };
+  const platformSubdir2 = input.platform === "x" ? "" : (input.platform === "xiaohongshu" ? "xiaohongshu-format" : input.platform === "wechat" ? "wechat-format" : "bilibili-format");
+  const imgUrl2 = function (f: string) { return "/api/file-image?videoId=" + encodeURIComponent(videoId2) + "&file=" + encodeURIComponent(f) + (platformSubdir2 ? "&subdir=" + encodeURIComponent(platformSubdir2) : ""); };
 
   let sectionBlocks: string;
 

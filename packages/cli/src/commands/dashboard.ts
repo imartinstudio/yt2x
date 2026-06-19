@@ -966,32 +966,29 @@ const handleDashboardRequest = async (
   if (req.method === "GET" && url.pathname === "/api/file-image") {
     const videoId = url.searchParams.get("videoId");
     const file = url.searchParams.get("file");
+    const subdir = url.searchParams.get("subdir");
     if (videoId === null || !isSafeVideoId(videoId) || file === null || file.length === 0 || file.includes("/") || file.includes("\\") || file.includes("..")) {
       sendJson(res, 400, { error: "Invalid videoId or file." });
       return;
     }
-    const imageDir = path.join(path.resolve(opts.articleOutDir), videoId, "images");
-    const imagePath = path.join(imageDir, file);
-    if (!path.resolve(imagePath).startsWith(path.resolve(imageDir) + path.sep)) {
-      sendJson(res, 400, { error: "Invalid file path." });
-      return;
+    const articleRoot = path.join(path.resolve(opts.articleOutDir), videoId);
+    // Platform-specific dir first, then fallback to images/
+    const dirs = subdir ? [path.join(articleRoot, subdir, "images"), path.join(articleRoot, "images")] : [path.join(articleRoot, "images")];
+    let served = false;
+    for (const imageDir of dirs) {
+      const imagePath = path.join(imageDir, file);
+      if (!path.resolve(imagePath).startsWith(path.resolve(imageDir) + path.sep)) continue;
+      try {
+        const ext = path.extname(file).toLowerCase();
+        const mimeTypes: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" };
+        const data = await readFile(imagePath);
+        res.writeHead(200, { "content-type": mimeTypes[ext] ?? "application/octet-stream", "cache-control": "public, max-age=3600" });
+        res.end(data);
+        served = true;
+        break;
+      } catch { /* try next dir */ }
     }
-    try {
-      const ext = path.extname(file).toLowerCase();
-      const mimeTypes: Record<string, string> = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".svg": "image/svg+xml",
-      };
-      const data = await readFile(imagePath);
-      res.writeHead(200, { "content-type": mimeTypes[ext] ?? "application/octet-stream", "cache-control": "public, max-age=3600" });
-      res.end(data);
-    } catch {
-      sendJson(res, 404, { error: "Image not found." });
-    }
+    if (!served) sendJson(res, 404, { error: "Image not found." });
     return;
   }
 

@@ -82,9 +82,20 @@ const resolveFlatArticleDir = async (videoRoot: string, videoId: string): Promis
 };
 
 export const findCoverImage = async (articleDir: string): Promise<string | null> => {
+  // cover.webp is at root images/; other images may be in x-format/images/
   const imagesDir = path.join(articleDir, "images");
+  const fallbackDir = path.join(articleDir, "x-format", "images");
   for (const name of COVER_CANDIDATES) {
     const p = path.join(imagesDir, name);
+    try {
+      await stat(p);
+      return p;
+    } catch {
+      // 继续找
+    }
+  }
+  for (const name of COVER_CANDIDATES) {
+    const p = path.join(fallbackDir, name);
     try {
       await stat(p);
       return p;

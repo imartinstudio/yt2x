@@ -300,6 +300,7 @@ export const renderArticleImages = async (
   }
 
   let rendered = articleMd;
+  // scene_* images are article-level artifacts (not platform-specific), stored in root images/.
   const imagesDir = path.join(articleDir, "images");
   await mkdir(imagesDir, { recursive: true });
 

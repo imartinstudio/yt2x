@@ -521,6 +521,8 @@ export type RunSubtitlePipelineOptions = {
   skipBurnIfChineseBurned?: boolean;
   /** 强制重新烧录，覆盖已有 burnt video 并跳过硬字幕检测 */
   force?: boolean;
+  /** 视频原语言（来自 YouTube metadata.language），用于 Layer 1 跳过判断 */
+  videoLanguage?: string;
 };
 
 export type RunSubtitlePipelineResult = {
@@ -589,6 +591,34 @@ export const runSubtitlePipeline = async (
       }
     } catch {
       // If we can't read the file, trust the language code
+    }
+  }
+
+  // When sourceLangCodeMatchesTarget is false but the source IS Chinese (e.g. bare
+  // "zh" vs target "zh-CN"), the language code alone is ambiguous — bare "zh" could
+  // be either Simplified or Traditional. Run content detection to check whether the
+  // subtitle content is already Simplified Chinese; if so, skip translation + burn.
+  if (!sourceLangCodeMatchesTarget && !contentMatchesTargetLang &&
+      isChineseLanguageCode(manifest.source_language) &&
+      isSimplifiedChineseCode(subtitle.targetLang) &&
+      subResult.sourceSubtitle !== undefined) {
+    try {
+      const sampleText = await readFile(subResult.sourceSubtitle, "utf8");
+      const detected = detectSubtitleLanguage(sampleText);
+      if (detected === "zh") {
+        // Content IS Chinese — now check if it's already Simplified
+        const { simplifyChinese } = await import("./simplify-chinese.js");
+        const simplified = await simplifyChinese(sampleText.slice(0, 3_000));
+        if (simplified === sampleText.slice(0, 3_000)) {
+          // Already Simplified Chinese — skip translation + burn
+          contentMatchesTargetLang = true;
+          warnings.push(
+            `source_language is ${manifest.source_language} but content is already Simplified Chinese; skipping translation`,
+          );
+        }
+      }
+    } catch {
+      // If detection fails, fall through to normal translation path
     }
   }
 
@@ -667,6 +697,7 @@ export const runSubtitlePipeline = async (
         : {}),
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       ...(opts.force !== undefined ? { force: opts.force } : {}),
+      ...(opts.videoLanguage !== undefined ? { videoLanguage: opts.videoLanguage } : {}),
     });
 
     if (burnResult.burnedPath !== undefined) {
@@ -675,6 +706,10 @@ export const runSubtitlePipeline = async (
 
     if (burnResult.skipReason === "already_exists") {
       warnings.push("burned video already exists, skipping burn step");
+    } else if (burnResult.skipReason === "video_is_chinese") {
+      warnings.push(
+        "video original language is Chinese, skipping subtitle burn (Layer 1)",
+      );
     } else if (burnResult.skipReason === "chinese_burned_detected") {
       warnings.push(
         "original video already has burned Chinese subtitles (detected), skipping re-burn",

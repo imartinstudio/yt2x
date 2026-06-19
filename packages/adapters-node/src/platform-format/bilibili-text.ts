@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { PlatformFormatInput, PlatformFormatResult, BilibiliMetadata } from "./types.js";
 
-const METADATA_FILE = "bilibili-metadata.json";
+const METADATA_FILE = "bilibili-format/bilibili-metadata.json";
 const OUTPUT_DIR = "bilibili-format";
 const OUTPUT_FILE = "video-info.md";
 

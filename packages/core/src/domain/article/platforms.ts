@@ -45,11 +45,11 @@ export const PLATFORM_ARTICLE_SPECS = {
     adaptationMode: "preserve-claims",
     outputs: [
       {
-        path: "xiaohongshu-article.md",
+        path: "xiaohongshu-format/xiaohongshu-article.md",
         description: "小红书图文笔记文案，包含统一标题、正文和核心标签。",
       },
       {
-        path: "xiaohongshu-metadata.json",
+        path: "xiaohongshu-format/xiaohongshu-metadata.json",
         description: "小红书标题、标签、封面/配图建议等结构化元数据。",
       },
     ],
@@ -72,11 +72,11 @@ export const PLATFORM_ARTICLE_SPECS = {
     adaptationMode: "preserve-claims",
     outputs: [
       {
-        path: "wechat-article.md",
+        path: "wechat-format/wechat-article.md",
         description: "适合公众号排版发布的完整 Markdown 长文。",
       },
       {
-        path: "wechat-metadata.json",
+        path: "wechat-format/wechat-metadata.json",
         description: "公众号标题候选、摘要、导语和封面图建议。",
       },
     ],
@@ -99,11 +99,11 @@ export const PLATFORM_ARTICLE_SPECS = {
     adaptationMode: "preserve-claims",
     outputs: [
       {
-        path: "bilibili-article.md",
+        path: "bilibili-format/bilibili-article.md",
         description: "哔哩哔哩视频简介、标题候选、分区和标签建议。",
       },
       {
-        path: "bilibili-metadata.json",
+        path: "bilibili-format/bilibili-metadata.json",
         description: "哔哩哔哩标题、分区、标签和章节时间线草案。",
       },
     ],

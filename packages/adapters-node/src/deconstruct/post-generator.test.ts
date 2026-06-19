@@ -9,8 +9,8 @@ describe("generateClipsPosts", () => {
   it("writes clip posts with Martin AI Coding Workflow 4-segment format", async () => {
     const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-posts-"));
     try {
-      const clipsDir = path.join(articleDir, "clips");
-      await mkdir(clipsDir);
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
       await writeFile(
         path.join(articleDir, "article.md"),
         "# Claude Code 从 0 到 1 全攻略：90% 的用户只用了 10% 的功能\n\n正文",

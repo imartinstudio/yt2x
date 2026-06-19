@@ -4,11 +4,15 @@ import { burnSubtitles } from "./burn-subtitles.js";
 import { detectBurnedSubtitles, type DetectBurnedSubtitlesResult } from "./detect-burned-subs.js";
 import type { ProcessRunner } from "../process/index.js";
 
+/** 判断语言代码是否属于中文（简体或繁体） */
+const isChineseLanguageCode = (lang: string): boolean => /^zh(?:[-_][a-z0-9]+)?$/iu.test(lang);
+
 export type BurnZhSubtitlesSkipReason =
   | "missing_zh_srt"
   | "missing_mp4"
   | "already_exists"
   | "chinese_burned_detected"
+  | "video_is_chinese"
   | "stale_burned_removed";
 
 export type BurnZhSubtitlesForVideoOptions = {
@@ -22,6 +26,8 @@ export type BurnZhSubtitlesForVideoOptions = {
   signal?: AbortSignal;
   /** 强制重新烧录，覆盖已有 burnt video 并跳过硬字幕检测 */
   force?: boolean;
+  /** 视频原语言（来自 YouTube metadata.language）。若未提供，自动从 metadata.json 读取。 */
+  videoLanguage?: string;
 };
 
 export type BurnZhSubtitlesForVideoResult = {
@@ -59,6 +65,24 @@ export const burnZhSubtitlesForVideo = async (
   const videoSubdir = path.join(opts.videoDir, "video");
   const zhSrtPath = path.join(videoSubdir, "full.zh.srt");
   const skipIfChineseBurned = opts.skipIfChineseBurned !== false;
+
+  // ── Layer 1: video language check ──
+  // If the video's original audio language is Chinese, there is zero reason to
+  // burn Chinese subtitles — the viewer already understands the spoken content.
+  // This is the cheapest and most reliable check: one metadata field read.
+  let videoLanguage = opts.videoLanguage?.trim() || "";
+  if (!videoLanguage) {
+    try {
+      const metaPath = path.join(opts.videoDir, "metadata.json");
+      const meta = JSON.parse(await readFile(metaPath, "utf8")) as { language?: string };
+      videoLanguage = String(meta.language ?? "").trim();
+    } catch {
+      // metadata.json not available — fall through to remaining layers
+    }
+  }
+  if (videoLanguage && isChineseLanguageCode(videoLanguage)) {
+    return { burned: false, skipped: true, skipReason: "video_is_chinese" };
+  }
 
   try {
     await access(zhSrtPath);

@@ -97,6 +97,14 @@ const burnSubtitlesForVideo = async (
     ...(force ? { force } : {}),
   });
 
+  if (result.skipReason === "video_is_chinese") {
+    logger.info(
+      { videoId },
+      "video original language is Chinese, skipping subtitle burn (Layer 1)",
+    );
+    return;
+  }
+
   if (result.skipReason === "chinese_burned_detected") {
     logger.info(
       { videoId, detect: result.detect },
@@ -191,11 +199,11 @@ const collectVideoSummary = async (
       article = "done";
     } catch { /* */ }
     try {
-      await access(path.join(articleDir, "x-thread.md"));
+      await access(path.join(articleDir, "x-format", "x-thread.md"));
       articleThread = "done";
     } catch { /* */ }
     try {
-      await access(path.join(articleDir, "x-short.md"));
+      await access(path.join(articleDir, "x-format", "x-short.md"));
       articleShort = "done";
     } catch { /* */ }
   } else if (status?.steps.article?.status === "failed") {

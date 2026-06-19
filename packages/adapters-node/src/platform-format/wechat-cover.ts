@@ -6,7 +6,7 @@ import type { PlatformFormatInput, PlatformFormatResult, WechatMetadata } from "
 const COVER_1_1 = "cover-1-1.png";
 const COVER_WIDE = "cover-wide.png";
 
-const METADATA_FILE = "wechat-metadata.json";
+const METADATA_FILE = "wechat-format/wechat-metadata.json";
 
 const downloadImage = async (url: string, destPath: string, _fetcher = fetch): Promise<void> => {
   let buffer: Buffer;

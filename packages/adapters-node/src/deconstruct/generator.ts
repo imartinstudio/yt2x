@@ -235,13 +235,14 @@ export const parseDeconstructLlmOutput = (raw: string): DeconstructLlmOutput => 
   return result.data;
 };
 
-/** Filter out sections with invalid/zero-duration timecodes */
+/** Filter out sections with invalid/zero-duration timecodes or exceeding 120s max */
 export const filterValidSections = (
   output: DeconstructLlmOutput,
 ): DeconstructLlmOutput => {
+  const MAX_CLIP_DURATION_SEC = 120; // hard limit: no clip may exceed 2 minutes
   const valid = output.sections.filter((s) => {
     const dur = s.timecodes.durationSec;
-    return dur > 0 && s.timecodes.startSec >= 0 && s.timecodes.endSec > s.timecodes.startSec;
+    return dur > 0 && dur <= MAX_CLIP_DURATION_SEC && s.timecodes.startSec >= 0 && s.timecodes.endSec > s.timecodes.startSec;
   });
   return { sections: valid };
 };

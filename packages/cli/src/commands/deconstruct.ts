@@ -158,7 +158,7 @@ export const runDeconstructCommand = async (
     });
 
     // Step 6b: Write .md files only for selected clips
-    const manifestPath = `${articleDir}/clips/clips-manifest.json`;
+    const manifestPath = `${articleDir}/x-format/clips/clips-manifest.json`;
     const manifestRaw = await readFile(manifestPath, "utf8");
     const postManifest = JSON.parse(manifestRaw) as DeconstructManifest;
     const selectedPostPaths = await writeSelectedPostFiles(
@@ -169,13 +169,13 @@ export const runDeconstructCommand = async (
     logger.info({ mdCount: selectedPostPaths.length }, "Deconstruct: .md files written for selected clips");
 
     // Step 7: Clip ONLY selected video segments — 节省裁剪时间和磁盘空间
-    logger.info({ sourceVideo: artifacts.videoPath, outputDir: `${articleDir}/clips` }, "Deconstruct: clipping selected video segments only");
+    logger.info({ sourceVideo: artifacts.videoPath, outputDir: `${articleDir}/x-format/clips` }, "Deconstruct: clipping selected video segments only");
 
     const selectedSections = filtered.sections.filter((_, i) => keepIds.includes(String(i + 1)));
     const clipResults = await clipCandidates(
       artifacts.videoPath,
       selectedSections,
-      `${articleDir}/clips`,
+      `${articleDir}/x-format/clips`,
     );
 
     const successCount = clipResults.filter((r) => r.success).length;
@@ -253,7 +253,7 @@ export const runDeconstructCommand = async (
 /** 从磁盘读取当前 manifest，生成两份审核报告 */
 const generateReports = async (articleDir: string, articleMd: string): Promise<void> => {
   try {
-    const manifestPath = `${articleDir}/clips/clips-manifest.json`;
+    const manifestPath = `${articleDir}/x-format/clips/clips-manifest.json`;
     const manifest = JSON.parse(
       await import("node:fs/promises").then((m) => m.readFile(manifestPath, "utf8")),
     );

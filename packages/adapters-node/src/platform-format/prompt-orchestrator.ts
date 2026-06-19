@@ -268,10 +268,11 @@ export const previewExistingArticleImages = async (
   promptMap?: Map<number, string>,
 ): Promise<{ html: string; coverCount: number; illCount: number } | null> => {
   const { readdir, readFile: rf } = await import("node:fs/promises");
-  // X uses images/; other platforms use <format-dir>/images/ with fallback to images/
+  // X: primary is root images/ (scene_*, cover.webp), fallback is x-format/images/ (x-table-*)
+  // Other platforms: primary is <format-dir>/images/, fallback is root images/
   const platformImageDir = platform === "x" ? "images" : `${platform === "xiaohongshu" ? "xiaohongshu-format" : platform === "wechat" ? "wechat-format" : "bilibili-format"}/images`;
   const imageDir = path.join(articleDir, platformImageDir);
-  const fallbackDir = platform !== "x" ? path.join(articleDir, "images") : null;
+  const fallbackDir = platform === "x" ? path.join(articleDir, "x-format", "images") : path.join(articleDir, "images");
   let entries: string[] = [];
   try { entries = await readdir(imageDir); } catch { entries = []; }
   if (fallbackDir) {
@@ -387,7 +388,7 @@ export const previewExistingArticleImages = async (
       nameHtml +
       '<div class="ph-row"><span class="ph-label">' + labelText + '</span>' +
       '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '">📋 复制</button>' +
-      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(promptText) + '" target="_blank">🤖 ChatGPT</a></span></div>';
+      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(promptText.slice(0, 1000)) + '" target="_blank">🤖 ChatGPT</a></span></div>';
   };
 
   const isXhs = platform === "xiaohongshu";
@@ -479,7 +480,7 @@ export const previewExistingArticleImages = async (
     const coverHtml = coverImg
       ? '<div class="cover-wrap"><img src="' + imgUrl(coverImg) + '" alt="封面" class="cover-img" /><div class="img-label">封面</div></div>'
       : nonXhsCoverPrompts.map(function (cp) {
-          return '<div class="cover-wrap"><div class="ph-box ph-box-cover">' + cp.prompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div><div class="ph-row"><span class="ph-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/</g, "&lt;") : '') + '</span><span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '">📋 复制</button><a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt) + '" target="_blank">🤖 ChatGPT</a></span></div></div>';
+          return '<div class="cover-wrap"><div class="ph-box ph-box-cover">' + cp.prompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div><div class="ph-row"><span class="ph-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/</g, "&lt;") : '') + '</span><span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '">📋 复制</button><a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt.slice(0, 1000)) + '" target="_blank">🤖 ChatGPT</a></span></div></div>';
         }).join("");
 
     // Count total prompt placeholders for X/bilibili preview counter
@@ -499,7 +500,7 @@ export const previewExistingArticleImages = async (
         ? '<div class="ph-box">' + secPrompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div>' +
           '<div class="ph-row"><span class="ph-label">📷 待生成</span>' +
           '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(secPrompt, "utf8").toString("base64") + '">📋 复制</button>' +
-          '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt) + '" target="_blank">🤖 ChatGPT</a></span></div>'
+          '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt.slice(0, 1000)) + '" target="_blank">🤖 ChatGPT</a></span></div>'
         : "";
       let blockHtml = '<div class="sec-block">' + h + '<div class="sec-body">' + b + '</div>' + imgHtml + promptHtml + '</div>';
       if (promptHtml) {
@@ -622,7 +623,7 @@ export const orchestratePlatformPrompts = async (
   let title = "";
   let body = input.articleMd;
   try {
-    const metaPath = path.join(articleDir, `${input.platform}-metadata.json`);
+    const metaPath = path.join(articleDir, `${input.platform}-format`, `${input.platform}-metadata.json`);
     const raw = await readFile(metaPath, "utf8");
     const meta = JSON.parse(raw) as { title?: string; body?: string };
     if (meta.title) title = meta.title;
@@ -637,8 +638,27 @@ export const orchestratePlatformPrompts = async (
   const sections = splitBodyIntoSections(body, input.platform);
   const files: string[] = [];
 
+  // If prompts.json already exists, reuse cached prompts instead of calling the LLM again.
+  // This ensures prompts are generated only once per platform — "重新排版" re-renders
+  // the HTML from cached prompts without re-calling the LLM.
+  const promptsPath = path.join(outputDir, "prompts.json");
+  let coverPrompts: Array<{ label: string; prompt: string; size: string; filename: string; name: string }> = [];
+  let illustrationPrompts: Array<{ index: number; text: string; prompt: string; filename: string; name: string }> = [];
+  let hasCachedPrompts = false;
+  try {
+    const cachedRaw = await readFile(promptsPath, "utf8");
+    const cached = JSON.parse(cachedRaw) as { coverPrompts: typeof coverPrompts; illustrationPrompts: typeof illustrationPrompts };
+    if (Array.isArray(cached.coverPrompts) && Array.isArray(cached.illustrationPrompts)) {
+      coverPrompts = cached.coverPrompts;
+      illustrationPrompts = cached.illustrationPrompts;
+      hasCachedPrompts = true;
+    }
+  } catch {
+    // prompts.json doesn't exist — will generate via LLM below
+  }
+
+  if (!hasCachedPrompts) {
   // generate cover prompts
-  const coverPrompts: Array<{ label: string; prompt: string; size: string; filename: string; name: string }> = [];
   for (const coverSpec of spec.coverRatios) {
     const slug = title.replace(/[^a-zA-Z0-9一-鿿]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).toLowerCase() || "cover";
     const coverFilename = `cover-${slug}.png`;
@@ -769,6 +789,7 @@ export const orchestratePlatformPrompts = async (
   } catch (err: unknown) {
     process.stderr.write(`illustration prompt error: ${err instanceof Error ? err.message : String(err)}\n`);
   }
+  } // end if (!hasCachedPrompts)
 
   // Post-process: force correct aspect ratio on every prompt
   const illRatioSuffix = spec.illustrationRatio ? ` Aspect ratio: ${spec.illustrationRatio}.` : "";
@@ -782,17 +803,18 @@ export const orchestratePlatformPrompts = async (
     if (cp.size) cp.prompt += ` Aspect ratio: ${cp.label} (${cp.size}).`;
   }
 
-  // save prompts.json
-  const promptsData = {
-    platform: input.platform,
-    title,
-    model: input.llmModel,
-    coverPrompts,
-    illustrationPrompts,
-  };
-  const promptsPath = path.join(outputDir, "prompts.json");
-  await writeFile(promptsPath, JSON.stringify(promptsData, null, 2), "utf8");
-  files.push(promptsPath);
+  // save prompts.json (only if newly generated — cached prompts are already on disk)
+  if (!hasCachedPrompts) {
+    const promptsData = {
+      platform: input.platform,
+      title,
+      model: input.llmModel,
+      coverPrompts,
+      illustrationPrompts,
+    };
+    await writeFile(promptsPath, JSON.stringify(promptsData, null, 2), "utf8");
+    files.push(promptsPath);
+  }
 
   // Build prompt lookup: section index → prompt text
   const promptMap = new Map<number, string>();
@@ -805,7 +827,7 @@ export const orchestratePlatformPrompts = async (
   // Render HTML: article sections with inline prompt placeholders
   const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[input.platform] ?? input.platform;
   const promptActions = function (promptText: string, label: string, sizeHint: string, name?: string) {
-    const encoded = encodeURIComponent(promptText);
+    const encoded = encodeURIComponent(promptText.slice(0, 1000));
     const nameHtml = name
       ? '<div class="ph-name">' + name.replace(/</g, "&lt;") + '</div>'
       : '';

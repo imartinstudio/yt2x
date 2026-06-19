@@ -20,13 +20,25 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     const fmtDate = (iso) => iso ? new Date(iso).toLocaleString("zh-CN", { hour12: false }) : "-";
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+    var loading = false;
     async function load() {
-      const resp = await fetch("/api/videos");
-      payload = await resp.json();
-      if (selectedId && !payload.videos.some((v) => v.videoId === selectedId)) selectedId = null;
-      if (!selectedId && payload.videos.length > 0) selectedId = payload.videos[0].videoId;
-      $("sourceLine").textContent = payload.videos.length + " 个视频 · " + payload.articleOutDir;
-      render();
+      if (loading) return;
+      loading = true;
+      var refreshBtn = $("refresh");
+      if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = "…"; }
+      try {
+        const resp = await fetch("/api/videos");
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        payload = await resp.json();
+        if (selectedId && !payload.videos.some((v) => v.videoId === selectedId)) selectedId = null;
+        if (!selectedId && payload.videos.length > 0) selectedId = payload.videos[0].videoId;
+        $("sourceLine").textContent = payload.videos.length + " 个视频 · 本地内容库";
+        render();
+      } catch (err) {
+        $("rows").innerHTML = '<tr><td colspan="8" style="color:var(--accent-2);padding:24px">加载失败：' + esc(err.message) + '。请检查后端服务是否正常。</td></tr>';
+      }
+      loading = false;
+      if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = "刷新"; }
     }
 
     async function loadWechatThemes() {
@@ -72,6 +84,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       const q = $("search").value.trim().toLowerCase();
       const platform = $("platformFilter").value;
       const status = $("statusFilter").value;
+      const needsAction = $("needsActionFilter").classList.contains("on");
       let list = payload.videos.filter((video) => {
         const blob = [
           video.videoId,
@@ -79,6 +92,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
           ...platformOrder.flatMap((p) => [video.platforms[p].url, video.platforms[p].note, video.platforms[p].files.join(" ")])
         ].join("\n").toLowerCase();
         if (q && !blob.includes(q)) return false;
+        if (needsAction) { var scope = platform === "all" ? platformOrder : [platform]; return scope.some((p) => (video.platforms[p].generated && !video.platforms[p].published) || video.platforms[p].status === "failed"); }
         const platforms = platform === "all" ? platformOrder : [platform];
         if (status === "generated" && !platforms.some((p) => video.platforms[p].status !== "empty")) return false;
         if (status === "published" && !platforms.some((p) => video.platforms[p].status === "published")) return false;
@@ -97,42 +111,45 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
 
     function renderSummary(videos) {
       const total = videos.length;
-      const generated = videos.reduce((sum, v) => sum + platformOrder.filter((p) => v.platforms[p].generated).length, 0);
+      const totalTasks = total * 4; // 4 platforms per video
       const published = videos.reduce((sum, v) => sum + platformOrder.filter((p) => v.platforms[p].published).length, 0);
-      const waiting = videos.reduce((sum, v) => sum + platformOrder.filter((p) => v.platforms[p].generated && !v.platforms[p].published).length, 0);
+      const failed = videos.reduce((sum, v) => sum + platformOrder.filter((p) => v.platforms[p].status === "failed" && !v.platforms[p].generated).length, 0);
+      const needsAction = videos.reduce((sum, v) => sum + platformOrder.filter((p) => (v.platforms[p].generated && !v.platforms[p].published) || v.platforms[p].status === "failed").length, 0);
       $("summary").innerHTML = [
-        ["视频", total],
-        ["已生成平台稿", generated],
-        ["已发布", published],
-        ["待发布", waiting],
-      ].map(([label, value]) => '<div class="metric"><b>' + value + '</b><span>' + label + '</span></div>').join("");
+        '<div class="metric-group"><div class="metric-group-label">内容库</div>',
+        '<div class="metric"><b>' + total + '</b><span>视频</span></div></div>',
+        '<div class="metric-sep"></div>',
+        '<div class="metric-group"><div class="metric-group-label">发布进度</div>',
+        '<div class="metric"><b>' + published + '</b><span>已发布</span></div>',
+        '<div class="metric"><b>' + needsAction + '</b><span>需处理</span></div></div>',
+      ].join("");
     }
 
     const statusLabels = { empty: "无稿件", draft: "待排版", formatted: "已排版", published: "已发布", failed: "排版失败" };
     function platformPill(state) {
-      const cls = "pill pill-" + (state.status || "empty");
-      return '<span class="' + cls + '">' + (statusLabels[state.status] || "无稿件") + '</span>';
+      var st = state.status || "empty";
+      if (st === "empty") return '<span class="pill pill-empty">—</span>';
+      if (st === "failed") return '<span class="pill pill-failed pill-strong">排版失败</span>';
+      var cls = "pill pill-" + st;
+      if (st === "draft") cls += " pill-pulse";
+      return '<span class="' + cls + '">' + (statusLabels[st] || st) + '</span>';
     }
 
     function selectVideo(videoId) {
       if (selectedId === videoId) return;
-      // remove old active without full re-render
       const prev = document.querySelector("tr.active");
       if (prev) prev.classList.remove("active");
       selectedId = videoId;
       localStorage.setItem("yt2x.selectedVideoId", videoId);
-      // highlight new row
       const next = document.querySelector('tr[data-id="' + CSS.escape(videoId) + '"]');
       if (next) next.classList.add("active");
-      // only re-render detail panel
-      renderDetail();
+      renderDetail(false); // different video → reset scroll
     }
 
     function renderRows(videos) {
       $("rows").innerHTML = videos.map((video) => [
-        '<tr class="' + (video.videoId === selectedId ? "active" : "") + '" data-id="' + esc(video.videoId) + '">',
+        '<tr tabindex="0" class="' + (video.videoId === selectedId ? "active" : "") + '" data-id="' + esc(video.videoId) + '">',
         '<td><div class="title">' + esc(video.title) + '</div>' +
-          (video.originalTitle ? '<div class="original-title">' + esc(video.originalTitle) + '</div>' : "") +
           '<div class="video-id" title="点击复制" onclick="event.stopPropagation();navigator.clipboard.writeText(\'' + esc(video.videoId) + '\');this.classList.add(\'copied\');setTimeout(()=>this.classList.remove(\'copied\'),1500)">' + esc(video.videoId) + '</div></td>',
         '<td class="date">' + esc(fmtDate(video.originalDate || video.updatedAt)) + '</td>',
         '<td class="date">' + esc(fmtDate(video.uploadDate)) + '</td>',
@@ -141,52 +158,138 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         '</tr>',
       ].join("")).join("");
       document.querySelectorAll("tr[data-id]").forEach((row) => {
-        row.addEventListener("click", () => {
-          selectVideo(row.dataset.id);
+        row.addEventListener("click", function() { selectVideo(row.dataset.id); });
+        row.addEventListener("keydown", function(e) {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectVideo(row.dataset.id); }
         });
+      });
+      // Mobile card list
+      renderMobileCards(videos);
+    }
+
+    function renderMobileCards(videos) {
+      var container = document.getElementById("mobileCards");
+      if (!container) { var mc = document.createElement("div"); mc.className = "mobile-cards"; mc.id = "mobileCards"; var tw = document.querySelector(".table-wrap"); if (tw) tw.appendChild(mc); container = mc; }
+      if (!container) return;
+      container.innerHTML = videos.map(function(v) {
+        return '<div class="mobile-card' + (v.videoId === selectedId ? " active" : "") + '" data-id="' + esc(v.videoId) + '">' +
+          '<div class="mc-title">' + esc(v.title) + '</div>' +
+          '<div class="mc-pills">' + platformOrder.map(function(p) { return platformPill(v.platforms[p]); }).join("") + '</div>' +
+          '<div class="mc-date">' + esc(fmtDate(v.updatedAt)) + '</div>' +
+          '</div>';
+      }).join("");
+      container.querySelectorAll(".mobile-card").forEach(function(card) {
+        card.addEventListener("click", function() { selectVideo(card.dataset.id); });
       });
     }
 
-    function swapDetailHTML(html) {
+    // ── Mobile drawer ──
+    function openDrawer() { $("drawerOverlay").classList.add("open"); }
+    function closeDrawer() { $("drawerOverlay").classList.remove("open"); }
+    $("drawerOverlay").addEventListener("click", function(e) { if (e.target === $("drawerOverlay")) closeDrawer(); });
+    $("drawerClose").addEventListener("click", closeDrawer);
+
+    // on mobile, render detail into drawer instead of aside
+    var origRenderDetail = renderDetail;
+    renderDetail = function(keepScroll) {
+      if (window.innerWidth <= 860) {
+        // Mobile: render into drawer
+        var video = payload.videos.find(function(item) { return item.videoId === selectedId; });
+        if (!video) return;
+        var html = '<h2 class="detail-title">' + esc(video.title) + '</h2>' +
+          (video.originalTitle ? '<div class="detail-original-title">' + esc(video.originalTitle) + '</div>' : "") +
+          '<div class="detail-meta">' + esc(video.articleDir || "无 article 目录") + '</div>' +
+          platformOrder.map(function(p) { return renderPlatformCard(video, p); }).join("");
+        $("drawerContent").innerHTML = html;
+        bindDetailEvents(video);
+        openDrawer();
+      } else {
+        origRenderDetail(keepScroll);
+      }
+    };
+
+    function bindDetailEvents(video) {
+      var el = $("drawerContent");
+      el.querySelectorAll("[data-publish]").forEach(function(btn) { btn.addEventListener("click", function() { publishPlatform(video.videoId, btn.dataset.publish); }); });
+      el.querySelectorAll("[data-unpublish]").forEach(function(btn) { btn.addEventListener("click", function() { unpublishPlatform(video.videoId, btn.dataset.unpublish); }); });
+      el.querySelectorAll("[data-copy]").forEach(function(btn) { btn.addEventListener("click", function() { copyPlatform(video.videoId, btn.dataset.copy); }); });
+      el.querySelectorAll("[data-format-wechat]").forEach(function(btn) { btn.addEventListener("click", function() { openThemeModal(video.videoId, btn.dataset.theme || "notion-doc"); }); });
+      el.querySelectorAll("[data-copy-wechat-html]").forEach(function(btn) { btn.addEventListener("click", function() { copyWechatHtml(video.videoId); }); });
+      el.querySelectorAll("[data-format-platform]").forEach(function(btn) { btn.addEventListener("click", function() { formatPlatform(video.videoId, btn.dataset.formatPlatform); }); });
+      el.querySelectorAll("[data-generate-platform]").forEach(function(btn) { btn.addEventListener("click", function() { generatePlatform(video.videoId, btn.dataset.generatePlatform); }); });
+      el.querySelectorAll("[data-init-platform]").forEach(function(btn) { btn.addEventListener("click", function() { initPlatform(video.videoId, btn.dataset.initPlatform); }); });
+      el.querySelectorAll("[data-more]").forEach(function(btn) { btn.addEventListener("click", function(e) { e.stopPropagation(); toggleMoreMenu(btn.dataset.more); }); });
+    }
+
+    function swapDetailHTML(html, keepScroll) {
       const detail = $("detail");
-      // save scroll position before swapping content
-      const scrollTop = detail.scrollTop;
-      // build a DocumentFragment and replace children atomically
+      const scrollTop = keepScroll ? detail.scrollTop : 0;
       const template = document.createElement("template");
       template.innerHTML = html;
       detail.replaceChildren(template.content);
-      // restore scroll position
       detail.scrollTop = scrollTop;
     }
 
-    function renderDetail() {
+    function renderDetail(keepScroll) {
       const video = payload.videos.find((item) => item.videoId === selectedId);
       if (!video) {
-        swapDetailHTML('<div class="empty">没有匹配的视频。</div>');
+        swapDetailHTML('<div class="empty">没有匹配的视频。</div>', false);
         return;
       }
       const html = [
         '<h2 class="detail-title">' + esc(video.title) + '</h2>',
-        video.originalTitle ? '<div class="detail-original-title">原视频标题：' + esc(video.originalTitle) + '</div>' : "",
-        '<div class="detail-meta">' + esc(video.videoId) + '<br>' + esc(video.articleDir || "无 article 目录") + '</div>',
+        video.originalTitle ? '<div class="detail-original-title">' + esc(video.originalTitle) + '</div>' : "",
+        '<div class="detail-meta">' + esc(video.articleDir || "无 article 目录") + '</div>',
         platformOrder.map((p) => renderPlatformCard(video, p)).join(""),
       ].join("");
-      swapDetailHTML(html);
-      $("detail").querySelectorAll("[data-save]").forEach((btn) => {
-        btn.addEventListener("click", () => savePlatform(video.videoId, btn.dataset.save, btn.dataset.value));
+      swapDetailHTML(html, keepScroll === true);
+      var detail = $("detail");
+      detail.querySelectorAll("[data-publish]").forEach(function(btn) {
+        btn.addEventListener("click", function() { publishPlatform(video.videoId, btn.dataset.publish); });
       });
-      $("detail").querySelectorAll("[data-copy]").forEach((btn) => {
-        btn.addEventListener("click", () => copyPlatform(video.videoId, btn.dataset.copy));
+      detail.querySelectorAll("[data-unpublish]").forEach(function(btn) {
+        btn.addEventListener("click", function() { unpublishPlatform(video.videoId, btn.dataset.unpublish); });
       });
-      $("detail").querySelectorAll("[data-format-wechat]").forEach((btn) => {
-        btn.addEventListener("click", () => openThemeModal(video.videoId, btn.dataset.theme || "notion-doc"));
+      detail.querySelectorAll("[data-copy]").forEach(function(btn) {
+        btn.addEventListener("click", function() { copyPlatform(video.videoId, btn.dataset.copy); });
       });
-      $("detail").querySelectorAll("[data-copy-wechat-html]").forEach((btn) => {
-        btn.addEventListener("click", () => copyWechatHtml(video.videoId));
+      detail.querySelectorAll("[data-format-wechat]").forEach(function(btn) {
+        btn.addEventListener("click", function() { openThemeModal(video.videoId, btn.dataset.theme || "notion-doc"); });
       });
-      $("detail").querySelectorAll("[data-format-platform]").forEach((btn) => {
-        btn.addEventListener("click", () => formatPlatform(video.videoId, btn.dataset.formatPlatform));
+      detail.querySelectorAll("[data-copy-wechat-html]").forEach(function(btn) {
+        btn.addEventListener("click", function() { copyWechatHtml(video.videoId); });
       });
+      detail.querySelectorAll("[data-format-platform]").forEach(function(btn) {
+        btn.addEventListener("click", function() { formatPlatform(video.videoId, btn.dataset.formatPlatform); });
+      });
+      detail.querySelectorAll("[data-generate-platform]").forEach(function(btn) {
+        btn.addEventListener("click", function() { generatePlatform(video.videoId, btn.dataset.generatePlatform); });
+      });
+      detail.querySelectorAll("[data-init-platform]").forEach(function(btn) {
+        btn.addEventListener("click", function() { initPlatform(video.videoId, btn.dataset.initPlatform); });
+      });
+      detail.querySelectorAll("[data-more]").forEach(function(btn) {
+        btn.addEventListener("click", function(e) { e.stopPropagation(); toggleMoreMenu(btn.dataset.more); });
+      });
+    }
+
+    const generatingSet = new Set();
+    async function generatePlatform(videoId, platform) {
+      if (generatingSet.has(platform)) return;
+      generatingSet.add(platform);
+      var btn = document.querySelector('[data-generate-platform="' + platform + '"]');
+      if (btn) { btn.disabled = true; btn.classList.add("loading"); btn.innerHTML = '生成中<span class="dots"><span>.</span><span>.</span><span>.</span></span>'; }
+      try {
+        const resp = await fetch("/api/platform-generate", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ videoId, platform }),
+        });
+        if (!resp.ok) { const data = await resp.json().catch(function() { return {}; }); toast(data.error || "生成失败"); }
+        else { toast((platformLabels[platform] || platform) + "稿件已生成"); }
+      } catch { toast("生成请求失败"); }
+      generatingSet.delete(platform);
+      await load();
     }
 
     const formattingSet = new Set();
@@ -215,42 +318,114 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       await load();
     }
 
+    // ── Confirm dialog (#3) ──
+    let confirmResolve = null;
+    function showConfirm(html, okText, variant) {
+      $("confirmBody").innerHTML = html;
+      var okBtn = $("confirmOk");
+      okBtn.textContent = okText || "确认";
+      okBtn.className = variant === "danger" ? "danger-btn" : variant === "primary" ? "primary-btn" : "secondary";
+      $("confirmDialog").classList.add("open");
+      okBtn.focus();
+      return new Promise(function(resolve) { confirmResolve = resolve; });
+    }
+    function hideConfirm(result) {
+      $("confirmDialog").classList.remove("open");
+      if (confirmResolve) { confirmResolve(result); confirmResolve = null; }
+    }
+    $("confirmCancel").addEventListener("click", function() { hideConfirm(false); });
+    $("confirmOk").addEventListener("click", function() { hideConfirm(true); });
+    $("confirmDialog").addEventListener("click", function(e) {
+      if (e.target === $("confirmDialog")) hideConfirm(false);
+    });
+    document.addEventListener("keydown", function(e) {
+      if (e.key === "Escape" && $("confirmDialog").classList.contains("open")) hideConfirm(false);
+    });
+
+    async function initPlatform(videoId, platform) {
+      const platformName = platformLabels[platform] || platform;
+      var extraFiles = "";
+      if (platform === "xiaohongshu" || platform === "bilibili") {
+        extraFiles = "<div class='confirm-item'>" + platform + "-article.md（平台文章）</div>" +
+          "<div class='confirm-item'>" + platform + "-metadata.json（平台元数据）</div>";
+      }
+      const ok = await showConfirm(
+        "<div class='confirm-icon'>🗑</div>" +
+        "<div class='confirm-title'>删除" + platformName + "排版产出</div>" +
+        "<div class='confirm-sub'>以下内容将被永久删除：</div>" +
+        "<div class='confirm-list'>" +
+        "<div class='confirm-item'>" + platform + "-format/ 目录（排版 HTML、prompts、图片等）</div>" +
+        extraFiles +
+        "</div>" +
+        "<div class='confirm-warn'>此操作不可恢复。排版状态将被重置。</div>",
+        "删除并重新初始化",
+        "danger"
+      );
+      if (!ok) return;
+
+      try {
+        const resp = await fetch("/api/platform-init", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ videoId, platform }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(function() { return { error: "未知错误" }; });
+          toast("初始化失败: " + (err.error || ""));
+          return;
+        }
+        const data = await resp.json();
+        toast("已初始化 " + platformName + "，删除了 " + (data.deleted || []).length + " 项");
+      } catch {
+        toast("初始化请求失败");
+      }
+      await load();
+    }
+
     function renderPlatformCard(video, platform) {
       const state = video.platforms[platform];
       const st = state.status;
       const orchPreviewLink = '/api/platform-orchestrate/preview?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform;
       const previewHref = st === "published" ? orchPreviewLink + '&mode=published' : orchPreviewLink;
+      const pn = platformLabels[platform] || platform;
 
-      // Status line
-      const statusSteps = [
-        { key: "empty", label: "无稿件" },
-        { key: "draft", label: "已有稿件" },
-        { key: "formatted", label: "已排版" },
-        { key: "published", label: "已发布" },
-      ];
-      const currentIdx = statusSteps.findIndex(function(s) { return s.key === st; });
-      const statusLine = '<div class="status-steps">' + statusSteps.map(function(step, i) {
-        var cls = "status-step";
-        if (i < currentIdx) cls += " done";
-        else if (i === currentIdx) cls += " current";
-        if (st === "failed") cls += " failed";
-        return '<span class="' + cls + '">' + step.label + '</span>';
-      }).join('<span class="status-arrow">→</span>') + '</div>';
+      // ── Workflow guidance line (#1) ──
+      const guide = {
+        empty: '<span class="guide-icon">📝</span> 点击生成' + pn + '稿件',
+        draft: platform === "wechat"
+          ? '<span class="guide-icon">🎨</span> 选择主题并排版'
+          : '<span class="guide-icon">✨</span> 稿件就绪 · 点击排版',
+        formatted: platform === "wechat"
+          ? '<span class="guide-icon">📋</span> 复制 HTML 粘贴到公众号编辑器'
+          : '<span class="guide-icon">👁</span> 预览排版 · 确认后发布',
+        failed: '<span class="guide-icon">⚠️</span> 排版失败 · 查看原因并重试',
+        published: '<span class="guide-icon">✅</span> 已发布' + (/^https?:\/\//i.test(state.url) ? ' · <a href="' + esc(state.url) + '" target="_blank" rel="noopener noreferrer" class="pub-link">查看</a>' : ''),
+      };
+      const guideLine = '<div class="guide-line guide-' + st + '">' + (guide[st] || '') + '</div>';
 
-      // Error line for failed
-      const errorLine = st === "failed"
-        ? '<div class="format-error">' + esc(state.formatError || "排版失败") + '</div>'
-        : '';
+      // ── Progress dots (#1) ──
+      const phases = ["empty", "draft", "formatted", "published"];
+      const currentIdx = phases.indexOf(st);
+      const dots = phases.map(function(p, i) {
+        var c = "dot";
+        if (i < currentIdx) c += " dot-done";
+        else if (i === currentIdx) c += " dot-current";
+        if (st === "failed" && i === phases.indexOf("formatted")) c += " dot-failed";
+        return '<span class="' + c + '"></span>';
+      }).join("");
 
-      // Primary action button
+      // ── Publish control (#2) ──
+      var publishCtrl = "";
+      if (st === "published") {
+        publishCtrl = '<div class="publish-ctrl"><span class="pub-done">已发布 ✓</span><button class="ghost" data-unpublish="' + platform + '">撤销</button></div>';
+      } else if (st === "formatted") {
+        publishCtrl = '<div class="publish-ctrl"><button class="secondary" data-publish="' + platform + '">标记为已发布</button></div>';
+      }
+
+      // ── Primary action button ──
       var primaryBtn = "";
       if (st === "empty") {
-        // XHS/Bilibili can generate from base article if X has content
-        if ((platform === "xiaohongshu" || platform === "bilibili") && video.platforms.x.generated) {
-          primaryBtn = '<button class="primary-btn" data-format-platform="' + platform + '">排版</button>';
-        } else {
-          primaryBtn = '<button class="secondary" disabled>缺稿件</button>';
-        }
+        primaryBtn = '<button class="primary-btn" data-generate-platform="' + platform + '">生成' + pn + '稿</button>';
       } else if (st === "draft") {
         if (platform === "wechat") {
           primaryBtn = '<button class="primary-btn" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">排版</button>';
@@ -258,50 +433,66 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
           primaryBtn = '<button class="primary-btn" data-format-platform="' + platform + '">排版</button>';
         }
       } else if (st === "formatted") {
-        if (platform === "wechat") {
-          primaryBtn = '<button class="secondary" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">重新排版</button>';
-        } else {
-          primaryBtn = '<button class="secondary" data-format-platform="' + platform + '">重新排版</button>';
-        }
+        primaryBtn = ''; // no primary action — delivery + preview are the main actions
       } else if (st === "failed") {
         if (platform === "wechat") {
-          primaryBtn = '<button class="primary-btn" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">重新排版</button>';
+          primaryBtn = '<button class="primary-btn" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">重试排版</button>';
         } else {
-          primaryBtn = '<button class="primary-btn" data-format-platform="' + platform + '">重新排版</button>';
+          primaryBtn = '<button class="primary-btn" data-format-platform="' + platform + '">重试排版</button>';
         }
-      } else if (st === "published") {
-        primaryBtn = '<button class="secondary" disabled title="已发布">已发布</button>';
       }
 
-      // Platform-specific extra
-      var extraActions = "";
-      if (platform === "wechat" && (st === "formatted" || st === "published")) {
-        extraActions = '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '">复制 HTML</button>';
+      // Error line
+      const errorLine = st === "failed"
+        ? '<div class="format-error">' + esc(state.formatError || "排版失败") + '</div>'
+        : '';
+
+      // ── Delivery action (per platform) ──
+      var deliveryBtn = "";
+      if (st !== "empty") {
+        if (platform === "wechat" && (st === "formatted" || st === "published")) {
+          deliveryBtn = '<button class="secondary" data-copy-wechat-html="' + esc(video.videoId) + '">复制 HTML</button>';
+        } else if (platform !== "wechat") {
+          deliveryBtn = '<button class="secondary" data-copy="' + platform + '">复制稿件</button>';
+        }
       }
+
+      // ── More menu ──
+      var moreItems = [];
+      if (st !== "empty") {
+        moreItems.push('<a href="/api/file?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform + '" target="_blank" rel="noopener noreferrer" class="more-item">打开稿件</a>');
+      }
+      if (st === "formatted" || st === "failed") {
+        if (platform === "wechat") {
+          moreItems.push('<button class="more-item" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">重新排版</button>');
+        } else {
+          moreItems.push('<button class="more-item" data-format-platform="' + platform + '">重新排版</button>');
+        }
+      }
+      if (st !== "published" && st !== "empty") {
+        moreItems.push('<div class="more-sep"></div>');
+        moreItems.push('<button class="danger-item" data-init-platform="' + platform + '">删除排版产出并重新初始化</button>');
+      }
+      var moreMenu = moreItems.length > 0
+        ? '<div class="more-wrap"><button class="ghost more-trigger" data-more="' + platform + '" aria-label="更多操作">···</button><div class="more-drop" id="moreDrop-' + platform + '">' + moreItems.join("") + '</div></div>'
+        : '';
 
       return [
         '<section class="platform-card">',
         '<div class="platform-head">',
-        '<div class="platform-name">' + platformLabels[platform] + ' <span class="status-text status-' + st + '">' + (statusLabels[st] || st) + '</span></div>',
-        '<div class="switch">',
-        '<button data-save="' + platform + '" data-value="false" class="' + (st !== "published" ? "on" : "") + '">待发布</button>',
-        '<button data-save="' + platform + '" data-value="true" class="' + (st === "published" ? "on" : "") + '">已发布</button>',
+        '<div class="platform-name">' + pn + ' <span class="progress-dots">' + dots + '</span></div>',
+        publishCtrl,
         '</div>',
-        '</div>',
-        statusLine,
+        guideLine,
         errorLine,
         '<input data-url="' + platform + '" placeholder="发布链接" value="' + esc(state.url) + '" />',
         '<textarea data-note="' + platform + '" placeholder="备注">' + esc(state.note) + '</textarea>',
         '<div class="actions">',
         '<div class="action-row">',
-        '<button data-save="' + platform + '" data-value="' + String(state.published) + '">保存状态</button>',
-        st !== "empty" ? '<button class="secondary" data-copy="' + platform + '">复制稿件</button>' : '',
-        extraActions,
-        '</div>',
-        '<div class="action-row">',
         primaryBtn,
-        st !== "empty" ? '<a href="/api/file?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform + '" target="_blank"><button class="secondary">打开稿件</button></a>' : '',
-        st !== "empty" ? '<a href="' + previewHref + '" target="_blank"><button class="secondary">预览</button></a>' : '',
+        st !== "empty" ? '<a href="' + previewHref + '" target="_blank" rel="noopener noreferrer" class="btn-link secondary">预览</a>' : '',
+        deliveryBtn,
+        moreMenu,
         '</div>',
         '</div>',
         '</section>',
@@ -317,13 +508,125 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ videoId, platform, published: active, url, note }),
       });
-      if (!resp.ok) {
-        toast("保存失败");
-        return;
-      }
+      if (!resp.ok) { toast("保存失败"); return; }
       toast("已保存");
       await load();
     }
+
+    async function publishPlatform(videoId, platform) {
+      var urlInput = document.querySelector('[data-url="' + platform + '"]');
+      var url = urlInput ? urlInput.value.trim() : "";
+      var noteInput = document.querySelector('[data-note="' + platform + '"]');
+      var note = noteInput ? noteInput.value : "";
+      var pn = platformLabels[platform] || platform;
+
+      var ok = await showConfirm(
+        "<div class='confirm-icon'>📮</div>" +
+        "<div class='confirm-title'>确认" + pn + "已发布</div>" +
+        "<div class='confirm-sub'>发布后可在平台卡片中查看链接、撤销状态。请填写公开访问链接。</div>" +
+        "<div class='confirm-field'><label>发布链接 <span class='req'>*</span></label>" +
+        "<input id='publishUrlInput' value='" + esc(url) + "' placeholder='https://...' autocomplete='off' /></div>",
+        "确认发布",
+        "primary"
+      );
+      if (!ok) return;
+
+      url = (document.getElementById("publishUrlInput") ? document.getElementById("publishUrlInput").value : url).trim();
+      if (!url || !/^https?:\/\//i.test(url)) {
+        toast("请输入有效的发布链接（以 http:// 或 https:// 开头）");
+        return;
+      }
+      if (urlInput) urlInput.value = url;
+
+      const resp = await fetch("/api/status", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ videoId, platform, published: true, url: url, note: note }),
+      });
+      if (!resp.ok) {
+        var err = await resp.json().catch(function() { return { error: "保存失败" }; });
+        toast(err.error || "保存失败");
+        return;
+      }
+      toast(pn + " 已标记为已发布");
+      await load();
+    }
+
+    async function unpublishPlatform(videoId, platform) {
+      var pn = platformLabels[platform] || platform;
+      var ok = await showConfirm(
+        "<div class='confirm-icon'>↩</div>" +
+        "<div class='confirm-title'>撤销" + pn + "发布</div>" +
+        "<div class='confirm-sub'>该平台将回到「已排版」状态。发布链接和备注会被保留。</div>",
+        "撤销发布",
+        "secondary"
+      );
+      if (!ok) return;
+
+      var urlInput = document.querySelector('[data-url="' + platform + '"]');
+      var noteInput = document.querySelector('[data-note="' + platform + '"]');
+      const resp = await fetch("/api/status", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ videoId, platform, published: false, url: urlInput ? urlInput.value : "", note: noteInput ? noteInput.value : "" }),
+      });
+      if (!resp.ok) { toast("保存失败"); return; }
+      toast(pn + " 已撤销发布");
+      await load();
+    }
+
+    var morePortal = null;
+    function closeMorePortal() { if (morePortal) { morePortal.remove(); morePortal = null; } }
+    function toggleMoreMenu(platform) {
+      var trigger = document.querySelector('[data-more="' + platform + '"]');
+      if (!trigger) return;
+      if (morePortal) { closeMorePortal(); return; }
+      closeMorePortal();
+      var drop = document.getElementById("moreDrop-" + platform);
+      if (!drop) return;
+      var rect = trigger.getBoundingClientRect();
+      var portal = document.createElement("div");
+      portal.className = "more-portal";
+      portal.style.cssText = "position:fixed;z-index:200;visibility:hidden;top:0;right:" + (window.innerWidth - rect.right) + "px;";
+      portal.innerHTML = drop.innerHTML;
+      portal.addEventListener("click", function(e) { e.stopPropagation(); });
+      document.body.appendChild(portal);
+      // measure and flip direction
+      var ph = portal.offsetHeight;
+      var spaceBelow = window.innerHeight - rect.bottom - 8;
+      var spaceAbove = rect.top - 8;
+      var top;
+      if (spaceBelow >= ph || spaceBelow >= spaceAbove) {
+        top = rect.bottom + 4;
+      } else {
+        top = rect.top - ph - 4;
+      }
+      portal.style.top = top + "px";
+      portal.style.visibility = "visible";
+      // copy event handlers by delegating on the portal
+      portal.querySelectorAll("[data-init-platform]").forEach(function(btn) {
+        btn.addEventListener("click", function() { closeMorePortal(); initPlatform(payload.videos.find(function(v) { return v.videoId === selectedId; }).videoId, btn.dataset.initPlatform); });
+      });
+      portal.querySelectorAll("[data-format-wechat]").forEach(function(btn) {
+        btn.addEventListener("click", function() { closeMorePortal(); var v = payload.videos.find(function(x) { return x.videoId === selectedId; }); if (v) openThemeModal(v.videoId, btn.dataset.theme); });
+      });
+      portal.querySelectorAll("[data-format-platform]").forEach(function(btn) {
+        btn.addEventListener("click", function() { closeMorePortal(); formatPlatform(payload.videos.find(function(v) { return v.videoId === selectedId; }).videoId, btn.dataset.formatPlatform); });
+      });
+      portal.querySelectorAll("[data-copy]").forEach(function(btn) {
+        btn.addEventListener("click", function() { closeMorePortal(); copyPlatform(payload.videos.find(function(v) { return v.videoId === selectedId; }).videoId, btn.dataset.copy); });
+      });
+      portal.querySelectorAll(".more-item:not([data-copy])").forEach(function(link) {
+        // these are <a> links — they work natively
+      });
+      morePortal = portal;
+      setTimeout(function() {
+        document.addEventListener("click", function handler(e) {
+          if (!portal.contains(e.target) && e.target !== trigger) { closeMorePortal(); document.removeEventListener("click", handler); }
+        });
+      }, 0);
+    }
+    document.addEventListener("click", function() { closeMorePortal(); });
 
     async function copyPlatform(videoId, platform) {
       const resp = await fetch("/api/file?videoId=" + encodeURIComponent(videoId) + "&platform=" + platform);
@@ -335,17 +638,24 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       toast("已复制稿件");
     }
 
+    var lastFocusedBeforeModal = null;
     function openThemeModal(videoId, theme) {
+      lastFocusedBeforeModal = document.activeElement;
       themeModalVideoId = videoId;
       selectedWechatTheme = theme || "notion-doc";
       $("themeSearch").value = "";
       renderThemeList();
       $("themeModal").classList.add("open");
+      // focus first focusable element in modal
+      setTimeout(function() { $("themeSearch").focus(); }, 50);
     }
 
     function closeThemeModal() {
       $("themeModal").classList.remove("open");
       themeModalVideoId = null;
+      if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === "function") {
+        setTimeout(function() { lastFocusedBeforeModal.focus(); }, 50);
+      }
     }
 
     function themeById(themeId) {
@@ -355,16 +665,23 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     function themeCard(theme) {
       const favorite = isFavoriteTheme(theme.id);
       const selected = theme.id === selectedWechatTheme;
-      const preview = theme.description
-        ? theme.description.slice(0, 38) + (theme.description.length > 38 ? "…" : "")
-        : "预览效果 · 排版风格";
-      // generate a deterministic hue from the theme id for the accent swatch
-      let hash = 0;
-      for (let i = 0; i < theme.id.length; i++) hash = ((hash << 5) - hash) + theme.id.charCodeAt(i);
-      const hue = Math.abs(hash) % 360;
+      var hash = 0;
+      for (var i = 0; i < theme.id.length; i++) hash = ((hash << 5) - hash) + theme.id.charCodeAt(i);
+      var h = Math.abs(hash);
+      // Vary preview skeleton per theme: title width, body count, image position
+      var tW = 50 + (h % 30); // title width 50-80%
+      var bW = 70 + ((h >> 4) % 25); // body width 70-95%
+      var b2 = (h >> 8) % 2; // second body line?
+      var imgRight = (h >> 9) % 2; // image on right?
+      var accentHue = h % 360;
       return [
-        '<div class="theme-card' + (selected ? " selected" : "") + '" data-select-theme="' + esc(theme.id) + '">',
-        '<div class="theme-card-ink" style="--card-hue:' + hue + '"></div>',
+        '<div class="theme-card' + (selected ? " selected" : "") + '" data-select-theme="' + esc(theme.id) + '" tabindex="0">',
+        '<div class="theme-card-preview" style="--tcp-title-w:' + tW + '%;--tcp-body-w:' + bW + '%;--tcp-accent:' + accentHue + '">',
+        '<div class="tcp-title" style="width:' + tW + '%"></div>',
+        '<div class="tcp-body" style="width:' + bW + '%"></div>',
+        b2 ? '<div class="tcp-body" style="width:' + (bW - 10) + '%"></div>' : '',
+        imgRight ? '<div class="tcp-quote" style="width:' + (40 + (h % 20)) + '%"></div><div class="tcp-img"></div>' : '<div class="tcp-img"></div><div class="tcp-quote" style="width:' + (40 + (h % 20)) + '%"></div>',
+        '</div>',
         '<button class="theme-fav' + (favorite ? " on" : "") + '" data-favorite-theme="' + esc(theme.id) + '" title="' + (favorite ? "取消收藏" : "收藏风格") + '" aria-label="' + (favorite ? "取消收藏" : "收藏风格") + '">' + (favorite ? "★" : "☆") + '</button>',
         '<div class="theme-card-body">',
         '<span class="theme-name">' + esc(theme.name || theme.id) + '</span>',
@@ -388,25 +705,18 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     }
 
     function bindThemeListEvents() {
+      function selectCard(card) {
+        if (selectedWechatTheme === card.dataset.selectTheme) return;
+        const prev = $("themeList").querySelector(".theme-card.selected");
+        if (prev) { prev.classList.remove("selected"); var pc = prev.querySelector(".theme-check"); if (pc) pc.remove(); }
+        selectedWechatTheme = card.dataset.selectTheme;
+        card.classList.add("selected");
+        if (!card.querySelector(".theme-check")) { var ck = document.createElement("span"); ck.className = "theme-check"; ck.textContent = "✓"; card.querySelector(".theme-card-body").appendChild(ck); }
+      }
       $("themeList").querySelectorAll("[data-select-theme]").forEach((card) => {
-        card.addEventListener("click", () => {
-          if (selectedWechatTheme === card.dataset.selectTheme) return;
-          // update selected state without full rebuild
-          const prev = $("themeList").querySelector(".theme-card.selected");
-          if (prev) {
-            prev.classList.remove("selected");
-            const prevCheck = prev.querySelector(".theme-check");
-            if (prevCheck) prevCheck.remove();
-          }
-          selectedWechatTheme = card.dataset.selectTheme;
-          card.classList.add("selected");
-          // add checkmark if not present
-          if (!card.querySelector(".theme-check")) {
-            const check = document.createElement("span");
-            check.className = "theme-check";
-            check.textContent = "✓";
-            card.querySelector(".theme-card-body")?.appendChild(check);
-          }
+        card.addEventListener("click", function() { selectCard(card); });
+        card.addEventListener("keydown", function(e) {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectCard(card); }
         });
       });
       $("themeList").querySelectorAll("[data-favorite-theme]").forEach((btn) => {
@@ -497,17 +807,60 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       }
     }
 
+    function syncHeaderHeight() {
+      var h = document.querySelector("header");
+      if (h) { var hh = h.offsetHeight; document.documentElement.style.setProperty("--header-real-h", hh + "px"); }
+    }
+    window.addEventListener("resize", syncHeaderHeight);
+    syncHeaderHeight(); // set immediately before first render
+
     function render() {
+      syncHeaderHeight();
       const videos = filteredVideos();
       renderSummary(videos);
       renderRows(videos);
-      renderDetail();
+      renderDetail(true);
     }
+
+    // ── Keyboard support (#5) ──
+    document.addEventListener("keydown", function(e) {
+      // Escape closes theme modal
+      if (e.key === "Escape" && $("themeModal").classList.contains("open") && !$("confirmDialog").classList.contains("open")) {
+        closeThemeModal();
+      }
+      // Arrow keys navigate video list when table has focus
+      if ((e.key === "ArrowDown" || e.key === "ArrowUp") && document.activeElement && document.activeElement.closest("tr[data-id]")) {
+        e.preventDefault();
+        var rows = Array.from(document.querySelectorAll("tr[data-id]"));
+        var idx = rows.indexOf(document.activeElement.closest("tr[data-id]"));
+        var next = e.key === "ArrowDown" ? Math.min(idx + 1, rows.length - 1) : Math.max(idx - 1, 0);
+        if (rows[next]) { rows[next].focus(); selectVideo(rows[next].dataset.id); }
+      }
+    });
+    // Focus trap for theme modal
+    $("themeModal").addEventListener("keydown", function(e) {
+      if (e.key === "Escape") { closeThemeModal(); e.stopPropagation(); return; }
+      if (e.key !== "Tab") return;
+      var modal = $("themeModal").querySelector(".theme-modal");
+      if (!modal) return;
+      var focusable = modal.querySelectorAll('input, button, [tabindex]:not([tabindex="-1"])');
+      if (focusable.length === 0) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
 
     $("refresh").addEventListener("click", load);
     $("search").addEventListener("input", render);
     $("platformFilter").addEventListener("change", render);
-    $("statusFilter").addEventListener("change", render);
+    $("statusFilter").addEventListener("change", function() { $("needsActionFilter").classList.remove("on"); render(); });
+    $("needsActionFilter").addEventListener("click", function() {
+      var btn = $("needsActionFilter");
+      if (btn.classList.contains("on")) { btn.classList.remove("on"); $("statusFilter").value = "all"; }
+      else { btn.classList.add("on"); $("statusFilter").value = "all"; }
+      render();
+    });
     $("themeModalClose").addEventListener("click", closeThemeModal);
     $("themeModalCancel").addEventListener("click", closeThemeModal);
     $("themeModalSubmit").addEventListener("click", submitThemeModal);

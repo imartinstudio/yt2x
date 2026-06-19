@@ -3,17 +3,18 @@
 用法: python3 detect-burned-subs.py <video_path> [sample_count] [threshold]
 返回 JSON:
   {
-    "hasBurnedSubtitles": bool,          # 至少 2 帧底部边缘密度超阈值
+    "hasBurnedSubtitles": bool,          # 至少 3 帧底部边缘密度超阈值
     "hasChineseBurnedSubtitles": bool,   # 高置信帧 OCR 出足够汉字
     "shouldSkipBurn": bool,              # 与 hasChineseBurnedSubtitles 相同
     "scores": [...],
-    "threshold": 0.04,
+    "threshold": 0.015,
     "ocrAvailable": bool
   }
 
 跳过烧录规则（与 pipeline 约定一致）：
   仅当「画面底部已有硬字幕」且「OCR 判定为中文」时才 shouldSkipBurn=true。
   仅有英文硬字幕、UI 条、进度条等误判，或无法 OCR 时，不跳过烧录。
+  这是三层防御的最后一道防线（Layer 3），前面还有 Layer 1（视频原语言）和 Layer 2（字幕内容检测）。
 
 依赖：PIL、ffmpeg、ffprobe；中文 OCR 可选 tesseract（优先 chi_sim+chi_tra+eng）。
 """
@@ -198,9 +199,9 @@ def main() -> None:
         sys.exit(1)
 
     video_path = sys.argv[1]
-    sample_count = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-    threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.018
-    min_burned_frames = 2
+    sample_count = int(sys.argv[2]) if len(sys.argv) > 2 else 8
+    threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.015
+    min_burned_frames = 3
 
     ocr_available = shutil.which("tesseract") is not None
 

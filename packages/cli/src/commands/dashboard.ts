@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import {
@@ -82,10 +82,10 @@ type DashboardPayload = {
 };
 
 const PLATFORMS: Array<{ key: PlatformKey; label: string; primaryFile: string; files: string[] }> = [
-  { key: "x", label: "X", primaryFile: "article.md", files: ["article.md", "x-thread.md", "x-short.md", "x-video-short.md"] },
-  { key: "xiaohongshu", label: "小红书", primaryFile: "xiaohongshu-article.md", files: ["xiaohongshu-article.md"] },
-  { key: "wechat", label: "公众号", primaryFile: "wechat-article.md", files: ["wechat-article.md"] },
-  { key: "bilibili", label: "B站", primaryFile: "bilibili-article.md", files: ["bilibili-article.md"] },
+  { key: "x", label: "X", primaryFile: "x-format/x-article.md", files: ["x-format/x-article.md", "x-format/x-short.md", "x-format/x-thread.md", "x-format/x-video-short.md"] },
+  { key: "xiaohongshu", label: "小红书", primaryFile: "xiaohongshu-format/xiaohongshu-article.md", files: ["xiaohongshu-format/xiaohongshu-article.md"] },
+  { key: "wechat", label: "公众号", primaryFile: "wechat-format/wechat-article.md", files: ["wechat-format/wechat-article.md"] },
+  { key: "bilibili", label: "B站", primaryFile: "bilibili-format/bilibili-article.md", files: ["bilibili-format/bilibili-article.md"] },
 ];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -229,10 +229,11 @@ export const scanDashboardVideos = async (input: {
         : state.formatStatus === "formatted" || hasFormattedWechat
           ? "formatted"
           : "none";
-      // Derive unified status: published > failed > formatted > draft > empty
+      // Derive unified status: failed > published > formatted > draft > empty
+      // failed takes priority so formatting errors are never hidden by a stale published flag
       let pstatus: "empty" | "draft" | "formatted" | "published" | "failed" = "empty";
-      if (published) pstatus = "published";
-      else if (fmtStatus === "failed") pstatus = "failed";
+      if (fmtStatus === "failed") pstatus = "failed";
+      else if (published) pstatus = "published";
       else if (fmtStatus === "formatted") pstatus = "formatted";
       else if (generated) pstatus = "draft";
 
@@ -666,11 +667,16 @@ const handleDashboardRequest = async (
       sendJson(res, 400, { error: "Invalid videoId or platform." });
       return;
     }
+    const statusUrl = typeof parsed.url === "string" ? parsed.url.trim() : "";
+    if (statusUrl && !/^https?:\/\//i.test(statusUrl)) {
+      sendJson(res, 400, { error: "发布链接必须以 http:// 或 https:// 开头" });
+      return;
+    }
     await updatePlatformStatus(path.resolve(opts.indexPath), {
       videoId,
       platform,
       published: parsed.published === true,
-      url: typeof parsed.url === "string" ? parsed.url : "",
+      url: statusUrl,
       note: typeof parsed.note === "string" ? parsed.note : "",
     });
     sendJson(res, 200, { ok: true });
@@ -680,7 +686,7 @@ const handleDashboardRequest = async (
   const ensurePlatformArticle = async (videoId: string, targetPlatform: PlatformKey): Promise<string> => {
     if (targetPlatform === "x") return "";
     const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
-    const metadataFile = `${targetPlatform}-metadata.json`;
+    const metadataFile = `${targetPlatform}-format/${targetPlatform}-metadata.json`;
 
     // already generated?
     try { await readFile(path.join(articleDir, metadataFile)); return ""; } catch { /* nope */ }
@@ -717,6 +723,35 @@ const handleDashboardRequest = async (
     }
   };
 
+  // ── platform generate (empty → draft) ──
+  if (req.method === "POST" && url.pathname === "/api/platform-generate") {
+    const parsed = JSON.parse(await readBody(req)) as unknown;
+    if (!isRecord(parsed)) { sendJson(res, 400, { error: "Invalid JSON body." }); return; }
+    const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
+    const platform = typeof parsed.platform === "string" ? platformFromString(parsed.platform) : null;
+    if (!isSafeVideoId(videoId) || platform === null) { sendJson(res, 400, { error: "Invalid videoId or platform." }); return; }
+    const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
+
+    try {
+      if (platform === "x" || platform === "wechat") {
+        // Copy article.md → platform article
+        const dstFile = platform === "x" ? "x-format/x-article.md" : "wechat-format/wechat-article.md";
+        const src = path.join(articleDir, "article.md");
+        const dst = path.join(articleDir, dstFile);
+        try { await access(src); } catch { sendJson(res, 400, { error: "article.md 不存在" }); return; }
+        await mkdir(path.dirname(dst), { recursive: true });
+        await copyFile(src, dst);
+      } else if (platform === "xiaohongshu" || platform === "bilibili") {
+        const err = await ensurePlatformArticle(videoId, platform);
+        if (err) { sendJson(res, 400, { error: err }); return; }
+      }
+      sendJson(res, 200, { ok: true, platform });
+    } catch (err: unknown) {
+      sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
   // ── platform format dispatch ──
   if (req.method === "POST" && url.pathname === "/api/platform-format") {
     const parsed = JSON.parse(await readBody(req)) as unknown;
@@ -739,6 +774,26 @@ const handleDashboardRequest = async (
       const genStatus = platform === "xiaohongshu" || platform === "bilibili"
         ? await ensurePlatformArticle(videoId, platform)
         : "";
+
+      // For X and WeChat: ensure platform article file exists by copying article.md
+      // article.md is the universal source; each platform gets its own copy.
+      const platformArticleFile = platform === "x" ? "x-format/x-article.md"
+        : platform === "wechat" ? "wechat-format/wechat-article.md"
+        : null;
+      if (platformArticleFile !== null) {
+        const srcArticle = path.join(articleDir, "article.md");
+        const dstArticle = path.join(articleDir, platformArticleFile);
+        try {
+          await access(dstArticle);
+        } catch {
+          try {
+            await mkdir(path.dirname(dstArticle), { recursive: true });
+            await copyFile(srcArticle, dstArticle);
+          } catch {
+            // copy failed — orchestrate can fall back to reading article.md directly
+          }
+        }
+      }
 
       // X / XHS / WeChat (no images): generate prompts via orchestratePlatformPrompts
       const needsPrompts = platform === "x" || platform === "xiaohongshu";
@@ -818,6 +873,62 @@ const handleDashboardRequest = async (
       const message = err instanceof Error ? err.message : String(err);
       sendJson(res, 500, { error: message });
     }
+    return;
+  }
+
+  // ── platform init (reset) ──
+  if (req.method === "POST" && url.pathname === "/api/platform-init") {
+    const parsed = JSON.parse(await readBody(req)) as unknown;
+    if (!isRecord(parsed)) {
+      sendJson(res, 400, { error: "Invalid JSON body." });
+      return;
+    }
+    const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
+    const platform = typeof parsed.platform === "string" ? platformFromString(parsed.platform) : null;
+    if (!isSafeVideoId(videoId) || platform === null) {
+      sendJson(res, 400, { error: "Invalid videoId or platform." });
+      return;
+    }
+
+    // Check if platform is already published — refuse init
+    const idx = await readPublishIndex(opts.indexPath);
+    const platformState = idx.videos?.[videoId]?.platforms?.[platform];
+    if (platformState?.published === true) {
+      sendJson(res, 400, { error: "已发布的平台不可初始化。请先取消发布状态。" });
+      return;
+    }
+
+    const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
+    const deleted: string[] = [];
+
+    // All platform artifacts are now inside the format directory.
+    // Deleting the directory removes everything: articles, metadata, images, clips, prompts, HTML.
+    const formatDir = { x: "x-format", xiaohongshu: "xiaohongshu-format", wechat: "wechat-format", bilibili: "bilibili-format" }[platform]!;
+    const toDelete = [path.join(articleDir, formatDir)];
+
+    // Delete files
+    for (const p of toDelete) {
+      try {
+        await rm(p, { recursive: true, force: true });
+        deleted.push(path.relative(articleDir, p));
+      } catch {
+        // file may not exist — skip
+      }
+    }
+
+    // Reset platform state in publish-index.json
+    if (idx.videos?.[videoId]?.platforms?.[platform] !== undefined) {
+      const current = idx.videos[videoId]!.platforms![platform]!;
+      idx.videos[videoId]!.platforms![platform] = {
+        published: current.published ?? false,
+        url: current.url ?? "",
+        note: current.note ?? "",
+        // Clear all format-related fields
+      };
+      await writePublishIndex(opts.indexPath, idx);
+    }
+
+    sendJson(res, 200, { ok: true, platform, deleted });
     return;
   }
 
@@ -966,32 +1077,29 @@ const handleDashboardRequest = async (
   if (req.method === "GET" && url.pathname === "/api/file-image") {
     const videoId = url.searchParams.get("videoId");
     const file = url.searchParams.get("file");
+    const subdir = url.searchParams.get("subdir");
     if (videoId === null || !isSafeVideoId(videoId) || file === null || file.length === 0 || file.includes("/") || file.includes("\\") || file.includes("..")) {
       sendJson(res, 400, { error: "Invalid videoId or file." });
       return;
     }
-    const imageDir = path.join(path.resolve(opts.articleOutDir), videoId, "images");
-    const imagePath = path.join(imageDir, file);
-    if (!path.resolve(imagePath).startsWith(path.resolve(imageDir) + path.sep)) {
-      sendJson(res, 400, { error: "Invalid file path." });
-      return;
+    const articleRoot = path.join(path.resolve(opts.articleOutDir), videoId);
+    // Platform-specific dir first, then fallback to images/
+    const dirs = subdir ? [path.join(articleRoot, subdir, "images"), path.join(articleRoot, "images")] : [path.join(articleRoot, "images")];
+    let served = false;
+    for (const imageDir of dirs) {
+      const imagePath = path.join(imageDir, file);
+      if (!path.resolve(imagePath).startsWith(path.resolve(imageDir) + path.sep)) continue;
+      try {
+        const ext = path.extname(file).toLowerCase();
+        const mimeTypes: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" };
+        const data = await readFile(imagePath);
+        res.writeHead(200, { "content-type": mimeTypes[ext] ?? "application/octet-stream", "cache-control": "public, max-age=3600" });
+        res.end(data);
+        served = true;
+        break;
+      } catch { /* try next dir */ }
     }
-    try {
-      const ext = path.extname(file).toLowerCase();
-      const mimeTypes: Record<string, string> = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".svg": "image/svg+xml",
-      };
-      const data = await readFile(imagePath);
-      res.writeHead(200, { "content-type": mimeTypes[ext] ?? "application/octet-stream", "cache-control": "public, max-age=3600" });
-      res.end(data);
-    } catch {
-      sendJson(res, 404, { error: "Image not found." });
-    }
+    if (!served) sendJson(res, 404, { error: "Image not found." });
     return;
   }
 
@@ -1018,7 +1126,7 @@ export const registerDashboardCommand = (program: Command): void => {
     .option("--out-dir <path>", "Downloads/notes root", DEFAULT_OUT_DIR)
     .option("--index <path>", "Publish status index path", "files/publish-index.json")
     .option("--wechat-formatter-dir <path>", "Path to xiaohu-wechat-format checkout (or WECHAT_FORMATTER_DIR)")
-    .action((flags: { port: string; host: string; articleOutDir: string; outDir: string; index: string; wechatFormatterDir?: string }) => {
+    .action(async (flags: { port: string; host: string; articleOutDir: string; outDir: string; index: string; wechatFormatterDir?: string }) => {
       const port = Number.parseInt(flags.port, 10);
       if (!Number.isInteger(port) || port <= 0 || port > 65535) {
         throw new Error(`Invalid --port: ${flags.port}`);
@@ -1039,6 +1147,13 @@ export const registerDashboardCommand = (program: Command): void => {
         ...(wechatFormatterDir !== undefined ? { wechatFormatterDir: path.resolve(wechatFormatterDir) } : {}),
         ...(imageGenerator !== undefined ? { imageGenerator } : {}),
       };
+      // Migrate legacy X platform files into x-format/ subdirectory (idempotent)
+      const { migrateXFilesToFormatDir } = await import("./migrate-x-files.js");
+      const migrated = await migrateXFilesToFormatDir(path.resolve(flags.articleOutDir));
+      if (migrated > 0) {
+        process.stderr.write(`migrated ${migrated} X platform file(s) into x-format/ subdirectories\n`);
+      }
+
       const server = createServer((req, res) => {
         handleDashboardRequest(req, res, opts).catch((err: unknown) => {
           sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });

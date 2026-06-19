@@ -275,6 +275,7 @@ export const prepareYoutubeVideo = async (
           ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
           ...(opts.burnedVideoOutDir !== undefined ? { burnedVideoOutDir: opts.burnedVideoOutDir } : {}),
           ...(opts.force !== undefined ? { force: opts.force } : {}),
+          videoLanguage,
         });
         result.warnings.push(...warnings);
       });

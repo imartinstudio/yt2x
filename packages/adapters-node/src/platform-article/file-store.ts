@@ -111,10 +111,13 @@ export const renderPlatformArticleMarkdown = (article: GeneratedPlatformArticle)
 
 export const platformArticleFileNames = (
   target: PlatformArticleTarget,
-): { articleFile: string; metadataFile: string } => ({
-  articleFile: `${target}-article.md`,
-  metadataFile: `${target}-metadata.json`,
-});
+): { articleFile: string; metadataFile: string } => {
+  const dir = `${target}-format`;
+  return {
+    articleFile: `${dir}/${target}-article.md`,
+    metadataFile: `${dir}/${target}-metadata.json`,
+  };
+};
 
 export const writePlatformArticleBundle = async (
   articleOutDir: string,

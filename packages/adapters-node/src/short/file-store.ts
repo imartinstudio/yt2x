@@ -23,7 +23,7 @@ export const writeNativeShortBundle = async (
   }
 
   const articleDir = path.join(path.resolve(articleOutDir), videoId);
-  const shortPath = path.join(articleDir, "x-short.md");
+  const shortPath = path.join(articleDir, "x-format", "x-short.md");
 
   if (options.force !== true) {
     await assertMissing(shortPath);
@@ -34,7 +34,7 @@ export const writeNativeShortBundle = async (
 
   let visualPath: string | null = null;
   if (shortPost.visual !== undefined) {
-    visualPath = path.join(articleDir, "x-short-visual.json");
+    visualPath = path.join(articleDir, "x-format", "x-short-visual.json");
     await atomicWriteUtf8(
       visualPath,
       JSON.stringify({ visual: shortPost.visual }, null, 2) + "\n",

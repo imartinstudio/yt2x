@@ -30,8 +30,8 @@ export const writeNativeThreadBundle = async (
   }
 
   const articleDir = path.join(path.resolve(articleOutDir), videoId);
-  const threadPath = path.join(articleDir, "x-thread.md");
-  const hooksPath = path.join(articleDir, "x-hooks.json");
+  const threadPath = path.join(articleDir, "x-format", "x-thread.md");
+  const hooksPath = path.join(articleDir, "x-format", "x-hooks.json");
 
   if (options.force !== true) {
     await assertMissing(threadPath);
@@ -44,7 +44,7 @@ export const writeNativeThreadBundle = async (
 
   let visualsPath: string | null = null;
   if (thread.visuals !== undefined && thread.visuals.length > 0) {
-    visualsPath = path.join(articleDir, "x-thread-visuals.json");
+    visualsPath = path.join(articleDir, "x-format", "x-thread-visuals.json");
     await atomicWriteUtf8(
       visualsPath,
       JSON.stringify({ visuals: thread.visuals }, null, 2) + "\n",

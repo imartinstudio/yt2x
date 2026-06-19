@@ -28,7 +28,7 @@ export const writeNativeVideoShortBundle = async (
   }
 
   const articleDir = path.join(path.resolve(articleOutDir), videoId);
-  const shortPath = path.join(articleDir, "x-video-short.md");
+  const shortPath = path.join(articleDir, "x-format", "x-video-short.md");
 
   if (options.force !== true) {
     await assertMissing(shortPath);

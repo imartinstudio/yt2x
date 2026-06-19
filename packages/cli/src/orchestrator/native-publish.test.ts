@@ -36,6 +36,7 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://youtu.be/dryRunVid1" }),
@@ -56,7 +57,7 @@ describe("executeNativePublish", () => {
       stdout.mockRestore();
     }
 
-    const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
+    const previewRaw = await readFile(path.join(articleDir, "x-format", "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { format: string; source: string; parts: unknown[] };
     expect(preview.format).toBe("article");
     expect(preview.source).toBe("article.md");
@@ -79,11 +80,12 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/thread-preview" }),
     );
-    await writeFile(path.join(articleDir, "x-thread.md"), "# T\n\n1/ first\n\n2/ second\n");
+    await writeFile(path.join(articleDir, "x-format", "x-thread.md"), "# T\n\n1/ first\n\n2/ second\n");
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
@@ -100,7 +102,7 @@ describe("executeNativePublish", () => {
       stdout.mockRestore();
     }
 
-    const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
+    const previewRaw = await readFile(path.join(articleDir, "x-format", "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as {
       mode: string;
       source: string;
@@ -123,11 +125,12 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/thread-delay" }),
     );
-    await writeFile(path.join(articleDir, "x-thread.md"), "1/ first\n\n2/ second\n");
+    await writeFile(path.join(articleDir, "x-format", "x-thread.md"), "1/ first\n\n2/ second\n");
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
@@ -144,7 +147,7 @@ describe("executeNativePublish", () => {
       stdout.mockRestore();
     }
 
-    const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
+    const previewRaw = await readFile(path.join(articleDir, "x-format", "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { threadDelayMs: { min: number; max: number } };
     expect(preview.threadDelayMs).toEqual({ min: 7_000, max: 9_000 });
   });
@@ -157,11 +160,12 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/thread-normalize" }),
     );
-    await writeFile(path.join(articleDir, "x-thread.md"), "1/ **标题：**正文\n- item\n\n2/ | A | B |\n| --- | --- |\n| ok | yes |");
+    await writeFile(path.join(articleDir, "x-format", "x-thread.md"), "1/ **标题：**正文\n- item\n\n2/ | A | B |\n| --- | --- |\n| ok | yes |");
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
@@ -177,7 +181,7 @@ describe("executeNativePublish", () => {
       stdout.mockRestore();
     }
 
-    const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
+    const previewRaw = await readFile(path.join(articleDir, "x-format", "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { tweets: string[] };
     expect(preview.tweets).toEqual(["1/ 标题：\n\n正文\n- item", "2/ A ｜ B\nok ｜ yes"]);
   });
@@ -190,12 +194,13 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/thread-paragraphs" }),
     );
     await writeFile(
-      path.join(articleDir, "x-thread.md"),
+      path.join(articleDir, "x-format", "x-thread.md"),
       [
         "1/ **标题：**第一段",
         "",
@@ -222,7 +227,7 @@ describe("executeNativePublish", () => {
       stdout.mockRestore();
     }
 
-    const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
+    const previewRaw = await readFile(path.join(articleDir, "x-format", "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { tweets: string[] };
     expect(preview.tweets).toEqual([
       "1/ 标题：\n\n第一段\n\n第二段保留在同一条 tweet\n\n- item",
@@ -251,11 +256,12 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/thread-too-long" }),
     );
-    await writeFile(path.join(articleDir, "x-thread.md"), `1/ ${"长".repeat(300)}\n`);
+    await writeFile(path.join(articleDir, "x-format", "x-thread.md"), `1/ ${"长".repeat(300)}\n`);
 
     const code = await executeNativePublish({
       videoId,
@@ -278,11 +284,12 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/short-preview" }),
     );
-    await writeFile(path.join(articleDir, "x-short.md"), "short post body\n");
+    await writeFile(path.join(articleDir, "x-format", "x-short.md"), "short post body\n");
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
@@ -298,7 +305,7 @@ describe("executeNativePublish", () => {
       stdout.mockRestore();
     }
 
-    const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
+    const previewRaw = await readFile(path.join(articleDir, "x-format", "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { mode: string; source: string; text: string; sourceReply: string };
     expect(preview.mode).toBe("short");
     expect(preview.source).toBe("x-short.md");
@@ -314,11 +321,12 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/short-normalize" }),
     );
-    await writeFile(path.join(articleDir, "x-short.md"), "**核心：**正文\n- [x] done\n- next\n");
+    await writeFile(path.join(articleDir, "x-format", "x-short.md"), "**核心：**正文\n- [x] done\n- next\n");
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
@@ -334,7 +342,7 @@ describe("executeNativePublish", () => {
       stdout.mockRestore();
     }
 
-    const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
+    const previewRaw = await readFile(path.join(articleDir, "x-format", "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { text: string };
     expect(preview.text).toBe("核心：\n正文\n- done\n- next");
   });
@@ -348,11 +356,12 @@ describe("executeNativePublish", () => {
     const coverPath = path.join(articleDir, "images", "cover.png");
     await mkdir(videoDir, { recursive: true });
     await mkdir(path.dirname(coverPath), { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/short-cover" }),
     );
-    await writeFile(path.join(articleDir, "x-short.md"), "short with cover\n");
+    await writeFile(path.join(articleDir, "x-format", "x-short.md"), "short with cover\n");
     await writeFile(coverPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -369,7 +378,7 @@ describe("executeNativePublish", () => {
       stdout.mockRestore();
     }
 
-    const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
+    const previewRaw = await readFile(path.join(articleDir, "x-format", "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { coverPath: string | null };
     expect(preview.coverPath).toBe(coverPath);
   });
@@ -383,12 +392,13 @@ describe("executeNativePublish", () => {
     const coverPath = path.join(articleDir, "images", "cover.jpg");
     await mkdir(videoDir, { recursive: true });
     await mkdir(path.dirname(coverPath), { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/thread-short" }),
     );
-    await writeFile(path.join(articleDir, "x-short.md"), "short head\n");
-    await writeFile(path.join(articleDir, "x-thread.md"), "# T\n\n1/ first reply\n\n2/ second reply\n");
+    await writeFile(path.join(articleDir, "x-format", "x-short.md"), "short head\n");
+    await writeFile(path.join(articleDir, "x-format", "x-thread.md"), "# T\n\n1/ first reply\n\n2/ second reply\n");
     await writeFile(coverPath, Buffer.from([0xff, 0xd8, 0xff]));
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -405,7 +415,7 @@ describe("executeNativePublish", () => {
       stdout.mockRestore();
     }
 
-    const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
+    const previewRaw = await readFile(path.join(articleDir, "x-format", "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as {
       mode: string;
       source: string;
@@ -435,11 +445,12 @@ describe("executeNativePublish", () => {
     const longShort = `核心判断：${"短帖内容".repeat(80)}`;
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/short-no-limit" }),
     );
-    await writeFile(path.join(articleDir, "x-short.md"), longShort);
+    await writeFile(path.join(articleDir, "x-format", "x-short.md"), longShort);
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
@@ -456,7 +467,7 @@ describe("executeNativePublish", () => {
       stdout.mockRestore();
     }
 
-    const previewRaw = await readFile(path.join(articleDir, "publish-preview.json"), "utf8");
+    const previewRaw = await readFile(path.join(articleDir, "x-format", "publish-preview.json"), "utf8");
     const preview = JSON.parse(previewRaw) as { text: string };
     expect(preview.text).toBe(longShort);
   });
@@ -497,6 +508,7 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await mkdir(path.join(articleDir, "video"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
@@ -528,11 +540,11 @@ describe("executeNativePublish", () => {
 
       expect(code).toBe(0);
       expect(saveDraft).toHaveBeenCalledOnce();
-      expect(await readFile(path.join(articleDir, "article_for_x.md"), "utf8")).toContain("**Detail**");
-      expect(await readFile(path.join(articleDir, "article_for_x.md"), "utf8")).toContain(
+      expect(await readFile(path.join(articleDir, "x-format", "article_for_x.md"), "utf8")).toContain("**Detail**");
+      expect(await readFile(path.join(articleDir, "x-format", "article_for_x.md"), "utf8")).toContain(
         '<video controls src="video/clip.mp4"></video>',
       );
-      const result = JSON.parse(await readFile(path.join(articleDir, "publish-result.json"), "utf8")) as {
+      const result = JSON.parse(await readFile(path.join(articleDir, "x-format", "publish-result.json"), "utf8")) as {
         mode: string;
         editorUrl: string;
         warnings: string[];
@@ -560,6 +572,7 @@ describe("executeNativePublish", () => {
     const articleDir = path.join(articleOutDir, videoId);
     await mkdir(videoDir, { recursive: true });
     await mkdir(articleDir, { recursive: true });
+    await mkdir(path.join(articleDir, "x-format"), { recursive: true });
     await writeFile(
       path.join(videoDir, "metadata.json"),
       JSON.stringify({ id: videoId, webpage_url: "https://example.com/article-tier" }),

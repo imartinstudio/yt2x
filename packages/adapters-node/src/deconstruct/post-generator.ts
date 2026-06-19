@@ -58,6 +58,11 @@ const buildPostUserPrompt = (input: GeneratePostsInput): string => {
   parts.push("遵循 Martin AI Coding Workflow 风格：真实体验 > 技术参数，发现 > 功能介绍。");
   parts.push("每条帖子完成后执行最终检查清单（6 项），不满足则重新生成。");
   parts.push("输出的 posts 数组顺序必须与输入顺序一致。");
+  parts.push("");
+  parts.push("重要提醒：");
+  parts.push("- 杜绝 AI 味的「我…」泛泛感慨。如果「我」后面没有具体动作或画面，就不要用「我」。");
+  parts.push("- Emoji 0-2 个，贴合上下文才加，不要硬塞。不加 emoji 完全没问题。");
+  parts.push("- 所有片段时长均在 120 秒以内，文案节奏需与短视频片段匹配。");
 
   return parts.join("\n");
 };
@@ -69,7 +74,7 @@ const buildPostUserPrompt = (input: GeneratePostsInput): string => {
 export const generateClipsPosts = async (
   input: GeneratePostsRunnerInput,
 ): Promise<GeneratePostsRunnerResult> => {
-  const manifestPath = path.join(input.articleDir, "clips", "clips-manifest.json");
+  const manifestPath = path.join(input.articleDir, "x-format", "clips", "clips-manifest.json");
   const articlePath = path.join(input.articleDir, "article.md");
 
   const [manifestRaw, articleMd] = await Promise.all([
@@ -194,7 +199,7 @@ export const writeSelectedPostFiles = async (
   manifest: DeconstructManifest,
   articleDir: string,
 ): Promise<string[]> => {
-  const clipsDir = path.join(articleDir, "clips");
+  const clipsDir = path.join(articleDir, "x-format", "clips");
   const postPaths: string[] = [];
   const selected = manifest.clips.filter((c) => c.selected === true);
 

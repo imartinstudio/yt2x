@@ -3,7 +3,7 @@ import path from "node:path";
 import type { LlmPort } from "@yt2x/core";
 import type { PlatformFormatInput, PlatformFormatResult, XiaohongshuMetadata } from "./types.js";
 
-const METADATA_FILE = "xiaohongshu-metadata.json";
+const METADATA_FILE = "xiaohongshu-format/xiaohongshu-metadata.json";
 const OUTPUT_DIR = "xiaohongshu-format";
 const IMAGE_PREFIX = "section-";
 const IMAGE_EXT = ".png";
@@ -218,7 +218,23 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
   const sectionHasImage: boolean[] = [];
   const sectionPrompts: string[] = [];
 
-  // generate prompts via LLM (always if available)
+  // If prompts.json already exists, reuse cached prompts instead of calling the LLM again.
+  // This ensures prompts are generated only once — "重新排版" reuses cached prompts.
+  const promptsPath = path.join(outputDir, PROMPTS_FILE);
+  let hasCachedPrompts = false;
+  try {
+    const cachedRaw = await readFile(promptsPath, "utf8");
+    const cached = JSON.parse(cachedRaw) as string[];
+    if (Array.isArray(cached) && cached.length === sections.length) {
+      sectionPrompts.push(...cached);
+      hasCachedPrompts = true;
+    }
+  } catch {
+    // prompts.json doesn't exist — will generate via LLM below
+  }
+
+  if (!hasCachedPrompts) {
+  // generate prompts via LLM
   const hasLlm = input.llm !== undefined && input.llmModel !== undefined;
   for (let i = 0; i < sections.length; i++) {
     let prompt = "";
@@ -235,10 +251,13 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
   }
 
   // save prompts
-  const promptsPath = path.join(outputDir, PROMPTS_FILE);
   await mkdir(outputDir, { recursive: true });
   await writeFile(promptsPath, JSON.stringify(sectionPrompts, null, 2), "utf8");
   files.push(promptsPath);
+  } // end if (!hasCachedPrompts)
+
+  // ensure output directory exists (needed for image generation below)
+  await mkdir(outputDir, { recursive: true });
 
   // generate images
   for (let i = 0; i < sections.length; i++) {

@@ -32,6 +32,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <option value="published">已发布</option>
         <option value="unpublished">未发布</option>
       </select>
+      <button id="needsActionFilter" class="secondary" style="white-space:nowrap">仅看需处理</button>
     </div>
     <button id="refresh">刷新</button>
   </header>
@@ -82,7 +83,24 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </div>
     </section>
   </div>
-  <div class="toast" id="toast"></div>
+  <div class="modal-overlay" id="confirmDialog">
+    <section class="confirm-dialog" role="alertdialog" aria-modal="true">
+      <div class="confirm-body" id="confirmBody"></div>
+      <div class="confirm-esc-hint">ESC 取消</div>
+      <div class="confirm-foot">
+        <button class="secondary" id="confirmCancel">取消</button>
+        <button id="confirmOk">确认</button>
+      </div>
+    </section>
+  </div>
+  <div class="drawer-overlay" id="drawerOverlay">
+    <div class="drawer-sheet" id="drawerSheet">
+      <div class="drawer-handle"></div>
+      <button class="drawer-close" id="drawerClose" aria-label="关闭">×</button>
+      <div id="drawerContent"></div>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script>${DASHBOARD_CLIENT}</script>
 </body>
 </html>`;

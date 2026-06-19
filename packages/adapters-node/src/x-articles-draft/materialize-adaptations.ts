@@ -10,7 +10,7 @@ export const materializeArticleDraftAdaptations = async (input: {
   const tables = input.adapted.adaptations.filter(isTableImageAdaptation);
   if (tables.length === 0) return input.adapted;
 
-  const imagesDir = path.join(input.articleDir, "images");
+  const imagesDir = path.join(input.articleDir, "x-format", "images");
   await mkdir(imagesDir, { recursive: true });
   const browser = await chromium.launch({ headless: true });
   try {
@@ -20,7 +20,7 @@ export const materializeArticleDraftAdaptations = async (input: {
       const filename = `x-table-${index + 1}.png`;
       await page.setContent(renderTableDocument(table.sourceMarkdown));
       await page.locator("table").screenshot({ path: path.join(imagesDir, filename) });
-      markdown = markdown.replace(`(${table.placeholder})`, `(images/${filename})`);
+      markdown = markdown.replace(`(${table.placeholder})`, `(x-format/images/${filename})`);
     }
     return { ...input.adapted, markdown };
   } finally {

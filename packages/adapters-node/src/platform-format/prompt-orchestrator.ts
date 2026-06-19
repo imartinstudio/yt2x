@@ -268,9 +268,16 @@ export const previewExistingArticleImages = async (
   promptMap?: Map<number, string>,
 ): Promise<{ html: string; coverCount: number; illCount: number } | null> => {
   const { readdir, readFile: rf } = await import("node:fs/promises");
-  const imageDir = path.join(articleDir, "images");
+  // X: primary is root images/ (scene_*, cover.webp), fallback is x-format/images/ (x-table-*)
+  // Other platforms: primary is <format-dir>/images/, fallback is root images/
+  const platformImageDir = platform === "x" ? "images" : `${platform === "xiaohongshu" ? "xiaohongshu-format" : platform === "wechat" ? "wechat-format" : "bilibili-format"}/images`;
+  const imageDir = path.join(articleDir, platformImageDir);
+  const fallbackDir = platform === "x" ? path.join(articleDir, "x-format", "images") : path.join(articleDir, "images");
   let entries: string[] = [];
   try { entries = await readdir(imageDir); } catch { entries = []; }
+  if (fallbackDir) {
+    try { entries.push(...(await readdir(fallbackDir)).filter((f) => !entries.includes(f))); } catch { /* no fallback */ }
+  }
   const imageSet = new Set(entries);
 
   // Read article text
@@ -297,7 +304,8 @@ export const previewExistingArticleImages = async (
   const articleTitleClean = title.replace(/\*\*/g, "");
   const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[platform] ?? platform;
   const videoId = path.basename(articleDir);
-  const imgUrl = (f: string) => "/api/file-image?videoId=" + encodeURIComponent(videoId) + "&file=" + encodeURIComponent(f);
+  const platformSubdir = platform === "x" ? "" : (platform === "xiaohongshu" ? "xiaohongshu-format" : platform === "wechat" ? "wechat-format" : "bilibili-format");
+  const imgUrl = (f: string) => "/api/file-image?videoId=" + encodeURIComponent(videoId) + "&file=" + encodeURIComponent(f) + (platformSubdir ? "&subdir=" + encodeURIComponent(platformSubdir) : "");
   const imgExists = (f: string) => imageSet.has(f);
   const imgRefRe = /!\[.*?\]\(images\/([^)]+)\)/g;
 
@@ -380,7 +388,7 @@ export const previewExistingArticleImages = async (
       nameHtml +
       '<div class="ph-row"><span class="ph-label">' + labelText + '</span>' +
       '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '">📋 复制</button>' +
-      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(promptText) + '" target="_blank">🤖 ChatGPT</a></span></div>';
+      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(promptText.slice(0, 1000)) + '" target="_blank">🤖 ChatGPT</a></span></div>';
   };
 
   const isXhs = platform === "xiaohongshu";
@@ -472,7 +480,7 @@ export const previewExistingArticleImages = async (
     const coverHtml = coverImg
       ? '<div class="cover-wrap"><img src="' + imgUrl(coverImg) + '" alt="封面" class="cover-img" /><div class="img-label">封面</div></div>'
       : nonXhsCoverPrompts.map(function (cp) {
-          return '<div class="cover-wrap"><div class="ph-box ph-box-cover">' + cp.prompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div><div class="ph-row"><span class="ph-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/</g, "&lt;") : '') + '</span><span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '">📋 复制</button><a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt) + '" target="_blank">🤖 ChatGPT</a></span></div></div>';
+          return '<div class="cover-wrap"><div class="ph-box ph-box-cover">' + cp.prompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div><div class="ph-row"><span class="ph-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/</g, "&lt;") : '') + '</span><span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '">📋 复制</button><a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt.slice(0, 1000)) + '" target="_blank">🤖 ChatGPT</a></span></div></div>';
         }).join("");
 
     // Count total prompt placeholders for X/bilibili preview counter
@@ -492,7 +500,7 @@ export const previewExistingArticleImages = async (
         ? '<div class="ph-box">' + secPrompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div>' +
           '<div class="ph-row"><span class="ph-label">📷 待生成</span>' +
           '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(secPrompt, "utf8").toString("base64") + '">📋 复制</button>' +
-          '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt) + '" target="_blank">🤖 ChatGPT</a></span></div>'
+          '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt.slice(0, 1000)) + '" target="_blank">🤖 ChatGPT</a></span></div>'
         : "";
       let blockHtml = '<div class="sec-block">' + h + '<div class="sec-body">' + b + '</div>' + imgHtml + promptHtml + '</div>';
       if (promptHtml) {
@@ -615,7 +623,7 @@ export const orchestratePlatformPrompts = async (
   let title = "";
   let body = input.articleMd;
   try {
-    const metaPath = path.join(articleDir, `${input.platform}-metadata.json`);
+    const metaPath = path.join(articleDir, `${input.platform}-format`, `${input.platform}-metadata.json`);
     const raw = await readFile(metaPath, "utf8");
     const meta = JSON.parse(raw) as { title?: string; body?: string };
     if (meta.title) title = meta.title;
@@ -630,8 +638,27 @@ export const orchestratePlatformPrompts = async (
   const sections = splitBodyIntoSections(body, input.platform);
   const files: string[] = [];
 
+  // If prompts.json already exists, reuse cached prompts instead of calling the LLM again.
+  // This ensures prompts are generated only once per platform — "重新排版" re-renders
+  // the HTML from cached prompts without re-calling the LLM.
+  const promptsPath = path.join(outputDir, "prompts.json");
+  let coverPrompts: Array<{ label: string; prompt: string; size: string; filename: string; name: string }> = [];
+  let illustrationPrompts: Array<{ index: number; text: string; prompt: string; filename: string; name: string }> = [];
+  let hasCachedPrompts = false;
+  try {
+    const cachedRaw = await readFile(promptsPath, "utf8");
+    const cached = JSON.parse(cachedRaw) as { coverPrompts: typeof coverPrompts; illustrationPrompts: typeof illustrationPrompts };
+    if (Array.isArray(cached.coverPrompts) && Array.isArray(cached.illustrationPrompts)) {
+      coverPrompts = cached.coverPrompts;
+      illustrationPrompts = cached.illustrationPrompts;
+      hasCachedPrompts = true;
+    }
+  } catch {
+    // prompts.json doesn't exist — will generate via LLM below
+  }
+
+  if (!hasCachedPrompts) {
   // generate cover prompts
-  const coverPrompts: Array<{ label: string; prompt: string; size: string; filename: string; name: string }> = [];
   for (const coverSpec of spec.coverRatios) {
     const slug = title.replace(/[^a-zA-Z0-9一-鿿]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).toLowerCase() || "cover";
     const coverFilename = `cover-${slug}.png`;
@@ -698,26 +725,36 @@ export const orchestratePlatformPrompts = async (
       body,
     ].join("\n");
 
+    const isXhsIll = input.platform === "xiaohongshu";
     const illSystemPrompt = [
-      `Create illustration prompts following sketch-knowledge-kit. Fill EVERY field below with exact Chinese labels. No generic descriptions.`,
+      isXhsIll
+        ? `Xiaohongshu images are NOTE CARDS, not illustrations. Each 3:4 image is a self-contained knowledge card the reader can study — like a well-designed notebook page.`
+        : `Create illustration prompts following sketch-knowledge-kit. Fill EVERY field below with exact Chinese labels. No generic descriptions.`,
       ``,
-      `For each section you pick, the prompt must fill this exact structure:`,
+      isXhsIll
+        ? `CRITICAL: NOT a simplified visual metaphor. An INFORMATION-DENSE page with 40-60% handwritten Chinese text. Only 20-30% whitespace. The reader should be able to READ the image.`
+        : `For each section you pick, the prompt must fill this exact structure:`,
       ``,
-      `Canvas: ${spec.illustrationRatio}, [exact pixels].`,
-      `Section: "[Chinese heading]". Mode: [before-after / walkthrough / single-feature / conceptual-diagram].`,
-      `Scene — every element labeled in Chinese:`,
-      `- Left: [element] labeled "[Chinese]"`,
-      `- Center: [element] labeled "[Chinese]"`,
-      `- Right: [element] labeled "[Chinese]"`,
-      `- Arrows between: [describe] labeled "[Chinese]"`,
-      `Orange (#E67E22) on exactly 1-2 elements: [list them].`,
-      `Labels: section heading as hand-drawn Chinese title. 1-3 key Chinese terms as handwritten labels with positions.`,
-      `Color: #F5F0E8 paper+grain, black fine-tip marker, orange only on specified elements. 70%+ whitespace.`,
-      `Avoid: dark bg, screenshots, OS chrome, glossy UI, 3D, gradients, computer fonts, pure white, photos.`,
+      isXhsIll
+        ? `Canvas: 3:4 portrait, 1080x1440px. Section: "[Chinese heading]". This is a Xiaohongshu knowledge card.`
+        : `Canvas: ${spec.illustrationRatio}, [exact pixels].`,
+      isXhsIll
+        ? `LAYOUT (top to bottom): 1. TITLE (top 10-15%): Bold hand-drawn Chinese heading, orange underline. 2. CORE ARGUMENT (15-20%): 2-3 sentences summarizing the thesis. 3. DETAILED CONTENT (40-50%): Numbered steps, before/after comparisons, bullet takeaways, concrete examples — ALL in readable hand-drawn Chinese. Each point a complete thought. 4. BOTTOM BAR (5-10%): Horizontal line + article short title in small script.`
+        : `Section: "[Chinese heading]". Mode: [before-after / walkthrough / single-feature / conceptual-diagram].`,
+      isXhsIll
+        ? `STYLE: #F5F0E8 paper+grain. Black marker for borders/dividers/icons. Orange (#E67E22) ONLY on title underline + 1-2 highlight boxes. ALL text hand-drawn Chinese, varying sizes. Simple hand-drawn icons.`
+        : `Scene — every element labeled in Chinese: Left/Center/Right/Arrows with exact "[Chinese]" labels. Orange on 1-2 elements. Labels: heading + 1-3 key terms.`,
+      isXhsIll
+        ? `Avoid: dark bg, screenshots, glossy UI, 3D, computer fonts, pure white.`
+        : `Color: #F5F0E8 paper+grain, black marker, orange only on specified elements. 70%+ whitespace. Avoid: dark bg, screenshots, OS chrome, glossy UI, 3D, gradients, computer fonts, pure white, photos.`,
       ``,
-      `DECISION RULES: Pick sections with comparisons, workflows, architecture, before/after, processes. Skip conclusions, disclaimers, tags, code blocks.`,
+      isXhsIll
+        ? `Pick ALL major sections. Default to INCLUDE. Skip only pure tag lists and disclaimers.`
+        : `DECISION RULES: Pick sections with comparisons, workflows, architecture, before/after, processes. Skip conclusions, disclaimers, tags, code blocks.`,
       ``,
-      `Every prompt MUST end with: "Aspect ratio: ${spec.illustrationRatio}."`,
+      isXhsIll
+        ? `Every prompt MUST end with: "Aspect ratio: 3:4 portrait (1080x1440 pixels)."`
+        : `Every prompt MUST end with: "Aspect ratio: ${spec.illustrationRatio}."`,
       `Return JSON array: [{"index": <1-based N>, "filename": "<slug>.png", "name": "<Chinese description>", "prompt": "<filled template above>"}].`,
       `Return ONLY JSON. No markdown.`,
     ].join("\n");
@@ -752,6 +789,7 @@ export const orchestratePlatformPrompts = async (
   } catch (err: unknown) {
     process.stderr.write(`illustration prompt error: ${err instanceof Error ? err.message : String(err)}\n`);
   }
+  } // end if (!hasCachedPrompts)
 
   // Post-process: force correct aspect ratio on every prompt
   const illRatioSuffix = spec.illustrationRatio ? ` Aspect ratio: ${spec.illustrationRatio}.` : "";
@@ -765,17 +803,18 @@ export const orchestratePlatformPrompts = async (
     if (cp.size) cp.prompt += ` Aspect ratio: ${cp.label} (${cp.size}).`;
   }
 
-  // save prompts.json
-  const promptsData = {
-    platform: input.platform,
-    title,
-    model: input.llmModel,
-    coverPrompts,
-    illustrationPrompts,
-  };
-  const promptsPath = path.join(outputDir, "prompts.json");
-  await writeFile(promptsPath, JSON.stringify(promptsData, null, 2), "utf8");
-  files.push(promptsPath);
+  // save prompts.json (only if newly generated — cached prompts are already on disk)
+  if (!hasCachedPrompts) {
+    const promptsData = {
+      platform: input.platform,
+      title,
+      model: input.llmModel,
+      coverPrompts,
+      illustrationPrompts,
+    };
+    await writeFile(promptsPath, JSON.stringify(promptsData, null, 2), "utf8");
+    files.push(promptsPath);
+  }
 
   // Build prompt lookup: section index → prompt text
   const promptMap = new Map<number, string>();
@@ -788,7 +827,7 @@ export const orchestratePlatformPrompts = async (
   // Render HTML: article sections with inline prompt placeholders
   const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[input.platform] ?? input.platform;
   const promptActions = function (promptText: string, label: string, sizeHint: string, name?: string) {
-    const encoded = encodeURIComponent(promptText);
+    const encoded = encodeURIComponent(promptText.slice(0, 1000));
     const nameHtml = name
       ? '<div class="ph-name">' + name.replace(/</g, "&lt;") + '</div>'
       : '';
@@ -810,7 +849,8 @@ export const orchestratePlatformPrompts = async (
 
   const isXhs2 = input.platform === "xiaohongshu";
   const videoId2 = path.basename(articleDir);
-  const imgUrl2 = function (f: string) { return "/api/file-image?videoId=" + encodeURIComponent(videoId2) + "&file=" + encodeURIComponent(f); };
+  const platformSubdir2 = input.platform === "x" ? "" : (input.platform === "xiaohongshu" ? "xiaohongshu-format" : input.platform === "wechat" ? "wechat-format" : "bilibili-format");
+  const imgUrl2 = function (f: string) { return "/api/file-image?videoId=" + encodeURIComponent(videoId2) + "&file=" + encodeURIComponent(f) + (platformSubdir2 ? "&subdir=" + encodeURIComponent(platformSubdir2) : ""); };
 
   let sectionBlocks: string;
 

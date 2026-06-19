@@ -12,8 +12,11 @@ describe("scanDashboardVideos", () => {
     const videoId = "video123";
     await mkdir(path.join(articleOutDir, videoId), { recursive: true });
     await mkdir(path.join(downloadsDir, videoId), { recursive: true });
+    await mkdir(path.join(articleOutDir, videoId, "x-format"), { recursive: true });
     await mkdir(path.join(articleOutDir, videoId, "wechat-format", "article"), { recursive: true });
     await writeFile(path.join(articleOutDir, videoId, "article.md"), "# **正式发布标题**\n\n正文");
+    await writeFile(path.join(articleOutDir, videoId, "x-format", "x-article.md"), "# **正式发布标题**\n\n正文");
+    await writeFile(path.join(articleOutDir, videoId, "x-format", "x-short.md"), "# **正式发布标题**\n\n正文");
     await writeFile(path.join(articleOutDir, videoId, "wechat-format", "article", "article.html"), "<article>html</article>");
     await writeFile(path.join(articleOutDir, videoId, "wechat-format", "article", "preview.html"), "<html>preview</html>");
     await writeFile(path.join(downloadsDir, videoId, "metadata.json"), JSON.stringify({ title: "真实标题" }));

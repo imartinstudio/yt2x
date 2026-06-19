@@ -26,7 +26,7 @@ export const writeDeconstructOutput = async (
   videoPath: string,
   durationSec: number,
 ): Promise<WriteDeconstructOutput> => {
-  const clipsDir = path.join(articleDir, "clips");
+  const clipsDir = path.join(articleDir, "x-format", "clips");
   await mkdir(clipsDir, { recursive: true });
 
   // Build manifest entries

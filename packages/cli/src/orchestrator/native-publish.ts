@@ -236,7 +236,7 @@ const loadGeneratedThreadTexts = async (
   maxTweets: number,
   maxChars: number,
 ): Promise<{ texts: string[]; source: "x-thread.md" }> => {
-  const threadPath = path.join(articleDir, "x-thread.md");
+  const threadPath = path.join(articleDir, "x-format", "x-thread.md");
   const raw = await readFile(threadPath, "utf8");
   const texts = parseGeneratedThreadMarkdown(raw)
     .map((block) => block.trim())
@@ -256,7 +256,7 @@ const loadGeneratedThreadTexts = async (
 };
 
 const loadGeneratedShortText = async (articleDir: string): Promise<{ texts: string[]; source: "x-short.md" }> => {
-  const shortPath = path.join(articleDir, "x-short.md");
+  const shortPath = path.join(articleDir, "x-format", "x-short.md");
   const raw = await readFile(shortPath, "utf8");
   const text = prepareTextForXPublish(raw, { orderedListStyle: "decimal" });
   if (text.length === 0) {
@@ -273,7 +273,7 @@ const appendDownPointingEmoji = (text: string): string => {
 const loadThreadVisualPlans = async (
   articleDir: string,
 ): Promise<ThreadVisualItem[]> => {
-  const visualsPath = path.join(articleDir, "x-thread-visuals.json");
+  const visualsPath = path.join(articleDir, "x-format", "x-thread-visuals.json");
   try {
     const raw = await readFile(visualsPath, "utf8");
     const parsed = JSON.parse(raw) as { visuals?: ThreadVisualItem[] };
@@ -286,7 +286,7 @@ const loadThreadVisualPlans = async (
 const loadShortVisualPlan = async (
   articleDir: string,
 ): Promise<ShortVisualItem | null> => {
-  const visualPath = path.join(articleDir, "x-short-visual.json");
+  const visualPath = path.join(articleDir, "x-format", "x-short-visual.json");
   try {
     const raw = await readFile(visualPath, "utf8");
     const parsed = JSON.parse(raw) as { visual?: ShortVisualItem };
@@ -446,6 +446,11 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
 
   const articleRootDir = resolveArticleOutRoot(flags, DEFAULT_ARTICLE_OUT_DIR);
   await mkdir(articleRootDir, { recursive: true });
+
+  // Ensure x-* files are migrated into x-format/ before reading (idempotent)
+  const { migrateXFilesToFormatDir } = await import("../commands/migrate-x-files.js");
+  await migrateXFilesToFormatDir(articleRootDir);
+
   const profile = flags.profile ?? "default";
   let publishTarget: PublishTarget;
   let threadSource: ThreadSource;
@@ -626,7 +631,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
         "Dry-run: cover would be uploaded on real publish (requires media.write).",
       );
     }
-    const previewFile = path.join(articleDirForStatus, "publish-preview.json");
+    const previewFile = path.join(articleDirForStatus, "x-format", "publish-preview.json");
 
     const videoAssets = await resolveVideoAssets(articleDirForStatus);
 
@@ -690,7 +695,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
         }),
         articleDir: articleDirForStatus,
       });
-      const adaptedPath = path.join(articleDirForStatus, "article_for_x.md");
+      const adaptedPath = path.join(articleDirForStatus, "x-format", "article_for_x.md");
       await writeFile(adaptedPath, adapted.markdown, "utf8");
       const parseResult = parseArticleDraftMarkdown(adapted.markdown, articleDirForStatus, coverPath);
       await assertArticleDraftImagesExist(parseResult);
@@ -706,7 +711,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
         ...(flags.browserProfileDir !== undefined ? { browserProfileDir: flags.browserProfileDir } : {}),
         ...(flags.headless !== undefined ? { headless: flags.headless } : {}),
       });
-      const resultFile = path.join(articleDirForStatus, "publish-result.json");
+      const resultFile = path.join(articleDirForStatus, "x-format", "publish-result.json");
       const payload = {
         profile,
         mode: "article-draft",
@@ -889,7 +894,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
           })
         : null;
 
-    const resultFile = path.join(articleDirForStatus, "publish-result.json");
+    const resultFile = path.join(articleDirForStatus, "x-format", "publish-result.json");
     const payload = {
       profile,
       handle: user?.user?.username ?? null,

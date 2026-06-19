@@ -19,7 +19,7 @@ export type SelectClipsResult = {
  * 不再删除未选中视频——视频裁剪在 selection 之后才进行。
  */
 export const selectClips = async (input: SelectClipsInput): Promise<SelectClipsResult> => {
-  const manifestPath = path.join(input.articleDir, "clips", "clips-manifest.json");
+  const manifestPath = path.join(input.articleDir, "x-format", "clips", "clips-manifest.json");
   const raw = await readFile(manifestPath, "utf8");
   const manifest: DeconstructManifest = JSON.parse(raw);
 

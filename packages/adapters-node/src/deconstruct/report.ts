@@ -340,7 +340,7 @@ export const writeReports = async (
   manifest: DeconstructManifest,
   articleTitle?: string,
 ): Promise<WriteReportsResult> => {
-  const clipsDir = path.join(articleDir, "clips");
+  const clipsDir = path.join(articleDir, "x-format", "clips");
   const title = articleTitle ?? manifest.source.title;
 
   const decompositionPath = path.join(clipsDir, "DECOMPOSITION.md");

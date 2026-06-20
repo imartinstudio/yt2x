@@ -3,6 +3,26 @@ import path from "node:path";
 import type { LlmPort } from "@yt2x/core";
 import type { PlatformFormatInput, PlatformFormatResult } from "./types.js";
 
+// ── HTML/URL helpers ──
+
+/** HTML-escape a string for use in element text content (NOT safe for unquoted attribute values — does not escape quotes). */
+const _esc = (s: string): string => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * Encode prompt for ChatGPT URL, truncated so the total URL stays well under browser limits.
+ * CJK chars encode to ~9 bytes each, so we cap at ~166 CJK chars (~1500 encoded bytes).
+ */
+const _chatGptUrl = (prompt: string): string => {
+  const maxEncoded = 1500;
+  let result = "";
+  for (const ch of prompt) {
+    const encoded = encodeURIComponent(ch);
+    if (result.length + encoded.length > maxEncoded) break;
+    result += encoded;
+  }
+  return result;
+};
+
 // ── platform-specific spec ──
 
 type PlatformSpec = {
@@ -163,10 +183,10 @@ const _renderPreviewHtml = (
         <span class="ratio">${c.size}</span>
       </div>
       <div class="card-label">${c.label}</div>
-      <div class="prompt-box">${c.prompt.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
+      <div class="prompt-box">${_esc(c.prompt)}</div>
       <div class="card-actions">
         <button class="copy-btn" onclick="copyText(${i})">📋 复制 Prompt</button>
-        <a class="chatgpt-btn" href="https://chatgpt.com/?q=${encodeURIComponent(c.prompt)}" target="_blank">🤖 打开 ChatGPT</a>
+        <a class="chatgpt-btn" href="https://chatgpt.com/?q=${_chatGptUrl(c.prompt)}" target="_blank">🤖 打开 ChatGPT</a>
       </div>
     </div>`,
     )
@@ -183,10 +203,10 @@ const _renderPreviewHtml = (
         <span class="ratio">${platformSpec.illustrationRatio}</span>
       </div>
       <div class="card-text">${il.text.replace(/\n/g, "<br>")}…</div>
-      <div class="prompt-box">${il.prompt.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
+      <div class="prompt-box">${_esc(il.prompt)}</div>
       <div class="card-actions">
         <button class="copy-btn" onclick="copyText(${idx})">📋 复制 Prompt</button>
-        <a class="chatgpt-btn" href="https://chatgpt.com/?q=${encodeURIComponent(il.prompt)}" target="_blank">🤖 打开 ChatGPT</a>
+        <a class="chatgpt-btn" href="https://chatgpt.com/?q=${_chatGptUrl(il.prompt)}" target="_blank">🤖 打开 ChatGPT</a>
       </div>
     </div>`;
       },
@@ -280,8 +300,8 @@ export const previewExistingArticleImages = async (
   }
   const imageSet = new Set(entries);
 
-  // Read article text
-  const articleFiles: Record<string, string> = { x: "article.md", xiaohongshu: "xiaohongshu-article.md", bilibili: "bilibili-article.md", wechat: "article.md" };
+  // Read article text — prefer platform-specific files (which are cleaned copies without images)
+  const articleFiles: Record<string, string> = { x: "x-format/x-article.md", xiaohongshu: "xiaohongshu-format/xiaohongshu-article.md", bilibili: "bilibili-format/video-info.md", wechat: "wechat-format/wechat-article.md" };
   const articleFile = articleFiles[platform] ?? "article.md";
   let articleText = "";
   let fellBackToMainArticle = false;
@@ -293,7 +313,7 @@ export const previewExistingArticleImages = async (
   // When XHS preview falls back to article.md (X's article), strip X image references
   // because XHS image galleries require 3:4 portrait — X's 16:9 images don't fit.
   if (platform === "xiaohongshu" && fellBackToMainArticle) {
-    articleText = articleText.replace(/!\[.*?\]\(images\/[^)]+\)\n?/g, "");
+    articleText = articleText.replace(/!\[.*?\]\(\.?\/?images\/[^)]+\)\n?/g, "");
     // also remove standalone cover/pairing image blocks in frontmatter-like regions
     articleText = articleText.replace(/\*\*封面\/配图建议\*\*[\s\S]*?(?=\*\*[^*]+\*\*|$)/g, "");
   }
@@ -307,7 +327,7 @@ export const previewExistingArticleImages = async (
   const platformSubdir = platform === "x" ? "" : (platform === "xiaohongshu" ? "xiaohongshu-format" : platform === "wechat" ? "wechat-format" : "bilibili-format");
   const imgUrl = (f: string) => "/api/file-image?videoId=" + encodeURIComponent(videoId) + "&file=" + encodeURIComponent(f) + (platformSubdir ? "&subdir=" + encodeURIComponent(platformSubdir) : "");
   const imgExists = (f: string) => imageSet.has(f);
-  const imgRefRe = /!\[.*?\]\(images\/([^)]+)\)/g;
+  const imgRefRe = /!\[.*?\]\(\.?\/?images\/([^)]+)\)/g;
 
   // XHS image galleries require 3:4 portrait (1080×1440).
   // X's 16:9 landscape cover/illustrations are NOT suitable — never reuse X images for XHS.
@@ -340,12 +360,15 @@ export const previewExistingArticleImages = async (
         const body = boldMatch ? b.slice(boldMatch[0]!.length).trim() : b;
         const imgs: string[] = [];
         let m: RegExpExecArray | null;
+        imgRefRe.lastIndex = 0;
         while ((m = imgRefRe.exec(b)) !== null) { imgs.push(m[1]!); }
         sections.push({ heading, body, images: imgs });
       }
     }
   } else {
-    // X / Bilibili: split on ## headings
+    // X / Bilibili: split on ## headings — use a fresh non-global regex per-line
+    // to avoid lastIndex leaking from imgRefRe's g flag between iterations
+    const _singleImgRe = /!\[.*?\]\(\.?\/?images\/([^)]+)\)/;
     for (const line of lines) {
       if (/^#\s/.test(line) && !afterTitle) { afterTitle = true; continue; }
       if (/^##\s/.test(line)) {
@@ -355,7 +378,7 @@ export const previewExistingArticleImages = async (
         curHeading = line.replace(/^##\s+/, "").replace(/\*\*/g, "");
         curBody = []; curImages = [];
       } else if (afterTitle) {
-        const m = imgRefRe.exec(line);
+        const m = _singleImgRe.exec(line);
         if (m) { curImages.push(m[1]!); } else { curBody.push(line); }
       }
     }
@@ -376,19 +399,24 @@ export const previewExistingArticleImages = async (
   const hasSectionImages = allImgs.length > 1;
   const needsFormatNote = !promptMap && !hasSectionImages;
 
-  const promptActions = function (promptText: string, opts?: { name?: string; label?: string; model?: string }) {
+  const promptActions = function (promptText: string, opts?: { name?: string; label?: string; model?: string; promptId?: string }) {
     const nameHtml = opts?.name
-      ? '<div class="ph-name">' + opts.name.replace(/</g, "&lt;") + '</div>'
+      ? '<div class="ph-name">' + _esc(opts.name) + '</div>'
       : '';
     const modelHtml = opts?.model
-      ? '<div class="prompt-model">' + opts.model.replace(/</g, "&lt;") + '</div>'
+      ? '<div class="prompt-model">' + _esc(opts.model) + '</div>'
       : '';
     const labelText = opts?.label ?? '📷 待生成 · 3:4';
-    return '<div class="ph-box">' + promptText.replace(/</g, "&lt;") + modelHtml + '</div>' +
+    const promptIdAttr = opts?.promptId ? ' data-prompt-id="' + _esc(opts.promptId) + '"' : '';
+    return '<div' + promptIdAttr + '>' +
+      '<div class="ph-box">' + _esc(promptText) + modelHtml + '</div>' +
       nameHtml +
       '<div class="ph-row"><span class="ph-label">' + labelText + '</span>' +
       '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '">📋 复制</button>' +
-      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(promptText.slice(0, 1000)) + '" target="_blank">🤖 ChatGPT</a></span></div>';
+      '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + _chatGptUrl(promptText) + '" target="_blank">🤖 ChatGPT</a>' +
+      '<button class="ph-edit-btn" onclick="editPrompt(this)" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '" data-prompt-id="' + _esc(opts?.promptId ?? "") + '">✏️</button>' +
+      '<button class="ph-del-btn" onclick="deletePrompt(this)" data-prompt-id="' + _esc(opts?.promptId ?? "") + '">🗑</button>' +
+      '</span></div></div>';
   };
 
   const isXhs = platform === "xiaohongshu";
@@ -427,7 +455,7 @@ export const previewExistingArticleImages = async (
     if (coverImg) {
       galleryItems.push('<div class="xhs-slide"><img src="' + imgUrl(coverImg) + '" alt="封面" class="xhs-slide-img" /><div class="img-label">封面 · ' + xhsCoverFilename + '</div></div>');
     } else if (xhsCoverPrompt) {
-      galleryItems.push('<div class="xhs-slide xhs-slide-placeholder xhs-slide-cover">' + promptActions(xhsCoverPrompt, { name: xhsCoverName, label: '🎨 封面 · 3:4', model: xhsModel }) + '</div>');
+      galleryItems.push('<div class="xhs-slide xhs-slide-placeholder xhs-slide-cover">' + promptActions(xhsCoverPrompt, { name: xhsCoverName, label: '🎨 封面 · 3:4', model: xhsModel, promptId: 'cover-0' }) + '</div>');
     }
     for (let i = 0; i < sections.length; i++) {
       const sec = sections[i]!;
@@ -440,7 +468,7 @@ export const previewExistingArticleImages = async (
       const secPrompt = promptMap?.get(i);
       if (secPrompt && imgs.length === 0) {
         const nm = xhsIllNames.get(i) ?? ('插图 ' + (i + 1));
-        galleryItems.push('<div class="xhs-slide xhs-slide-placeholder">' + promptActions(secPrompt, { name: nm, label: '📷 3:4 竖版', model: xhsModel }) + '</div>');
+        galleryItems.push('<div class="xhs-slide xhs-slide-placeholder">' + promptActions(secPrompt, { name: nm, label: '📷 3:4 竖版', model: xhsModel, promptId: 'ill-' + i }) + '</div>');
       }
     }
     // Inject slide counter into each gallery item before closing xhs-slide div
@@ -479,8 +507,8 @@ export const previewExistingArticleImages = async (
 
     const coverHtml = coverImg
       ? '<div class="cover-wrap"><img src="' + imgUrl(coverImg) + '" alt="封面" class="cover-img" /><div class="img-label">封面</div></div>'
-      : nonXhsCoverPrompts.map(function (cp) {
-          return '<div class="cover-wrap"><div class="ph-box ph-box-cover">' + cp.prompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div><div class="ph-row"><span class="ph-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/</g, "&lt;") : '') + '</span><span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '">📋 复制</button><a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt.slice(0, 1000)) + '" target="_blank">🤖 ChatGPT</a></span></div></div>';
+      : nonXhsCoverPrompts.map(function (cp, ci) {
+          return '<div class="cover-wrap"><div data-prompt-id="cover-' + ci + '"><div class="ph-box ph-box-cover">' + _esc(cp.prompt) + (nonXhsModel ? '<div class="prompt-model">' + _esc(nonXhsModel) + '</div>' : '') + '</div><div class="ph-row"><span class="ph-label">🎨 封面' + (cp.label ? ' · ' + _esc(cp.label) : '') + '</span><span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '">📋 复制</button><a class="ph-chatgpt" href="https://chatgpt.com/?q=' + _chatGptUrl(cp.prompt) + '" target="_blank">🤖 ChatGPT</a><button class="ph-edit-btn" onclick="editPrompt(this)" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '" data-prompt-id="cover-' + ci + '">✏️</button><button class="ph-del-btn" onclick="deletePrompt(this)" data-prompt-id="cover-' + ci + '">🗑</button></span></div></div></div>';
         }).join("");
 
     // Count total prompt placeholders for X/bilibili preview counter
@@ -497,10 +525,12 @@ export const previewExistingArticleImages = async (
       const imgHtml = imgs.map(function (f) { usedImgs.add(f); return '<img src="' + imgUrl(f) + '" alt="' + f + '" class="sec-img" /><div class="img-label">' + f + '</div>'; }).join("");
       const secPrompt = promptMap?.get(i);
       const promptHtml = (secPrompt && imgs.length === 0)
-        ? '<div class="ph-box">' + secPrompt.replace(/</g, "&lt;") + (nonXhsModel ? '<div class="prompt-model">' + nonXhsModel.replace(/</g, "&lt;") + '</div>' : '') + '</div>' +
+        ? '<div data-prompt-id="ill-' + i + '"><div class="ph-box">' + _esc(secPrompt) + (nonXhsModel ? '<div class="prompt-model">' + _esc(nonXhsModel) + '</div>' : '') + '</div>' +
           '<div class="ph-row"><span class="ph-label">📷 待生成</span>' +
           '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(secPrompt, "utf8").toString("base64") + '">📋 复制</button>' +
-          '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + encodeURIComponent(secPrompt.slice(0, 1000)) + '" target="_blank">🤖 ChatGPT</a></span></div>'
+          '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + _chatGptUrl(secPrompt) + '" target="_blank">🤖 ChatGPT</a>' +
+          '<button class="ph-edit-btn" onclick="editPrompt(this)" data-prompt-b64="' + Buffer.from(secPrompt, "utf8").toString("base64") + '" data-prompt-id="ill-' + i + '">✏️</button>' +
+          '<button class="ph-del-btn" onclick="deletePrompt(this)" data-prompt-id="ill-' + i + '">🗑</button></span></div></div>'
         : "";
       let blockHtml = '<div class="sec-block">' + h + '<div class="sec-body">' + b + '</div>' + imgHtml + promptHtml + '</div>';
       if (promptHtml) {
@@ -551,6 +581,9 @@ export const previewExistingArticleImages = async (
       ".ph-copy,.ph-chatgpt{padding:4px 12px;font-size:11px;border-radius:6px;cursor:pointer;text-decoration:none;display:inline-block;font-weight:600;transition:all .15s ease}",
       ".ph-copy{border:1px solid #d9cbb8;background:#fffdf8;color:#6b5e4f}.ph-copy:hover{background:#faf4ea;border-color:#c4a98a}",
       ".ph-chatgpt{background:#ff2442;border:1px solid #ff2442;color:#fff}.ph-chatgpt:hover{background:#e01e38;border-color:#e01e38;box-shadow:0 2px 8px rgba(255,36,66,.25)}",
+".ph-edit-ta{width:100%;min-height:100px;padding:10px;font-size:12px;line-height:1.6;border:2px solid #E07030;border-radius:6px;font-family:monospace;resize:vertical;box-sizing:border-box;background:#fffdf8;color:#333}",
+".ph-edit-btn,.ph-del-btn{padding:2px 7px;font-size:13px;border-radius:4px;cursor:pointer;border:1px solid #ddd;background:#fff;line-height:1.4;transition:all .15s ease}",
+".ph-edit-btn:hover{background:#f0f0f0}.ph-del-btn{color:#c0392b;border-color:#f5c6cb}.ph-del-btn:hover{background:#fde8e8}",
       // toolbar overrides
       ".toolbar{border-bottom-color:#e8d5c0;background:rgba(251,247,240,.92)}",
       ".toolbar h2{font-family:'Georgia','Noto Serif SC',serif}",
@@ -581,6 +614,9 @@ export const previewExistingArticleImages = async (
       ".prompt-model{text-align:right;font-size:9px;color:#999;font-style:italic;margin-top:4px;opacity:.7}",
       ".cover-wrap .ph-box{position:relative}",
       ".slide-counter{font-size:10px;color:#999;font-family:'Georgia',serif;opacity:.6;text-align:right;padding:4px 12px 0}",
+	      ".ph-edit-ta{width:100%;min-height:100px;padding:10px;font-size:12px;line-height:1.6;border:2px solid #E07030;border-radius:6px;font-family:monospace;resize:vertical;box-sizing:border-box;background:#fffdf8;color:#333}",
+	      ".ph-edit-btn,.ph-del-btn{padding:2px 7px;font-size:13px;border-radius:4px;cursor:pointer;border:1px solid #ddd;background:#fff;line-height:1.4;transition:all .15s ease}",
+	      ".ph-edit-btn:hover{background:#f0f0f0}.ph-del-btn{color:#c0392b;border-color:#f5c6cb}.ph-del-btn:hover{background:#fde8e8}",
     ].join("");
 
   const h = [];
@@ -602,7 +638,39 @@ export const previewExistingArticleImages = async (
       : '<div class="note">📌 以下为文章图文预览。封面在上，正文按文章顺序展示，插图按 markdown 位置内联。</div>';
   h.push('<div class="container">' + noteHtml);
   h.push(isXhs ? sectionHtml : '<div class="article-body">' + sectionHtml + '</div>');
-  h.push("</div></body></html>");
+  h.push("</div>");
+  h.push('<script>var _VIDEO_ID=' + JSON.stringify(videoId) + ',_PLATFORM=' + JSON.stringify(platform) + ';' +
+    'function _promptText(el){var t="";for(var j=0;j<el.childNodes.length;j++){if(el.childNodes[j].nodeType===3)t+=el.childNodes[j].textContent}return t||""}' + 'function editPrompt(b){' +
+      'var c=b.closest(\'div[data-prompt-id]\'),o=c.querySelector(\'.ph-box\'),t=o.textContent,i=c.dataset.promptId;' +
+      'var ta=document.createElement(\'textarea\');ta.className=\'ph-edit-ta\';ta.value=t;' +
+      'o.replaceWith(ta);' +
+      'b.textContent=\'💾\';b.onclick=function(){' +
+        'var n=c.querySelector(\'.ph-edit-ta\').value;' +
+        'fetch(\'/api/prompts/update\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},' +
+          'body:JSON.stringify({videoId:_VIDEO_ID,platform:_PLATFORM,promptId:i,prompt:n})}).then(function(r){' +
+          'if(r.ok){' +
+            'var nb=document.createElement(\'div\');nb.className=\'ph-box\';nb.textContent=n;' +
+            'c.querySelector(\'.ph-edit-ta\').replaceWith(nb);' +
+            'b.textContent=\'✏️\';b.onclick=function(){editPrompt(b)};' +
+          '}' +
+        '});' +
+      '};' +
+      'var ca=document.createElement(\'button\');ca.textContent=\'↩️\';ca.className=\'ph-del-btn\';ca.onclick=function(){' +
+        'ta.replaceWith(o);b.textContent=\'✏️\';b.onclick=function(){editPrompt(b)};ca.remove();' +
+      '};' +
+      'b.parentNode.insertBefore(ca,b.nextSibling);' +
+    '}' +
+    'function deletePrompt(b){' +
+      'var c=b.closest(\'div[data-prompt-id]\'),i=c.dataset.promptId;' +
+      'if(confirm(\'删除此 prompt？此操作不可撤销。\')){' +
+        'fetch(\'/api/prompts/delete\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},' +
+          'body:JSON.stringify({videoId:_VIDEO_ID,platform:_PLATFORM,promptId:i})}).then(function(r){' +
+          'if(r.ok){c.style.transition=\'all .3s ease\';c.style.opacity=\'0\';setTimeout(function(){c.remove()},300)}' +
+        '});' +
+      '}' +
+    '}' +
+  '</script>');
+  h.push("</body></html>");
 
   return { html: h.join("\n"), coverCount, illCount };
 };
@@ -638,9 +706,10 @@ export const orchestratePlatformPrompts = async (
   const sections = splitBodyIntoSections(body, input.platform);
   const files: string[] = [];
 
-  // If prompts.json already exists, reuse cached prompts instead of calling the LLM again.
-  // This ensures prompts are generated only once per platform — "重新排版" re-renders
-  // the HTML from cached prompts without re-calling the LLM.
+  // If prompts.json already exists AND has non-empty illustrationPrompts,
+  // reuse cached prompts instead of calling the LLM again. An empty
+  // illustrationPrompts array means the previous LLM call returned nothing
+  // useful — regenerate rather than caching failure permanently.
   const promptsPath = path.join(outputDir, "prompts.json");
   let coverPrompts: Array<{ label: string; prompt: string; size: string; filename: string; name: string }> = [];
   let illustrationPrompts: Array<{ index: number; text: string; prompt: string; filename: string; name: string }> = [];
@@ -711,8 +780,9 @@ export const orchestratePlatformPrompts = async (
 
   // Generate illustration prompts: one call with full article.
   // No section splitting. No truncation. LLM reads everything and decides.
-  const illustrationPrompts: Array<{ index: number; text: string; prompt: string; filename: string; name: string }> = [];
-  const imgRefRe2 = /!\[.*?\]\(images\/([^)]+)\)/;
+  // Reuse the outer illustrationPrompts variable — do NOT shadow with const.
+  const imgRefRe2 = /!\[.*?\]\(\.?\/?images\/([^)]+)\)/;
+  illustrationPrompts = [];
 
   try {
     const illUserPrompt = [
@@ -827,11 +897,11 @@ export const orchestratePlatformPrompts = async (
   // Render HTML: article sections with inline prompt placeholders
   const platformLabel = { x: "X", wechat: "公众号", xiaohongshu: "小红书", bilibili: "B站" }[input.platform] ?? input.platform;
   const promptActions = function (promptText: string, label: string, sizeHint: string, name?: string) {
-    const encoded = encodeURIComponent(promptText.slice(0, 1000));
+    const encoded = _chatGptUrl(promptText);
     const nameHtml = name
-      ? '<div class="ph-name">' + name.replace(/</g, "&lt;") + '</div>'
+      ? '<div class="ph-name">' + _esc(name) + '</div>'
       : '';
-    return '<div class="ph-box">' + promptText.replace(/</g, "&lt;") + '</div>' +
+    return '<div class="ph-box">' + _esc(promptText) + '</div>' +
       nameHtml +
       '<div class="ph-row"><span class="ph-label">' + label + ' · ' + sizeHint + '</span>' +
       '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '">📋 复制</button>' +
@@ -902,7 +972,7 @@ export const orchestratePlatformPrompts = async (
       const body = heading ? clean.slice(heading.length).replace(/^[：:\s]+/, "") : clean;
       const headingHtml = heading ? '<h3 class="xhs-sec-heading">' + heading + '</h3>' : "";
       const bodyClean = body
-        .replace(/!\[.*?\]\(images\/[^)]+\)/g, "")
+        .replace(/!\[.*?\]\(\.?\/?images\/[^)]+\)/g, "")
         .replace(/```[\s\S]*?```/g, "")
         .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
         .replace(/\n/g, "<br>");
@@ -937,7 +1007,7 @@ export const orchestratePlatformPrompts = async (
       const body = heading ? clean.slice(heading.length).replace(/^[：:\s]+/, "") : clean;
       const headingHtml = heading ? '<h3 class="sec-heading">' + heading + '</h3>' : "";
       const bodyClean = body
-        .replace(/!\[.*?\]\(images\/[^)]+\)/g, "")
+        .replace(/!\[.*?\]\(\.?\/?images\/[^)]+\)/g, "")
         .replace(/```[\s\S]*?```/g, "")
         .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
         .replace(/\n/g, "<br>");
@@ -1015,6 +1085,9 @@ export const orchestratePlatformPrompts = async (
   h2.push(".ph-copy,.ph-chatgpt{padding:4px 12px;font-size:11px;border-radius:6px;cursor:pointer;text-decoration:none;display:inline-block;font-weight:600;transition:all .15s ease}");
   h2.push(".ph-copy{border:1px solid #d9cbb8;background:#fffdf8;color:#6b5e4f}.ph-copy:hover{background:#faf4ea;border-color:#c4a98a}");
   h2.push(".ph-chatgpt{background:#ff2442;border:1px solid #ff2442;color:#fff}.ph-chatgpt:hover{background:#e01e38;border-color:#e01e38;box-shadow:0 2px 8px rgba(255,36,66,.25)}");
+  h2.push(".ph-edit-ta{width:100%;min-height:100px;padding:10px;font-size:12px;line-height:1.6;border:2px solid #E07030;border-radius:6px;font-family:monospace;resize:vertical;box-sizing:border-box;background:#fffdf8;color:#333}");
+  h2.push(".ph-edit-btn,.ph-del-btn{padding:2px 7px;font-size:13px;border-radius:4px;cursor:pointer;border:1px solid #ddd;background:#fff;line-height:1.4;transition:all .15s ease}");
+  h2.push(".ph-edit-btn:hover{background:#f0f0f0}.ph-del-btn{color:#c0392b;border-color:#f5c6cb}.ph-del-btn:hover{background:#fde8e8}");
   h2.push(".copy-bar{text-align:center;padding:16px}.copy-bar button{padding:10px 24px;border:2px solid #E07030;background:#fff;color:#E07030;border-radius:8px;cursor:pointer;font-weight:600}</style></head>");
   h2.push("<body><div class='toolbar'><h2>" + title + "</h2><span>" + platformLabel + (isXhs2 ? " · 图集+" + illustrationPrompts.length + "图/" + sections.length + "节" : " · " + illustrationPrompts.length + "图/" + sections.length + "节") + "</span></div>");
   h2.push('<div class="container"><div class="note" style="background:#fff;border-radius:8px;padding:14px 20px;margin-bottom:16px;font-size:13px;color:#888;line-height:1.6">');

@@ -275,8 +275,8 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
 
     const generatingSet = new Set();
     async function generatePlatform(videoId, platform) {
-      if (generatingSet.has(platform)) return;
-      generatingSet.add(platform);
+      if (generatingSet.has(videoId + ":" + platform)) return;
+      generatingSet.add(videoId + ":" + platform);
       var btn = document.querySelector('[data-generate-platform="' + platform + '"]');
       if (btn) { btn.disabled = true; btn.classList.add("loading"); btn.innerHTML = '生成中<span class="dots"><span>.</span><span>.</span><span>.</span></span>'; }
       try {
@@ -288,22 +288,24 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         if (!resp.ok) { const data = await resp.json().catch(function() { return {}; }); toast(data.error || "生成失败"); }
         else { toast((platformLabels[platform] || platform) + "稿件已生成"); }
       } catch { toast("生成请求失败"); }
-      generatingSet.delete(platform);
+      generatingSet.delete(videoId + ":" + platform);
       await load();
     }
 
     const formattingSet = new Set();
     async function formatPlatform(videoId, platform) {
-      if (formattingSet.has(platform)) return;
-      formattingSet.add(platform);
+      if (formattingSet.has(videoId + ":" + platform)) return;
+      formattingSet.add(videoId + ":" + platform);
       // Disable only this platform's format button
       var btn = document.querySelector('[data-format-platform="' + platform + '"]');
       if (btn) { btn.disabled = true; btn.classList.add("loading"); btn.innerHTML = '排版中<span class="dots"><span>.</span><span>.</span><span>.</span></span>'; }
+      // Pass theme from data-theme (used by WeChat for theme selection)
+      var _theme = btn ? btn.dataset.theme || "notion-doc" : "notion-doc";
       try {
         const resp = await fetch("/api/platform-format", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ videoId, platform }),
+          body: JSON.stringify({ videoId, platform, theme: _theme }),
         });
         if (!resp.ok) {
           const data = await resp.json().catch(() => ({}));
@@ -314,7 +316,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       } catch {
         toast("排版请求失败");
       }
-      formattingSet.delete(platform);
+      formattingSet.delete(videoId + ":" + platform);
       await load();
     }
 
@@ -687,7 +689,6 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         '<span class="theme-name">' + esc(theme.name || theme.id) + '</span>',
         '<span class="theme-id">' + esc(theme.id) + '</span>',
         theme.description ? '<span class="theme-desc">' + esc(theme.description) + '</span>' : "",
-        '<span class="theme-preview">' + esc(preview) + '</span>',
         selected ? '<span class="theme-check">✓</span>' : "",
         '</div>',
         '</div>',
@@ -771,19 +772,26 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     }
 
     async function formatWechat(videoId, theme) {
+      var lockKey = videoId + ":wechat";
+      if (formattingSet.has(lockKey)) return;
+      formattingSet.add(lockKey);
       toast("开始排版公众号主稿...");
-      const resp = await fetch("/api/wechat-format", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ videoId, theme }),
-      });
-      if (!resp.ok) {
-        const payload = await resp.json().catch(() => ({}));
-        toast(payload.error || "排版失败");
-        await load();
-        return;
+      try {
+        const resp = await fetch("/api/wechat-format", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ videoId, theme }),
+        });
+        if (!resp.ok) {
+          const payload = await resp.json().catch(() => ({}));
+          toast(payload.error || "排版失败");
+        } else {
+          toast("公众号排版完成");
+        }
+      } catch {
+        toast("排版请求失败");
       }
-      toast("公众号排版完成");
+      formattingSet.delete(lockKey);
       await load();
     }
 

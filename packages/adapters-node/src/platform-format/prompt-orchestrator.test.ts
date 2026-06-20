@@ -97,7 +97,8 @@ describe("previewExistingArticleImages", () => {
       "**🔄 三栏并行任务布局**",
       "三栏布局：左侧任务列表，中间对话，右侧多功能。",
     ].join("\n");
-    await writeFile(path.join(tmpRoot, "xiaohongshu-article.md"), xhsArticle, "utf8");
+    await mkdir(path.join(tmpRoot, "xiaohongshu-format"), { recursive: true });
+    await writeFile(path.join(tmpRoot, "xiaohongshu-format", "xiaohongshu-article.md"), xhsArticle, "utf8");
 
     const result = await previewExistingArticleImages(tmpRoot, "xiaohongshu");
     expect(result).not.toBeNull();
@@ -122,7 +123,8 @@ describe("previewExistingArticleImages", () => {
       "**第二节标题**",
       "第二节内容。",
     ].join("\n");
-    await writeFile(path.join(tmpRoot, "xiaohongshu-article.md"), xhsArticle, "utf8");
+    await mkdir(path.join(tmpRoot, "xiaohongshu-format"), { recursive: true });
+    await writeFile(path.join(tmpRoot, "xiaohongshu-format", "xiaohongshu-article.md"), xhsArticle, "utf8");
 
     // Create prompts.json with cover + illustration prompts
     const formatDir = path.join(tmpRoot, "xiaohongshu-format");
@@ -175,8 +177,9 @@ describe("previewExistingArticleImages", () => {
   });
 
   it("shows 'needs format' note when no prompts and no images exist", async () => {
+    await mkdir(path.join(tmpRoot, "xiaohongshu-format"), { recursive: true });
     await writeFile(
-      path.join(tmpRoot, "xiaohongshu-article.md"),
+      path.join(tmpRoot, "xiaohongshu-format", "xiaohongshu-article.md"),
       "# 空文章\n\n**标题**\n内容。",
       "utf8",
     );
@@ -188,9 +191,9 @@ describe("previewExistingArticleImages", () => {
 
   it("uses prompts.json names in XHS gallery when available", async () => {
     const xhsArticle = "# 测试\n\n**唯一章节**\n章节内容。";
-    await writeFile(path.join(tmpRoot, "xiaohongshu-article.md"), xhsArticle, "utf8");
-
     const formatDir = path.join(tmpRoot, "xiaohongshu-format");
+    await mkdir(formatDir, { recursive: true });
+    await writeFile(path.join(formatDir, "xiaohongshu-article.md"), xhsArticle, "utf8");
     await mkdir(formatDir, { recursive: true });
     await writeFile(
       path.join(formatDir, "prompts.json"),
@@ -242,7 +245,8 @@ describe("previewExistingArticleImages", () => {
       "**第一节**",
       "内容。",
     ].join("\n");
-    await writeFile(path.join(tmpRoot, "xiaohongshu-article.md"), xhsArticle, "utf8");
+    await mkdir(path.join(tmpRoot, "xiaohongshu-format"), { recursive: true });
+    await writeFile(path.join(tmpRoot, "xiaohongshu-format", "xiaohongshu-article.md"), xhsArticle, "utf8");
 
     const result = await previewExistingArticleImages(tmpRoot, "xiaohongshu");
     expect(result).not.toBeNull();

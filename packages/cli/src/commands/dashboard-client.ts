@@ -4,7 +4,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     let selectedId = localStorage.getItem("yt2x.selectedVideoId");
     let wechatThemes = [];
     let themeModalVideoId = null;
-    let selectedWechatTheme = "notion-doc";
+    let selectedWechatTheme = "github";
     let favoriteThemes = [];
     let sortField = "originalDate";
     let sortDir = -1; // -1 = desc, 1 = asc, 0 = none
@@ -213,7 +213,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       el.querySelectorAll("[data-publish]").forEach(function(btn) { btn.addEventListener("click", function() { publishPlatform(video.videoId, btn.dataset.publish); }); });
       el.querySelectorAll("[data-unpublish]").forEach(function(btn) { btn.addEventListener("click", function() { unpublishPlatform(video.videoId, btn.dataset.unpublish); }); });
       el.querySelectorAll("[data-copy]").forEach(function(btn) { btn.addEventListener("click", function() { copyPlatform(video.videoId, btn.dataset.copy); }); });
-      el.querySelectorAll("[data-format-wechat]").forEach(function(btn) { btn.addEventListener("click", function() { openThemeModal(video.videoId, btn.dataset.theme || "notion-doc"); }); });
+      el.querySelectorAll("[data-format-wechat]").forEach(function(btn) { btn.addEventListener("click", function() { openThemeModal(video.videoId, btn.dataset.theme || "github"); }); });
       el.querySelectorAll("[data-copy-wechat-html]").forEach(function(btn) { btn.addEventListener("click", function() { copyWechatHtml(video.videoId); }); });
       el.querySelectorAll("[data-format-platform]").forEach(function(btn) { btn.addEventListener("click", function() { formatPlatform(video.videoId, btn.dataset.formatPlatform); }); });
       el.querySelectorAll("[data-generate-platform]").forEach(function(btn) { btn.addEventListener("click", function() { generatePlatform(video.videoId, btn.dataset.generatePlatform); }); });
@@ -254,7 +254,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         btn.addEventListener("click", function() { copyPlatform(video.videoId, btn.dataset.copy); });
       });
       detail.querySelectorAll("[data-format-wechat]").forEach(function(btn) {
-        btn.addEventListener("click", function() { openThemeModal(video.videoId, btn.dataset.theme || "notion-doc"); });
+        btn.addEventListener("click", function() { openThemeModal(video.videoId, btn.dataset.theme || "github"); });
       });
       detail.querySelectorAll("[data-copy-wechat-html]").forEach(function(btn) {
         btn.addEventListener("click", function() { copyWechatHtml(video.videoId); });
@@ -300,7 +300,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       var btn = document.querySelector('[data-format-platform="' + platform + '"]');
       if (btn) { btn.disabled = true; btn.classList.add("loading"); btn.innerHTML = '排版中<span class="dots"><span>.</span><span>.</span><span>.</span></span>'; }
       // Pass theme from data-theme (used by WeChat for theme selection)
-      var _theme = btn ? btn.dataset.theme || "notion-doc" : "notion-doc";
+      var _theme = btn ? btn.dataset.theme || "github" : "github";
       try {
         const resp = await fetch("/api/platform-format", {
           method: "POST",
@@ -430,7 +430,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         primaryBtn = '<button class="primary-btn" data-generate-platform="' + platform + '">生成' + pn + '稿</button>';
       } else if (st === "draft") {
         if (platform === "wechat") {
-          primaryBtn = '<button class="primary-btn" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">排版</button>';
+          primaryBtn = '<button class="primary-btn" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "github") + '">排版</button>';
         } else {
           primaryBtn = '<button class="primary-btn" data-format-platform="' + platform + '">排版</button>';
         }
@@ -438,7 +438,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
         primaryBtn = ''; // no primary action — delivery + preview are the main actions
       } else if (st === "failed") {
         if (platform === "wechat") {
-          primaryBtn = '<button class="primary-btn" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">重试排版</button>';
+          primaryBtn = '<button class="primary-btn" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "github") + '">重试排版</button>';
         } else {
           primaryBtn = '<button class="primary-btn" data-format-platform="' + platform + '">重试排版</button>';
         }
@@ -466,7 +466,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       }
       if (st === "formatted" || st === "failed") {
         if (platform === "wechat") {
-          moreItems.push('<button class="more-item" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "notion-doc") + '">重新排版</button>');
+          moreItems.push('<button class="more-item" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "github") + '">重新排版</button>');
         } else {
           moreItems.push('<button class="more-item" data-format-platform="' + platform + '">重新排版</button>');
         }
@@ -644,7 +644,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
     function openThemeModal(videoId, theme) {
       lastFocusedBeforeModal = document.activeElement;
       themeModalVideoId = videoId;
-      selectedWechatTheme = theme || "notion-doc";
+      selectedWechatTheme = theme || "github";
       $("themeSearch").value = "";
       renderThemeList();
       $("themeModal").classList.add("open");

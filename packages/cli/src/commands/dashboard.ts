@@ -870,7 +870,7 @@ const handleDashboardRequest = async (
           try {
             const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-pro" };
             const llm = createLlmAdapter(cfg);
-            await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });
+            orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! }).catch(function(){});
           } catch (err: unknown) {
             process.stderr.write(`orchestrate warning: ${err instanceof Error ? err.message : String(err)}\n`);
           }
@@ -900,12 +900,18 @@ const handleDashboardRequest = async (
           if (apiKey2 !== undefined) {
             const cfg: LlmFactoryConfig = { provider: provider2, apiKey: apiKey2, baseUrl: baseUrlMap2[provider2] ?? "https://api.openai.com/v1", defaultModel: modelMap2[provider2] ?? "deepseek-v4-pro" };
             const llm = createLlmAdapter(cfg);
-            await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform: "wechat", llm, llmModel: cfg.defaultModel! });
+            orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform: "wechat", llm, llmModel: cfg.defaultModel! }).catch(function(){});
           }
         const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : DEFAULT_WECHAT_FORMAT_THEME;
         const fmtResult = await formatWechatForDashboard(opts, { videoId, theme });
         sendJson(res, 200, { ok: true, platform: "wechat", theme: fmtResult.theme });
       } else if (platform === "xiaohongshu") {
+        if (genStatus && genStatus.length > 0) {
+          const msg = "小红书平台稿生成失败: " + genStatus;
+          await updatePlatformFormatStatus(path.resolve(opts.indexPath), { videoId, platform: "xiaohongshu", status: "failed", error: msg });
+          sendJson(res, 400, { error: msg });
+          return;
+        }
         try {
           await formatXiaohongshuLayout({ articleDir, videoId, articleMd });
         } catch (err: unknown) {

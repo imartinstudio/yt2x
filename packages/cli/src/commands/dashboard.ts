@@ -1,13 +1,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { access, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import {
   DEFAULT_ARTICLE_OUT_DIR,
   DEFAULT_OUT_DIR,
   formatWechatArticle,
+  DEFAULT_WECHAT_FORMAT_THEME,
   formatWechatCovers,
   formatBilibiliText,
+  formatXiaohongshuLayout,
   orchestratePlatformPrompts,
   previewExistingArticleImages,
   generatePlatformArticleContent,
@@ -85,7 +87,7 @@ const PLATFORMS: Array<{ key: PlatformKey; label: string; primaryFile: string; f
   { key: "x", label: "X", primaryFile: "x-format/x-article.md", files: ["x-format/x-article.md", "x-format/x-short.md", "x-format/x-thread.md", "x-format/x-video-short.md"] },
   { key: "xiaohongshu", label: "小红书", primaryFile: "xiaohongshu-format/xiaohongshu-article.md", files: ["xiaohongshu-format/xiaohongshu-article.md"] },
   { key: "wechat", label: "公众号", primaryFile: "wechat-format/wechat-article.md", files: ["wechat-format/wechat-article.md"] },
-  { key: "bilibili", label: "B站", primaryFile: "bilibili-format/bilibili-article.md", files: ["bilibili-format/bilibili-article.md"] },
+  { key: "bilibili", label: "B站", primaryFile: "bilibili-format/video-info.md", files: ["bilibili-format/video-info.md"] },
 ];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -173,6 +175,17 @@ const stripMarkdownTitle = (title: string): string =>
     .replace(/^\s*#+\s+/u, "")
     .replace(/\*\*/gu, "")
     .trim();
+
+/** Copy article.md → platform article, stripping embedded images and empty image lines. */
+const copyArticleWithoutImages = async (src: string, dst: string): Promise<void> => {
+  let content = await readFile(src, "utf8");
+  // Remove markdown image references: ![alt](images/file)
+  content = content.replace(/!\[.*?\]\(\.?\/?images\/[^)]+\)\n?/g, "");
+  // Remove leftover blank lines that were only holding an image
+  content = content.replace(/\n{3,}/g, "\n\n");
+  await mkdir(path.dirname(dst), { recursive: true });
+  await writeFile(dst, content, "utf8");
+};
 
 const titleFromArticle = async (articleDir: string | null): Promise<string | undefined> => {
   if (articleDir === null) return undefined;
@@ -392,15 +405,19 @@ const formatWechatForDashboard = async (
   const articleDir = path.join(path.resolve(opts.articleOutDir), input.videoId);
   const articlePath = path.join(articleDir, "article.md");
 
-  // escape leading # in hashtag lines so the formatter doesn't treat them as markdown headings.
-  // a line starting with # followed by a word character (not whitespace) is a hashtag, not a heading.
+  // Strip markdown images and escape leading # in hashtag lines so the formatter doesn't
+  // treat them as markdown headings. The cover image from article.md should NOT appear
+  // in the formatted WeChat output.
   let originalMarkdown = "";
   let patched = false;
   try {
     originalMarkdown = await readFile(articlePath, "utf8");
-    const escaped = originalMarkdown.replace(/^(#[^\s#*_\n])/gm, "\\$1");
-    if (escaped !== originalMarkdown) {
-      await writeFile(articlePath, escaped, "utf8");
+    const modified = originalMarkdown
+      .replace(/!\[.*?\]\(\.?\/?images\/[^)]+\)\n?/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/^(#[^\s#*_\n])/gm, "\\$1");
+    if (modified !== originalMarkdown) {
+      await writeFile(articlePath, modified, "utf8");
       patched = true;
     }
   } catch {
@@ -414,6 +431,12 @@ const formatWechatForDashboard = async (
       theme: input.theme,
       ...(opts.wechatFormatterDir !== undefined ? { formatterDir: opts.wechatFormatterDir } : {}),
     });
+    // Validate formatter produced output files
+    if (!(await fileExists(result.articleHtmlPath)) || !(await fileExists(result.previewHtmlPath))) {
+      throw new Error("排版完成但输出文件不存在: " + result.articleHtmlPath);
+    }
+    // Create stripped copy for preview (no cover image)
+    try { await copyArticleWithoutImages(articlePath, path.join(articleDir, "wechat-format", "wechat-article.md")); } catch { /* best-effort */ }
     await updateWechatFormatStatus(path.resolve(opts.indexPath), {
       videoId: input.videoId,
       status: "formatted",
@@ -446,7 +469,7 @@ type WechatTheme = {
 
 const listWechatThemes = async (formatterDir: string | undefined): Promise<WechatTheme[]> => {
   if (formatterDir === undefined || formatterDir.trim().length === 0) {
-    return [{ id: "github", name: "GitHub", description: "Default GitHub-inspired WeChat formatting theme." }];
+    return [{ id: DEFAULT_WECHAT_FORMAT_THEME, name: "GitHub", description: "Default GitHub-inspired WeChat formatting theme." }];
   }
   const themesDir = path.join(path.resolve(formatterDir), "themes");
   const entries = await readdir(themesDir, { withFileTypes: true });
@@ -466,7 +489,7 @@ const listWechatThemes = async (formatterDir: string | undefined): Promise<Wecha
     }
   }
   themes.sort((a, b) => a.id.localeCompare(b.id));
-  return themes.length > 0 ? themes : [{ id: "github", name: "GitHub", description: "" }];
+  return themes.length > 0 ? themes : [{ id: DEFAULT_WECHAT_FORMAT_THEME, name: "GitHub", description: "" }];
 };
 
 const platformFromString = (value: string | null): PlatformKey | null => {
@@ -530,10 +553,10 @@ const handleDashboardRequest = async (
           illustrationPrompts?: Array<{ index: number; name?: string; prompt: string }>;
         };
         const coverCards = (prompts.coverPrompts ?? []).map(function (cp, _i) {
-          return '<div class="wx-prompt-card"><div class="wx-prompt-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/</g, "&lt;") : '') + '</div><div class="wx-prompt-box">' + cp.prompt.replace(/</g, "&lt;") + '</div><div class="wx-prompt-actions"><button onclick="navigator.clipboard.writeText(this.dataset.p)" data-p="' + cp.prompt.replace(/"/g, "&quot;") + '">📋 复制</button><a href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt) + '" target="_blank">🤖 ChatGPT</a></div></div>';
+          return '<div class="wx-prompt-card"><div class="wx-prompt-label">🎨 封面' + (cp.label ? ' · ' + cp.label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : '') + '</div><div class="wx-prompt-box">' + cp.prompt.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</div><div class="wx-prompt-actions"><button onclick="navigator.clipboard.writeText(decodeURIComponent(this.dataset.p))" data-p="' + encodeURIComponent(cp.prompt) + '">📋 复制</button><a href="https://chatgpt.com/?q=' + encodeURIComponent(cp.prompt).slice(0, 1500) + '" target="_blank">🤖 ChatGPT</a></div></div>';
         }).join("");
         const illCards = (prompts.illustrationPrompts ?? []).map(function (ip, i) {
-          return '<div class="wx-prompt-card"><div class="wx-prompt-label">📷 ' + (ip.name ?? '插图 ' + (i + 1)) + '</div><div class="wx-prompt-box">' + ip.prompt.replace(/</g, "&lt;") + '</div><div class="wx-prompt-actions"><button onclick="navigator.clipboard.writeText(this.dataset.p)" data-p="' + ip.prompt.replace(/"/g, "&quot;") + '">📋 复制</button><a href="https://chatgpt.com/?q=' + encodeURIComponent(ip.prompt) + '" target="_blank">🤖 ChatGPT</a></div></div>';
+          return '<div class="wx-prompt-card"><div class="wx-prompt-label">📷 ' + (ip.name ? ip.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : '插图 ' + (i + 1)) + '</div><div class="wx-prompt-box">' + ip.prompt.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</div><div class="wx-prompt-actions"><button onclick="navigator.clipboard.writeText(decodeURIComponent(this.dataset.p))" data-p="' + encodeURIComponent(ip.prompt) + '">📋 复制</button><a href="https://chatgpt.com/?q=' + encodeURIComponent(ip.prompt).slice(0, 1500) + '" target="_blank">🤖 ChatGPT</a></div></div>';
         }).join("");
         if (coverCards || illCards) {
           const promptsBar = '<div id="wx-prompts-bar"><div class="wx-prompts-header">📌 图片生成 Prompt（' + ((prompts.coverPrompts?.length ?? 0) + (prompts.illustrationPrompts?.length ?? 0)) + ' 张）</div><div class="wx-prompts-grid">' + coverCards + illCards + '</div></div><style>#wx-prompts-bar{background:#fffdf8;border:2px dashed #e8d5c0;border-radius:10px;padding:16px;margin:16px 0;font-family:-apple-system,sans-serif}.wx-prompts-header{font-size:14px;font-weight:700;color:#1a1008;margin-bottom:12px}.wx-prompts-grid{display:flex;flex-direction:column;gap:10px}.wx-prompt-card{background:#faf7f2;border-radius:8px;padding:12px}.wx-prompt-label{font-size:12px;font-weight:600;color:#555;margin-bottom:6px}.wx-prompt-box{font-size:11px;color:#666;line-height:1.6;max-height:120px;overflow-y:auto;white-space:pre-wrap;background:#fff;border:1px solid #eee;padding:8px;border-radius:4px;margin-bottom:6px}.wx-prompt-actions{display:flex;gap:6px}.wx-prompt-actions button,.wx-prompt-actions a{font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;text-decoration:none;border:1px solid #ddd;background:#fff;color:#555}.wx-prompt-actions a{background:#ff2442;color:#fff;border-color:#ff2442}</style>';
@@ -595,6 +618,7 @@ const handleDashboardRequest = async (
       sendJson(res, 400, { error: "Invalid file path." });
       return;
     }
+
     try {
       const ext = path.extname(file).toLowerCase();
       const mimeTypes: Record<string, string> = {
@@ -630,10 +654,31 @@ const handleDashboardRequest = async (
       return;
     }
     const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
-    const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : "github";
+    const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : DEFAULT_WECHAT_FORMAT_THEME;
     if (!isSafeVideoId(videoId)) {
       sendJson(res, 400, { error: "Invalid videoId." });
       return;
+    }
+        // Generate WeChat prompts (blocking, consistent with X/XHS behavior)
+    const wArticleDir = path.join(path.resolve(opts.articleOutDir), videoId);
+    try {
+      const wMd = await readFile(path.join(wArticleDir, "article.md"), "utf8");
+      if (wMd) {
+        let wp = defaultCliLlmProvider();
+        let wk = readLlmApiKeyFromEnv(wp);
+        const wBaseUrlMap = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.deepseek.com/anthropic" };
+        const wModelMap = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-pro", moonshot: "moonshot-v1-8k", anthropic: "deepseek-v4-pro[1m]" };
+        const wToken = process.env["ANTHROPIC_AUTH_TOKEN"];
+        const wUrl = process.env["ANTHROPIC_BASE_URL"];
+        if (wToken && wUrl?.includes("deepseek")) { wp = "anthropic"; wk = wToken; }
+        if (wk !== undefined) {
+          const wCfg = { provider: wp, apiKey: wk, baseUrl: wBaseUrlMap[wp] ?? "https://api.openai.com/v1", defaultModel: wModelMap[wp] ?? "deepseek-v4-pro" };
+          orchestratePlatformPrompts({ articleDir: wArticleDir, videoId, articleMd: wMd, platform: "wechat", llm: createLlmAdapter(wCfg), llmModel: wCfg.defaultModel! }).catch(function(){});
+        }
+      }
+    } catch (err: unknown) {
+      process.stderr.write(`wechat prompt orchestrate warning: ${err instanceof Error ? err.message : String(err)}
+`);
     }
     try {
       const result = await formatWechatForDashboard(opts, { videoId, theme });
@@ -687,9 +732,16 @@ const handleDashboardRequest = async (
     if (targetPlatform === "x") return "";
     const articleDir = path.join(path.resolve(opts.articleOutDir), videoId);
     const metadataFile = `${targetPlatform}-format/${targetPlatform}-metadata.json`;
+    const articleFile = `${targetPlatform}-format/${targetPlatform}-article.md`;
 
-    // already generated?
-    try { await readFile(path.join(articleDir, metadataFile)); return ""; } catch { /* nope */ }
+    // already generated? Must have BOTH metadata AND article file
+    try {
+      await readFile(path.join(articleDir, metadataFile));
+      await readFile(path.join(articleDir, articleFile));
+      return "";
+    } catch {
+      // one or both missing — will regenerate below
+    }
 
     const provider = defaultCliLlmProvider();
     const apiKey = readLlmApiKeyFromEnv(provider);
@@ -716,7 +768,10 @@ const handleDashboardRequest = async (
         artifacts: { videoDir: path.join(downloadsDir, videoId), videoId, structuredNotesMd: articleMdLocal, metadata: meta as unknown as Record<string, unknown> & { title: string } },
         articleMd: articleMdLocal,
       });
-      await writePlatformArticleBundle(path.resolve(opts.articleOutDir), videoId, result.platformArticle);
+      // Clean up any semi-products before writing fresh files
+      try { await rm(path.join(articleDir, metadataFile)); } catch { /* ok if not exists */ }
+      try { await rm(path.join(articleDir, articleFile)); } catch { /* ok if not exists */ }
+        await writePlatformArticleBundle(path.resolve(opts.articleOutDir), videoId, result.platformArticle);
       return ""; // success
     } catch (err: unknown) {
       return `LLM生成失败: ${err instanceof Error ? err.message : String(err)}`;
@@ -734,13 +789,12 @@ const handleDashboardRequest = async (
 
     try {
       if (platform === "x" || platform === "wechat") {
-        // Copy article.md → platform article
+        // Copy article.md → platform article, stripping embedded images
         const dstFile = platform === "x" ? "x-format/x-article.md" : "wechat-format/wechat-article.md";
         const src = path.join(articleDir, "article.md");
         const dst = path.join(articleDir, dstFile);
         try { await access(src); } catch { sendJson(res, 400, { error: "article.md 不存在" }); return; }
-        await mkdir(path.dirname(dst), { recursive: true });
-        await copyFile(src, dst);
+        await copyArticleWithoutImages(src, dst);
       } else if (platform === "xiaohongshu" || platform === "bilibili") {
         const err = await ensurePlatformArticle(videoId, platform);
         if (err) { sendJson(res, 400, { error: err }); return; }
@@ -787,8 +841,8 @@ const handleDashboardRequest = async (
           await access(dstArticle);
         } catch {
           try {
-            await mkdir(path.dirname(dstArticle), { recursive: true });
-            await copyFile(srcArticle, dstArticle);
+            // Copy article → platform article, stripping embedded images
+            await copyArticleWithoutImages(srcArticle, dstArticle);
           } catch {
             // copy failed — orchestrate can fall back to reading article.md directly
           }
@@ -825,14 +879,14 @@ const handleDashboardRequest = async (
 
       if (platform === "wechat") {
         // Check if article already has images
-        const imgRefGlobal = /!\[.*?\]\(images\/([^)]+)\)/g;
+        const imgRefGlobal = /!\[.*?\]\(\.?\/?images\/([^)]+)\)/g;
         const hasImages = imgRefGlobal.test(articleMd);
 
         if (hasImages) {
           // Use existing images
           await formatWechatCovers({ articleDir, videoId, articleMd, ...(opts.imageGenerator !== undefined ? { imageGenerator: opts.imageGenerator } : {}) });
-        } else {
-          // No images — generate prompts via sketch-knowledge-kit
+        }
+        // Always generate prompts for WeChat (for preview prompt cards)
           let provider2 = defaultCliLlmProvider();
           let apiKey2 = readLlmApiKeyFromEnv(provider2);
           const baseUrlMap2: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.deepseek.com/anthropic" };
@@ -848,20 +902,29 @@ const handleDashboardRequest = async (
             const llm = createLlmAdapter(cfg);
             await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform: "wechat", llm, llmModel: cfg.defaultModel! });
           }
-        }
-        const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : "notion-doc";
-        const result = await formatWechatArticle({
-          articleDir,
-          sourceFile: "article.md",
-          theme,
-          ...(opts.wechatFormatterDir !== undefined ? { formatterDir: opts.wechatFormatterDir } : {}),
-        });
-        await updateWechatFormatStatus(path.resolve(opts.indexPath), { videoId, status: "formatted", theme: result.theme, htmlPath: result.articleHtmlPath, previewPath: result.previewHtmlPath });
-        sendJson(res, 200, { ok: true, platform: "wechat", theme: result.theme });
+        const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : DEFAULT_WECHAT_FORMAT_THEME;
+        const fmtResult = await formatWechatForDashboard(opts, { videoId, theme });
+        sendJson(res, 200, { ok: true, platform: "wechat", theme: fmtResult.theme });
       } else if (platform === "xiaohongshu") {
+        try {
+          await formatXiaohongshuLayout({ articleDir, videoId, articleMd });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(`xiaohongshu layout error: ${msg}
+`);
+          await updatePlatformFormatStatus(path.resolve(opts.indexPath), { videoId, platform: "xiaohongshu", status: "failed", error: msg });
+          sendJson(res, 500, { error: "小红书排版失败: " + msg });
+          return;
+        }
         await updatePlatformFormatStatus(path.resolve(opts.indexPath), { videoId, platform: "xiaohongshu", status: "formatted" });
         sendJson(res, 200, { ok: true, platform: "xiaohongshu", ...(genStatus ? { genStatus } : {}) });
       } else if (platform === "bilibili") {
+        if (genStatus && genStatus.length > 0) {
+          const msg = "B站平台稿生成失败: " + genStatus;
+          await updatePlatformFormatStatus(path.resolve(opts.indexPath), { videoId, platform: "bilibili", status: "failed", error: msg });
+          sendJson(res, 400, { error: msg });
+          return;
+        }
         const result = await formatBilibiliText({ articleDir, videoId, articleMd });
         await updatePlatformFormatStatus(path.resolve(opts.indexPath), { videoId, platform: "bilibili", status: "formatted" });
         sendJson(res, 200, { ok: true, platform: "bilibili", ...(genStatus ? { genStatus } : {}), ...result });
@@ -1083,8 +1146,10 @@ const handleDashboardRequest = async (
       return;
     }
     const articleRoot = path.join(path.resolve(opts.articleOutDir), videoId);
-    // Platform-specific dir first, then fallback to images/
-    const dirs = subdir ? [path.join(articleRoot, subdir, "images"), path.join(articleRoot, "images")] : [path.join(articleRoot, "images")];
+    // Platform-specific dir first, then fallback to images/ and x-format/images/
+    const dirs = subdir
+      ? [path.join(articleRoot, subdir, "images"), path.join(articleRoot, "images")]
+      : [path.join(articleRoot, "images"), path.join(articleRoot, "x-format", "images")];
     let served = false;
     for (const imageDir of dirs) {
       const imagePath = path.join(imageDir, file);
@@ -1100,6 +1165,85 @@ const handleDashboardRequest = async (
       } catch { /* try next dir */ }
     }
     if (!served) sendJson(res, 404, { error: "Image not found." });
+    return;
+  }
+
+  // ── prompt edit/delete ──
+  if (req.method === "POST" && url.pathname === "/api/prompts/update") {
+    let parsed; try { parsed = JSON.parse(await readBody(req).catch(function(){return"{}"})); } catch { sendJson(res, 400, { error: "无效的 JSON 请求体" }); return; }
+    const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
+    const platform = typeof parsed.platform === "string" ? platformFromString(parsed.platform) : null;
+    const promptId = typeof parsed.promptId === "string" ? parsed.promptId : "";
+    const promptText = typeof parsed.prompt === "string" ? parsed.prompt : "";
+    if (!isSafeVideoId(videoId) || platform === null || !promptId || !promptText) {
+      sendJson(res, 400, { error: "缺少必要字段" }); return;
+    }
+    const formatDirs: Record<string, string> = { x: "x-format", xiaohongshu: "xiaohongshu-format", wechat: "wechat-format", bilibili: "bilibili-format" };
+    const formatDir = formatDirs[platform];
+    if (!formatDir) { sendJson(res, 400, { error: "无效平台" }); return; }
+    const promptsPath = path.join(path.resolve(opts.articleOutDir), videoId, formatDir, "prompts.json");
+    try {
+      const raw = await readFile(promptsPath, "utf8");
+      const prompts = JSON.parse(raw) as Record<string, unknown>;
+      const match = promptId.match(/^(cover|ill)(?:-(\d+))?$/);
+      if (!match) { sendJson(res, 400, { error: "无效 promptId" }); return; }
+      const type = match[1]!;
+      const idx = match[2] !== undefined ? Number.parseInt(match[2], 10) : 0;
+      let found = false;
+      if (type === "cover") {
+        const covers = prompts.coverPrompts as Array<Record<string, unknown>> | undefined;
+        if (covers && idx >= 0 && idx < covers.length) { covers[idx]!.prompt = promptText; found = true; }
+      } else if (type === "ill") {
+        const ills = prompts.illustrationPrompts as Array<Record<string, unknown>> | undefined;
+        if (ills) { const il = ills.find((i) => i.index === idx); if (il) { il.prompt = promptText; found = true; } }
+      }
+      if (!found) { sendJson(res, 404, { error: "未找到该 prompt" }); return; }
+      await writeFile(promptsPath, JSON.stringify(prompts, null, 2) + "\n", "utf8");
+      sendJson(res, 200, { ok: true });
+    } catch (err: unknown) {
+      sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/prompts/delete") {
+    let parsed; try { parsed = JSON.parse(await readBody(req).catch(function(){return"{}"})); } catch { sendJson(res, 400, { error: "无效的 JSON 请求体" }); return; }
+    const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
+    const platform = typeof parsed.platform === "string" ? platformFromString(parsed.platform) : null;
+    const promptId = typeof parsed.promptId === "string" ? parsed.promptId : "";
+    if (!isSafeVideoId(videoId) || platform === null || !promptId) {
+      sendJson(res, 400, { error: "缺少必要字段" }); return;
+    }
+    const formatDirs: Record<string, string> = { x: "x-format", xiaohongshu: "xiaohongshu-format", wechat: "wechat-format", bilibili: "bilibili-format" };
+    const formatDir = formatDirs[platform];
+    if (!formatDir) { sendJson(res, 400, { error: "无效平台" }); return; }
+    const promptsPath = path.join(path.resolve(opts.articleOutDir), videoId, formatDir, "prompts.json");
+    try {
+      const raw = await readFile(promptsPath, "utf8");
+      const prompts = JSON.parse(raw) as Record<string, unknown>;
+      const match = promptId.match(/^(cover|ill)(?:-(\d+))?$/);
+      if (!match) { sendJson(res, 400, { error: "无效 promptId" }); return; }
+      const type = match[1]!;
+      const idx = match[2] !== undefined ? Number.parseInt(match[2], 10) : 0;
+      let found = false;
+      if (type === "cover") {
+        const covers = prompts.coverPrompts as Array<Record<string, unknown>> | undefined;
+        if (covers && idx >= 0 && idx < covers.length) { prompts.coverPrompts = covers.filter((_, i) => i !== idx); found = true; }
+      } else if (type === "ill") {
+        const ills = prompts.illustrationPrompts as Array<Record<string, unknown>> | undefined;
+        if (ills) {
+          const lenBefore = ills.length;
+          const filtered = ills.filter((i) => i.index !== idx);
+          prompts.illustrationPrompts = filtered;
+          found = filtered.length < lenBefore;
+        }
+      }
+      if (!found) { sendJson(res, 404, { error: "未找到该 prompt" }); return; }
+      await writeFile(promptsPath, JSON.stringify(prompts, null, 2) + "\n", "utf8");
+      sendJson(res, 200, { ok: true });
+    } catch (err: unknown) {
+      sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
     return;
   }
 

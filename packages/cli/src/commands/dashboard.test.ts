@@ -47,4 +47,64 @@ describe("scanDashboardVideos", () => {
     expect(result.videos[0]!.platforms.wechat.formatStatus).toBe("formatted");
     expect(result.videos[0]!.platforms.wechat.htmlPath).toContain("wechat-format");
   });
+
+  it("shows failed status when index has formatStatus failed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-dashboard-"));
+    const articleOutDir = path.join(root, "articles");
+    const downloadsDir = path.join(root, "downloads");
+    const videoId = "fail123";
+    await mkdir(path.join(articleOutDir, videoId), { recursive: true });
+    await mkdir(path.join(downloadsDir, videoId), { recursive: true });
+    await writeFile(path.join(articleOutDir, videoId, "article.md"), "# 标题");
+    const indexPath = path.join(root, "publish-index.json");
+    await writeFile(
+      indexPath,
+      JSON.stringify({
+        videos: {
+          [videoId]: {
+            platforms: {
+              xiaohongshu: { formatStatus: "failed", formatError: "API timeout" },
+              bilibili: { formatStatus: "failed", formatError: "no-llm-key" },
+            },
+          },
+        },
+      }),
+    );
+    const result = await scanDashboardVideos({ articleOutDir, downloadsDir, indexPath });
+    expect(result.videos[0]!.platforms.xiaohongshu.status).toBe("failed");
+    expect(result.videos[0]!.platforms.xiaohongshu.formatError).toBe("API timeout");
+    expect(result.videos[0]!.platforms.bilibili.status).toBe("failed");
+    expect(result.videos[0]!.platforms.bilibili.formatError).toBe("no-llm-key");
+  });
+
+  it("reads bilibili primaryFile as video-info.md", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-dashboard-"));
+    const articleOutDir = path.join(root, "articles");
+    const downloadsDir = path.join(root, "downloads");
+    const videoId = "bili123";
+    await mkdir(path.join(articleOutDir, videoId, "bilibili-format"), { recursive: true });
+    await mkdir(path.join(downloadsDir, videoId), { recursive: true });
+    await writeFile(path.join(articleOutDir, videoId, "article.md"), "# 标题");
+    await writeFile(path.join(articleOutDir, videoId, "bilibili-format", "video-info.md"), "## 视频信息\n\n正文");
+    const indexPath = path.join(root, "publish-index.json");
+    await writeFile(indexPath, JSON.stringify({}));
+    const result = await scanDashboardVideos({ articleOutDir, downloadsDir, indexPath });
+    expect(result.videos[0]!.platforms.bilibili.files).toContain("bilibili-format/video-info.md");
+    expect(result.videos[0]!.platforms.bilibili.generated).toBe(true);
+  });
+
+  it("wechat formatted requires article.html and preview.html", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-dashboard-"));
+    const articleOutDir = path.join(root, "articles");
+    const downloadsDir = path.join(root, "downloads");
+    const videoId = "wechat123";
+    await mkdir(path.join(articleOutDir, videoId, "wechat-format", "article"), { recursive: true });
+    await mkdir(path.join(downloadsDir, videoId), { recursive: true });
+    await writeFile(path.join(articleOutDir, videoId, "article.md"), "# 标题");
+    await writeFile(path.join(articleOutDir, videoId, "wechat-format", "article", "article.html"), "<html>article</html>");
+    const indexPath = path.join(root, "publish-index.json");
+    await writeFile(indexPath, JSON.stringify({}));
+    const result = await scanDashboardVideos({ articleOutDir, downloadsDir, indexPath });
+    expect(result.videos[0]!.platforms.wechat.formatStatus).toBe("none");
+  });
 });

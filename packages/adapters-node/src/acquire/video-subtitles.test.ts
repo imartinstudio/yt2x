@@ -49,6 +49,42 @@ Two
 });
 
 describe("prepareSourceSubtitle", () => {
+  it("rejects a local transcription with a long consecutive run of duplicate cues", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-transcribe-repeat-"));
+    const repeatedSrt = Array.from(
+      { length: 18 },
+      (_, index) => `${index + 1}\n00:00:${String(index * 2).padStart(2, "0")},000 --> 00:00:${String(index * 2 + 2).padStart(2, "0")},000\n我记得很棒，因为我非常喜欢那个演员。`,
+    ).join("\n\n");
+
+    await expect(
+      prepareSourceSubtitle({
+        videoDir: root,
+        sourceLang: "zh",
+        targetLang: "zh-CN",
+        source: "transcribe",
+        runner: {
+          run: async (spec) => {
+            if (spec.command === "whisper-cli") {
+              const outputIndex = spec.args!.indexOf("-of");
+              await writeFile(`${spec.args![outputIndex + 1]}.srt`, repeatedSrt, "utf8");
+            }
+            return {
+              exitCode: 0,
+              signal: null,
+              stdout: "",
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              durationMs: 0,
+              command: spec.command,
+              args: spec.args ?? [],
+            };
+          },
+        },
+      }),
+    ).rejects.toThrow(/repeated subtitle cues/);
+  });
+
   it("copies a user-provided SRT to video/full.en.srt and writes a manifest", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-file-"));
     const source = path.join(root, "source.srt");
@@ -210,6 +246,7 @@ describe("runSubtitlePipeline", () => {
     );
     expect(result.manifest.source_language).toBe("zh-Hant");
     expect(result.manifest.translation_method).toBe("llm");
+    expect(seenSystemPrompts[0]).toMatch(/Translate from zh-Hant to zh-CN/);
     expect(seenSystemPrompts[0]).toMatch(/Simplified Chinese/);
     expect(seenSystemPrompts[0]).toMatch(/Traditional Chinese output is FORBIDDEN/);
   });
@@ -338,6 +375,42 @@ describe("runSubtitlePipeline", () => {
         expect.stringContaining("Traditional Chinese"),
       ]),
     );
+  });
+
+  it("regenerates full.zh.srt instead of reusing it when force is set", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-force-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(path.join(root, "Demo.video123.en.srt"), "1\n00:00:01,000 --> 00:00:02,000\nHello\n", "utf8");
+    await writeFile(path.join(root, "video", "full.zh.srt"), "1\n00:00:01,000 --> 00:00:02,000\nstale subtitle\n", "utf8");
+
+    await runSubtitlePipeline({
+      videoDir: root,
+      subtitle: { mode: "srt", sourceLang: "en", targetLang: "zh-CN", source: "youtube" },
+      llm: {
+        chat: async (): Promise<ChatResponse> => ({
+          content: JSON.stringify([{ index: 1, text: "你好" }]),
+          model: "test",
+          finishReason: "stop",
+        }),
+      },
+      llmModel: "test",
+      force: true,
+      runner: {
+        run: async (spec) => ({
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 0,
+          command: spec.command,
+          args: spec.args ?? [],
+        }),
+      },
+    });
+
+    await expect(readFile(path.join(root, "video", "full.zh.srt"), "utf8")).resolves.toContain("你好");
   });
 });
 

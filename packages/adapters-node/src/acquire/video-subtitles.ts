@@ -239,6 +239,27 @@ export const cleanupSrt = (srtContent: string): string => {
   return serializeSrtBlocks(merged);
 };
 
+const normalizedCueText = (cue: RawCue): string =>
+  cue.text.join(" ").replace(/\s+/gu, " ").trim().toLocaleLowerCase();
+
+/** Reject a common Whisper hallucination: the same cue repeated for a long run. */
+export const assertNoRepeatedTranscriptionCues = (srtContent: string): void => {
+  let previous = "";
+  let repeatedRun = 0;
+
+  for (const cue of parseSubtitleBlocks(srtContent)) {
+    const text = normalizedCueText(cue);
+    if (text.length === 0) continue;
+    repeatedRun = text === previous ? repeatedRun + 1 : 1;
+    previous = text;
+    if (repeatedRun >= 6) {
+      throw new Error(
+        "local transcription contains repeated subtitle cues; verify --subtitle-source-lang or use auto",
+      );
+    }
+  }
+};
+
 export const convertSubtitleTextToSrt = (raw: string): string => {
   const cues = parseSubtitleBlocks(raw);
   if (cues.length === 0) {
@@ -488,6 +509,9 @@ export const prepareSourceSubtitle = async (
   // Clean up Whisper fragmentation: merge duplicate cues, consolidate short durations
   const rawSrt = await readFile(dest, "utf8");
   const cleanedSrt = cleanupSrt(rawSrt);
+  if (method === "local_transcription") {
+    assertNoRepeatedTranscriptionCues(cleanedSrt);
+  }
   await writeFile(dest, cleanedSrt, "utf8");
 
   const completed: SubtitleManifest = {
@@ -561,6 +585,9 @@ export const runSubtitlePipeline = async (
   }
 
   const zhSrtPath = path.join(videoDir, "video", "full.zh.srt");
+  if (opts.force) {
+    await rm(zhSrtPath).catch(() => {});
+  }
   let hasZhSrt = false;
   try {
     await access(zhSrtPath);
@@ -662,7 +689,7 @@ export const runSubtitlePipeline = async (
       const { srt: zhSrt, warnings: translationWarnings } = await translateSrt(enSrt, {
         llm: opts.llm!,
         model: opts.llmModel!,
-        sourceLang: subtitle.sourceLang,
+        sourceLang: manifest.source_language,
         targetLang: subtitle.targetLang,
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       });

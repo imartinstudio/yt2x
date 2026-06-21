@@ -415,9 +415,13 @@ export const previewExistingArticleImages = async (
       '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '">📋 复制</button>' +
       '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + _chatGptUrl(promptText) + '" target="_blank">🤖 ChatGPT</a>' +
       '<button class="ph-edit-btn" onclick="editPrompt(this)" data-prompt-b64="' + Buffer.from(promptText, "utf8").toString("base64") + '" data-prompt-id="' + _esc(opts?.promptId ?? "") + '">✏️</button>' +
+      '<button class="ph-upload-btn" onclick="selectPromptImage(this)">上传图片</button><input class="ph-upload-input" type="file" accept="image/jpeg,image/png,image/webp" data-prompt-id="' + _esc(opts?.promptId ?? "") + '" onchange="uploadPromptImage(this)" />' +
       '<button class="ph-del-btn" onclick="deletePrompt(this)" data-prompt-id="' + _esc(opts?.promptId ?? "") + '">🗑</button>' +
       '</span></div></div>';
   };
+
+  const uploadedImageActions = (promptId: string) =>
+    '<div class="uploaded-image-actions"><button class="ph-upload-btn" onclick="selectPromptImage(this)">替换图片</button><input class="ph-upload-input" type="file" accept="image/jpeg,image/png,image/webp" data-prompt-id="' + _esc(promptId) + '" onchange="uploadPromptImage(this)" /><button class="ph-del-btn" onclick="deletePromptImage(\'' + _esc(promptId) + '\')">删除图片</button></div>';
 
   const isXhs = platform === "xiaohongshu";
   let sectionHtml = "";
@@ -431,6 +435,7 @@ export const previewExistingArticleImages = async (
     let xhsCoverName = "封面";
     let xhsModel = "";
     const xhsIllNames = new Map<number, string>();
+    const xhsPromptIdsByFile = new Map<string, string>();
     try {
       const promptsPath = path.join(articleDir, "xiaohongshu-format", "prompts.json");
       const promptsRaw = await rf(promptsPath, "utf8");
@@ -443,17 +448,19 @@ export const previewExistingArticleImages = async (
       xhsCoverPrompt = prompts.coverPrompts?.[0]?.prompt ?? "";
       xhsCoverFilename = prompts.coverPrompts?.[0]?.filename ?? "cover.png";
       xhsCoverName = prompts.coverPrompts?.[0]?.name ?? "封面";
+      if (prompts.coverPrompts?.[0]?.filename) xhsPromptIdsByFile.set(prompts.coverPrompts[0].filename, "cover-0");
       for (const il of (prompts.illustrationPrompts ?? [])) {
         if (typeof il.name === "string" && il.name.trim().length > 0) {
           xhsIllNames.set(il.index, il.name.trim());
         }
+        if (typeof il.filename === "string") xhsPromptIdsByFile.set(il.filename, "ill-" + il.index);
       }
     } catch { /* no prompts.json yet */ }
 
     // Gallery: collect cover + all section images + prompt placeholders
     const galleryItems: string[] = [];
     if (coverImg) {
-      galleryItems.push('<div class="xhs-slide"><img src="' + imgUrl(coverImg) + '" alt="封面" class="xhs-slide-img" /><div class="img-label">封面 · ' + xhsCoverFilename + '</div></div>');
+      galleryItems.push('<div class="xhs-slide"><img src="' + imgUrl(coverImg) + '" alt="封面" class="xhs-slide-img" /><div class="img-label">封面 · ' + xhsCoverFilename + '</div>' + (xhsPromptIdsByFile.has(coverImg) ? uploadedImageActions(xhsPromptIdsByFile.get(coverImg)!) : "") + '</div>');
     } else if (xhsCoverPrompt) {
       galleryItems.push('<div class="xhs-slide xhs-slide-placeholder xhs-slide-cover">' + promptActions(xhsCoverPrompt, { name: xhsCoverName, label: '🎨 封面 · 3:4', model: xhsModel, promptId: 'cover-0' }) + '</div>');
     }
@@ -461,7 +468,7 @@ export const previewExistingArticleImages = async (
       const sec = sections[i]!;
       const imgs = sec.images.filter(function (f) { return imgExists(f) && !usedImgs.has(f); });
       for (const f of imgs) {
-        galleryItems.push('<div class="xhs-slide"><img src="' + imgUrl(f) + '" alt="' + f + '" class="xhs-slide-img" /><div class="img-label">' + f + '</div></div>');
+        galleryItems.push('<div class="xhs-slide"><img src="' + imgUrl(f) + '" alt="' + f + '" class="xhs-slide-img" /><div class="img-label">' + f + '</div>' + (xhsPromptIdsByFile.has(f) ? uploadedImageActions(xhsPromptIdsByFile.get(f)!) : "") + '</div>');
         usedImgs.add(f);
       }
       // Prompt placeholder for sections without images
@@ -582,7 +589,7 @@ export const previewExistingArticleImages = async (
       ".ph-copy{border:1px solid #d9cbb8;background:#fffdf8;color:#6b5e4f}.ph-copy:hover{background:#faf4ea;border-color:#c4a98a}",
       ".ph-chatgpt{background:#ff2442;border:1px solid #ff2442;color:#fff}.ph-chatgpt:hover{background:#e01e38;border-color:#e01e38;box-shadow:0 2px 8px rgba(255,36,66,.25)}",
 ".ph-edit-ta{width:100%;min-height:100px;padding:10px;font-size:12px;line-height:1.6;border:2px solid #E07030;border-radius:6px;font-family:monospace;resize:vertical;box-sizing:border-box;background:#fffdf8;color:#333}",
-".ph-edit-btn,.ph-del-btn{padding:2px 7px;font-size:13px;border-radius:4px;cursor:pointer;border:1px solid #ddd;background:#fff;line-height:1.4;transition:all .15s ease}",
+".ph-edit-btn,.ph-upload-btn,.ph-del-btn{padding:2px 7px;font-size:13px;border-radius:4px;cursor:pointer;border:1px solid #ddd;background:#fff;line-height:1.4;transition:all .15s ease}.ph-upload-input{display:none}.uploaded-image-actions{display:flex;gap:8px;justify-content:flex-end;padding:8px 12px}",
 ".ph-edit-btn:hover{background:#f0f0f0}.ph-del-btn{color:#c0392b;border-color:#f5c6cb}.ph-del-btn:hover{background:#fde8e8}",
       // toolbar overrides
       ".toolbar{border-bottom-color:#e8d5c0;background:rgba(251,247,240,.92)}",
@@ -615,7 +622,7 @@ export const previewExistingArticleImages = async (
       ".cover-wrap .ph-box{position:relative}",
       ".slide-counter{font-size:10px;color:#999;font-family:'Georgia',serif;opacity:.6;text-align:right;padding:4px 12px 0}",
 	      ".ph-edit-ta{width:100%;min-height:100px;padding:10px;font-size:12px;line-height:1.6;border:2px solid #E07030;border-radius:6px;font-family:monospace;resize:vertical;box-sizing:border-box;background:#fffdf8;color:#333}",
-	      ".ph-edit-btn,.ph-del-btn{padding:2px 7px;font-size:13px;border-radius:4px;cursor:pointer;border:1px solid #ddd;background:#fff;line-height:1.4;transition:all .15s ease}",
+      ".ph-edit-btn,.ph-upload-btn,.ph-del-btn{padding:2px 7px;font-size:13px;border-radius:4px;cursor:pointer;border:1px solid #ddd;background:#fff;line-height:1.4;transition:all .15s ease}.ph-upload-input{display:none}.uploaded-image-actions{display:flex;gap:8px;justify-content:flex-end;padding:8px 12px}",
 	      ".ph-edit-btn:hover{background:#f0f0f0}.ph-del-btn{color:#c0392b;border-color:#f5c6cb}.ph-del-btn:hover{background:#fde8e8}",
     ].join("");
 
@@ -660,6 +667,16 @@ export const previewExistingArticleImages = async (
       '};' +
       'b.parentNode.insertBefore(ca,b.nextSibling);' +
     '}' +
+    'var _activePromptImageInput=null;' +
+    'function selectPromptImage(button){_activePromptImageInput=button.nextElementSibling;_activePromptImageInput.click()}' +
+    'function uploadPromptImage(input){var file=input.files&&input.files[0];uploadPromptFile(file,input.dataset.promptId);input.value=\'\'}' +
+    'function uploadPromptFile(file,i){' +
+      'if(!file)return;' +
+      'if([\'image/jpeg\',\'image/png\',\'image/webp\'].indexOf(file.type)<0){alert(\'仅支持 JPG、PNG、WebP 图片\');return;}' +
+      'if(file.size>10*1024*1024){alert(\'图片不能超过 10MB\');return;}' +
+      'var reader=new FileReader();reader.onload=function(){fetch(\'/api/prompts/image\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({videoId:_VIDEO_ID,platform:_PLATFORM,promptId:i,dataUrl:reader.result})}).then(function(r){return r.json().then(function(v){if(!r.ok)throw new Error(v.error||\'图片上传失败\');location.reload()})}).catch(function(e){alert(e.message)})};reader.readAsDataURL(file);' +
+    '}' +
+    'function deletePromptImage(i){if(!confirm(\'删除此图片？\'))return;fetch(\'/api/prompts/image/delete\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({videoId:_VIDEO_ID,platform:_PLATFORM,promptId:i})}).then(function(r){return r.json().then(function(v){if(!r.ok)throw new Error(v.error||\'删除图片失败\');location.reload()})}).catch(function(e){alert(e.message)})}' +
     'function deletePrompt(b){' +
       'var c=b.closest(\'div[data-prompt-id]\'),i=c.dataset.promptId;' +
       'if(confirm(\'删除此 prompt？此操作不可撤销。\')){' +
@@ -669,6 +686,8 @@ export const previewExistingArticleImages = async (
         '});' +
       '}' +
     '}' +
+    'document.addEventListener(\'paste\',function(e){var f=e.clipboardData&&e.clipboardData.files[0];if(f&&_activePromptImageInput)uploadPromptFile(f,_activePromptImageInput.dataset.promptId)});' +
+    'document.querySelectorAll(\'div[data-prompt-id]\').forEach(function(card){card.addEventListener(\'dragover\',function(e){e.preventDefault()});card.addEventListener(\'drop\',function(e){e.preventDefault();var f=e.dataTransfer&&e.dataTransfer.files[0];if(f)uploadPromptFile(f,card.dataset.promptId)})});' +
   '</script>');
   h.push("</body></html>");
 

@@ -174,6 +174,9 @@ describe("previewExistingArticleImages", () => {
     expect(result!.html).toContain("第二节插图");
     // Cover prompt appears with correct label
     expect(result!.html).toContain("🎨 封面 · 3:4");
+    expect(result!.html).toContain('class="ph-upload-btn"');
+    expect(result!.html).toContain('data-prompt-id="ill-0"');
+    expect(result!.html).toContain('accept="image/jpeg,image/png,image/webp"');
   });
 
   it("shows 'needs format' note when no prompts and no images exist", async () => {

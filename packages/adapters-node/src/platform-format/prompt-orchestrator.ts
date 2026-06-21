@@ -515,7 +515,7 @@ export const previewExistingArticleImages = async (
     const coverHtml = coverImg
       ? '<div class="cover-wrap"><img src="' + imgUrl(coverImg) + '" alt="封面" class="cover-img" /><div class="img-label">封面</div></div>'
       : nonXhsCoverPrompts.map(function (cp, ci) {
-          return '<div class="cover-wrap"><div data-prompt-id="cover-' + ci + '"><div class="ph-box ph-box-cover">' + _esc(cp.prompt) + (nonXhsModel ? '<div class="prompt-model">' + _esc(nonXhsModel) + '</div>' : '') + '</div><div class="ph-row"><span class="ph-label">🎨 封面' + (cp.label ? ' · ' + _esc(cp.label) : '') + '</span><span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '">📋 复制</button><a class="ph-chatgpt" href="https://chatgpt.com/?q=' + _chatGptUrl(cp.prompt) + '" target="_blank">🤖 ChatGPT</a><button class="ph-edit-btn" onclick="editPrompt(this)" data-prompt-b64="' + Buffer.from(cp.prompt, "utf8").toString("base64") + '" data-prompt-id="cover-' + ci + '">✏️</button><button class="ph-del-btn" onclick="deletePrompt(this)" data-prompt-id="cover-' + ci + '">🗑</button></span></div></div></div>';
+          return '<div class="cover-wrap">' + promptActions(cp.prompt, { label: '🎨 封面' + (cp.label ? ' · ' + cp.label : ''), model: nonXhsModel, promptId: 'cover-' + ci }) + '</div>';
         }).join("");
 
     // Count total prompt placeholders for X/bilibili preview counter
@@ -532,12 +532,7 @@ export const previewExistingArticleImages = async (
       const imgHtml = imgs.map(function (f) { usedImgs.add(f); return '<img src="' + imgUrl(f) + '" alt="' + f + '" class="sec-img" /><div class="img-label">' + f + '</div>'; }).join("");
       const secPrompt = promptMap?.get(i);
       const promptHtml = (secPrompt && imgs.length === 0)
-        ? '<div data-prompt-id="ill-' + i + '"><div class="ph-box">' + _esc(secPrompt) + (nonXhsModel ? '<div class="prompt-model">' + _esc(nonXhsModel) + '</div>' : '') + '</div>' +
-          '<div class="ph-row"><span class="ph-label">📷 待生成</span>' +
-          '<span class="ph-btns"><button class="ph-copy" onclick="navigator.clipboard.writeText(atob(this.dataset.promptB64))" data-prompt-b64="' + Buffer.from(secPrompt, "utf8").toString("base64") + '">📋 复制</button>' +
-          '<a class="ph-chatgpt" href="https://chatgpt.com/?q=' + _chatGptUrl(secPrompt) + '" target="_blank">🤖 ChatGPT</a>' +
-          '<button class="ph-edit-btn" onclick="editPrompt(this)" data-prompt-b64="' + Buffer.from(secPrompt, "utf8").toString("base64") + '" data-prompt-id="ill-' + i + '">✏️</button>' +
-          '<button class="ph-del-btn" onclick="deletePrompt(this)" data-prompt-id="ill-' + i + '">🗑</button></span></div></div>'
+        ? promptActions(secPrompt, { label: '📷 待生成', model: nonXhsModel, promptId: 'ill-' + i })
         : "";
       let blockHtml = '<div class="sec-block">' + h + '<div class="sec-body">' + b + '</div>' + imgHtml + promptHtml + '</div>';
       if (promptHtml) {

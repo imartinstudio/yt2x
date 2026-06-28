@@ -214,6 +214,7 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       el.querySelectorAll("[data-unpublish]").forEach(function(btn) { btn.addEventListener("click", function() { unpublishPlatform(video.videoId, btn.dataset.unpublish); }); });
       el.querySelectorAll("[data-copy]").forEach(function(btn) { btn.addEventListener("click", function() { copyPlatform(video.videoId, btn.dataset.copy); }); });
       el.querySelectorAll("[data-format-wechat]").forEach(function(btn) { btn.addEventListener("click", function() { openThemeModal(video.videoId, btn.dataset.theme || "github"); }); });
+      el.querySelectorAll("[data-format-wechat-x-images]").forEach(function(btn) { btn.addEventListener("click", function() { formatWechatWithXImages(video.videoId, btn.dataset.theme || "github"); }); });
       el.querySelectorAll("[data-copy-wechat-html]").forEach(function(btn) { btn.addEventListener("click", function() { copyWechatHtml(video.videoId); }); });
       el.querySelectorAll("[data-format-platform]").forEach(function(btn) { btn.addEventListener("click", function() { formatPlatform(video.videoId, btn.dataset.formatPlatform); }); });
       el.querySelectorAll("[data-generate-platform]").forEach(function(btn) { btn.addEventListener("click", function() { generatePlatform(video.videoId, btn.dataset.generatePlatform); }); });
@@ -255,6 +256,9 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       });
       detail.querySelectorAll("[data-format-wechat]").forEach(function(btn) {
         btn.addEventListener("click", function() { openThemeModal(video.videoId, btn.dataset.theme || "github"); });
+      });
+      detail.querySelectorAll("[data-format-wechat-x-images]").forEach(function(btn) {
+        btn.addEventListener("click", function() { formatWechatWithXImages(video.videoId, btn.dataset.theme || "github"); });
       });
       detail.querySelectorAll("[data-copy-wechat-html]").forEach(function(btn) {
         btn.addEventListener("click", function() { copyWechatHtml(video.videoId); });
@@ -464,6 +468,9 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       if (st !== "empty") {
         moreItems.push('<a href="/api/file?videoId=' + encodeURIComponent(video.videoId) + '&platform=' + platform + '" target="_blank" rel="noopener noreferrer" class="more-item">打开稿件</a>');
       }
+      if (st !== "empty" && platform === "wechat") {
+        moreItems.push('<button class="more-item" data-format-wechat-x-images="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "github") + '">X配图排版</button>');
+      }
       if (st === "formatted" || st === "failed") {
         if (platform === "wechat") {
           moreItems.push('<button class="more-item" data-format-wechat="' + esc(video.videoId) + '" data-theme="' + esc(state.formatTheme || "github") + '">重新排版</button>');
@@ -611,6 +618,9 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
       });
       portal.querySelectorAll("[data-format-wechat]").forEach(function(btn) {
         btn.addEventListener("click", function() { closeMorePortal(); var v = payload.videos.find(function(x) { return x.videoId === selectedId; }); if (v) openThemeModal(v.videoId, btn.dataset.theme); });
+      });
+      portal.querySelectorAll("[data-format-wechat-x-images]").forEach(function(btn) {
+        btn.addEventListener("click", function() { closeMorePortal(); formatWechatWithXImages(selectedId, btn.dataset.theme || "github"); });
       });
       portal.querySelectorAll("[data-format-platform]").forEach(function(btn) {
         btn.addEventListener("click", function() { closeMorePortal(); formatPlatform(payload.videos.find(function(v) { return v.videoId === selectedId; }).videoId, btn.dataset.formatPlatform); });
@@ -789,6 +799,30 @@ export const DASHBOARD_CLIENT = String.raw`    const platformLabels = { x: "X", 
           toast("公众号排版完成");
         }
       } catch {
+        toast("排版请求失败");
+      }
+      formattingSet.delete(lockKey);
+      await load();
+    }
+
+    async function formatWechatWithXImages(videoId, theme) {
+      var lockKey = videoId + ":wechat-x";
+      if (formattingSet.has(lockKey)) return;
+      formattingSet.add(lockKey);
+      toast("开始根据 X 配图排版公众号...");
+      try {
+        var resp = await fetch("/api/wechat-format", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ videoId: videoId, theme: theme, useXImages: true }),
+        });
+        if (!resp.ok) {
+          var payload = await resp.json().catch(function() { return {}; });
+          toast(payload.error || "X配图排版失败");
+        } else {
+          toast("公众号X配图排版完成");
+        }
+      } catch (e) {
         toast("排版请求失败");
       }
       formattingSet.delete(lockKey);

@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { access, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import {
@@ -400,22 +400,74 @@ const updateWechatFormatStatus = async (
 
 const formatWechatForDashboard = async (
   opts: { articleOutDir: string; indexPath: string; wechatFormatterDir?: string },
-  input: { videoId: string; theme: string },
+  input: { videoId: string; theme: string; useXImages?: boolean },
 ): Promise<{ theme: string; htmlPath: string; previewPath: string }> => {
   const articleDir = path.join(path.resolve(opts.articleOutDir), input.videoId);
   const articlePath = path.join(articleDir, "article.md");
 
-  // Strip markdown images and escape leading # in hashtag lines so the formatter doesn't
-  // treat them as markdown headings. The cover image from article.md should NOT appear
-  // in the formatted WeChat output.
+  // When useXImages: use the X long-form article (x-format/x-article.md) as the
+  // source instead of article.md, preserving its image layout for WeChat output.
+  let xArticleOriginal = "";
+  if (input.useXImages) {
+    const xArticlePath = path.join(articleDir, "x-format", "x-article.md");
+    const xImagesDir = path.join(articleDir, "x-format", "images");
+    const articleImagesDir = path.join(articleDir, "images");
+    const wechatArticleImagesDir = path.join(articleDir, "wechat-format", "article", "images");
+    const wechatImagesDir = path.join(articleDir, "wechat-format", "images");
+
+    // Validate x-article exists and has images
+    let xArticleText = "";
+    try { xArticleText = await readFile(xArticlePath, "utf8"); } catch {
+      throw new Error("没有找到 X 长文。请先运行 X 文章流水线。");
+    }
+    const imgRefs = xArticleText.match(/!\[.*?\]\(\.?\/?images\/[^)]+\)/g);
+    if (!imgRefs || imgRefs.length === 0) {
+      throw new Error("X 文章中没有配图。请先生成 X 文章配图。");
+    }
+
+    // Copy x-format images → articleDir/images/ so the formatter resolves ./images/ references
+    try {
+      await mkdir(articleImagesDir, { recursive: true });
+      const entries = await readdir(xImagesDir);
+      let copiedCount = 0;
+      for (const entry of entries) {
+        await copyFile(path.join(xImagesDir, entry), path.join(articleImagesDir, entry));
+        copiedCount++;
+      }
+      // Also copy to wechat-format output so the final HTML can reference them
+      await mkdir(wechatArticleImagesDir, { recursive: true });
+      await mkdir(wechatImagesDir, { recursive: true });
+      for (const entry of entries) {
+        await copyFile(path.join(xImagesDir, entry), path.join(wechatArticleImagesDir, entry));
+        await copyFile(path.join(xImagesDir, entry), path.join(wechatImagesDir, entry));
+      }
+      process.stderr.write(`wechat-format useXImages: copied ${copiedCount} images from x-format, found ${imgRefs.length} markdown image refs\n`);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes("没有配图")) throw err;
+      process.stderr.write(`wechat-format useXImages: image copy warning: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+
+    // Save x-article content for use as the formatter source (replacing article.md temporarily)
+    xArticleOriginal = xArticleText;
+  }
+
+  // Strip markdown images by default. When useXImages, replace article.md with the
+  // x-article content (which already has images placed). Also escape leading #
+  // in hashtag lines so the formatter doesn't treat them as markdown headings.
   let originalMarkdown = "";
   let patched = false;
   try {
     originalMarkdown = await readFile(articlePath, "utf8");
-    const modified = originalMarkdown
-      .replace(/!\[.*?\]\(\.?\/?images\/[^)]+\)\n?/g, "")
-      .replace(/\n{3,}/g, "\n\n")
-      .replace(/^(#[^\s#*_\n])/gm, "\\$1");
+    let modified: string;
+    if (input.useXImages && xArticleOriginal.length > 0) {
+      // Use x-article as the source — only escape hashtags, keep images
+      modified = xArticleOriginal.replace(/^(#[^\s#*_\n])/gm, "\\$1");
+    } else {
+      modified = originalMarkdown
+        .replace(/!\[.*?\]\(\.?\/?images\/[^)]+\)\n?/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .replace(/^(#[^\s#*_\n])/gm, "\\$1");
+    }
     if (modified !== originalMarkdown) {
       await writeFile(articlePath, modified, "utf8");
       patched = true;
@@ -435,8 +487,16 @@ const formatWechatForDashboard = async (
     if (!(await fileExists(result.articleHtmlPath)) || !(await fileExists(result.previewHtmlPath))) {
       throw new Error("排版完成但输出文件不存在: " + result.articleHtmlPath);
     }
-    // Create stripped copy for preview (no cover image)
-    try { await copyArticleWithoutImages(articlePath, path.join(articleDir, "wechat-format", "wechat-article.md")); } catch { /* best-effort */ }
+    // Create preview copy. When useXImages, keep images (copy x-article content directly).
+    // Otherwise strip images for the preview copy.
+    try {
+      const previewPath = path.join(articleDir, "wechat-format", "wechat-article.md");
+      if (input.useXImages && xArticleOriginal.length > 0) {
+        await writeFile(previewPath, xArticleOriginal, "utf8");
+      } else if (!input.useXImages) {
+        await copyArticleWithoutImages(articlePath, previewPath);
+      }
+    } catch { /* best-effort */ }
     await updateWechatFormatStatus(path.resolve(opts.indexPath), {
       videoId: input.videoId,
       status: "formatted",
@@ -679,8 +739,10 @@ const handleDashboardRequest = async (
     try {
       let html = await readFile(filePath, "utf8");
 
-      // Inject prompt placeholders if prompts.json exists (no images → generated prompts)
-      const promptsPath = path.join(path.dirname(filePath), "..", "prompts.json");
+      // Inject prompt placeholders if prompts.json exists AND html has no real images
+      // (when useXImages produces real <img> tags, skip prompts to avoid clutter)
+      if (!html.includes("<img ")) {
+        const promptsPath = path.join(path.dirname(filePath), "..", "prompts.json");
       try {
         const promptsRaw = await readFile(promptsPath, "utf8");
         const prompts = JSON.parse(promptsRaw) as {
@@ -698,6 +760,7 @@ const handleDashboardRequest = async (
           html = html.replace("<body", "<body>\n" + promptsBar);
         }
       } catch { /* no prompts.json */ }
+      } // end if (!html.includes("<img "))
 
       if (kind === "preview") {
         // preview: rewrite to API endpoint for local browser viewing
@@ -790,6 +853,7 @@ const handleDashboardRequest = async (
     }
     const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
     const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : DEFAULT_WECHAT_FORMAT_THEME;
+    const useXImages = parsed.useXImages === true;
     if (!isSafeVideoId(videoId)) {
       sendJson(res, 400, { error: "Invalid videoId." });
       return;
@@ -816,7 +880,7 @@ const handleDashboardRequest = async (
 `);
     }
     try {
-      const result = await formatWechatForDashboard(opts, { videoId, theme });
+      const result = await formatWechatForDashboard(opts, { videoId, theme, useXImages });
       sendJson(res, 200, {
         ok: true,
         theme: result.theme,

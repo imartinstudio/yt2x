@@ -180,7 +180,7 @@ export const runDeconstruct = async (
       { role: "system", content: DECONSTRUCT_SYSTEM_PROMPT },
       { role: "user", content: userPrompt },
     ],
-    temperature: 0.35,
+    temperature: 0.1,
     maxTokens: 8192,
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
@@ -205,6 +205,7 @@ const stripJsonFenceWrapper = (s: string): string => {
 
 /**
  * 解析并验证 LLM 返回的章节拆解 JSON。
+ * Pre-processes null fields for skipped sections into valid defaults before Zod validation.
  */
 export const parseDeconstructLlmOutput = (raw: string): DeconstructLlmOutput => {
   let parsed: unknown;
@@ -213,6 +214,26 @@ export const parseDeconstructLlmOutput = (raw: string): DeconstructLlmOutput => 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Deconstruct LLM response is not valid JSON: ${message}`);
+  }
+
+  // Pre-process: fill null/default values for skipped sections so Zod validation passes
+  if (parsed != null && typeof parsed === "object" && "sections" in parsed && Array.isArray((parsed as Record<string, unknown>).sections)) {
+    const arr = (parsed as Record<string, unknown>).sections as Array<Record<string, unknown>>;
+    for (const s of arr) {
+      if (s.title === null || s.title === undefined) s.title = "未命名";
+      if (s.summary === null || s.summary === undefined) s.summary = "";
+      if (s.article_section === null || s.article_section === undefined) s.article_section = "";
+      if (s.angle === null || s.angle === undefined) s.angle = "discussion";
+      if (s.risk === null || s.risk === undefined) s.risk = "low";
+      if (s.timecodes === null || s.timecodes === undefined) {
+        s.timecodes = { start: "00:00:00,000", end: "00:00:00,000", startSec: 0, endSec: 0, durationSec: 0 };
+      }
+      if (s.scores === null || s.scores === undefined) {
+        s.scores = { counter_intuitiveness: 1, shareability: 1, practical_value: 1, visual_appeal: 1, composite: 1.0 };
+      }
+      if (s.key_quote === null || s.key_quote === undefined) s.key_quote = "";
+      if (s.video_script === null || s.video_script === undefined) s.video_script = "";
+    }
   }
 
   const result = DeconstructLlmOutputSchema.safeParse(parsed);
@@ -235,16 +256,116 @@ export const parseDeconstructLlmOutput = (raw: string): DeconstructLlmOutput => 
   return result.data;
 };
 
-/** Filter out sections with invalid/zero-duration timecodes or exceeding 120s max */
+/** Filter out sections with skip_reason or invalid timecodes. Oversized sections are split in a prior step. */
 export const filterValidSections = (
   output: DeconstructLlmOutput,
 ): DeconstructLlmOutput => {
-  const MAX_CLIP_DURATION_SEC = 120; // hard limit: no clip may exceed 2 minutes
+  const MAX_CLIP_DURATION_SEC = 180; // hard limit: no clip may exceed 3 minutes
   const valid = output.sections.filter((s) => {
+    // Skip sections the LLM explicitly marked as having no video content
+    if (s.skip_reason != null) return false;
     const dur = s.timecodes.durationSec;
     return dur > 0 && dur <= MAX_CLIP_DURATION_SEC && s.timecodes.startSec >= 0 && s.timecodes.endSec > s.timecodes.startSec;
   });
   return { sections: valid };
+};
+
+/**
+ * Split oversized sections (> maxDurationSec) into sub-sections aligned to SRT sentence boundaries.
+ * Returns a new DeconstructLlmOutput with oversized sections replaced by their sub-sections.
+ */
+export const splitOversizedSections = (
+  output: DeconstructLlmOutput,
+  srtContent: string,
+  maxDurationSec = 180,
+): DeconstructLlmOutput => {
+  const srt = parseSrt(srtContent);
+  if (srt.length === 0) return output;
+
+  const newSections: SectionCandidate[] = [];
+
+  for (const section of output.sections) {
+    if (section.skip_reason != null) {
+      newSections.push(section);
+      continue;
+    }
+
+    const dur = section.timecodes.durationSec;
+    if (dur <= maxDurationSec) {
+      newSections.push(section);
+      continue;
+    }
+
+    // Need to split this section into N roughly-equal sub-sections
+    const parts = Math.ceil(dur / maxDurationSec);
+    const targetDur = dur / parts;
+
+    // Find SRT entries within this section's time range
+    const sectionSrts = srt.filter(
+      (e) => e.startSec >= section.timecodes.startSec && e.endSec <= section.timecodes.endSec,
+    );
+
+    if (sectionSrts.length < parts * 2) {
+      // Not enough SRT data to split cleanly — just do equal time split
+      for (let i = 0; i < parts; i++) {
+        const subStart = section.timecodes.startSec + i * targetDur;
+        const subEnd = i === parts - 1 ? section.timecodes.endSec : section.timecodes.startSec + (i + 1) * targetDur;
+        newSections.push(makeSubSection(section, i, parts, subStart, subEnd));
+      }
+      continue;
+    }
+
+    // Find best split points at SRT sentence boundaries
+    const splitPoints: number[] = [section.timecodes.startSec];
+    for (let p = 1; p < parts; p++) {
+      const idealSplit = section.timecodes.startSec + p * targetDur;
+      // Find the SRT entry boundary closest to idealSplit
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      for (let j = 1; j < sectionSrts.length - 1; j++) {
+        const entry = sectionSrts[j]!;
+        const dist = Math.abs(entry.endSec - idealSplit);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = j;
+        }
+      }
+      splitPoints.push(sectionSrts[bestIdx]!.endSec);
+    }
+    splitPoints.push(section.timecodes.endSec);
+
+    // Create sub-sections
+    for (let i = 0; i < parts; i++) {
+      const subStart = splitPoints[i]!;
+      const subEnd = splitPoints[i + 1]!;
+      newSections.push(makeSubSection(section, i, parts, subStart, subEnd));
+    }
+  }
+
+  return { sections: newSections };
+};
+
+/** Create a sub-section with derived id and timecodes from a parent section */
+const makeSubSection = (
+  parent: SectionCandidate,
+  index: number,
+  total: number,
+  startSec: number,
+  endSec: number,
+): SectionCandidate => {
+  const partLabel = total > 1 ? ` (${index + 1}/${total})` : "";
+  return {
+    ...parent,
+    id: `${parent.id}-part${index + 1}`,
+    title: `${parent.title}${partLabel}`,
+    timecodes: {
+      start: secondsToSrtTimecode(startSec),
+      end: secondsToSrtTimecode(endSec),
+      startSec: Math.round(startSec),
+      endSec: Math.round(endSec),
+      durationSec: Math.round(endSec - startSec),
+    },
+  };
 };
 
 /** 粗略适配时间码 → 文件名用 slug */

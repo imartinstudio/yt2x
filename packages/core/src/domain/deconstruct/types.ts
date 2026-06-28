@@ -47,13 +47,14 @@ export const SectionCandidateSchema = z.object({
   scores: SectionScoresSchema,
   key_quote: z.string().describe("字幕中最具传播力的一句原文"),
   video_script: z.string().describe("视频片段里发生了什么画面"),
+  skip_reason: z.string().nullable().optional().describe("跳过原因，有视频画面时为 null"),
 });
 
 export type SectionCandidate = z.infer<typeof SectionCandidateSchema>;
 
 /** LLM 输出完整结构 */
 export const DeconstructLlmOutputSchema = z.object({
-  sections: z.array(SectionCandidateSchema).min(3).max(30).describe("所有识别到的章节候选"),
+  sections: z.array(SectionCandidateSchema).min(1).max(30).describe("所有识别到的章节候选（含跳过的）"),
 });
 
 export type DeconstructLlmOutput = z.infer<typeof DeconstructLlmOutputSchema>;

@@ -135,6 +135,13 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
     });
     return NATIVE_EXIT.CONFIG_MISSING;
   }
+
+  // --targets all implies --platform-targets all-platforms (unless explicitly set)
+  if (flags.targets === "all" && platformTargets.length === 0) {
+    try {
+      platformTargets = parsePlatformArticleTargets("all-platforms");
+    } catch { /* should not happen for "all-platforms" */ }
+  }
   const llm = resolveNativeLlm(flags);
   if (!llm.ok) {
     printCliErrorBlock({

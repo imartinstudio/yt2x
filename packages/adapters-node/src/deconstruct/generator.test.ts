@@ -7,6 +7,8 @@ import {
   secondsToTimecode,
   parseSrt,
   validateClipEndings,
+  splitOversizedSections,
+  parseDeconstructLlmOutput,
 } from "./generator.js";
 import { deriveSeriesName, formatClipPostSeriesTitle } from "@yt2x/core";
 
@@ -144,6 +146,117 @@ describe("validateClipEndings", () => {
     const warnings = validateClipEndings(sections, srt);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]!.warning).toContain("不以结束标点结尾");
+  });
+});
+
+describe("filterValidSections with skip_reason", () => {
+  const base = {
+    id: "s1", title: "a", summary: "", article_section: "",
+    angle: "tutorial" as const, risk: "low" as const,
+    timecodes: { start: "00:00", end: "00:10", startSec: 0, endSec: 10, durationSec: 10 },
+    scores: { counter_intuitiveness: 1, shareability: 1, practical_value: 1, visual_appeal: 1, composite: 1 },
+    key_quote: "", video_script: "",
+  };
+
+  it("filters out sections with skip_reason set", () => {
+    const skipped = { ...base, id: "s2", skip_reason: "无对应字幕" };
+    const result = filterValidSections({ sections: [base, skipped] });
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0]!.id).toBe("s1");
+  });
+
+  it("filters out sections with duration > 180s", () => {
+    const oversized = { ...base, id: "s3", timecodes: { ...base.timecodes, endSec: 200, durationSec: 200 } };
+    const result = filterValidSections({ sections: [oversized] });
+    expect(result.sections).toHaveLength(0);
+  });
+});
+
+describe("splitOversizedSections", () => {
+  const base = {
+    id: "section-1", title: "测试", summary: "总结", article_section: "章节",
+    angle: "tutorial" as const, risk: "low" as const,
+    timecodes: { start: "00:00:00", end: "00:04:00", startSec: 0, endSec: 240, durationSec: 240 },
+    scores: { counter_intuitiveness: 3, shareability: 3, practical_value: 3, visual_appeal: 3, composite: 3 },
+    key_quote: "quote", video_script: "script",
+  };
+
+  const srt = `1\n00:00:00,000 --> 00:00:30,000\nFirst part.\n\n2\n00:00:30,000 --> 00:01:00,000\nMiddle part.\n\n3\n00:01:00,000 --> 00:01:30,000\nSecond middle.\n\n4\n00:01:30,000 --> 00:02:00,000\nThird part.\n\n5\n00:02:00,000 --> 00:02:30,000\nFourth part.\n\n6\n00:02:30,000 --> 00:03:00,000\nFifth part.\n\n7\n00:03:00,000 --> 00:03:30,000\nSixth part.\n\n8\n00:03:30,000 --> 00:04:00,000\nFinal part.`;
+
+  it("splits an oversized section into parts at SRT boundaries", () => {
+    const result = splitOversizedSections({ sections: [base] }, srt, 180);
+    expect(result.sections.length).toBeGreaterThanOrEqual(2);
+    const ids = result.sections.map((s) => s.id);
+    expect(ids.every((id) => id.startsWith("section-1-part"))).toBe(true);
+    // Each sub-section should be <= 180s
+    for (const s of result.sections) {
+      expect(s.timecodes.durationSec).toBeLessThanOrEqual(180);
+    }
+  });
+
+  it("does not split sections under maxDurationSec", () => {
+    const short = { ...base, timecodes: { ...base.timecodes, endSec: 100, durationSec: 100 } };
+    const result = splitOversizedSections({ sections: [short] }, srt, 180);
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0]!.id).toBe("section-1");
+  });
+
+  it("preserves sections with skip_reason", () => {
+    const skipped = { ...base, skip_reason: "no video" };
+    const result = splitOversizedSections({ sections: [skipped] }, srt, 180);
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0]!.skip_reason).toBe("no video");
+  });
+
+  it("handles equal time split when SRT is sparse", () => {
+    const sparseSrt = "1\n00:00:00,000 --> 00:04:00,000\nOnly entry.\n";
+    const result = splitOversizedSections({ sections: [base] }, sparseSrt, 180);
+    expect(result.sections.length).toBe(2);
+    for (const s of result.sections) {
+      expect(s.timecodes.durationSec).toBeLessThanOrEqual(180);
+    }
+  });
+});
+
+describe("parseDeconstructLlmOutput null preprocessing", () => {
+  it("fills null timecodes with defaults for skipped sections", () => {
+    const json = JSON.stringify({
+      sections: [{
+        id: "section-1", title: "正常", summary: "s", article_section: "a",
+        angle: "tutorial", risk: "low",
+        timecodes: { start: "00:00", end: "00:10", startSec: 0, endSec: 10, durationSec: 10 },
+        scores: { counter_intuitiveness: 3, shareability: 3, practical_value: 3, visual_appeal: 3, composite: 3 },
+        key_quote: "q", video_script: "v",
+      }, {
+        id: "section-2", title: "跳过", summary: "", article_section: "b",
+        angle: "discussion", risk: "low",
+        timecodes: null, scores: null, key_quote: null, video_script: null,
+        skip_reason: "无对应字幕",
+      }],
+    });
+    const result = parseDeconstructLlmOutput(json);
+    expect(result.sections).toHaveLength(2);
+    expect(result.sections[1]!.timecodes.durationSec).toBe(0);
+    expect(result.sections[1]!.scores.composite).toBe(1);
+    expect(result.sections[1]!.key_quote).toBe("");
+    expect(result.sections[1]!.video_script).toBe("");
+  });
+
+  it("fills missing title and summary with defaults", () => {
+    const json = JSON.stringify({
+      sections: [{
+        id: "section-1", title: null, summary: null,
+        article_section: null, angle: "discussion", risk: "low",
+        timecodes: { start: "00:00", end: "00:10", startSec: 0, endSec: 10, durationSec: 10 },
+        scores: { counter_intuitiveness: 3, shareability: 3, practical_value: 3, visual_appeal: 3, composite: 3 },
+        key_quote: "q", video_script: "v",
+      }],
+    });
+    const result = parseDeconstructLlmOutput(json);
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0]!.title).toBe("未命名");
+    expect(result.sections[0]!.summary).toBe("");
+    expect(result.sections[0]!.article_section).toBe("");
   });
 });
 

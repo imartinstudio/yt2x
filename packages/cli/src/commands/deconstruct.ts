@@ -67,13 +67,19 @@ export const runDeconstructCommand = async (
     return 1;
   }
 
-  // Step 3: Filter + validate
-  const { filterValidSections, validateClipEndings } = await import("@yt2x/adapters-node");
-  const filtered = filterValidSections(result.candidates);
-  const dropped = result.candidates.sections.length - filtered.sections.length;
+  // Step 3: Split oversized sections + filter + validate
+  const { filterValidSections, validateClipEndings, splitOversizedSections } = await import("@yt2x/adapters-node");
+  const split = splitOversizedSections(result.candidates, artifacts.srtContent);
+  const splitCount = split.sections.length - result.candidates.sections.length;
+  if (splitCount > 0) {
+    logger.info({ splitCount, totalAfterSplit: split.sections.length }, "Deconstruct: split oversized sections into sub-sections");
+  }
+  const filtered = filterValidSections(split);
+  const skipped = split.sections.filter((s) => s.skip_reason != null).length;
+  const invalid = split.sections.length - filtered.sections.length - skipped;
 
-  if (dropped > 0) {
-    logger.info({ dropped, kept: filtered.sections.length }, "Deconstruct: filtered out sections without video content");
+  if (skipped > 0 || invalid > 0) {
+    logger.info({ total: split.sections.length, skipped, invalid, kept: filtered.sections.length }, "Deconstruct: filtered out");
   }
 
   // Log all candidates
@@ -133,16 +139,23 @@ export const runDeconstructCommand = async (
   }
   logger.info({ postCount: genResult.postCount }, "Deconstruct: posts generated for all candidates");
 
-  // Step 6: Auto-select (if --select is set) — 基于文案质量 + 综合评分筛选
+  // Step 6: Auto-select — 基于文案质量 + 综合评分筛选
   const selectCount = selectCountOverride ?? 0;
-  if (selectCount > 0 && selectCount <= filtered.sections.length) {
-    logger.info({ selectCount }, "Deconstruct: selecting top candidates based on posts + scores");
+  // --select N clamps to available candidates; no --select flag → take all
+  const effectiveSelect = selectCount > 0
+    ? Math.min(selectCount, filtered.sections.length)
+    : filtered.sections.length;
+  if (effectiveSelect > 0) {
+    const selectSource = selectCount > 0
+      ? `--select ${selectCount}` + (selectCount > filtered.sections.length ? ` (clamped to ${effectiveSelect})` : "")
+      : "all (no --select flag)";
+    logger.info({ selectCount, effectiveSelect, totalCandidates: filtered.sections.length, selectSource }, "Deconstruct: selecting top candidates based on posts + scores");
 
     // Sort by composite score descending (posts are already generated, selection can now compare copy quality)
     const sorted = [...filtered.sections].sort(
       (a, b) => b.scores.composite - a.scores.composite,
     );
-    const top = sorted.slice(0, selectCount);
+    const top = sorted.slice(0, effectiveSelect);
 
     // Get their 1-based clip IDs
     const keepIds = top.map((s) => {
@@ -192,12 +205,17 @@ export const runDeconstructCommand = async (
     await generateReports(articleDir, artifacts.articleMd);
 
     // Summary for auto mode
+    const selectLabel = selectCount > 0
+      ? (selectCount > effectiveSelect
+          ? `Top ${effectiveSelect} (--select ${selectCount} 超出候选数，已自动降为 ${effectiveSelect})`
+          : `Top ${effectiveSelect}`)
+      : `全部 ${effectiveSelect} 个`;
     console.log("\n" + "=".repeat(60));
     console.log(`  ✅ 全自动拆解完成`);
     console.log(`  视频: ${artifacts.videoId} (${Math.round(artifacts.durationSec / 60)} min)`);
-    console.log(`  候选: ${filtered.sections.length} → 选中 Top ${selectCount}`);
-    console.log(`  文案: ${genResult.postCount} 篇 JSON（全部候选）→ 视频裁剪: ${successCount} 个（仅选中）`);
-    console.log(`  .md 文件: ${selectedPostPaths.length} 个（仅选中）`);
+    console.log(`  候选: ${filtered.sections.length} → 选中 ${selectLabel}`);
+    console.log(`  文案: ${genResult.postCount} 篇 → 视频裁剪: ${successCount} 个`);
+    console.log(`  .md 文件: ${selectedPostPaths.length} 个`);
     console.log(`  输出: ${output.manifestPath}`);
     console.log("=".repeat(60));
     console.log("\n选中章节（按评分排序）：");
@@ -216,34 +234,15 @@ export const runDeconstructCommand = async (
     }
     console.log();
   } else {
-    // No auto-select: posts generated for all, no video clipping yet
+    // No candidates found — nothing to select or clip
     await generateReports(articleDir, artifacts.articleMd);
 
-    // Standard summary
     console.log("\n" + "=".repeat(60));
-    console.log(`  ✅ 章节拆解完成（文案已生成，视频待裁剪）`);
+    console.log(`  ⚠️  未找到有效章节候选`);
     console.log(`  视频: ${artifacts.videoId} (${Math.round(artifacts.durationSec / 60)} min)`);
-    console.log(`  候选: ${filtered.sections.length} 个章节`);
-    console.log(`  文案: ${genResult.postCount} 篇（全部候选，JSON only，未选无 .md）`);
+    console.log(`  可能原因：文章章节在视频中缺少对应画面，或时间码无法匹配`);
     console.log(`  输出: ${output.manifestPath}`);
-    if (selectCount > 0 && selectCount > filtered.sections.length) {
-      console.log(`  ⚠️  --select ${selectCount} 超出候选数，已跳过自动选择`);
-    }
     console.log("=".repeat(60));
-    console.log("\n候选章节评分排序：");
-
-    const sorted = [...filtered.sections].sort(
-      (a, b) => b.scores.composite - a.scores.composite,
-    );
-    for (let i = 0; i < sorted.length; i++) {
-      const s = sorted[i]!;
-      console.log(
-        `  ${String(i + 1).padStart(2)}. ${String(s.scores.composite.toFixed(1))}⭐  [${s.angle}] ${s.title}`,
-      );
-      console.log(`      ${String(s.timecodes.startSec)}s → ${String(s.timecodes.endSec)}s  |  ${s.summary}`);
-    }
-    console.log();
-    console.log(`  提示：用 --select N 基于文案质量选 Top N，然后裁剪视频`);
     console.log();
   }
 

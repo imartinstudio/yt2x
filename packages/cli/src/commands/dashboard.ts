@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { access, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import {
@@ -400,22 +400,74 @@ const updateWechatFormatStatus = async (
 
 const formatWechatForDashboard = async (
   opts: { articleOutDir: string; indexPath: string; wechatFormatterDir?: string },
-  input: { videoId: string; theme: string },
+  input: { videoId: string; theme: string; useXImages?: boolean },
 ): Promise<{ theme: string; htmlPath: string; previewPath: string }> => {
   const articleDir = path.join(path.resolve(opts.articleOutDir), input.videoId);
   const articlePath = path.join(articleDir, "article.md");
 
-  // Strip markdown images and escape leading # in hashtag lines so the formatter doesn't
-  // treat them as markdown headings. The cover image from article.md should NOT appear
-  // in the formatted WeChat output.
+  // When useXImages: use the X long-form article (x-format/x-article.md) as the
+  // source instead of article.md, preserving its image layout for WeChat output.
+  let xArticleOriginal = "";
+  if (input.useXImages) {
+    const xArticlePath = path.join(articleDir, "x-format", "x-article.md");
+    const xImagesDir = path.join(articleDir, "x-format", "images");
+    const articleImagesDir = path.join(articleDir, "images");
+    const wechatArticleImagesDir = path.join(articleDir, "wechat-format", "article", "images");
+    const wechatImagesDir = path.join(articleDir, "wechat-format", "images");
+
+    // Validate x-article exists and has images
+    let xArticleText = "";
+    try { xArticleText = await readFile(xArticlePath, "utf8"); } catch {
+      throw new Error("没有找到 X 长文。请先运行 X 文章流水线。");
+    }
+    const imgRefs = xArticleText.match(/!\[.*?\]\(\.?\/?images\/[^)]+\)/g);
+    if (!imgRefs || imgRefs.length === 0) {
+      throw new Error("X 文章中没有配图。请先生成 X 文章配图。");
+    }
+
+    // Copy x-format images → articleDir/images/ so the formatter resolves ./images/ references
+    try {
+      await mkdir(articleImagesDir, { recursive: true });
+      const entries = await readdir(xImagesDir);
+      let copiedCount = 0;
+      for (const entry of entries) {
+        await copyFile(path.join(xImagesDir, entry), path.join(articleImagesDir, entry));
+        copiedCount++;
+      }
+      // Also copy to wechat-format output so the final HTML can reference them
+      await mkdir(wechatArticleImagesDir, { recursive: true });
+      await mkdir(wechatImagesDir, { recursive: true });
+      for (const entry of entries) {
+        await copyFile(path.join(xImagesDir, entry), path.join(wechatArticleImagesDir, entry));
+        await copyFile(path.join(xImagesDir, entry), path.join(wechatImagesDir, entry));
+      }
+      process.stderr.write(`wechat-format useXImages: copied ${copiedCount} images from x-format, found ${imgRefs.length} markdown image refs\n`);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes("没有配图")) throw err;
+      process.stderr.write(`wechat-format useXImages: image copy warning: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+
+    // Save x-article content for use as the formatter source (replacing article.md temporarily)
+    xArticleOriginal = xArticleText;
+  }
+
+  // Strip markdown images by default. When useXImages, replace article.md with the
+  // x-article content (which already has images placed). Also escape leading #
+  // in hashtag lines so the formatter doesn't treat them as markdown headings.
   let originalMarkdown = "";
   let patched = false;
   try {
     originalMarkdown = await readFile(articlePath, "utf8");
-    const modified = originalMarkdown
-      .replace(/!\[.*?\]\(\.?\/?images\/[^)]+\)\n?/g, "")
-      .replace(/\n{3,}/g, "\n\n")
-      .replace(/^(#[^\s#*_\n])/gm, "\\$1");
+    let modified: string;
+    if (input.useXImages && xArticleOriginal.length > 0) {
+      // Use x-article as the source — only escape hashtags, keep images
+      modified = xArticleOriginal.replace(/^(#[^\s#*_\n])/gm, "\\$1");
+    } else {
+      modified = originalMarkdown
+        .replace(/!\[.*?\]\(\.?\/?images\/[^)]+\)\n?/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .replace(/^(#[^\s#*_\n])/gm, "\\$1");
+    }
     if (modified !== originalMarkdown) {
       await writeFile(articlePath, modified, "utf8");
       patched = true;
@@ -435,8 +487,16 @@ const formatWechatForDashboard = async (
     if (!(await fileExists(result.articleHtmlPath)) || !(await fileExists(result.previewHtmlPath))) {
       throw new Error("排版完成但输出文件不存在: " + result.articleHtmlPath);
     }
-    // Create stripped copy for preview (no cover image)
-    try { await copyArticleWithoutImages(articlePath, path.join(articleDir, "wechat-format", "wechat-article.md")); } catch { /* best-effort */ }
+    // Create preview copy. When useXImages, keep images (copy x-article content directly).
+    // Otherwise strip images for the preview copy.
+    try {
+      const previewPath = path.join(articleDir, "wechat-format", "wechat-article.md");
+      if (input.useXImages && xArticleOriginal.length > 0) {
+        await writeFile(previewPath, xArticleOriginal, "utf8");
+      } else if (!input.useXImages) {
+        await copyArticleWithoutImages(articlePath, previewPath);
+      }
+    } catch { /* best-effort */ }
     await updateWechatFormatStatus(path.resolve(opts.indexPath), {
       videoId: input.videoId,
       status: "formatted",
@@ -500,6 +560,141 @@ const platformFromString = (value: string | null): PlatformKey | null => {
 const isSafeVideoId = (value: string): boolean =>
   value.length > 0 && !value.includes("/") && !value.includes("\\");
 
+const dashboardImageExtensions = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+} as const;
+
+export const decodeDashboardImage = (dataUrl: string): { data: Buffer; extension: ".jpg" | ".png" | ".webp" } => {
+  const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+  if (match === null) throw new Error("仅支持 JPG、PNG、WebP 图片");
+
+  const data = Buffer.from(match[2]!, "base64");
+  if (data.length === 0) throw new Error("图片内容不能为空");
+  if (data.length > 10 * 1024 * 1024) throw new Error("图片不能超过 10MB");
+
+  return { data, extension: dashboardImageExtensions[match[1] as keyof typeof dashboardImageExtensions] };
+};
+
+const platformImageTargets: Record<PlatformKey, { formatDir: string; articleFile: string }> = {
+  x: { formatDir: "x-format", articleFile: "x-article.md" },
+  xiaohongshu: { formatDir: "xiaohongshu-format", articleFile: "xiaohongshu-article.md" },
+  wechat: { formatDir: "wechat-format", articleFile: "wechat-article.md" },
+  bilibili: { formatDir: "bilibili-format", articleFile: "video-info.md" },
+};
+
+const promptForId = (prompts: Record<string, unknown>, promptId: string): Record<string, unknown> => {
+  const coverMatch = /^cover-(\d+)$/.exec(promptId);
+  if (coverMatch !== null) {
+    const index = Number.parseInt(coverMatch[1]!, 10);
+    const covers = prompts["coverPrompts"];
+    if (Array.isArray(covers) && isRecord(covers[index])) return covers[index];
+  }
+  const match = /^ill-(\d+)$/.exec(promptId);
+  if (match !== null) {
+    const index = Number.parseInt(match[1]!, 10);
+    const illustrations = prompts["illustrationPrompts"];
+    if (Array.isArray(illustrations)) {
+      const prompt = illustrations.find((item) => isRecord(item) && item["index"] === index);
+      if (isRecord(prompt)) return prompt;
+    }
+  }
+  throw new Error("未找到该图片 Prompt");
+};
+
+const assertInsideArticleDir = (articleDir: string, filePath: string): void => {
+  if (!path.resolve(filePath).startsWith(path.resolve(articleDir) + path.sep)) throw new Error("无效图片路径");
+};
+
+export const saveDashboardPromptImage = async (input: {
+  articleOutDir: string;
+  videoId: string;
+  platform: string;
+  promptId: string;
+  dataUrl: string;
+}): Promise<{ file: string }> => {
+  const platform = platformFromString(input.platform);
+  if (!isSafeVideoId(input.videoId) || platform === null) throw new Error("无效视频或平台");
+  const image = decodeDashboardImage(input.dataUrl);
+  const target = platformImageTargets[platform];
+  const articleDir = path.join(path.resolve(input.articleOutDir), input.videoId);
+  assertInsideArticleDir(path.resolve(input.articleOutDir), articleDir);
+  const formatDir = path.join(articleDir, target.formatDir);
+  const promptsPath = path.join(formatDir, "prompts.json");
+  const articlePath = path.join(formatDir, target.articleFile);
+  const imageDir = path.join(formatDir, "images");
+  assertInsideArticleDir(articleDir, promptsPath);
+  assertInsideArticleDir(articleDir, articlePath);
+  assertInsideArticleDir(articleDir, imageDir);
+
+  const rawPrompts = await readFile(promptsPath, "utf8");
+  const prompts = JSON.parse(rawPrompts) as unknown;
+  if (!isRecord(prompts)) throw new Error("图片 Prompt 文件无效");
+  const prompt = promptForId(prompts, input.promptId);
+  const previousFile = typeof prompt["filename"] === "string" ? prompt["filename"] : "";
+  const file = `prompt-${input.promptId}${image.extension}`;
+  const imagePath = path.join(imageDir, file);
+  assertInsideArticleDir(articleDir, imagePath);
+  await mkdir(imageDir, { recursive: true });
+  await writeFile(imagePath, image.data);
+
+  const alt = typeof prompt["name"] === "string" && prompt["name"].trim().length > 0 ? prompt["name"].trim() : "配图";
+  prompt["filename"] = file;
+  const articleMd = await readFile(articlePath, "utf8");
+  const imageRef = `![${alt}](images/${file})`;
+  const previousRef = previousFile.length > 0
+    ? new RegExp(`!\\[[^\\]]*\\]\\(images/${previousFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)`, "g")
+    : null;
+  const replacedArticleMd = previousRef === null ? articleMd : articleMd.replace(previousRef, imageRef);
+  const nextArticleMd = replacedArticleMd.includes(imageRef) ? replacedArticleMd : `${replacedArticleMd.trimEnd()}\n\n${imageRef}\n`;
+  await Promise.all([
+    writeFile(promptsPath, JSON.stringify(prompts, null, 2) + "\n", "utf8"),
+    writeFile(articlePath, nextArticleMd, "utf8"),
+  ]);
+  if (previousFile.length > 0 && previousFile !== file && !nextArticleMd.includes(`images/${previousFile}`)) {
+    const previousPath = path.join(imageDir, previousFile);
+    assertInsideArticleDir(articleDir, previousPath);
+    await rm(previousPath, { force: true });
+  }
+  return { file };
+};
+
+export const deleteDashboardPromptImage = async (input: {
+  articleOutDir: string;
+  videoId: string;
+  platform: string;
+  promptId: string;
+}): Promise<void> => {
+  const platform = platformFromString(input.platform);
+  if (!isSafeVideoId(input.videoId) || platform === null) throw new Error("无效视频或平台");
+  const target = platformImageTargets[platform];
+  const articleDir = path.join(path.resolve(input.articleOutDir), input.videoId);
+  const formatDir = path.join(articleDir, target.formatDir);
+  const promptsPath = path.join(formatDir, "prompts.json");
+  const articlePath = path.join(formatDir, target.articleFile);
+  const imageDir = path.join(formatDir, "images");
+  assertInsideArticleDir(articleDir, promptsPath);
+  assertInsideArticleDir(articleDir, articlePath);
+  assertInsideArticleDir(articleDir, imageDir);
+  const parsed = JSON.parse(await readFile(promptsPath, "utf8")) as unknown;
+  if (!isRecord(parsed)) throw new Error("图片 Prompt 文件无效");
+  const prompt = promptForId(parsed, input.promptId);
+  const file = typeof prompt["filename"] === "string" ? prompt["filename"] : "";
+  if (file.length === 0) throw new Error("该 Prompt 没有已上传图片");
+  const imagePath = path.join(imageDir, file);
+  assertInsideArticleDir(articleDir, imagePath);
+  const articleMd = await readFile(articlePath, "utf8");
+  const imageRef = new RegExp(`!?\\[[^\\]]*\\]\\(images/${file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)\\n?`, "g");
+  const nextArticleMd = articleMd.replace(imageRef, "").replace(/\n{3,}/g, "\n\n");
+  delete prompt["filename"];
+  await Promise.all([
+    writeFile(promptsPath, JSON.stringify(parsed, null, 2) + "\n", "utf8"),
+    writeFile(articlePath, nextArticleMd, "utf8"),
+    rm(imagePath, { force: true }),
+  ]);
+};
+
 const fileForPlatform = (platform: PlatformKey): string =>
   PLATFORMS.find((item) => item.key === platform)?.primaryFile ?? "article.md";
 
@@ -544,8 +739,10 @@ const handleDashboardRequest = async (
     try {
       let html = await readFile(filePath, "utf8");
 
-      // Inject prompt placeholders if prompts.json exists (no images → generated prompts)
-      const promptsPath = path.join(path.dirname(filePath), "..", "prompts.json");
+      // Inject prompt placeholders if prompts.json exists AND html has no real images
+      // (when useXImages produces real <img> tags, skip prompts to avoid clutter)
+      if (!html.includes("<img ")) {
+        const promptsPath = path.join(path.dirname(filePath), "..", "prompts.json");
       try {
         const promptsRaw = await readFile(promptsPath, "utf8");
         const prompts = JSON.parse(promptsRaw) as {
@@ -563,6 +760,7 @@ const handleDashboardRequest = async (
           html = html.replace("<body", "<body>\n" + promptsBar);
         }
       } catch { /* no prompts.json */ }
+      } // end if (!html.includes("<img "))
 
       if (kind === "preview") {
         // preview: rewrite to API endpoint for local browser viewing
@@ -655,6 +853,7 @@ const handleDashboardRequest = async (
     }
     const videoId = typeof parsed.videoId === "string" ? parsed.videoId : "";
     const theme = typeof parsed.theme === "string" && parsed.theme.trim().length > 0 ? parsed.theme.trim() : DEFAULT_WECHAT_FORMAT_THEME;
+    const useXImages = parsed.useXImages === true;
     if (!isSafeVideoId(videoId)) {
       sendJson(res, 400, { error: "Invalid videoId." });
       return;
@@ -681,7 +880,7 @@ const handleDashboardRequest = async (
 `);
     }
     try {
-      const result = await formatWechatForDashboard(opts, { videoId, theme });
+      const result = await formatWechatForDashboard(opts, { videoId, theme, useXImages });
       sendJson(res, 200, {
         ok: true,
         theme: result.theme,
@@ -1171,6 +1370,39 @@ const handleDashboardRequest = async (
       } catch { /* try next dir */ }
     }
     if (!served) sendJson(res, 404, { error: "Image not found." });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/prompts/image") {
+    let parsed: unknown;
+    try { parsed = JSON.parse(await readBody(req)); } catch { sendJson(res, 400, { error: "无效的 JSON 请求体" }); return; }
+    if (!isRecord(parsed)) { sendJson(res, 400, { error: "无效的 JSON 请求体" }); return; }
+    const videoId = typeof parsed["videoId"] === "string" ? parsed["videoId"] : "";
+    const platform = typeof parsed["platform"] === "string" ? parsed["platform"] : "";
+    const promptId = typeof parsed["promptId"] === "string" ? parsed["promptId"] : "";
+    const dataUrl = typeof parsed["dataUrl"] === "string" ? parsed["dataUrl"] : "";
+    try {
+      const result = await saveDashboardPromptImage({ articleOutDir: opts.articleOutDir, videoId, platform, promptId, dataUrl });
+      sendJson(res, 200, { ok: true, file: result.file });
+    } catch (err: unknown) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : "图片上传失败" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/prompts/image/delete") {
+    let parsed: unknown;
+    try { parsed = JSON.parse(await readBody(req)); } catch { sendJson(res, 400, { error: "无效的 JSON 请求体" }); return; }
+    if (!isRecord(parsed)) { sendJson(res, 400, { error: "无效的 JSON 请求体" }); return; }
+    const videoId = typeof parsed["videoId"] === "string" ? parsed["videoId"] : "";
+    const platform = typeof parsed["platform"] === "string" ? parsed["platform"] : "";
+    const promptId = typeof parsed["promptId"] === "string" ? parsed["promptId"] : "";
+    try {
+      await deleteDashboardPromptImage({ articleOutDir: opts.articleOutDir, videoId, platform, promptId });
+      sendJson(res, 200, { ok: true });
+    } catch (err: unknown) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : "删除图片失败" });
+    }
     return;
   }
 

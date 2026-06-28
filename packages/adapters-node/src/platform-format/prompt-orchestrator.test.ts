@@ -55,6 +55,22 @@ describe("previewExistingArticleImages", () => {
     expect(result!.html).not.toContain("xhs-gallery");
   });
 
+  it("renders upload controls for non-XHS prompt placeholders", async () => {
+    const formatDir = path.join(tmpRoot, "x-format");
+    await mkdir(formatDir, { recursive: true });
+    await writeFile(path.join(formatDir, "x-article.md"), "# 标题\n\n## 第一节\n正文。", "utf8");
+    await writeFile(
+      path.join(formatDir, "prompts.json"),
+      JSON.stringify({ coverPrompts: [{ prompt: "封面 prompt" }], illustrationPrompts: [{ index: 0, prompt: "插图 prompt" }] }),
+    );
+
+    const result = await previewExistingArticleImages(tmpRoot, "x", new Map([[0, "插图 prompt"]]));
+
+    expect(result!.html).toContain('data-prompt-id="cover-0"');
+    expect(result!.html).toContain('data-prompt-id="ill-0"');
+    expect(result!.html).toContain('class="ph-upload-btn"');
+  });
+
   it("strips X image references when XHS falls back to article.md", async () => {
     // No xiaohongshu-article.md — should fall back to article.md
     const imagesDir = path.join(tmpRoot, "images");
@@ -174,6 +190,9 @@ describe("previewExistingArticleImages", () => {
     expect(result!.html).toContain("第二节插图");
     // Cover prompt appears with correct label
     expect(result!.html).toContain("🎨 封面 · 3:4");
+    expect(result!.html).toContain('class="ph-upload-btn"');
+    expect(result!.html).toContain('data-prompt-id="ill-0"');
+    expect(result!.html).toContain('accept="image/jpeg,image/png,image/webp"');
   });
 
   it("shows 'needs format' note when no prompts and no images exist", async () => {

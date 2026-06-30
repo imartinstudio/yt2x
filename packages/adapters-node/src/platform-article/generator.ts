@@ -39,7 +39,7 @@ const XiaohongshuArticleSchema = z.object({
   title: z.string().min(1),
   body: z.string().min(1),
   tags: z.array(z.string().min(1)).min(3).max(8),
-  cover: CoverSchema,
+  cover: CoverSchema.optional(),
   notes: z.array(z.string().min(1)).optional(),
 });
 

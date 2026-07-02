@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { DeconstructManifest } from "@yt2x/core";
+import type { DeconstructManifest, SectionCandidate } from "@yt2x/core";
 
 export type SelectClipsInput = {
   articleDir: string;
@@ -12,6 +12,39 @@ export type SelectClipsResult = {
   manifestPath: string;
   kept: number;
   removed: number;
+};
+
+export type SelectedSection = {
+  section: SectionCandidate;
+  originalIndex: number;
+};
+
+const articleSectionKey = (section: SectionCandidate): string => {
+  const key = section.article_section.trim();
+  return key.length > 0 ? key : section.title.replace(/\s*\(\d+\/\d+\)\s*$/, "").trim();
+};
+
+/**
+ * 按综合评分排序，但同一个文章章节只保留最高分片段。
+ */
+export const selectTopUniqueArticleSections = (
+  sections: SectionCandidate[],
+  limit: number,
+): SelectedSection[] => {
+  const bestByArticleSection = new Map<string, SelectedSection>();
+
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i]!;
+    const key = articleSectionKey(section);
+    const current = bestByArticleSection.get(key);
+    if (current === undefined || section.scores.composite > current.section.scores.composite) {
+      bestByArticleSection.set(key, { section, originalIndex: i });
+    }
+  }
+
+  return [...bestByArticleSection.values()]
+    .sort((a, b) => b.section.scores.composite - a.section.scores.composite)
+    .slice(0, Math.max(0, limit));
 };
 
 /**

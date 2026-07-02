@@ -8,6 +8,7 @@ import {
   writeDeconstructOutput,
   createLlmAdapter,
   selectClips,
+  selectTopUniqueArticleSections,
   generateClipsPosts,
   writeSelectedPostFiles,
   writeReports,
@@ -141,27 +142,21 @@ export const runDeconstructCommand = async (
 
   // Step 6: Auto-select — 基于文案质量 + 综合评分筛选
   const selectCount = selectCountOverride ?? 0;
-  // --select N clamps to available candidates; no --select flag → take all
+  const uniqueSections = selectTopUniqueArticleSections(filtered.sections, filtered.sections.length);
+  // --select N clamps to available unique article sections; no --select flag → take all unique article sections
   const effectiveSelect = selectCount > 0
-    ? Math.min(selectCount, filtered.sections.length)
-    : filtered.sections.length;
+    ? Math.min(selectCount, uniqueSections.length)
+    : uniqueSections.length;
   if (effectiveSelect > 0) {
     const selectSource = selectCount > 0
-      ? `--select ${selectCount}` + (selectCount > filtered.sections.length ? ` (clamped to ${effectiveSelect})` : "")
-      : "all (no --select flag)";
-    logger.info({ selectCount, effectiveSelect, totalCandidates: filtered.sections.length, selectSource }, "Deconstruct: selecting top candidates based on posts + scores");
+      ? `--select ${selectCount}` + (selectCount > uniqueSections.length ? ` (clamped to ${effectiveSelect})` : "")
+      : "all unique article sections (no --select flag)";
+    logger.info({ selectCount, effectiveSelect, totalCandidates: filtered.sections.length, uniqueArticleSections: uniqueSections.length, selectSource }, "Deconstruct: selecting top candidates based on posts + scores");
 
-    // Sort by composite score descending (posts are already generated, selection can now compare copy quality)
-    const sorted = [...filtered.sections].sort(
-      (a, b) => b.scores.composite - a.scores.composite,
-    );
-    const top = sorted.slice(0, effectiveSelect);
+    const top = selectTopUniqueArticleSections(filtered.sections, effectiveSelect);
 
-    // Get their 1-based clip IDs
-    const keepIds = top.map((s) => {
-      const idx = filtered.sections.indexOf(s);
-      return String(idx + 1);
-    });
+    // Get their 1-based clip IDs from the original filtered candidate order
+    const keepIds = top.map((s) => String(s.originalIndex + 1));
 
     logger.info({ keepIds }, "Deconstruct: marking selected clips");
 
@@ -221,7 +216,7 @@ export const runDeconstructCommand = async (
     console.log("\n选中章节（按评分排序）：");
 
     for (let i = 0; i < top.length; i++) {
-      const s = top[i]!;
+      const s = top[i]!.section;
       console.log(
         `  ${String(i + 1).padStart(2)}. ${String(s.scores.composite.toFixed(1))}⭐  [${s.angle}] ${s.title}`,
       );

@@ -13,11 +13,11 @@ export type Timecode = z.infer<typeof TimecodeSchema>;
 
 /** 候选片段的评分维度 */
 export const SectionScoresSchema = z.object({
-  counter_intuitiveness: z.number().min(1).max(5).describe("颠覆常识的程度（1=常识，5=完全反直觉）"),
-  shareability: z.number().min(1).max(5).describe("引发转发/讨论的潜力（1=没人转，5=看到就想发）"),
-  practical_value: z.number().min(1).max(5).describe("看完能立刻行动的收益（1=纯知识，5=立刻能操作）"),
-  visual_appeal: z.number().min(1).max(5).describe("视频画面的精彩程度（1=口述，5=视觉震撼）"),
-  composite: z.number().min(1).max(5).describe("加权综合评分"),
+  counter_intuitiveness: z.number().min(0).max(5).describe("颠覆常识的程度（0=无，1=常识，5=完全反直觉）"),
+  shareability: z.number().min(0).max(5).describe("引发转发/讨论的潜力（0=无，1=没人转，5=看到就想发）"),
+  practical_value: z.number().min(0).max(5).describe("看完能立刻行动的收益（0=无，1=纯知识，5=立刻能操作）"),
+  visual_appeal: z.number().min(0).max(5).describe("视频画面的精彩程度（0=无，1=口述，5=视觉震撼）"),
+  composite: z.number().min(0).max(5).describe("加权综合评分"),
 });
 
 export type SectionScores = z.infer<typeof SectionScoresSchema>;

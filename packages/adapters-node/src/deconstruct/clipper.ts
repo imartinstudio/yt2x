@@ -73,14 +73,20 @@ export const clipCandidates = async (
       command: "ffmpeg",
       args: [
         "-y",
-        "-i", videoPath,
         "-ss", secondsToTimecode(startSec),
+        "-i", videoPath,
         "-t", String(Math.ceil(durationSec)),
-        "-c", "copy",
-        "-map", "0",
+        "-map", "0:v:0",
+        "-map", "0:a?",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "18",
+        "-c:a", "aac",
+        "-b:a", "160k",
+        "-movflags", "+faststart",
         outPath,
       ],
-      timeoutMs: Math.min(durationSec * 2000 + 30_000, 300_000),
+      timeoutMs: Math.min(durationSec * 5000 + 60_000, 900_000),
     };
     if (signal !== undefined) {
       (processSpec as { signal?: AbortSignal }).signal = signal;

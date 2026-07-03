@@ -41,15 +41,6 @@ export const renderPlatformArticleMarkdown = (article: GeneratedPlatformArticle)
       "",
       tagLine(article.tags),
       "",
-      "## 封面/配图建议",
-      "",
-      `- 主标题：${article.cover.headline}`,
-      ...(article.cover.subhead !== undefined ? [`- 副标题：${article.cover.subhead}`] : []),
-      `- 视觉说明：${article.cover.visual_prompt}`,
-      ...(article.notes !== undefined && article.notes.length > 0
-        ? ["", "## 发布注意事项", "", ...article.notes.map((note) => `- ${note}`)]
-        : []),
-      "",
     ].join("\n");
   }
 

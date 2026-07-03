@@ -1,9 +1,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  CLIP_POST_CALL_TO_ACTION,
   CLIP_POST_SYSTEM_PROMPT,
   deriveSeriesName,
-  formatClipPostSeriesTitle,
   type ClipPostList,
   type DeconstructManifest,
   type GeneratePostsInput,
@@ -134,12 +134,7 @@ export const generateClipsPosts = async (
     const post = parsed.posts[i]!;
     const clip = allClips[i]!;
 
-    // Build post text with 4-segment Martin AI Coding Workflow structure
-    const seriesLine = formatClipPostSeriesTitle({
-      clipTitle: post.title,
-      index: i + 1,
-      total: allClips.length,
-    });
+    // Build post text with AI Agents leverage template structure
     const videoLine = `🎬 视频 ${clip.video}（${Math.round(clip.timecodes.durationSec)}s）`;
     const articleLine = `📖 完整文章：${manifest.source.articlePath}`;
     // Last post appends YouTube link
@@ -148,13 +143,11 @@ export const generateClipsPosts = async (
       : `${articleLine}\n🔗 https://www.youtube.com/watch?v=${manifest.source.videoId}`;
 
     const postLines = [
-      seriesLine,
+      post.opening_quote,
       "",
-      post.conflict,
+      post.core_description,
       "",
-      post.what_happened,
-      "",
-      post.conclusion,
+      post.video_suggestion,
       "",
       videoLine,
       "",
@@ -200,6 +193,7 @@ export const writeSelectedPostFiles = async (
   articleDir: string,
 ): Promise<string[]> => {
   const clipsDir = path.join(articleDir, "x-format", "clips");
+  const manifestPath = path.join(clipsDir, "clips-manifest.json");
   const postPaths: string[] = [];
   const selected = manifest.clips.filter((c) => c.selected === true);
 
@@ -209,30 +203,32 @@ export const writeSelectedPostFiles = async (
 
     const slug = clip.slug || clip.id;
     const postPath = path.join(clipsDir, `post-${i + 1}-${slug}.md`);
-
-    // Rebuild series title line with re-numbered index
-    const clipTitle = clip.postTitle ?? clip.title;
-    const seriesMarker = formatClipPostSeriesTitle({
-      clipTitle,
-      index: i + 1,
-      total: selected.length,
-    });
-
-    // Replace the original series title line (first line of text)
-    const originalText = clip.text;
-    const lines = originalText.split("\n");
-    lines[0] = seriesMarker;
-    const renumberedText = lines.join("\n");
+    const baseText = stripClipPostCallToAction(clip.text);
+    const finalText = i === selected.length - 1
+      ? `${baseText}\n\n${CLIP_POST_CALL_TO_ACTION}`
+      : baseText;
+    clip.text = finalText;
+    clip.charCount = finalText.length;
 
     await writeFile(
       postPath,
-      `---\nref: clips-manifest.json\nclipId: ${clip.id}\ntype: clip-post\nplatform: x\nseries: ${i + 1}/${selected.length}\n---\n\n${renumberedText}\n`,
+      `---\nref: clips-manifest.json\nclipId: ${clip.id}\ntype: clip-post\nplatform: x\nseries: ${i + 1}/${selected.length}\n---\n\n${finalText}\n`,
       "utf8",
     );
     postPaths.push(postPath);
   }
 
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
   return postPaths;
+};
+
+const stripClipPostCallToAction = (text: string): string => {
+  return text
+    .split("\n")
+    .filter((line) => line.trim() !== CLIP_POST_CALL_TO_ACTION)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 };
 
 const parseClipPosts = (raw: string): ClipPostList => {

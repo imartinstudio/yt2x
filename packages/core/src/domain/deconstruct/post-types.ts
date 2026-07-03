@@ -1,11 +1,14 @@
 import { z } from "zod";
 
-/** 单条帖子 LLM 输出 — Martin AI Coding Workflow 四段结构 */
+export const CLIP_POST_CALL_TO_ACTION =
+  "先看视频，再阅读下方完整/分步指南，学习如何为你的 agents 构建 loops。";
+
+/** 单条帖子 LLM 输出 — AI Agents leverage template */
 export const ClipPostSchema = z.object({
-  title: z.string().describe("10-20字标题，优先意外发现/真实体验/反常识结论/具体结果。禁止功能介绍、教程标题"),
-  conflict: z.string().describe("冲突/发现，1-3句。制造认知反差或分享意外发现。写法：发现→过程→感受，非功能→参数→结果"),
-  what_happened: z.string().describe("视频里发生了什么，1-3句。第一视角还原视频中的具体画面和动作"),
-  conclusion: z.string().describe("一句结论，记忆锚点式收尾。让读者记住一个核心观点"),
+  title: z.string().describe("中文标题纯文本，不含 emoji 和序号。突出 agents、loops、杠杆或早期优势"),
+  opening_quote: z.string().describe("中文真实直接引语或观点式开头。不得编造名人引语，不得输出占位符"),
+  core_description: z.string().describe("中文背景解释 + 具体杠杆例子。必须强调 loops 比模型更关键"),
+  video_suggestion: z.string().describe("一句中文视频承接句，作为公开文案的一部分。不要写建议附上/建议配/可以配等内部建议口吻"),
 });
 
 export type ClipPost = z.infer<typeof ClipPostSchema>;

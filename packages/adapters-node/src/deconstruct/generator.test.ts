@@ -287,28 +287,28 @@ describe("deriveSeriesName", () => {
   });
 });
 
-describe("clip post series title", () => {
-  it("formats with 🎬 emoji and full-width ｜ separator", () => {
+describe("clip post title", () => {
+  it("formats as plain title without emoji or series counter", () => {
     expect(formatClipPostSeriesTitle({
       clipTitle: "我被 2GB 显存的模型上了一课",
       index: 1,
       total: 5,
-    })).toBe("🎬 我被 2GB 显存的模型上了一课｜1/5");
+    })).toBe("我被 2GB 显存的模型上了一课");
   });
 
-  it("handles short titles correctly", () => {
+  it("handles short titles without adding decorations", () => {
     expect(formatClipPostSeriesTitle({
       clipTitle: "它开始自己干活了",
       index: 2,
       total: 3,
-    })).toBe("🎬 它开始自己干活了｜2/3");
+    })).toBe("它开始自己干活了");
   });
 
-  it("handles single post series", () => {
+  it("handles single post titles without adding a counter", () => {
     expect(formatClipPostSeriesTitle({
       clipTitle: "88 秒完成部署",
       index: 1,
       total: 1,
-    })).toBe("🎬 88 秒完成部署｜1/1");
+    })).toBe("88 秒完成部署");
   });
 });

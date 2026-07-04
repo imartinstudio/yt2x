@@ -42,18 +42,18 @@
     "tsx": "^4.21.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.18.0",
-    "@types/node": "^22.10.5",
-    "@vitest/coverage-v8": "2.1.9",
-    "eslint": "^9.18.0",
-    "eslint-config-prettier": "^9.1.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.0",
+    "@vitest/coverage-v8": "4.1.9",
+    "eslint": "^10.6.0",
+    "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",
-    "jsdom": "^26.0.0",
-    "lint-staged": "^17.0.6",
-    "prettier": "^3.4.2",
-    "typescript": "^5.7.3",
-    "typescript-eslint": "^8.20.0",
-    "vitest": "^2.1.8"
+    "jsdom": "^29.1.1",
+    "lint-staged": "^17.0.8",
+    "prettier": "^3.9.4",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.1",
+    "vitest": "^4.1.9"
   },
   "pnpm": {
     "auditConfig": {

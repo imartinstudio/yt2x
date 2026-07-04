@@ -3,7 +3,6 @@ import path from "node:path";
 import {
   checkWechatFormatter,
   DEFAULT_ARTICLE_OUT_DIR,
-  DEFAULT_WECHAT_FORMAT_PYTHON,
   DEFAULT_WECHAT_FORMAT_THEME,
   formatWechatArticle,
 } from "@yt2x/adapters-node";
@@ -51,14 +50,9 @@ const resolveArticleDir = (flags: WechatFormatFlags): string => {
 };
 
 export const runWechatFormatCheckCommand = async (
-  flags: WechatFormatCheckFlags,
+  _flags: WechatFormatCheckFlags,
 ): Promise<number> => {
-  const result = await checkWechatFormatter({
-    ...(flags.formatterDir !== undefined ? { formatterDir: flags.formatterDir } : {}),
-    ...(flags.python !== undefined ? { pythonBin: flags.python } : {}),
-    env: process.env,
-  });
-
+  const result = await checkWechatFormatter();
   console.log(JSON.stringify(result, null, 2));
   return result.ok ? 0 : 1;
 };
@@ -69,11 +63,8 @@ export const runWechatFormatCommand = async (flags: WechatFormatFlags): Promise<
     logger.info({ articleDir, theme: flags.theme ?? DEFAULT_WECHAT_FORMAT_THEME }, "yt2x wechat-format: starting");
     const result = await formatWechatArticle({
       articleDir,
-      ...(flags.formatterDir !== undefined ? { formatterDir: flags.formatterDir } : {}),
-      ...(flags.python !== undefined ? { pythonBin: flags.python } : {}),
       ...(flags.theme !== undefined ? { theme: flags.theme } : {}),
       ...(flags.outputDir !== undefined ? { outputDir: flags.outputDir } : {}),
-      env: process.env,
     });
 
     console.log("\n✅ 公众号排版完成");
@@ -81,7 +72,6 @@ export const runWechatFormatCommand = async (flags: WechatFormatFlags): Promise<
     console.log(`   HTML: ${result.articleHtmlPath}`);
     console.log(`   Preview: ${result.previewHtmlPath}`);
     console.log(`   Output: ${result.formattedDir}`);
-    if (result.stdout.trim().length > 0) console.log(`\n${result.stdout.trim()}`);
     return 0;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -94,13 +84,11 @@ export const runWechatFormatCommand = async (flags: WechatFormatFlags): Promise<
 export const registerWechatFormatCommand = (program: Command): void => {
   const cmd = program
     .command("wechat-format")
-    .description("Format wechat-article.md with an external xiaohu-wechat-format checkout")
+    .description("Format article.md with the built-in WeChat formatter")
     .option("--video-id <id>", "Video id under --article-out-dir")
-    .option("--article-dir <path>", "Direct article directory containing wechat-article.md")
+    .option("--article-dir <path>", "Direct article directory containing article.md")
     .option("--article-out-dir <path>", "Root of article dirs (default: files/articles)", DEFAULT_ARTICLE_OUT_DIR)
-    .option("--formatter-dir <path>", "Path to xiaohu-wechat-format checkout (or WECHAT_FORMATTER_DIR)")
-    .option("--python <bin>", "Python command", DEFAULT_WECHAT_FORMAT_PYTHON)
-    .option("--theme <name>", "xiaohu-wechat-format theme", DEFAULT_WECHAT_FORMAT_THEME)
+    .option("--theme <name>", "WeChat theme (github, newspaper, minimal)", DEFAULT_WECHAT_FORMAT_THEME)
     .option("--output-dir <path>", "Formatter output base dir (default: <articleDir>/wechat-format)")
     .action(async (flags: WechatFormatFlags | Command, command?: Command) => {
       process.exitCode = await runWechatFormatCommand(readCommandOptions<WechatFormatFlags>(flags, command));
@@ -108,9 +96,9 @@ export const registerWechatFormatCommand = (program: Command): void => {
 
   cmd
     .command("check")
-    .description("Check local xiaohu-wechat-format installation")
-    .option("--formatter-dir <path>", "Path to xiaohu-wechat-format checkout (or WECHAT_FORMATTER_DIR)")
-    .option("--python <bin>", "Python command", DEFAULT_WECHAT_FORMAT_PYTHON)
+    .description("Check that WeChat formatter is ready (always succeeds — formatter is built-in)")
+    .option("--formatter-dir <path>", "(deprecated — formatter is built-in)")
+    .option("--python <bin>", "(deprecated — formatter is built-in)")
     .action(async (flags: WechatFormatCheckFlags | Command, command?: Command) => {
       process.exitCode = await runWechatFormatCheckCommand(readCommandOptions<WechatFormatCheckFlags>(flags, command));
     });

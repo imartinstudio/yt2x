@@ -30,6 +30,7 @@ coverage/
 .codex/
 .cursor/
 .claude/settings.local.json
+.claude/settings.json
 
 # ── Env / Secrets ────────────────────────────────────────────────────────────
 .env

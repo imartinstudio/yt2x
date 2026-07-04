@@ -7,6 +7,8 @@ import {
   DEFAULT_OUT_DIR,
   formatWechatArticle,
   DEFAULT_WECHAT_FORMAT_THEME,
+  getBuiltinWechatThemes,
+  type WechatTheme,
   formatWechatCovers,
   formatBilibiliText,
   formatXiaohongshuLayout,
@@ -87,7 +89,7 @@ const PLATFORMS: Array<{ key: PlatformKey; label: string; primaryFile: string; f
   { key: "x", label: "X", primaryFile: "x-format/x-article.md", files: ["x-format/x-article.md", "x-format/x-short.md", "x-format/x-thread.md", "x-format/x-video-short.md"] },
   { key: "xiaohongshu", label: "小红书", primaryFile: "xiaohongshu-format/xiaohongshu-article.md", files: ["xiaohongshu-format/xiaohongshu-article.md"] },
   { key: "wechat", label: "公众号", primaryFile: "wechat-format/wechat-article.md", files: ["wechat-format/wechat-article.md"] },
-  { key: "bilibili", label: "B站", primaryFile: "bilibili-format/video-info.md", files: ["bilibili-format/video-info.md"] },
+  { key: "bilibili", label: "B站", primaryFile: "bilibili-format/video-info.md", files: ["bilibili-format/video-info.md", "bilibili-format/bilibili-article.md"] },
 ];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -399,7 +401,7 @@ const updateWechatFormatStatus = async (
 ): Promise<void> => updatePlatformFormatStatus(indexPath, { ...input, platform: "wechat" });
 
 const formatWechatForDashboard = async (
-  opts: { articleOutDir: string; indexPath: string; wechatFormatterDir?: string },
+  opts: { articleOutDir: string; indexPath: string },
   input: { videoId: string; theme: string; useXImages?: boolean },
 ): Promise<{ theme: string; htmlPath: string; previewPath: string }> => {
   const articleDir = path.join(path.resolve(opts.articleOutDir), input.videoId);
@@ -481,7 +483,6 @@ const formatWechatForDashboard = async (
       articleDir,
       sourceFile: "article.md",
       theme: input.theme,
-      ...(opts.wechatFormatterDir !== undefined ? { formatterDir: opts.wechatFormatterDir } : {}),
     });
     // Validate formatter produced output files
     if (!(await fileExists(result.articleHtmlPath)) || !(await fileExists(result.previewHtmlPath))) {
@@ -521,36 +522,7 @@ const formatWechatForDashboard = async (
   }
 };
 
-type WechatTheme = {
-  id: string;
-  name: string;
-  description: string;
-};
-
-const listWechatThemes = async (formatterDir: string | undefined): Promise<WechatTheme[]> => {
-  if (formatterDir === undefined || formatterDir.trim().length === 0) {
-    return [{ id: DEFAULT_WECHAT_FORMAT_THEME, name: "GitHub", description: "Default GitHub-inspired WeChat formatting theme." }];
-  }
-  const themesDir = path.join(path.resolve(formatterDir), "themes");
-  const entries = await readdir(themesDir, { withFileTypes: true });
-  const themes: WechatTheme[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-    const id = entry.name.slice(0, -".json".length);
-    try {
-      const parsed = await readJson(path.join(themesDir, entry.name));
-      themes.push({
-        id,
-        name: isRecord(parsed) && typeof parsed.name === "string" && parsed.name.trim().length > 0 ? parsed.name.trim() : id,
-        description: isRecord(parsed) && typeof parsed.description === "string" ? parsed.description.trim() : "",
-      });
-    } catch {
-      themes.push({ id, name: id, description: "" });
-    }
-  }
-  themes.sort((a, b) => a.id.localeCompare(b.id));
-  return themes.length > 0 ? themes : [{ id: DEFAULT_WECHAT_FORMAT_THEME, name: "GitHub", description: "" }];
-};
+const listWechatThemes = (): WechatTheme[] => getBuiltinWechatThemes();
 
 const platformFromString = (value: string | null): PlatformKey | null => {
   if (value === "x" || value === "xiaohongshu" || value === "wechat" || value === "bilibili") return value;
@@ -701,7 +673,7 @@ const fileForPlatform = (platform: PlatformKey): string =>
 const handleDashboardRequest = async (
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { articleOutDir: string; downloadsDir: string; indexPath: string; wechatFormatterDir?: string; imageGenerator?: ImageGeneratorPort },
+  opts: { articleOutDir: string; downloadsDir: string; indexPath: string; imageGenerator?: ImageGeneratorPort },
 ): Promise<void> => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (req.method === "GET" && url.pathname === "/") {
@@ -839,7 +811,7 @@ const handleDashboardRequest = async (
   }
   if (req.method === "GET" && url.pathname === "/api/wechat-themes") {
     try {
-      sendJson(res, 200, { themes: await listWechatThemes(opts.wechatFormatterDir ?? process.env["WECHAT_FORMATTER_DIR"]) });
+      sendJson(res, 200, { themes: listWechatThemes() });
     } catch (err: unknown) {
       sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
     }
@@ -1507,8 +1479,7 @@ export const registerDashboardCommand = (program: Command): void => {
     .option("--article-out-dir <path>", "Article output root", DEFAULT_ARTICLE_OUT_DIR)
     .option("--out-dir <path>", "Downloads/notes root", DEFAULT_OUT_DIR)
     .option("--index <path>", "Publish status index path", "files/publish-index.json")
-    .option("--wechat-formatter-dir <path>", "Path to xiaohu-wechat-format checkout (or WECHAT_FORMATTER_DIR)")
-    .action(async (flags: { port: string; host: string; articleOutDir: string; outDir: string; index: string; wechatFormatterDir?: string }) => {
+    .action(async (flags: { port: string; host: string; articleOutDir: string; outDir: string; index: string }) => {
       const port = Number.parseInt(flags.port, 10);
       if (!Number.isInteger(port) || port <= 0 || port > 65535) {
         throw new Error(`Invalid --port: ${flags.port}`);
@@ -1521,12 +1492,10 @@ export const registerDashboardCommand = (program: Command): void => {
         const imageModel = process.env["YT2X_IMAGE_MODEL"] ?? "dall-e-3";
         imageGenerator = createImageGeneratorAdapter({ apiKey: imageApiKey, baseUrl: imageBaseUrl, defaultModel: imageModel });
       }
-      const wechatFormatterDir = flags.wechatFormatterDir ?? process.env["WECHAT_FORMATTER_DIR"];
       const opts = {
         articleOutDir: path.resolve(flags.articleOutDir),
         downloadsDir: path.resolve(flags.outDir),
         indexPath: path.resolve(flags.index),
-        ...(wechatFormatterDir !== undefined ? { wechatFormatterDir: path.resolve(wechatFormatterDir) } : {}),
         ...(imageGenerator !== undefined ? { imageGenerator } : {}),
       };
       // Migrate legacy X platform files into x-format/ subdirectory (idempotent)

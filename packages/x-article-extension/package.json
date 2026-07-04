@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@yt2x/core": "workspace:*",
-    "mermaid": "^11.6.0"
+    "mermaid": "^11.16.0"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.304",

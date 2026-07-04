@@ -11,11 +11,11 @@
   },
   "dependencies": {
     "@yt2x/core": "workspace:*",
-    "mermaid": "^11.6.0"
+    "mermaid": "^11.16.0"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.304",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.1",
     "typescript": "^5.7.3"
   }
 }

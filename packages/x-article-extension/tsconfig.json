@@ -4,7 +4,7 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "rootDir": "./src",
     "noEmit": true,
-    "types": ["chrome"]
+    "types": ["chrome", "node"]
   },
   "include": ["src/**/*"]
 }

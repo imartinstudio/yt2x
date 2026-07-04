@@ -29,7 +29,7 @@ describe("import button style", () => {
     expect(button.className).toBe("x-create");
     expect(button.style.width).toBe("36px");
     expect(button.style.height).toBe("36px");
-    expect(button.style.background).toBe("transparent");
+    expect(button.dataset.yt2xBaseBackground).toBe("transparent");
     expect(button.style.color).toBe("rgb(231, 233, 234)");
     expect(button.querySelector("svg")?.getAttribute("width")).toBe("24");
     expect(button.querySelector("svg")?.getAttribute("viewBox")).toBe("0 0 24 24");

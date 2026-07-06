@@ -39,7 +39,7 @@
   },
   "dependencies": {
     "@yt2x/core": "workspace:*",
-    "tsx": "^4.21.0"
+    "tsx": "^4.23.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

@@ -238,7 +238,6 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           { videoId: artifacts.videoId, model: llm.model },
           "yt2x article: calling LLM (may take several minutes)…",
         );
-
         const result = await generateXArticleContent({
           llm: llm.adapter,
           model: llm.model,

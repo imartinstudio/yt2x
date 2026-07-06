@@ -140,7 +140,7 @@ export const downloadSubtitlesTwoPhase = async (
 export const resolveDirectVideoUrl = async (url: string, opts: YtDlpOptions): Promise<string> => {
   const { stdout } = await runYtDlp(opts, [
     "-f",
-    "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]/best[height<=720][ext=mp4]/best[height<=720]",
+    "bestvideo[height<=1080][ext=mp4]/bestvideo[height<=1080]/best[height<=1080][ext=mp4]/best[height<=1080]",
     "-g",
     url,
   ]);

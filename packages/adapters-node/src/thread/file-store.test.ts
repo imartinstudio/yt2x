@@ -56,8 +56,9 @@ describe("writeNativeThreadBundle", () => {
     expect(hooks.hooks).toHaveLength(3);
   });
 
-  it("refuses overwrite without --force", async () => {
+  it("returns null when files exist without --force", async () => {
     await writeNativeThreadBundle(articleRoot, "v1", thread);
-    await expect(writeNativeThreadBundle(articleRoot, "v1", thread)).rejects.toThrow(/already exists/);
+    const result = await writeNativeThreadBundle(articleRoot, "v1", thread);
+    expect(result).toBeNull();
   });
 });

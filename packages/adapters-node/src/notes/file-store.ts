@@ -90,20 +90,18 @@ export const readVideoArtifacts = async (videoDir: string): Promise<VideoDirArti
 
 /**
  * 原子写 `structured-notes.md`：tmp + rename。
- * 已存在且 !force → throw（避免覆盖人工修改的结果）。
+ * 已存在且 !force → 返回 null 跳过；--force 时覆盖。
  */
 export const writeStructuredNotes = async (
   videoDir: string,
   content: string,
   options: { force?: boolean } = {},
-): Promise<string> => {
+): Promise<string | null> => {
   const target = path.join(videoDir, "structured-notes.md");
   if (options.force !== true) {
     try {
       await stat(target);
-      throw new Error(
-        `${target} already exists. Pass --force to overwrite, or delete it first.`,
-      );
+      return null;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }

@@ -52,7 +52,7 @@ export type VideoClipResult = {
 };
 
 export const X_COMPATIBLE_VIDEO_FORMAT =
-  "bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][vcodec^=avc1]";
+  "bestvideo[height<=1080][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4][vcodec^=avc1]";
 
 type HeatmapPoint = {
   start_time?: unknown;

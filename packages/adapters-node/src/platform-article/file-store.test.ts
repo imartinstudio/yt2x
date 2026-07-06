@@ -60,7 +60,7 @@ describe("writePlatformArticleBundle", () => {
     expect(metadata.target).toBe("wechat");
   });
 
-  it("refuses overwrite without --force", async () => {
+  it("returns null when files exist without --force", async () => {
     const article = {
       target: "bilibili" as const,
       title: "title",
@@ -71,6 +71,7 @@ describe("writePlatformArticleBundle", () => {
       comment_prompt: "你怎么看？",
     };
     await writePlatformArticleBundle(articleRoot, "v1", article);
-    await expect(writePlatformArticleBundle(articleRoot, "v1", article)).rejects.toThrow(/already exists/);
+    const result = await writePlatformArticleBundle(articleRoot, "v1", article);
+    expect(result).toBeNull();
   });
 });

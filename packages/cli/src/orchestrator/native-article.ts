@@ -1,4 +1,4 @@
-import { access, mkdir, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
@@ -206,11 +206,6 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       progress?.setActive(`article · ${artifacts.videoId}`);
       const url = await readYoutubePageUrl(videoDir, artifacts.videoId);
       const identity = { videoId: artifacts.videoId, url };
-      await patchStepRunning(videoDir, identity, "article").catch(() => {});
-      logger.info(
-        { videoId: artifacts.videoId, model: llm.model, outputTargets },
-        "yt2x article: calling LLM (may take several minutes)…",
-      );
       const t0 = Date.now();
       const writtenArtifacts: string[] = [];
       let articleDirForStatus: string | undefined;
@@ -230,6 +225,19 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       }
 
       if (outputTargets.includes("article")) {
+        const articlePath = path.join(articleOutDir, artifacts.videoId, "article.md");
+        let articleShouldSkip = false;
+        if (flags.force !== true) {
+          try { await stat(articlePath); articleShouldSkip = true; } catch { /* ENOENT → ok */ }
+        }
+        if (articleShouldSkip) {
+          logger.info({ videoId: artifacts.videoId }, "article already exists, skipping");
+        } else {
+        await patchStepRunning(videoDir, identity, "article").catch(() => {});
+        logger.info(
+          { videoId: artifacts.videoId, model: llm.model },
+          "yt2x article: calling LLM (may take several minutes)…",
+        );
         const result = await generateXArticleContent({
           llm: llm.adapter,
           model: llm.model,
@@ -263,6 +271,9 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           },
           { force: flags.force === true, notesVideoDir: videoDir, sourceVideoUrl: url },
         );
+        if (written === null) {
+          logger.info({ videoId: artifacts.videoId }, "article already exists, skipping");
+        } else {
         writtenArtifacts.push("article.md", "run.json");
         articleDirForStatus = written.articleDir;
         resultFile ??= path.basename(written.articlePath);
@@ -299,9 +310,20 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             "visual suggestions written (article)",
           );
         }
+        } // end if (written !== null)
+        } // end else (articleShouldSkip)
+
       }
 
       if (outputTargets.includes("x-thread")) {
+        const threadPath = path.join(articleOutDir, artifacts.videoId, "x-format", "x-thread.md");
+        let xthreadShouldSkip = false;
+        if (flags.force !== true) {
+          try { await stat(threadPath); xthreadShouldSkip = true; } catch { /* ENOENT → ok */ }
+        }
+        if (xthreadShouldSkip) {
+          logger.info({ videoId: artifacts.videoId }, "x-thread already exists, skipping");
+        } else {
         const result = await generateXThreadContent({
           llm: llm.adapter,
           model: llm.model,
@@ -314,6 +336,9 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           result.thread,
           { force: flags.force === true },
         );
+        if (written === null) {
+          logger.info({ videoId: artifacts.videoId }, "x-thread already exists, skipping");
+        } else {
         writtenArtifacts.push("x-thread.md", "x-hooks.json");
         articleDirForStatus = written.articleDir;
         resultFile ??= path.basename(written.threadPath);
@@ -333,9 +358,20 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           sourceText: `${artifacts.metadata.title ?? ""}\n${artifacts.structuredNotesMd}`,
         });
         logQualityIssues("x-thread", artifacts.videoId, written.threadPath, threadIssues);
+        } // end if (written !== null)
+        } // end else (xthreadShouldSkip)
+
       }
 
       if (outputTargets.includes("x-short")) {
+        const shortPath = path.join(articleOutDir, artifacts.videoId, "x-format", "x-short.md");
+        let xshortShouldSkip = false;
+        if (flags.force !== true) {
+          try { await stat(shortPath); xshortShouldSkip = true; } catch { /* ENOENT → ok */ }
+        }
+        if (xshortShouldSkip) {
+          logger.info({ videoId: artifacts.videoId }, "x-short already exists, skipping");
+        } else {
         const result = await generateXShortContent({
           llm: llm.adapter,
           model: llm.model,
@@ -348,6 +384,9 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           result.shortPost,
           { force: flags.force === true },
         );
+        if (written === null) {
+          logger.info({ videoId: artifacts.videoId }, "x-short already exists, skipping");
+        } else {
         writtenArtifacts.push("x-short.md");
         articleDirForStatus = written.articleDir;
         resultFile ??= path.basename(written.shortPath);
@@ -367,9 +406,19 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           sourceText: `${artifacts.metadata.title ?? ""}\n${artifacts.structuredNotesMd}`,
         });
         logQualityIssues("x-short", artifacts.videoId, written.shortPath, shortIssues);
+        } // end if (written !== null)
+        } // end else (xshortShouldSkip)
       }
 
       if (outputTargets.includes("x-video-short")) {
+        const videoShortPath = path.join(articleOutDir, artifacts.videoId, "x-format", "x-video-short.md");
+        let xvideoshortShouldSkip = false;
+        if (flags.force !== true) {
+          try { await stat(videoShortPath); xvideoshortShouldSkip = true; } catch { /* ENOENT → ok */ }
+        }
+        if (xvideoshortShouldSkip) {
+          logger.info({ videoId: artifacts.videoId }, "x-video-short already exists, skipping");
+        } else {
         const result = await generateXVideoShortContent({
           llm: llm.adapter,
           model: llm.model,
@@ -382,6 +431,9 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           result.videoShortPost,
           { force: flags.force === true },
         );
+        if (written === null) {
+          logger.info({ videoId: artifacts.videoId }, "x-video-short already exists, skipping");
+        } else {
         writtenArtifacts.push("x-video-short.md");
         articleDirForStatus = written.articleDir;
         resultFile ??= path.basename(written.shortPath);
@@ -397,9 +449,23 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           },
           "article generated (native x video short)",
         );
+        } // end if (written !== null)
+        } // end else (xvideoshortShouldSkip)
       }
 
       for (const platformTarget of platformTargets) {
+        const platformArticlePath = path.join(
+          articleOutDir, artifacts.videoId,
+          `${platformTarget}-format`, `${platformTarget}-article.md`,
+        );
+        if (flags.force !== true) {
+          let platformExists = false;
+          try { await stat(platformArticlePath); platformExists = true; } catch { /* ENOENT: ok */ }
+          if (platformExists) {
+            logger.info({ videoId: artifacts.videoId, target: platformTarget }, "platform article already exists, skipping");
+            continue;
+          }
+        }
         const articlePath = path.join(articleOutDir, artifacts.videoId, "article.md");
         sourceArticleMd ??= await readFile(articlePath, "utf8").catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
@@ -424,6 +490,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           result.platformArticle,
           { force: flags.force === true },
         );
+        if (written === null) {
+          logger.info({ videoId: artifacts.videoId, target: platformTarget }, "platform article already exists, skipping");
+          continue;
+        }
         writtenArtifacts.push(`${platformTarget}-article.md`, `${platformTarget}-metadata.json`);
         articleDirForStatus = written.articleDir;
         resultFile ??= path.basename(written.articlePath);
@@ -442,7 +512,13 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
         );
       }
 
-      progress?.record(`article.${artifacts.videoId}`, Date.now() - stageT0);
+      if (writtenArtifacts.length === 0) {
+        logger.info(
+          { videoId: artifacts.videoId },
+          "article stage: all targets already exist, nothing new written",
+        );
+        continue;
+      }
 
       const finishedAt = new Date().toISOString();
       const durationMs = Date.now() - t0;

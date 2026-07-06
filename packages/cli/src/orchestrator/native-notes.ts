@@ -5,6 +5,7 @@ import {
   DEFAULT_OUT_DIR,
   findPendingVideoDirs,
   generateNotesContent,
+  isStepDone,
   patchProcessStatus,
   patchStepRunning,
   readVideoArtifacts,
@@ -104,6 +105,13 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
             ? artifacts.metadata.webpage_url
             : `https://www.youtube.com/watch?v=${encodeURIComponent(artifacts.videoId)}`,
       };
+
+      // Pre-check: if structured-notes.md already exists and !force, skip before LLM call.
+      if (flags.force !== true && (await isStepDone(videoDir, "notes"))) {
+        logger.info({ videoId: artifacts.videoId }, "structured-notes.md already exists, skipping");
+        continue;
+      }
+
       await patchStepRunning(videoDir, identity, "notes").catch(() => {});
       logger.info(
         { videoId: artifacts.videoId, model: llm.model },
@@ -118,6 +126,10 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
       const written = await writeStructuredNotes(videoDir, result.content, {
         force: flags.force === true,
       });
+      if (written === null) {
+        logger.info({ videoDir }, "structured-notes.md already exists, skipping");
+        continue;
+      }
       const durationMs = Date.now() - t0;
       const finishedAt = new Date().toISOString();
       await patchProcessStatus(videoDir, identity, {

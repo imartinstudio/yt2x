@@ -47,22 +47,33 @@ export const readDeconstructArtifacts = async (
   }
 
   // Read SRT — try full.zh.srt first, then full.srt
+  // Look in article video dir first, then fall back to downloads video dir.
   const videoDir = path.join(resolved, "video");
-  let srtContent: string;
-  let srtPath: string;
-  try {
-    srtPath = path.join(videoDir, "full.zh.srt");
-    srtContent = await readFile(srtPath, "utf8");
-  } catch {
-    try {
-      srtPath = path.join(videoDir, "full.srt");
-      srtContent = await readFile(srtPath, "utf8");
-    } catch {
-      throw new Error(
-        `No SRT subtitle found in ${videoDir}/. Run the subtitle pipeline first.`,
-      );
+  const downloadVideoDir = path.join(
+    path.dirname(path.dirname(resolved)),
+    "downloads",
+    videoId,
+    "video",
+  );
+  const tryReadSrt = async (dir: string): Promise<{ path: string; content: string } | null> => {
+    for (const name of ["full.zh.srt", "full.srt"]) {
+      const p = path.join(dir, name);
+      try {
+        return { path: p, content: await readFile(p, "utf8") };
+      } catch {
+        continue;
+      }
     }
+    return null;
+  };
+
+  const srtResult = (await tryReadSrt(videoDir)) ?? (await tryReadSrt(downloadVideoDir));
+  if (srtResult === null) {
+    throw new Error(
+      `No SRT subtitle found in ${videoDir}/ or ${downloadVideoDir}/. Run the subtitle pipeline first.`,
+    );
   }
+  const srtContent = srtResult.content;
 
   // Find video file — prefer burned, fallback to clip
   let videoPath: string;

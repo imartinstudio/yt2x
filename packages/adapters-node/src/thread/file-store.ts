@@ -24,7 +24,7 @@ export const writeNativeThreadBundle = async (
   videoId: string,
   thread: GeneratedThread,
   options: { force?: boolean } = {},
-): Promise<WriteNativeThreadResult> => {
+): Promise<WriteNativeThreadResult | null> => {
   if (!isValidVideoId(videoId)) {
     throw new Error(`Invalid videoId: "${videoId}". Expected alphanumeric, hyphens, and underscores only.`);
   }
@@ -34,8 +34,8 @@ export const writeNativeThreadBundle = async (
   const hooksPath = path.join(articleDir, "x-format", "x-hooks.json");
 
   if (options.force !== true) {
-    await assertMissing(threadPath);
-    await assertMissing(hooksPath);
+    const exists = (await assertMissing(threadPath)) || (await assertMissing(hooksPath));
+    if (exists) return null;
   }
 
   await mkdir(articleDir, { recursive: true });
@@ -54,12 +54,13 @@ export const writeNativeThreadBundle = async (
   return { articleDir, threadPath, hooksPath, visualsPath };
 };
 
-const assertMissing = async (targetPath: string): Promise<void> => {
+const assertMissing = async (targetPath: string): Promise<boolean> => {
   try {
     await stat(targetPath);
-    throw new Error(`${targetPath} already exists. Pass --force to overwrite, or delete it first.`);
+    return true;
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    return false;
   }
 };
 

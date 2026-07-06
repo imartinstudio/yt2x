@@ -107,9 +107,10 @@ describe("writeStructuredNotes", () => {
     expect(await readFile(file, "utf8")).toBe("# Title\n\nbody");
   });
 
-  it("refuses to overwrite without --force", async () => {
+  it("returns null when structured-notes.md exists without --force", async () => {
     const dir = await seedVideo("abc", { structuredNotes: "old" });
-    await expect(writeStructuredNotes(dir, "new")).rejects.toThrow(/already exists/);
+    const result = await writeStructuredNotes(dir, "new");
+    expect(result).toBeNull();
     expect(await readFile(path.join(dir, "structured-notes.md"), "utf8")).toBe("old");
   });
 

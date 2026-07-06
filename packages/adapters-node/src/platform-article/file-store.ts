@@ -10,12 +10,13 @@ export type WritePlatformArticleResult = {
   metadataPath: string;
 };
 
-const assertMissing = async (targetPath: string): Promise<void> => {
+const assertMissing = async (targetPath: string): Promise<boolean> => {
   try {
     await stat(targetPath);
-    throw new Error(`${targetPath} already exists. Pass --force to overwrite, or delete it first.`);
+    return true;
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    return false;
   }
 };
 
@@ -115,7 +116,7 @@ export const writePlatformArticleBundle = async (
   videoId: string,
   article: GeneratedPlatformArticle,
   options: { force?: boolean } = {},
-): Promise<WritePlatformArticleResult> => {
+): Promise<WritePlatformArticleResult | null> => {
   if (!isValidVideoId(videoId)) {
     throw new Error(`Invalid videoId: "${videoId}". Expected alphanumeric, hyphens, and underscores only.`);
   }
@@ -126,8 +127,8 @@ export const writePlatformArticleBundle = async (
   const metadataPath = path.join(articleDir, metadataFile);
 
   if (options.force !== true) {
-    await assertMissing(articlePath);
-    await assertMissing(metadataPath);
+    const exists = (await assertMissing(articlePath)) || (await assertMissing(metadataPath));
+    if (exists) return null;
   }
 
   await mkdir(articleDir, { recursive: true });

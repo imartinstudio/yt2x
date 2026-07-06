@@ -126,7 +126,7 @@ export const writeNativeArticleBundle = async (
   articleMd: string,
   run: NativeArticleRunRecord,
   options: { force?: boolean; notesVideoDir?: string; sourceVideoUrl?: string } = {},
-): Promise<WriteNativeArticleResult> => {
+): Promise<WriteNativeArticleResult | null> => {
   if (!isValidVideoId(videoId)) {
     throw new Error(`Invalid videoId: "${videoId}". Expected alphanumeric, hyphens, and underscores only.`);
   }
@@ -137,9 +137,7 @@ export const writeNativeArticleBundle = async (
   if (options.force !== true) {
     try {
       await stat(articlePath);
-      throw new Error(
-        articlePath + " already exists. Pass --force to overwrite, or delete it first.",
-      );
+      return null;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }

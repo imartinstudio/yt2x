@@ -91,7 +91,7 @@ describe("writeNativeArticleBundle", () => {
     expect(parsed.model).toBe("m");
   });
 
-  it("refuses overwrite without --force", async () => {
+  it("returns null when file exists without --force", async () => {
     await seedNotesVideo("v1");
     const run = {
       v: 1 as const,
@@ -103,7 +103,8 @@ describe("writeNativeArticleBundle", () => {
       durationMs: 1,
     };
     await writeNativeArticleBundle(articleRoot, "v1", "one", run);
-    await expect(writeNativeArticleBundle(articleRoot, "v1", "two", run)).rejects.toThrow(/already exists/);
+    const result = await writeNativeArticleBundle(articleRoot, "v1", "two", run);
+    expect(result).toBeNull();
   });
 
   it("copies cover from screenshots when notesVideoDir passed", async () => {

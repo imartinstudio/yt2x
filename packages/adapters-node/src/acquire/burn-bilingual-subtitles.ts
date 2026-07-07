@@ -142,7 +142,7 @@ export const burnBilingualSubtitles = async (
   const renderResult = await opts.runner.run({
     command: "python3",
     args: [PYTHON_SCRIPT, opts.srtPath, renderDir],
-    timeoutMs: 60_000,
+    timeoutMs: 120_000,
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
 

@@ -5,56 +5,122 @@ Input: bilingual SRT file (Chinese line 1, English line 2 per cue)
 Output: PNG frames in a directory + manifest.json
 
 Style: Chinese yellow bold large on top, English white italic smaller on bottom.
-No background box — uses black outline for readability.
+No background box — uses black outline for readability on any background.
 """
 
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 VIDEO_WIDTH = 1280
 
-# Font discovery
-CJK_FONT_CANDIDATES = [
+# Font discovery — use fonts that cover BOTH CJK and Latin glyphs.
+# Helvetica/Arial cannot render CJK; STHeiti/PingFang/Hiragino handle both.
+UNIVERSAL_FONT_CANDIDATES = [
+    "/System/Library/Fonts/PingFang.ttc",
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
     "/System/Library/Fonts/STHeiti Medium.ttc",
-    "/System/Library/Fonts/PingFang.ttc",
-    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-]
-LATIN_FONT_CANDIDATES = [
-    "/System/Library/Fonts/Helvetica.ttc",
-    "/System/Library/Fonts/Arial.ttf",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
 ]
 
 # Style: based on 720p baseline, scaled for 1280x720
 ZH_FONT_SIZE = 58
 EN_FONT_SIZE = 34
-ZH_FILL = (255, 244, 0, 255)  # bright yellow
-EN_FILL = (255, 255, 255, 255)  # white
-OUTLINE_COLOR = (0, 0, 0, 255)
-ZH_OUTLINE_W = 3
-EN_OUTLINE_W = 2
+ZH_FILL = (255, 244, 0, 255)  # bright yellow (#FFF400)
+EN_FILL = (255, 255, 255, 255)  # pure white
+OUTLINE_COLOR = (0, 0, 0, 255)  # black
+ZH_OUTLINE_W = 4  # thicker outline for Chinese readability
+EN_OUTLINE_W = 2  # thinner outline for English
 
-# Margins from bottom (pixels)
-ZH_MARGIN_BOTTOM = 120
-EN_MARGIN_BOTTOM = 68
+MAX_WIDTH_FRAC = 0.90  # max text width as fraction of video width
 
 
 def find_font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
-    for path in candidates:
-        if Path(path).exists():
+    for p in candidates:
+        if Path(p).exists():
             try:
-                return ImageFont.truetype(path, size)
+                return ImageFont.truetype(p, size)
             except Exception:
                 continue
     return ImageFont.load_default()
 
 
+def contains_cjk(text: str) -> bool:
+    """Check if text contains any CJK characters."""
+    for ch in text:
+        cp = ord(ch)
+        if (
+            (0x4E00 <= cp <= 0x9FFF)  # CJK Unified
+            or (0x3400 <= cp <= 0x4DBF)  # CJK Extension A
+            or (0xF900 <= cp <= 0xFAFF)  # CJK Compatibility
+            or (0x2E80 <= cp <= 0x2EFF)  # CJK Radicals
+            or (0x3000 <= cp <= 0x303F)  # CJK Symbols
+            or (0xFF00 <= cp <= 0xFFEF)  # Halfwidth/Fullwidth
+        ):
+            return True
+    return False
+
+
+def wrap_text(
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    max_width: int,
+    draw: ImageDraw.ImageDraw,
+) -> list[str]:
+    """Wrap text into multiple lines to fit within max_width.
+
+    For CJK text: break at any character boundary.
+    For Latin text: break at word boundaries (spaces).
+    """
+    if not text:
+        return [""]
+
+    # Quick check: does it fit on one line?
+    bbox = draw.textbbox((0, 0), text, font=font)
+    if bbox[2] - bbox[0] <= max_width:
+        return [text]
+
+    has_cjk = contains_cjk(text)
+
+    if has_cjk:
+        # CJK wrapping: character-by-character, keep punctuation with preceding char
+        lines: list[str] = []
+        current = ""
+        for ch in text:
+            test = current + ch
+            bbox = draw.textbbox((0, 0), test, font=font)
+            if bbox[2] - bbox[0] > max_width and current:
+                lines.append(current)
+                current = ch
+            else:
+                current = test
+        if current:
+            lines.append(current)
+        return lines
+    else:
+        # Latin wrapping: word-by-word
+        words = text.split(" ")
+        lines = []
+        current = ""
+        for word in words:
+            sep = " " if current else ""
+            test = current + sep + word
+            bbox = draw.textbbox((0, 0), test, font=font)
+            if bbox[2] - bbox[0] > max_width and current:
+                lines.append(current)
+                current = word
+            else:
+                current = test
+        if current:
+            lines.append(current)
+        return lines
+
+
 def parse_srt(srt_path: str) -> list[dict]:
-    """Parse SRT file, return list of {index, start_s, end_s, zh_text, en_text}."""
+    """Parse bilingual SRT file, return list of cues."""
     cues = []
     with open(srt_path, encoding="utf-8") as f:
         content = f.read()
@@ -63,7 +129,7 @@ def parse_srt(srt_path: str) -> list[dict]:
         lines = [l.strip() for l in block.split("\n") if l.strip()]
         if len(lines) < 3:
             continue
-        # lines[0] = index, lines[1] = timestamp, lines[2:] = text lines
+
         timing_match = re.match(
             r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*"
             r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})",
@@ -86,7 +152,7 @@ def parse_srt(srt_path: str) -> list[dict]:
         )
 
         text_lines = lines[2:]
-        # First line = Chinese, rest = English (joined)
+        # First line = Chinese (top), rest = English (bottom)
         zh_text = text_lines[0] if text_lines else ""
         en_text = " ".join(text_lines[1:]) if len(text_lines) > 1 else ""
 
@@ -105,70 +171,93 @@ def parse_srt(srt_path: str) -> list[dict]:
 def draw_text_with_outline(
     draw: ImageDraw.ImageDraw,
     text: str,
-    position: tuple[int, int],
+    xy: tuple[int, int],
     font: ImageFont.FreeTypeFont,
     fill: tuple[int, int, int, int],
     outline_color: tuple[int, int, int, int],
     outline_width: int,
 ):
-    """Draw text with a black outline by stamping the text in all directions."""
-    x, y = position
-    # Draw outline
+    """Draw text with outline by stamping in all 8 directions + corners."""
+    x, y = xy
     for dx in range(-outline_width, outline_width + 1):
         for dy in range(-outline_width, outline_width + 1):
             if dx == 0 and dy == 0:
                 continue
             draw.text((x + dx, y + dy), text, font=font, fill=outline_color)
-    # Draw fill text on top
     draw.text((x, y), text, font=font, fill=fill)
 
 
-def render_cue(cue: dict, zh_font, en_font, out_dir: Path) -> dict:
-    """Render one bilingual cue, return manifest entry."""
-    # Calculate text sizes
-    zh_bbox = draw_text_with_outline.__code__  # placeholder
-    # Create temporary image to measure text
+def measure_lines(
+    text_lines: list[str], font: ImageFont.FreeTypeFont, draw: ImageDraw.ImageDraw
+) -> tuple[int, int, list[tuple[int, int, int, int]]]:
+    """Measure wrapped text lines. Returns (max_width, total_height, line_bboxes)."""
+    max_w = 0
+    total_h = 0
+    bboxes = []
+    gap = 2  # pixels between wrapped lines
+    for i, line_text in enumerate(text_lines):
+        bbox = draw.textbbox((0, 0), line_text, font=font)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        max_w = max(max_w, w)
+        bboxes.append((0, total_h, w, total_h + h))
+        total_h += h + (gap if i < len(text_lines) - 1 else 0)
+    return max_w, total_h, bboxes
+
+
+def render_cue(
+    cue: dict,
+    zh_font: ImageFont.FreeTypeFont,
+    en_font: ImageFont.FreeTypeFont,
+    out_dir: Path,
+) -> dict:
+    """Render one bilingual cue as a transparent PNG, return manifest entry."""
+    max_text_width = int(VIDEO_WIDTH * MAX_WIDTH_FRAC)
+
+    # Temporary draw for measurement
     temp = Image.new("RGBA", (1, 1))
     temp_draw = ImageDraw.Draw(temp)
-    zh_bbox = temp_draw.textbbox((0, 0), cue["zh_text"], font=zh_font)
-    en_bbox = temp_draw.textbbox((0, 0), cue["en_text"], font=en_font)
 
-    zh_w = zh_bbox[2] - zh_bbox[0]
-    zh_h = zh_bbox[3] - zh_bbox[1]
-    en_w = en_bbox[2] - en_bbox[0]
-    en_h = en_bbox[3] - en_bbox[1]
+    # Wrap text
+    zh_lines = wrap_text(cue["zh_text"], zh_font, max_text_width, temp_draw)
+    en_lines = wrap_text(cue["en_text"], en_font, max_text_width, temp_draw)
 
-    # Calculate total height (two lines with gap)
-    line_gap = 4
-    zh_outline_pad = ZH_OUTLINE_W * 2
-    en_outline_pad = EN_OUTLINE_W * 2
-    total_h = zh_h + line_gap + en_h + zh_outline_pad + en_outline_pad + 8
+    # Measure wrapped lines
+    zh_max_w, zh_total_h, zh_bboxes = measure_lines(zh_lines, zh_font, temp_draw)
+    en_max_w, en_total_h, en_bboxes = measure_lines(en_lines, en_font, temp_draw)
 
-    max_w = max(zh_w, en_w) + max(zh_outline_pad, en_outline_pad) + 4
-    max_w = min(max_w, int(VIDEO_WIDTH * 0.92))
+    # Canvas dimensions
+    zh_pad = ZH_OUTLINE_W * 2 + 4
+    en_pad = EN_OUTLINE_W * 2 + 4
+    line_gap = 6  # vertical gap between Chinese and English blocks
 
-    # Handle text wrapping if needed
-    if max_w >= int(VIDEO_WIDTH * 0.90):
-        # Text too wide — wrap Chinese to two lines if possible
-        # Simple approach: just use the width as-is, ffmpeg overlay handles centering
-        pass
+    content_w = max(zh_max_w, en_max_w)
+    canvas_w = content_w + max(zh_pad, en_pad)
+    # Clamp to max width — text is already wrapped, so canvas_w should fit
+    canvas_w = min(canvas_w, max_text_width)
 
-    img = Image.new("RGBA", (max_w, total_h), (0, 0, 0, 0))
+    canvas_h = zh_total_h + line_gap + en_total_h + zh_pad + en_pad
+
+    img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     # Draw Chinese (top)
-    zh_x = (max_w - zh_w) // 2
     zh_y = ZH_OUTLINE_W + 2
-    draw_text_with_outline(
-        draw, cue["zh_text"], (zh_x, zh_y), zh_font, ZH_FILL, OUTLINE_COLOR, ZH_OUTLINE_W
-    )
+    for line_text, (_, ly, lw, lh) in zip(zh_lines, zh_bboxes):
+        lx = (canvas_w - lw) // 2
+        draw_text_with_outline(
+            draw, line_text, (lx, zh_y + ly), zh_font,
+            ZH_FILL, OUTLINE_COLOR, ZH_OUTLINE_W,
+        )
 
     # Draw English (bottom)
-    en_x = (max_w - en_w) // 2
-    en_y = zh_y + zh_h + line_gap + ZH_OUTLINE_W
-    draw_text_with_outline(
-        draw, cue["en_text"], (en_x, en_y), en_font, EN_FILL, OUTLINE_COLOR, EN_OUTLINE_W
-    )
+    en_y = zh_y + zh_total_h + line_gap + ZH_OUTLINE_W
+    for line_text, (_, ly, lw, lh) in zip(en_lines, en_bboxes):
+        ex = (canvas_w - lw) // 2
+        draw_text_with_outline(
+            draw, line_text, (ex, en_y + ly), en_font,
+            EN_FILL, OUTLINE_COLOR, EN_OUTLINE_W,
+        )
 
     filename = f"cue_{cue['index']:04d}.png"
     img.save(out_dir / filename)
@@ -178,8 +267,8 @@ def render_cue(cue: dict, zh_font, en_font, out_dir: Path) -> dict:
         "filename": filename,
         "start": cue["start_s"],
         "end": cue["end_s"],
-        "width": max_w,
-        "height": total_h,
+        "width": canvas_w,
+        "height": canvas_h,
     }
 
 
@@ -192,11 +281,16 @@ def main():
     out_dir = Path(sys.argv[2])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    zh_font = find_font(CJK_FONT_CANDIDATES, ZH_FONT_SIZE)
-    en_font = find_font(LATIN_FONT_CANDIDATES, EN_FONT_SIZE)
+    # Use universal fonts that cover BOTH CJK and Latin glyphs.
+    # The "English" line may contain CJK characters when the source
+    # video has Chinese subtitles (source_language=zh-Hans).
+    zh_font = find_font(UNIVERSAL_FONT_CANDIDATES, ZH_FONT_SIZE)
+    en_font = find_font(UNIVERSAL_FONT_CANDIDATES, EN_FONT_SIZE)
 
-    print(f"ZH font: {zh_font.path if hasattr(zh_font, 'path') else 'default'}", file=sys.stderr)
-    print(f"EN font: {en_font.path if hasattr(en_font, 'path') else 'default'}", file=sys.stderr)
+    zh_path = zh_font.path if hasattr(zh_font, "path") else "default"
+    en_path = en_font.path if hasattr(en_font, "path") else "default"
+    print(f"ZH font: {zh_path} ({ZH_FONT_SIZE}px)", file=sys.stderr)
+    print(f"EN font: {en_path} ({EN_FONT_SIZE}px)", file=sys.stderr)
 
     cues = parse_srt(srt_path)
     if not cues:
@@ -208,10 +302,20 @@ def main():
         entry = render_cue(cue, zh_font, en_font, out_dir)
         manifest_entries.append(entry)
 
+    # Log a sample for debugging
+    if cues:
+        sample = cues[len(cues) // 2]
+        print(
+            f"Sample cue #{sample['index']}: "
+            f"ZH='{sample['zh_text'][:50]}...' "
+            f"EN='{sample['en_text'][:50]}...'",
+            file=sys.stderr,
+        )
+
     manifest = {
         "cues": manifest_entries,
         "video_width": VIDEO_WIDTH,
-        "video_height": 0,  # not needed for bilingual render
+        "video_height": 0,
     }
     with open(out_dir / "manifest.json", "w") as f:
         json.dump(manifest, f)

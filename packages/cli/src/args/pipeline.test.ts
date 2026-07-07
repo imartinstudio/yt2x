@@ -235,4 +235,108 @@ describe("PipelineArgsSchema", () => {
       }),
     ).toThrow(/必须提供/);
   });
+
+  it("defaults subtitleBilingual to off and subtitleBurnStyle to zh-default", () => {
+    const parsed = PipelineArgsSchema.parse(baseInput);
+    expect(parsed.acquire.subtitleBilingual).toBe("off");
+    expect(parsed.acquire.subtitleBurnStyle).toBe("zh-default");
+  });
+
+  it("accepts valid subtitleBilingual modes when subtitleZh is enabled", () => {
+    for (const mode of ["off", "srt", "ass", "burned", "all"] as const) {
+      const zhMode = mode === "off" ? "off" : "both";
+      const parsed = PipelineArgsSchema.parse({
+        ...baseInput,
+        acquire: { subtitleZh: zhMode, subtitleBilingual: mode },
+      });
+      expect(parsed.acquire.subtitleBilingual).toBe(mode);
+    }
+  });
+
+  it("rejects invalid subtitleBilingual mode", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        acquire: { subtitleBilingual: "png" },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts zh-default subtitleBurnStyle without bilingual mode", () => {
+    const parsed = PipelineArgsSchema.parse({
+      ...baseInput,
+      acquire: { subtitleBurnStyle: "zh-default" },
+    });
+    expect(parsed.acquire.subtitleBurnStyle).toBe("zh-default");
+  });
+
+  it("accepts bilingual-explainer style with subtitleBilingual enabled", () => {
+    const parsed = PipelineArgsSchema.parse({
+      ...baseInput,
+      acquire: {
+        subtitleZh: "both",
+        subtitleBilingual: "all",
+        subtitleBurnStyle: "bilingual-explainer",
+      },
+    });
+    expect(parsed.acquire.subtitleBurnStyle).toBe("bilingual-explainer");
+    expect(parsed.acquire.subtitleBilingual).toBe("all");
+  });
+
+  it("rejects invalid subtitleBurnStyle", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        acquire: { subtitleBurnStyle: "zh-yellow" },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects bilingual-explainer style when subtitleBilingual is off", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        acquire: {
+          subtitleBurnStyle: "bilingual-explainer",
+        },
+      }),
+    ).toThrow(/bilingual-explainer/);
+  });
+
+  it("rejects subtitleBilingual without subtitleZh", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        acquire: {
+          subtitleZh: "off",
+          subtitleBilingual: "all",
+        },
+      }),
+    ).toThrow(/subtitle-zh/);
+  });
+
+  it("accepts bilingual-explainer with subtitleBilingual enabled", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        acquire: {
+          subtitleZh: "both",
+          subtitleBilingual: "all",
+          subtitleBurnStyle: "bilingual-explainer",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts subtitleBilingual srt with subtitleZh srt", () => {
+    expect(() =>
+      PipelineArgsSchema.parse({
+        ...baseInput,
+        acquire: {
+          subtitleZh: "srt",
+          subtitleBilingual: "srt",
+        },
+      }),
+    ).not.toThrow();
+  });
 });

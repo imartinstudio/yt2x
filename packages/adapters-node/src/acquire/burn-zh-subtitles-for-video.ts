@@ -49,6 +49,16 @@ const updateBurnedVideoInManifest = async (
   try {
     const existing = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
     existing.burned_video = burnedPath;
+    // Preserve v2 bilingual fields if present
+    if (existing.bilingual_subtitle === undefined) {
+      delete existing.bilingual_subtitle;
+    }
+    if (existing.bilingual_ass === undefined) {
+      delete existing.bilingual_ass;
+    }
+    if (existing.burn_style === undefined) {
+      delete existing.burn_style;
+    }
     await writeFile(manifestPath, JSON.stringify(existing, null, 2) + "\n", "utf8");
   } catch {
     /* manifest 可能不存在 */

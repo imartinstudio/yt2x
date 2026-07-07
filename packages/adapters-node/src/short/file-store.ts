@@ -17,7 +17,7 @@ export const writeNativeShortBundle = async (
   videoId: string,
   shortPost: GeneratedShortPost,
   options: { force?: boolean } = {},
-): Promise<WriteNativeShortResult> => {
+): Promise<WriteNativeShortResult | null> => {
   if (!isValidVideoId(videoId)) {
     throw new Error(`Invalid videoId: "${videoId}". Expected alphanumeric, hyphens, and underscores only.`);
   }
@@ -26,7 +26,8 @@ export const writeNativeShortBundle = async (
   const shortPath = path.join(articleDir, "x-format", "x-short.md");
 
   if (options.force !== true) {
-    await assertMissing(shortPath);
+    const exists = await assertMissing(shortPath);
+    if (exists) return null;
   }
 
   await mkdir(articleDir, { recursive: true });
@@ -44,12 +45,13 @@ export const writeNativeShortBundle = async (
   return { articleDir, shortPath, visualPath };
 };
 
-const assertMissing = async (targetPath: string): Promise<void> => {
+const assertMissing = async (targetPath: string): Promise<boolean> => {
   try {
     await stat(targetPath);
-    throw new Error(`${targetPath} already exists. Pass --force to overwrite, or delete it first.`);
+    return true;
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    return false;
   }
 };
 

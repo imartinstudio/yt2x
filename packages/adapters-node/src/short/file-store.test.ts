@@ -41,8 +41,9 @@ describe("writeNativeShortBundle", () => {
     expect(await readFile(written.shortPath, "utf8")).toBe("one useful short post\n");
   });
 
-  it("refuses overwrite without --force", async () => {
+  it("returns null when x-short.md exists without --force", async () => {
     await writeNativeShortBundle(articleRoot, "v1", shortPost);
-    await expect(writeNativeShortBundle(articleRoot, "v1", shortPost)).rejects.toThrow(/already exists/);
+    const result = await writeNativeShortBundle(articleRoot, "v1", shortPost);
+    expect(result).toBeNull();
   });
 });

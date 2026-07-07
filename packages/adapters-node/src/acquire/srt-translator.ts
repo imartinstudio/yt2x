@@ -318,6 +318,14 @@ export const translateSrt = async (
     // If conversion fails, keep original SRT
   }
 
+  // Post-process: fix LLM CJK homoglyph mistakes
+  try {
+    const { fixLlmHomoglyphs } = await import("./simplify-chinese.js");
+    finalSrt = fixLlmHomoglyphs(finalSrt);
+  } catch {
+    // If fix fails, keep original SRT
+  }
+
   // Post-process: preserve proper nouns from English source
   try {
     const { preserveProperNouns } = await import("./simplify-chinese.js");

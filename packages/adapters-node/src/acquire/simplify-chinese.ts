@@ -18,6 +18,30 @@ export const simplifyChinese = async (text: string): Promise<string> => {
   }
 };
 
+/**
+ * LLM CJK homoglyph corrections.
+ *
+ * Some LLMs confuse visually similar CJK characters. These are NOT
+ * "hardcoded typos" — they are corrections for well-known homoglyph
+ * pairs where one character is semantically invalid in context.
+ *
+ * 幺 (U+5E7A, "youngest"/"one") ≠ 么 (U+4E48, interrogative particle)
+ *   - 幺 is NEVER used as a grammatical particle in modern Chinese
+ *   - When preceded by 什/这/怎/那, the particle is ALWAYS 么
+ *   - This is a spelling rule, not a word-list hack
+ */
+const LLM_HOMOGLYPH_FIXES: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /([什这怎那])幺/g, replacement: "$1么" },
+];
+
+/** Apply CJK homoglyph corrections to LLM output. */
+export const fixLlmHomoglyphs = (text: string): string => {
+  let result = text;
+  for (const { pattern, replacement } of LLM_HOMOGLYPH_FIXES) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+};
 
 /**
  * Extract capitalized English words (potential proper nouns) from source text.

@@ -28,7 +28,7 @@ const buildSystemPrompt = (sourceLang: string, targetLang: string): string =>
     ...(isSimplifiedChineseTarget(targetLang)
       ? [
           "5. The final subtitle text MUST be Simplified Chinese (zh-CN). Traditional Chinese output is FORBIDDEN. If you are unsure whether a character is Simplified or Traditional, choose Simplified. This is a hard requirement — do not violate it.",
-          "6. Keep technical terms, product names, commands, and API names in English when that is more natural.",
+          "6. NEVER translate proper nouns, brand names, product names (e.g. 'Claude', 'Fable', 'GPT', 'iPhone'), model names, technical terms, commands, API names, or code identifiers. Keep them EXACTLY as they appear in the source — do not transliterate, localize, or convert them.",
           "7. Do not add explanations, notes, or any text outside the JSON array.",
         ]
       : ["5. Do not add explanations, notes, or any text outside the JSON array."]),

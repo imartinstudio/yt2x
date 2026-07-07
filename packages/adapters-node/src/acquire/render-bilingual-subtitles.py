@@ -15,10 +15,7 @@ import unicodedata
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
-# Base style parameters for 720p baseline; scaled proportionally to actual
-# video height at runtime via --video-width / --video-height.
-_BASE_H = 720
-
+# Base style parameters — fixed sizes, not scaled.
 _BASE_ZH_FONT_SIZE = 52
 _BASE_EN_FONT_SIZE = 32
 _BASE_ZH_OUTLINE_W = 4
@@ -54,9 +51,11 @@ REGULAR_FONT_CANDIDATES = [
     ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
 ]
 
-def scale_value(base_val: int, video_h: int, base_h: int = _BASE_H) -> int:
-    """Scale a dimension proportionally to video height."""
-    return max(1, round(base_val * video_h / base_h))
+_TRAILING_PUNCT_RE = re.compile(r"[。！？；：，、,.!?;:]+$")
+
+def strip_trailing_punctuation(text: str) -> str:
+    """Remove trailing punctuation from subtitle text."""
+    return _TRAILING_PUNCT_RE.sub("", text).strip()
 
 
 def find_font(
@@ -185,8 +184,8 @@ def parse_srt(srt_path: str) -> list[dict]:
 
         text_lines = lines[2:]
         # First line = Chinese (top), rest = English (bottom)
-        zh_text = text_lines[0] if text_lines else ""
-        en_text = " ".join(text_lines[1:]) if len(text_lines) > 1 else ""
+        zh_text = strip_trailing_punctuation(text_lines[0]) if text_lines else ""
+        en_text = strip_trailing_punctuation(" ".join(text_lines[1:])) if len(text_lines) > 1 else ""
 
         cues.append(
             {
@@ -339,14 +338,13 @@ def main():
         )
         sys.exit(1)
 
-    # Scale all dimensions to actual video resolution (720p baseline)
-    scale = video_h / _BASE_H
+    # Use fixed font sizes — not scaled by video resolution
     VIDEO_WIDTH = video_w
     VIDEO_HEIGHT = video_h
-    ZH_FONT_SIZE = scale_value(_BASE_ZH_FONT_SIZE, video_h)
-    EN_FONT_SIZE = scale_value(_BASE_EN_FONT_SIZE, video_h)
-    ZH_OUTLINE_W = max(2, scale_value(_BASE_ZH_OUTLINE_W, video_h))
-    EN_OUTLINE_W = max(1, scale_value(_BASE_EN_OUTLINE_W, video_h))
+    ZH_FONT_SIZE = _BASE_ZH_FONT_SIZE
+    EN_FONT_SIZE = _BASE_EN_FONT_SIZE
+    ZH_OUTLINE_W = _BASE_ZH_OUTLINE_W
+    EN_OUTLINE_W = _BASE_EN_OUTLINE_W
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

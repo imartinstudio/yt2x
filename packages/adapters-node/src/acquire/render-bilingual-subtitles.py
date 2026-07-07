@@ -350,7 +350,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(
-        f"Video: {VIDEO_WIDTH}x{VIDEO_HEIGHT} (scale={scale:.2f}x)",
+        f"Video: {VIDEO_WIDTH}x{VIDEO_HEIGHT}",
         file=sys.stderr,
     )
 

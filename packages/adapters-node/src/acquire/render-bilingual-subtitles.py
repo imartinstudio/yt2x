@@ -37,15 +37,15 @@ REGULAR_FONT_CANDIDATES = [
 ]
 
 # Style: based on 720p baseline, scaled for 1280x720
-ZH_FONT_SIZE = 62
-EN_FONT_SIZE = 36
+ZH_FONT_SIZE = 56
+EN_FONT_SIZE = 34
 ZH_FILL = (255, 227, 2, 255)  # warm golden yellow (#FFE302) — matched to reference
 EN_FILL = (255, 255, 255, 255)  # pure white
 OUTLINE_COLOR = (0, 0, 0, 255)  # pure black
 ZH_OUTLINE_W = 5  # matched to reference: visible dark edge around yellow
 EN_OUTLINE_W = 3
 
-MAX_WIDTH_FRAC = 0.94  # max text width as fraction of video width
+MAX_WIDTH_FRAC = 0.96  # max text width as fraction of video width
 
 
 def find_font(

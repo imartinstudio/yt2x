@@ -36,16 +36,19 @@ REGULAR_FONT_CANDIDATES = [
     ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
 ]
 
-# Style: based on 720p baseline, scaled for 1280x720
-ZH_FONT_SIZE = 56
-EN_FONT_SIZE = 34
+# Style: calibrated for short-video explainer look.
+# Font sizes match reference: Chinese prominent, English readable.
+# MAX_WIDTH_FRAC is set near the practical limit — text only wraps when it
+# truly cannot fit on one line within the video safe area.
+ZH_FONT_SIZE = 52
+EN_FONT_SIZE = 32
 ZH_FILL = (255, 227, 2, 255)  # warm golden yellow (#FFE302) — matched to reference
 EN_FILL = (255, 255, 255, 255)  # pure white
 OUTLINE_COLOR = (0, 0, 0, 255)  # pure black
-ZH_OUTLINE_W = 5  # matched to reference: visible dark edge around yellow
-EN_OUTLINE_W = 3
+ZH_OUTLINE_W = 4
+EN_OUTLINE_W = 2
 
-MAX_WIDTH_FRAC = 0.96  # max text width as fraction of video width
+MAX_WIDTH_FRAC = 0.98  # near-full width — only wrap when truly necessary
 
 
 def find_font(
@@ -98,15 +101,24 @@ def wrap_text(
     has_cjk = contains_cjk(text)
 
     if has_cjk:
-        # CJK wrapping: character-by-character, keep punctuation with preceding char
+        # CJK wrapping: character-by-character with orphan prevention.
+        # If only 1-3 trailing characters would wrap to line 2, keep them
+        # on line 1 (slight overflow is better than an orphan line).
         lines: list[str] = []
         current = ""
-        for ch in text:
+        for i, ch in enumerate(text):
             test = current + ch
             bbox = draw.textbbox((0, 0), test, font=font)
             if bbox[2] - bbox[0] > max_width and current:
-                lines.append(current)
-                current = ch
+                # How many chars remain if we wrap here?
+                remaining = text[i:]
+                # If only 1-3 chars remain, keep them on line 1 instead
+                if len(remaining) <= 3:
+                    current = test  # slight overflow, better than orphan
+                else:
+                    # Try to find a semantic break point nearby
+                    lines.append(current)
+                    current = ch
             else:
                 current = test
         if current:

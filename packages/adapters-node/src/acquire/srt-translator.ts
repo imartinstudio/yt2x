@@ -318,5 +318,35 @@ export const translateSrt = async (
     // If conversion fails, keep original SRT
   }
 
+  // Post-process: fix common LLM character mistakes (幺→么)
+  try {
+    const { fixLlmCharMistakes } = await import("./simplify-chinese.js");
+    finalSrt = fixLlmCharMistakes(finalSrt);
+  } catch {
+    // If fix fails, keep original SRT
+  }
+
+  // Post-process: preserve proper nouns from English source
+  try {
+    const { preserveProperNouns } = await import("./simplify-chinese.js");
+    // Apply per-cue: find English source text for each translated cue
+    const parsedZh = parseSubtitleBlocks(finalSrt);
+    const parsedEn = parseSubtitleBlocks(srtContent);
+    if (parsedZh.length === parsedEn.length) {
+      const fixedCues = parsedZh.map((zhCue, i) => {
+        const enCue = parsedEn[i]!;
+        const enText = enCue.text.join(" ");
+        const fixedText = preserveProperNouns(
+          zhCue.text.join(" "),
+          enText,
+        );
+        return { ...zhCue, text: [fixedText] };
+      });
+      finalSrt = serializeSrtBlocks(fixedCues);
+    }
+  } catch {
+    // If preservation fails, keep original SRT
+  }
+
   return { srt: finalSrt, warnings };
 };

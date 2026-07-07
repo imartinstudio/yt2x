@@ -18,24 +18,6 @@ export const simplifyChinese = async (text: string): Promise<string> => {
   }
 };
 
-// Common LLM character mistakes in zh-CN output
-const LLM_CHAR_FIXES: Record<string, string> = {
-  "幺": "么", // 幺 → 么 (in context of 什么/这么/怎么/那么)
-  "系": "系", // placeholder — add more as needed
-};
-
-/**
- * Fix common LLM character mistakes in Chinese subtitle output.
- *
- * Certain LLMs confuse visually similar CJK characters:
- * - 幺 (yāo, "youngest"/"one") vs 么 (me/ma, particle in 什么/怎么)
- *
- * We use context-aware replacement: 幺 → 么 when preceded by 什/这/怎/那.
- */
-export const fixLlmCharMistakes = (text: string): string => {
-  // 幺 → 么 when it follows 什/这/怎/那 (common particle context)
-  return text.replace(/([什这怎那])幺/g, "$1么");
-};
 
 /**
  * Extract capitalized English words (potential proper nouns) from source text.
@@ -53,9 +35,10 @@ const extractProperNouns = (text: string): string[] => {
  * Post-process translated Chinese text to preserve proper nouns from the
  * English source that the LLM may have translated despite instructions.
  *
- * Strategy: for each proper noun found in the English source, check if it
- * appears in the translation. If not, append it in parentheses after the
- * most likely translated position.
+ * Strategy: for capitalized words in the English source that don't appear
+ * verbatim in the Chinese translation, append the original English term.
+ * This is a conservative safety net — we never modify the Chinese text,
+ * only add missing proper nouns.
  */
 export const preserveProperNouns = (
   zhText: string,
@@ -64,17 +47,18 @@ export const preserveProperNouns = (
   const nouns = extractProperNouns(enSourceText);
   let result = zhText;
   for (const noun of nouns) {
-    // Skip if the noun already appears verbatim in the Chinese text
+    // Skip if already present verbatim
     if (result.includes(noun)) continue;
-    // Skip common English words that happen to be capitalized
-    if (/^(The|A|An|I|It|We|You|He|She|They|This|That|These|Those|And|But|Or|So|For|In|On|At|To|Of|Is|Are|Was|Were|Be|Been|Have|Has|Had|Do|Does|Did|Can|Will|Would|Should|Could|May|Might|Not|No|Yes|If|When|Where|Why|How|What|Who|Which)$/.test(noun)) continue;
-    // Replace likely Chinese transliterations with the original English
-    // Common patterns: 2-4 Chinese chars that match the English syllable count
-    result = result.replace(noun, noun);
-    // If not found as-is, append the original name
-    if (!result.includes(noun)) {
-      result = result.trimEnd() + ` (${noun})`;
-    }
+    // Skip common English stopwords/pronouns
+    if (
+      /^(The|A|An|I|It|We|You|He|She|They|This|That|These|Those|And|But|Or|So|For|In|On|At|To|Of|Is|Are|Was|Were|Be|Been|Have|Has|Had|Do|Does|Did|Can|Will|Would|Should|Could|May|Might|Not|No|Yes|If|When|Where|Why|How|What|Who|Which|Her|His|My|Our|Your|Its|Their|Me|Him|Us|Them|Here|There|Now|Then|Just|Also|Only|Still|Even|Very|Much|Many|More|Most|Some|Any|All|Each|Every|Both|Few|One|Two|Hello|Goodbye|Okay|Alright|Hey|Wow|Yeah|Right|Left|North|South|East|West)$/.test(
+        noun,
+      )
+    )
+      continue;
+
+    // Append original proper noun — never modify the Chinese text itself
+    result = result.trimEnd() + ` (${noun})`;
   }
   return result;
 };

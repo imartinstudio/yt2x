@@ -27,8 +27,8 @@ const buildSystemPrompt = (sourceLang: string, targetLang: string): string =>
     "4. Return the SAME number of blocks you receive. No merging or splitting.",
     ...(isSimplifiedChineseTarget(targetLang)
       ? [
-          "5. The final subtitle text MUST be Simplified Chinese (zh-CN). Traditional Chinese output is FORBIDDEN. If you are unsure whether a character is Simplified or Traditional, choose Simplified. This is a hard requirement — do not violate it.",
-          "6. NEVER translate proper nouns, brand names, product names (e.g. 'Claude', 'Fable', 'GPT', 'iPhone'), model names, technical terms, commands, API names, or code identifiers. Keep them EXACTLY as they appear in the source — do not transliterate, localize, or convert them.",
+          "5. The final subtitle text MUST be Simplified Chinese (zh-CN). Traditional Chinese output is FORBIDDEN. Pay special attention: use 么 (not 幺) for the particle in 什么/怎么/这么/那么. If you are unsure whether a character is Simplified or Traditional, choose Simplified. This is a hard requirement — do not violate it.",
+          "6. PROPER NOUNS MUST BE PRESERVED VERBATIM. This means: brand names (Fable, Claude, GPT, iPhone), product names, model names, technical terms, commands, API names, and code identifiers must appear EXACTLY as in the source text. Do NOT translate, transliterate, or localize them under any circumstance. If the source says 'Fable 5', the output must say 'Fable 5' — never '神谕5' or any other translation.",
           "7. Do not add explanations, notes, or any text outside the JSON array.",
         ]
       : ["5. Do not add explanations, notes, or any text outside the JSON array."]),
@@ -316,14 +316,6 @@ export const translateSrt = async (
     finalSrt = await simplifyChinese(finalSrt);
   } catch {
     // If conversion fails, keep original SRT
-  }
-
-  // Post-process: fix common LLM character mistakes (幺→么)
-  try {
-    const { fixLlmCharMistakes } = await import("./simplify-chinese.js");
-    finalSrt = fixLlmCharMistakes(finalSrt);
-  } catch {
-    // If fix fails, keep original SRT
   }
 
   // Post-process: preserve proper nouns from English source

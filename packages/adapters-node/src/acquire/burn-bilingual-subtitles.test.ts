@@ -55,8 +55,8 @@ describe("burnBilingualSubtitles", () => {
               await writeFile(pngPath, Buffer.from([0x89, 0x50, 0x4E, 0x47]));
             }
           } else {
-            // Bilingual render script: write manifest.json + cue PNGs
-            const renderDir = args[args.length - 1] ?? "/tmp/fallback";
+            // Bilingual render script: args are [script, srt, outDir, --video-width, W, --video-height, H]
+            const renderDir = args[2] ?? "/tmp/fallback";
             await mkdir(renderDir, { recursive: true });
             await writeFile(
               path.join(renderDir, "manifest.json"),

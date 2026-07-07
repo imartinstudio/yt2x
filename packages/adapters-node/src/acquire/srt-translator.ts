@@ -230,10 +230,46 @@ export const translateSrt = async (
     }
   }
 
+  // Phase 4: final single-cue targeted repair
+  if (translated.length !== blocks.length) {
+    const translatedIndices = new Set(translated.map((b) => b.index));
+    const missing = blocks.filter((b) => !translatedIndices.has(b.index));
+
+    if (missing.length > 0) {
+      for (const m of missing) {
+        try {
+          const repaired = await translateBatch([m], opts, true);
+          const added = repaired.filter((r) => !translatedIndices.has(r.index));
+          translated.push(...added);
+          if (added.length > 0) {
+            warnings.push(`phase 4: recovered missing cue #${m.index}`);
+          }
+        } catch {
+          warnings.push(`phase 4: failed to recover cue #${m.index}`);
+        }
+      }
+    }
+  }
+
+  // Final fallback: if mismatch is small (< 3% of cues), trim the result
+  // to match by filling missing cues with English text + warning.
   if (translated.length !== cues.length) {
-    throw new Error(
-      `translation returned ${translated.length} blocks, expected ${cues.length}`,
-    );
+    const missingCount = cues.length - translated.length;
+    if (missingCount > 0 && missingCount <= Math.max(2, Math.ceil(cues.length * 0.03))) {
+      const translatedIndices = new Set(translated.map((b) => b.index));
+      for (const block of blocks) {
+        if (!translatedIndices.has(block.index)) {
+          translated.push({ index: block.index, text: `[未翻译] ${block.text}` });
+          warnings.push(
+            `cue #${block.index} could not be translated after 4 repair phases; using English fallback`,
+          );
+        }
+      }
+    } else {
+      throw new Error(
+        `translation returned ${translated.length} blocks, expected ${cues.length} (${missingCount} missing after 4 repair phases)`,
+      );
+    }
   }
 
   let finalSrt = buildFinalSrt(cues, translated);

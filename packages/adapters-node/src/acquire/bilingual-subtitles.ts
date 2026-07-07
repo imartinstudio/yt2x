@@ -119,9 +119,13 @@ export const validateCueAlignment = (
  */
 export const mergeBilingualSrt = (enSrt: string, zhSrt: string): string => {
   const errors = validateCueAlignment(enSrt, zhSrt);
-  if (errors.length > 0) {
+  // Empty text errors are non-fatal — mergeBilingualSrt fills gaps with English fallback
+  const fatalErrors = errors.filter(
+    (e) => !e.message.includes("text is empty"),
+  );
+  if (fatalErrors.length > 0) {
     throw new Error(
-      `bilingual SRT merge failed:\n${errors.map((e) => `  - ${e.message}`).join("\n")}`,
+      `bilingual SRT merge failed:\n${fatalErrors.map((e) => `  - ${e.message}`).join("\n")}`,
     );
   }
 
@@ -132,9 +136,14 @@ export const mergeBilingualSrt = (enSrt: string, zhSrt: string): string => {
     const zhCue = zhCues[i]!;
     // Chinese text: collapse extra whitespace from narrow line breaks,
     // but preserve natural single spaces
-    const zhText = zhCue.text.join(" ").replace(/\s+/gu, " ").trim();
+    let zhText = zhCue.text.join(" ").replace(/\s+/gu, " ").trim();
     // English text: preserve natural spacing and capitalization
     const enText = enCue.text.join(" ").replace(/\s+/gu, " ").trim();
+
+    // Fallback: if Chinese text is empty (translation gap), use English text
+    if (zhText.length === 0 && enText.length > 0) {
+      zhText = `[未翻译] ${enText}`;
+    }
 
     return {
       index: enCue.index,

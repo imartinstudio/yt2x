@@ -251,6 +251,42 @@ export const translateSrt = async (
     }
   }
 
+  // Phase 5: check for empty-text blocks (LLM sometimes returns empty string on repair)
+  const emptyBlocks = translated.filter((b) => b.text.trim().length === 0);
+  if (emptyBlocks.length > 0) {
+    const emptyIndices = emptyBlocks.map((b) => b.index);
+    const sourceBlocks = blocks.filter((b) => emptyIndices.includes(b.index));
+    warnings.push(
+      `phase 5: ${emptyBlocks.length} blocks have empty text (indices: ${emptyIndices.join(", ")}), repairing`,
+    );
+    for (const src of sourceBlocks) {
+      try {
+        const repaired = await translateBatch([src], opts, true);
+        const valid = repaired.filter((r) => r.text.trim().length > 0);
+        if (valid.length > 0) {
+          // Replace empty block with repaired one
+          const idx = translated.findIndex((b) => b.index === src.index);
+          if (idx >= 0) translated[idx] = valid[0]!;
+          else translated.push(valid[0]!);
+          warnings.push(`phase 5: repaired empty cue #${src.index}`);
+        } else {
+          // Fill with source text as last resort
+          const idx = translated.findIndex((b) => b.index === src.index);
+          const fallback = { index: src.index, text: `[未翻译] ${src.text}` };
+          if (idx >= 0) translated[idx] = fallback;
+          else translated.push(fallback);
+          warnings.push(`phase 5: using source fallback for cue #${src.index}`);
+        }
+      } catch {
+        const idx = translated.findIndex((b) => b.index === src.index);
+        const fallback = { index: src.index, text: `[未翻译] ${src.text}` };
+        if (idx >= 0) translated[idx] = fallback;
+        else translated.push(fallback);
+        warnings.push(`phase 5: using source fallback for cue #${src.index} (repair failed)`);
+      }
+    }
+  }
+
   // Final fallback: if mismatch is small (< 3% of cues), trim the result
   // to match by filling missing cues with English text + warning.
   if (translated.length !== cues.length) {
@@ -261,13 +297,13 @@ export const translateSrt = async (
         if (!translatedIndices.has(block.index)) {
           translated.push({ index: block.index, text: `[未翻译] ${block.text}` });
           warnings.push(
-            `cue #${block.index} could not be translated after 4 repair phases; using English fallback`,
+            `cue #${block.index} could not be translated after 5 repair phases; using English fallback`,
           );
         }
       }
     } else {
       throw new Error(
-        `translation returned ${translated.length} blocks, expected ${cues.length} (${missingCount} missing after 4 repair phases)`,
+        `translation returned ${translated.length} blocks, expected ${cues.length} (${missingCount} missing after 5 repair phases)`,
       );
     }
   }

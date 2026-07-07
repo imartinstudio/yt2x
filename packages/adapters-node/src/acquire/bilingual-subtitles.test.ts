@@ -20,29 +20,6 @@ const zhSrt = [
   "00:00:04,000 --> 00:00:06,000",
   "第二行字幕",
 ].join("\n");
-
-const enSrtMultiline = [
-  "1",
-  "00:00:01,000 --> 00:00:03,500",
-  "First line of English",
-  "Second line of English",
-  "",
-  "2",
-  "00:00:04,000 --> 00:00:06,000",
-  "Another cue",
-].join("\n");
-
-const zhSrtMultiline = [
-  "1",
-  "00:00:01,000 --> 00:00:03,500",
-  "中文第一行",
-  "中文第二行",
-  "",
-  "2",
-  "00:00:04,000 --> 00:00:06,000",
-  "另一个字幕",
-].join("\n");
-
 describe("validateCueAlignment", () => {
   it("passes when cues are perfectly aligned", () => {
     const errors = validateCueAlignment(enSrt, zhSrt);

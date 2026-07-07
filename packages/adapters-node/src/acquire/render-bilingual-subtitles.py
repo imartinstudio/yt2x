@@ -19,30 +19,42 @@ VIDEO_WIDTH = 1280
 
 # Font discovery — use fonts that cover BOTH CJK and Latin glyphs.
 # Helvetica/Arial cannot render CJK; STHeiti/PingFang/Hiragino handle both.
-UNIVERSAL_FONT_CANDIDATES = [
-    "/System/Library/Fonts/PingFang.ttc",
-    "/System/Library/Fonts/Hiragino Sans GB.ttc",
-    "/System/Library/Fonts/STHeiti Medium.ttc",
-    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+# Font face indices for bold weights:
+#   PingFang.ttc: 0=Regular, 1=Medium, 2=Semibold
+#   Hiragino Sans GB.ttc: 0=W3(light), 3=W6(bold)
+BOLD_FONT_CANDIDATES = [
+    ("/System/Library/Fonts/PingFang.ttc", 2),         # Semibold
+    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),  # W6 bold
+    ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
+    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
+]
+
+REGULAR_FONT_CANDIDATES = [
+    ("/System/Library/Fonts/PingFang.ttc", 1),          # Medium (bolder than Regular)
+    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),   # W6 bold
+    ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
+    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
 ]
 
 # Style: based on 720p baseline, scaled for 1280x720
 ZH_FONT_SIZE = 58
-EN_FONT_SIZE = 34
+EN_FONT_SIZE = 36  # slightly larger for readability
 ZH_FILL = (255, 244, 0, 255)  # bright yellow (#FFF400)
 EN_FILL = (255, 255, 255, 255)  # pure white
 OUTLINE_COLOR = (0, 0, 0, 255)  # black
-ZH_OUTLINE_W = 4  # thicker outline for Chinese readability
-EN_OUTLINE_W = 2  # thinner outline for English
+ZH_OUTLINE_W = 4
+EN_OUTLINE_W = 2
 
-MAX_WIDTH_FRAC = 0.90  # max text width as fraction of video width
+MAX_WIDTH_FRAC = 0.94  # max text width as fraction of video width
 
 
-def find_font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
-    for p in candidates:
-        if Path(p).exists():
+def find_font(
+    candidates: list[tuple[str, int]], size: int
+) -> ImageFont.FreeTypeFont:
+    for path, face_index in candidates:
+        if Path(path).exists():
             try:
-                return ImageFont.truetype(p, size)
+                return ImageFont.truetype(path, size, index=face_index)
             except Exception:
                 continue
     return ImageFont.load_default()
@@ -281,11 +293,11 @@ def main():
     out_dir = Path(sys.argv[2])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use universal fonts that cover BOTH CJK and Latin glyphs.
+    # Use bold fonts that cover BOTH CJK and Latin glyphs.
     # The "English" line may contain CJK characters when the source
     # video has Chinese subtitles (source_language=zh-Hans).
-    zh_font = find_font(UNIVERSAL_FONT_CANDIDATES, ZH_FONT_SIZE)
-    en_font = find_font(UNIVERSAL_FONT_CANDIDATES, EN_FONT_SIZE)
+    zh_font = find_font(BOLD_FONT_CANDIDATES, ZH_FONT_SIZE)
+    en_font = find_font(REGULAR_FONT_CANDIDATES, EN_FONT_SIZE)
 
     zh_path = zh_font.path if hasattr(zh_font, "path") else "default"
     en_path = en_font.path if hasattr(en_font, "path") else "default"

@@ -46,7 +46,7 @@ export const readDeconstructArtifacts = async (
     throw new Error(`article.md not found in ${resolved}. Run yt2x article first.`);
   }
 
-  // Read SRT — try full.zh.srt first, then full.srt
+  // Read SRT — prefer zh.srt, then bilingual.srt, then raw full.srt
   // Look in article video dir first, then fall back to downloads video dir.
   const videoDir = path.join(resolved, "video");
   const downloadVideoDir = path.join(
@@ -56,7 +56,7 @@ export const readDeconstructArtifacts = async (
     "video",
   );
   const tryReadSrt = async (dir: string): Promise<{ path: string; content: string } | null> => {
-    for (const name of ["full.zh.srt", "full.srt"]) {
+    for (const name of ["full.zh.srt", "full.bilingual.srt", "full.srt"]) {
       const p = path.join(dir, name);
       try {
         return { path: p, content: await readFile(p, "utf8") };
@@ -77,7 +77,7 @@ export const readDeconstructArtifacts = async (
 
   // Find video file — prefer burned, fallback to clip
   let videoPath: string;
-  const videoFiles = ["full.zh-burned.mp4", "full.mp4", "clip.mp4"];
+  const videoFiles = ["full.bilingual-burned.mp4", "full.zh-burned.mp4", "full.mp4", "clip.mp4"];
   let found: string | null = null;
   for (const vf of videoFiles) {
     const p = path.join(videoDir, vf);

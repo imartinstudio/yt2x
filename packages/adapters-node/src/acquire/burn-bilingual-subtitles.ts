@@ -2,7 +2,7 @@ import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/pr
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isProcessError, type ProcessRunner } from "../process/index.js";
+import { type ProcessRunner } from "../process/index.js";
 import { validateSrtIntegrity, verifyBurnedSubtitles } from "./burn-subtitles.js";
 
 export type BurnBilingualSubtitlesOptions = {

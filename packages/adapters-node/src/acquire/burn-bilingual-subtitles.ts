@@ -137,11 +137,21 @@ export const burnBilingualSubtitles = async (
     }
   }
 
-  // 1. Render bilingual subtitle PNGs via Python PIL
+  // 1. Probe video dimensions
+  const videoWidth = await probeVideoWidth(opts.videoPath, opts.runner);
+  const videoHeight = await probeVideoHeight(opts.videoPath, opts.runner);
+
+  // 2. Render bilingual subtitle PNGs via Python PIL
   const renderDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-bilingual-render-"));
   const renderResult = await opts.runner.run({
     command: "python3",
-    args: [PYTHON_SCRIPT, opts.srtPath, renderDir],
+    args: [
+      PYTHON_SCRIPT,
+      opts.srtPath,
+      renderDir,
+      "--video-width", String(videoWidth),
+      "--video-height", String(videoHeight),
+    ],
     timeoutMs: 120_000,
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
@@ -260,6 +270,46 @@ export const burnBilingualSubtitles = async (
   }
 
   return { burned: true, skipped: false, warnings };
+};
+
+/** Probe video width. */
+const probeVideoWidth = async (
+  videoPath: string,
+  runner: ProcessRunner,
+): Promise<number> => {
+  const result = await runner.run({
+    command: "ffprobe",
+    args: [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=width",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      videoPath,
+    ],
+    timeoutMs: 15_000,
+  });
+  const w = parseInt((result.stdout ?? "1280").trim(), 10);
+  return Number.isFinite(w) && w > 0 ? w : 1280;
+};
+
+/** Probe video height. */
+const probeVideoHeight = async (
+  videoPath: string,
+  runner: ProcessRunner,
+): Promise<number> => {
+  const result = await runner.run({
+    command: "ffprobe",
+    args: [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=height",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      videoPath,
+    ],
+    timeoutMs: 15_000,
+  });
+  const h = parseInt((result.stdout ?? "720").trim(), 10);
+  return Number.isFinite(h) && h > 0 ? h : 720;
 };
 
 /** Probe video duration in seconds, falling back to lastEnd + 10. */

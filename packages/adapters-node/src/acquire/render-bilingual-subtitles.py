@@ -15,40 +15,48 @@ import unicodedata
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
-VIDEO_WIDTH = 1280
+# Base style parameters for 720p baseline; scaled proportionally to actual
+# video height at runtime via --video-width / --video-height.
+_BASE_H = 720
 
-# Font discovery — use fonts that cover BOTH CJK and Latin glyphs.
-# Helvetica/Arial cannot render CJK; STHeiti/PingFang/Hiragino handle both.
-# Font face indices for bold weights:
+_BASE_ZH_FONT_SIZE = 52
+_BASE_EN_FONT_SIZE = 32
+_BASE_ZH_OUTLINE_W = 4
+_BASE_EN_OUTLINE_W = 2
+
+ZH_FILL = (255, 227, 2, 255)  # warm golden yellow (#FFE302)
+EN_FILL = (255, 255, 255, 255)  # pure white
+OUTLINE_COLOR = (0, 0, 0, 255)  # pure black
+MAX_WIDTH_FRAC = 0.98
+
+# Runtime values — set by main() after parsing video dimensions
+VIDEO_WIDTH = 1280
+VIDEO_HEIGHT = 720
+ZH_FONT_SIZE = _BASE_ZH_FONT_SIZE
+EN_FONT_SIZE = _BASE_EN_FONT_SIZE
+ZH_OUTLINE_W = _BASE_ZH_OUTLINE_W
+EN_OUTLINE_W = _BASE_EN_OUTLINE_W
+
+# Font candidates (face index for bold weights):
 #   PingFang.ttc: 0=Regular, 1=Medium, 2=Semibold
-#   Hiragino Sans GB.ttc: 0=W3(light), 3=W6(bold)
+#   Hiragino Sans GB.ttc: 0=W3, 3=W6(bold)
 BOLD_FONT_CANDIDATES = [
-    ("/System/Library/Fonts/PingFang.ttc", 2),         # Semibold
-    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),  # W6 bold
+    ("/System/Library/Fonts/PingFang.ttc", 2),
+    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),
     ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
     ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
 ]
 
 REGULAR_FONT_CANDIDATES = [
-    ("/System/Library/Fonts/PingFang.ttc", 1),          # Medium (bolder than Regular)
-    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),   # W6 bold
+    ("/System/Library/Fonts/PingFang.ttc", 1),
+    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),
     ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
     ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
 ]
 
-# Style: calibrated for short-video explainer look.
-# Font sizes match reference: Chinese prominent, English readable.
-# MAX_WIDTH_FRAC is set near the practical limit — text only wraps when it
-# truly cannot fit on one line within the video safe area.
-ZH_FONT_SIZE = 52
-EN_FONT_SIZE = 32
-ZH_FILL = (255, 227, 2, 255)  # warm golden yellow (#FFE302) — matched to reference
-EN_FILL = (255, 255, 255, 255)  # pure white
-OUTLINE_COLOR = (0, 0, 0, 255)  # pure black
-ZH_OUTLINE_W = 4
-EN_OUTLINE_W = 2
-
-MAX_WIDTH_FRAC = 0.98  # near-full width — only wrap when truly necessary
+def scale_value(base_val: int, video_h: int, base_h: int = _BASE_H) -> int:
+    """Scale a dimension proportionally to video height."""
+    return max(1, round(base_val * video_h / base_h))
 
 
 def find_font(
@@ -297,17 +305,57 @@ def render_cue(
 
 
 def main():
-    if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <bilingual.srt> <output_dir>", file=sys.stderr)
+    global VIDEO_WIDTH, VIDEO_HEIGHT, ZH_FONT_SIZE, EN_FONT_SIZE, ZH_OUTLINE_W, EN_OUTLINE_W
+
+    # Parse args: <srt> <out_dir> [--video-width W] [--video-height H]
+    args = sys.argv[1:]
+    srt_path = None
+    out_dir = None
+    video_w = 1280
+    video_h = 720
+
+    i = 0
+    while i < len(args):
+        if args[i] == "--video-width" and i + 1 < len(args):
+            video_w = int(args[i + 1])
+            i += 2
+        elif args[i] == "--video-height" and i + 1 < len(args):
+            video_h = int(args[i + 1])
+            i += 2
+        elif srt_path is None:
+            srt_path = args[i]
+            i += 1
+        elif out_dir is None:
+            out_dir = args[i]
+            i += 1
+        else:
+            i += 1
+
+    if srt_path is None or out_dir is None:
+        print(
+            f"Usage: {sys.argv[0]} <bilingual.srt> <output_dir> "
+            f"[--video-width W] [--video-height H]",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    srt_path = sys.argv[1]
-    out_dir = Path(sys.argv[2])
+    # Scale all dimensions to actual video resolution (720p baseline)
+    scale = video_h / _BASE_H
+    VIDEO_WIDTH = video_w
+    VIDEO_HEIGHT = video_h
+    ZH_FONT_SIZE = scale_value(_BASE_ZH_FONT_SIZE, video_h)
+    EN_FONT_SIZE = scale_value(_BASE_EN_FONT_SIZE, video_h)
+    ZH_OUTLINE_W = max(2, scale_value(_BASE_ZH_OUTLINE_W, video_h))
+    EN_OUTLINE_W = max(1, scale_value(_BASE_EN_OUTLINE_W, video_h))
+
+    out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use bold fonts that cover BOTH CJK and Latin glyphs.
-    # The "English" line may contain CJK characters when the source
-    # video has Chinese subtitles (source_language=zh-Hans).
+    print(
+        f"Video: {VIDEO_WIDTH}x{VIDEO_HEIGHT} (scale={scale:.2f}x)",
+        file=sys.stderr,
+    )
+
     zh_font = find_font(BOLD_FONT_CANDIDATES, ZH_FONT_SIZE)
     en_font = find_font(REGULAR_FONT_CANDIDATES, EN_FONT_SIZE)
 

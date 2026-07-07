@@ -44,15 +44,25 @@ export const fixLlmHomoglyphs = (text: string): string => {
 };
 
 /**
- * Extract capitalized English words (potential proper nouns) from source text.
- * Returns a list of proper nouns that must be preserved verbatim.
+ * Extract proper nouns from English source text.
+ *
+ * Only extracts unambiguous proper nouns:
+ * - Compounds with numbers: "Fable 5", "GPT-4", "Claude 3.5"
+ * - Known brand/product patterns: "ChatGPT", "Claude", "Midjourney"
+ *
+ * Single capitalized words are intentionally excluded — they are too
+ * ambiguous ("Cloud", "Open", "Free", etc. are often regular words
+ * at the start of a subtitle line, not proper nouns).
  */
 const extractProperNouns = (text: string): string[] => {
-  // Match capitalized words (2+ chars) that aren't at the start of a sentence
-  const words = text.match(/\b[A-Z][a-zA-Z0-9]+\b/g) ?? [];
-  // Also match patterns like "GPT-4", "Claude 3.5", "Fable 5"
-  const compounds = text.match(/\b[A-Z][a-zA-Z0-9]+[- ]\d+(\.\d+)?\b/g) ?? [];
-  return [...new Set([...words, ...compounds])];
+  // Compound names with numbers: "Fable 5", "GPT-4", "Claude 3.5"
+  // Only match ONE word + number, not multi-word prefixes like "Cloud Fable 5"
+  const compounds =
+    text.match(/\b[A-Z][a-zA-Z0-9]+[- ]\d+(?:\.\d+)?\b/g) ?? [];
+  // Known multi-word brand names that are always proper nouns
+  const knownBrands =
+    text.match(/\b(?:ChatGPT|Midjourney|Claude|Gemini|Copilot|Notion|Figma|Canva|Photoshop|Stable\s*Diffusion|DALL-E)\b/gi) ?? [];
+  return [...new Set([...compounds, ...knownBrands])];
 };
 
 /**
@@ -71,15 +81,8 @@ export const preserveProperNouns = (
   const nouns = extractProperNouns(enSourceText);
   let result = zhText;
   for (const noun of nouns) {
-    // Skip if already present verbatim
-    if (result.includes(noun)) continue;
-    // Skip common English stopwords/pronouns
-    if (
-      /^(The|A|An|I|It|We|You|He|She|They|This|That|These|Those|And|But|Or|So|For|In|On|At|To|Of|Is|Are|Was|Were|Be|Been|Have|Has|Had|Do|Does|Did|Can|Will|Would|Should|Could|May|Might|Not|No|Yes|If|When|Where|Why|How|What|Who|Which|Her|His|My|Our|Your|Its|Their|Me|Him|Us|Them|Here|There|Now|Then|Just|Also|Only|Still|Even|Very|Much|Many|More|Most|Some|Any|All|Each|Every|Both|Few|One|Two|Hello|Goodbye|Okay|Alright|Hey|Wow|Yeah|Right|Left|North|South|East|West)$/.test(
-        noun,
-      )
-    )
-      continue;
+    // Skip if already present verbatim (case-insensitive for known brands)
+    if (result.toLowerCase().includes(noun.toLowerCase())) continue;
 
     // Append original proper noun — never modify the Chinese text itself
     result = result.trimEnd() + ` (${noun})`;

@@ -208,10 +208,10 @@ export const burnBilingualSubtitles = async (
     await copyFile(src, dst);
   }
 
-  // 6. ffmpeg overlay onto main video
+  // 6. ffmpeg overlay onto main video — preserve source resolution
   const filterComplex = [
     `[0:v][1:v]overlay=(W-w)/2:H-h-36[overlaid]`,
-    `[overlaid]scale=w=min(1280\\,iw):h=min(720\\,ih),format=yuv420p[vfinal]`,
+    `[overlaid]format=yuv420p[vfinal]`,
   ].join(";");
 
   const ffmpegArgs = [

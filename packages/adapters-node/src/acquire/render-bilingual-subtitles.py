@@ -37,13 +37,13 @@ REGULAR_FONT_CANDIDATES = [
 ]
 
 # Style: based on 720p baseline, scaled for 1280x720
-ZH_FONT_SIZE = 58
-EN_FONT_SIZE = 36  # slightly larger for readability
-ZH_FILL = (255, 244, 0, 255)  # bright yellow (#FFF400)
+ZH_FONT_SIZE = 62
+EN_FONT_SIZE = 36
+ZH_FILL = (255, 227, 2, 255)  # warm golden yellow (#FFE302) — matched to reference
 EN_FILL = (255, 255, 255, 255)  # pure white
-OUTLINE_COLOR = (0, 0, 0, 255)  # black
-ZH_OUTLINE_W = 4
-EN_OUTLINE_W = 2
+OUTLINE_COLOR = (0, 0, 0, 255)  # pure black
+ZH_OUTLINE_W = 5  # matched to reference: visible dark edge around yellow
+EN_OUTLINE_W = 3
 
 MAX_WIDTH_FRAC = 0.94  # max text width as fraction of video width
 

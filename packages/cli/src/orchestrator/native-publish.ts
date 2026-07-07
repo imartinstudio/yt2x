@@ -174,41 +174,71 @@ type VideoAssetsInfo = {
   videoFile: string;
   subtitleFile?: string;
   burnedVideoFile?: string;
-  recommendedUploadMode: "video_with_srt" | "burned_video" | "video_only";
+  /** v2: bilingual subtitle SRT asset */
+  bilingualSubtitleFile?: string;
+  /** v2: bilingual subtitle ASS asset */
+  bilingualAssFile?: string;
+  /** v2: burned bilingual video asset */
+  bilingualBurnedVideoFile?: string;
+  recommendedUploadMode: "video_with_srt" | "burned_video" | "bilingual_burned_video" | "video_only";
 };
 
 const resolveVideoAssets = async (articleDir: string): Promise<VideoAssetsInfo | null> => {
   const videoDir = path.join(articleDir, "video");
-  const videoFile = path.join(videoDir, "clip.mp4");
+  // Prefer clip.mp4 (clipped video), fall back to full.mp4 (full download).
+  // The full-video workflow produces full.mp4 + bilingual burned assets
+  // without a clip.mp4.
+  const clipFile = path.join(videoDir, "clip.mp4");
+  const fullFile = path.join(videoDir, "full.mp4");
+  let videoFile = clipFile;
+  let videoRelPath = "video/clip.mp4";
   try {
     await access(videoFile);
   } catch {
-    return null;
+    try {
+      await access(fullFile);
+      videoFile = fullFile;
+      videoRelPath = "video/full.mp4";
+    } catch {
+      return null;
+    }
   }
 
   const subtitleFile = path.join(videoDir, "full.zh.srt");
   const burnedFile = path.join(videoDir, "full.zh-burned.mp4");
+  const bilingualBurnedFile = path.join(videoDir, "full.bilingual-burned.mp4");
+  const bilingualSrtFile = path.join(videoDir, "full.bilingual.srt");
+  const bilingualAssFile = path.join(videoDir, "full.bilingual.ass");
+
   let hasSubtitle = false;
   let hasBurned = false;
-  try {
-    await access(subtitleFile);
-    hasSubtitle = true;
-  } catch { /* */ }
-  try {
-    await access(burnedFile);
-    hasBurned = true;
-  } catch { /* */ }
+  let hasBilingualBurned = false;
+  let hasBilingualSrt = false;
+  let hasBilingualAss = false;
 
-  const recommendedUploadMode: VideoAssetsInfo["recommendedUploadMode"] = hasSubtitle
-    ? "video_with_srt"
-    : hasBurned
-      ? "burned_video"
-      : "video_only";
+  try { await access(subtitleFile); hasSubtitle = true; } catch { /* */ }
+  try { await access(burnedFile); hasBurned = true; } catch { /* */ }
+  try { await access(bilingualBurnedFile); hasBilingualBurned = true; } catch { /* */ }
+  try { await access(bilingualSrtFile); hasBilingualSrt = true; } catch { /* */ }
+  try { await access(bilingualAssFile); hasBilingualAss = true; } catch { /* */ }
+
+  // Priority: bilingual burned > zh burned > video + zh srt > video only
+  const recommendedUploadMode: VideoAssetsInfo["recommendedUploadMode"] =
+    hasBilingualBurned
+      ? "bilingual_burned_video"
+      : hasBurned
+        ? "burned_video"
+        : hasSubtitle
+          ? "video_with_srt"
+          : "video_only";
 
   return {
-    videoFile: "video/clip.mp4",
+    videoFile: videoRelPath,
     ...(hasSubtitle ? { subtitleFile: "video/full.zh.srt" } : {}),
     ...(hasBurned ? { burnedVideoFile: "video/full.zh-burned.mp4" } : {}),
+    ...(hasBilingualBurned ? { bilingualBurnedVideoFile: "video/full.bilingual-burned.mp4" } : {}),
+    ...(hasBilingualSrt ? { bilingualSubtitleFile: "video/full.bilingual.srt" } : {}),
+    ...(hasBilingualAss ? { bilingualAssFile: "video/full.bilingual.ass" } : {}),
     recommendedUploadMode,
   };
 };

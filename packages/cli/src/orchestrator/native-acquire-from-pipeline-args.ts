@@ -32,6 +32,8 @@ export const nativeAcquireOptionsFromPipelineArgs = (
     subtitleTargetLang: args.acquire.subtitleTargetLang,
     subtitleSource: args.acquire.subtitleSource,
     ...(args.acquire.subtitleFile !== undefined ? { subtitleFile: args.acquire.subtitleFile } : {}),
+    subtitleBilingual: args.acquire.subtitleBilingual,
+    subtitleBurnStyle: args.acquire.subtitleBurnStyle,
     ...(args.acquire.subLangs !== undefined ? { subLangs: args.acquire.subLangs } : {}),
     ...(args.acquire.cookiesFromBrowser !== undefined
       ? { cookiesFromBrowser: args.acquire.cookiesFromBrowser }

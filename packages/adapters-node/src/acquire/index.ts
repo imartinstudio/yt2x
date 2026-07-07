@@ -34,6 +34,13 @@ export {
 } from "./video-subtitles.js";
 export { translateSrt, type SrtTranslatorOptions } from "./srt-translator.js";
 export {
+  mergeBilingualSrt,
+  validateCueAlignment,
+  buildBilingualAss,
+  type CueAlignmentError,
+  type BilingualAssStyleOptions,
+} from "./bilingual-subtitles.js";
+export {
   burnSubtitles,
   validateSrtIntegrity,
   verifyBurnedSubtitles,
@@ -48,3 +55,8 @@ export {
   type BurnZhSubtitlesForVideoResult,
   type BurnZhSubtitlesSkipReason,
 } from "./burn-zh-subtitles-for-video.js";
+export {
+  burnBilingualSubtitles,
+  type BurnBilingualSubtitlesOptions,
+  type BurnBilingualSubtitlesResult,
+} from "./burn-bilingual-subtitles.js";

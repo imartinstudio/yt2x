@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import type { LlmPort } from "@yt2x/core";
 import type { ProcessRunner } from "../process/index.js";
+import { buildBilingualAss, mergeBilingualSrt } from "./bilingual-subtitles.js";
+import { burnBilingualSubtitles } from "./burn-bilingual-subtitles.js";
 import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
 import { translateSrt } from "./srt-translator.js";
 
@@ -24,7 +26,7 @@ export type SubtitleSourceMethod =
   | "file";
 
 export type SubtitleManifest = {
-  version: 1;
+  version: 1 | 2;
   source_video: string;
   source_language: string;
   target_language: string;
@@ -33,6 +35,12 @@ export type SubtitleManifest = {
   target_subtitle?: string;
   burned_video?: string;
   translation_method?: "llm" | "manual" | "external_command";
+  /** v2: bilingual SRT asset path (relative to video dir) */
+  bilingual_subtitle?: string;
+  /** v2: bilingual ASS asset path (relative to video dir) */
+  bilingual_ass?: string;
+  /** v2: subtitle burn visual style identifier (only written when bilingual is active) */
+  burn_style?: "zh-default" | "bilingual-explainer-v1";
   warnings: string[];
 };
 
@@ -547,6 +555,10 @@ export type RunSubtitlePipelineOptions = {
   force?: boolean;
   /** 视频原语言（来自 YouTube metadata.language），用于 Layer 1 跳过判断 */
   videoLanguage?: string;
+  /** 双语字幕模式：off / srt / ass / burned / all */
+  subtitleBilingual?: "off" | "srt" | "ass" | "burned" | "all";
+  /** 硬字幕烧制样式：zh-default / bilingual-explainer */
+  subtitleBurnStyle?: "zh-default" | "bilingual-explainer";
 };
 
 export type RunSubtitlePipelineResult = {
@@ -560,7 +572,10 @@ export const runSubtitlePipeline = async (
   const { videoDir, subtitle } = opts;
   const mode = subtitle.mode;
   const warnings: string[] = [];
-  const mustHaveSubtitles = mode === "burned";
+  const mustHaveSubtitles =
+    mode === "burned" ||
+    opts.subtitleBilingual === "burned" ||
+    opts.subtitleBilingual === "all";
 
   const subResult = await prepareSourceSubtitle({
     videoDir,
@@ -576,8 +591,12 @@ export const runSubtitlePipeline = async (
 
   if (subResult.sourceSubtitle === undefined) {
     if (mustHaveSubtitles) {
+      const reqDesc =
+        opts.subtitleBilingual === "burned" || opts.subtitleBilingual === "all"
+          ? "--subtitle-bilingual burned/all"
+          : "--subtitle-zh burned";
       throw new Error(
-        "no subtitles available. --subtitle-zh burned requires subtitle source. " +
+        `no subtitles available. ${reqDesc} requires subtitle source. ` +
           "Provide subtitles via --subtitle-source file --subtitle-file, or ensure YouTube subtitles are available.",
       );
     }
@@ -743,6 +762,134 @@ export const runSubtitlePipeline = async (
       );
     } else if (burnResult.skipReason === "missing_mp4") {
       warnings.push("no MP4 video file found for subtitle burning");
+    }
+  }
+
+  // ── Bilingual subtitle generation ──
+  const bilingualMode = opts.subtitleBilingual ?? "off";
+  const bilingualMustHave =
+    bilingualMode === "burned" || bilingualMode === "all";
+
+  if (bilingualMode !== "off" && !hasZhSrt) {
+    if (bilingualMustHave) {
+      throw new Error(
+        "Chinese subtitle translation required for --subtitle-bilingual burned/all. " +
+          "Provide LLM config (--llm-provider) or ensure Chinese subtitles are available.",
+      );
+    }
+  }
+
+  if (bilingualMode !== "off" && subResult.sourceSubtitle !== undefined && hasZhSrt) {
+    const enSrtPath = subResult.sourceSubtitle;
+    const zhSrtPath = path.join(videoDir, "video", "full.zh.srt");
+    const burnStyle = opts.subtitleBurnStyle === "bilingual-explainer"
+      ? "bilingual-explainer-v1"
+      : undefined;
+
+    try {
+      const enSrtContent = await readFile(enSrtPath, "utf8");
+      const zhSrtContent = await readFile(zhSrtPath, "utf8");
+
+      // Generate bilingual SRT
+      if (bilingualMode === "srt" || bilingualMode === "ass" || bilingualMode === "burned" || bilingualMode === "all") {
+        const bilingualSrt = mergeBilingualSrt(enSrtContent, zhSrtContent);
+        const bilingualSrtPath = path.join(videoDir, "video", "full.bilingual.srt");
+        await writeFile(bilingualSrtPath, bilingualSrt, "utf8");
+        manifest = {
+          ...manifest,
+          bilingual_subtitle: "video/full.bilingual.srt",
+        };
+
+        // Copy to article dir if specified
+        if (opts.burnedVideoOutDir !== undefined) {
+          const articleVideoDir = path.join(opts.burnedVideoOutDir, path.basename(videoDir), "video");
+          await mkdir(articleVideoDir, { recursive: true });
+          await copyFile(
+            bilingualSrtPath,
+            path.join(articleVideoDir, "full.bilingual.srt"),
+          ).catch(() => {});
+        }
+      }
+
+      // Generate bilingual ASS
+      if (bilingualMode === "ass" || bilingualMode === "burned" || bilingualMode === "all") {
+        const bilingualAss = buildBilingualAss(enSrtContent, zhSrtContent, {
+          zhFont: opts.subtitleBurnStyle === "bilingual-explainer" ? "PingFang SC" : "PingFang SC",
+          enFont: "Arial",
+          videoWidth: 1280,
+          videoHeight: 720,
+        });
+        const bilingualAssPath = path.join(videoDir, "video", "full.bilingual.ass");
+        await writeFile(bilingualAssPath, bilingualAss, "utf8");
+        manifest = {
+          ...manifest,
+          bilingual_ass: "video/full.bilingual.ass",
+        };
+
+        // Copy to article dir if specified
+        if (opts.burnedVideoOutDir !== undefined) {
+          const articleVideoDir = path.join(opts.burnedVideoOutDir, path.basename(videoDir), "video");
+          await mkdir(articleVideoDir, { recursive: true });
+          await copyFile(
+            bilingualAssPath,
+            path.join(articleVideoDir, "full.bilingual.ass"),
+          ).catch(() => {});
+        }
+      }
+
+      // Burn bilingual subtitles
+      if (bilingualMode === "burned" || bilingualMode === "all") {
+        const bilingualAssPath = path.join(videoDir, "video", "full.bilingual.ass");
+        const names = await readdir(path.join(videoDir, "video")).catch(() => [] as string[]);
+        const mp4File = names.find((n) => /\.mp4$/i.test(n) && !/\.(zh|bilingual)-burned\.mp4$/i.test(n));
+        if (mp4File !== undefined) {
+          const videoPath = path.join(videoDir, "video", mp4File);
+          const burnedSubdir =
+            opts.burnedVideoOutDir !== undefined
+              ? path.join(opts.burnedVideoOutDir, path.basename(videoDir), "video")
+              : path.join(videoDir, "video");
+          const burnedOutput = path.join(burnedSubdir, "full.bilingual-burned.mp4");
+
+          const burnResult = await burnBilingualSubtitles({
+            assPath: bilingualAssPath,
+            videoPath,
+            outputPath: burnedOutput,
+            runner: opts.runner,
+            enSrtPath,
+            zhSrtPath,
+            ...(opts.force !== undefined ? { force: opts.force } : {}),
+            ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+          });
+
+          warnings.push(...burnResult.warnings);
+
+          if (burnResult.burned) {
+            manifest = {
+              ...manifest,
+              version: 2,
+              burned_video: "video/full.bilingual-burned.mp4",
+              ...(burnStyle !== undefined ? { burn_style: burnStyle } : {}),
+            };
+          }
+        } else {
+          warnings.push("no MP4 video file found for bilingual subtitle burning");
+        }
+      }
+
+      // Upgrade manifest version if bilingual fields are present
+      if (manifest.bilingual_subtitle !== undefined || manifest.bilingual_ass !== undefined) {
+        manifest = {
+          ...manifest,
+          version: 2,
+          ...(burnStyle !== undefined ? { burn_style: burnStyle } : {}),
+        };
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (bilingualMode === "burned" || bilingualMode === "all") {
+        throw new Error(`bilingual subtitle generation failed: ${message}`);
+      }
+      warnings.push(`bilingual subtitle generation failed: ${message}`);
     }
   }
 

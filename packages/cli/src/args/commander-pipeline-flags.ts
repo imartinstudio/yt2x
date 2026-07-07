@@ -36,6 +36,8 @@ export type CommanderPipelineFlags = {
   subtitleTargetLang?: string;
   subtitleSource?: string;
   subtitleFile?: string;
+  subtitleBilingual?: string;
+  subtitleBurnStyle?: string;
   continueFrom?: boolean;
   errorStrategy?: string;
   force?: boolean;
@@ -95,6 +97,8 @@ export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): Pipe
       subtitleTargetLang: flags.subtitleTargetLang,
       subtitleSource: flags.subtitleSource,
       subtitleFile: flags.subtitleFile,
+      subtitleBilingual: flags.subtitleBilingual,
+      subtitleBurnStyle: flags.subtitleBurnStyle,
     },
     article: {
       platform: flags.platform ?? "x",

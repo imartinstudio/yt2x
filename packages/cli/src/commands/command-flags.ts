@@ -22,6 +22,8 @@ export type SingleStageFlags = {
   subtitleTargetLang?: string;
   subtitleSource?: string;
   subtitleFile?: string;
+  subtitleBilingual?: string;
+  subtitleBurnStyle?: string;
   platform?: string;
   maxChars?: string;
   rewriteMode?: string;

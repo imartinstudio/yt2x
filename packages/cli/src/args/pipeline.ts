@@ -11,6 +11,8 @@ import { LlmConfigSchema } from "./llm.js";
 
 export const SearchSortSchema = z.enum(["views"]);
 export const SubtitleZhModeSchema = z.enum(["off", "srt", "burned", "both"]);
+export const SubtitleBilingualModeSchema = z.enum(["off", "srt", "ass", "burned", "all"]);
+export const SubtitleBurnStyleSchema = z.enum(["zh-default", "bilingual-explainer"]);
 export const SubtitleSourceSchema = z.enum(["auto", "youtube", "transcribe", "file"]);
 
 export const VideoSourcesFieldsSchema = z
@@ -67,6 +69,8 @@ export const AcquireOptionsSchema = z.object({
   subtitleTargetLang: z.string().min(1).default("zh-CN"),
   subtitleSource: SubtitleSourceSchema.default("auto"),
   subtitleFile: z.string().min(1).optional(),
+  subtitleBilingual: SubtitleBilingualModeSchema.default("off"),
+  subtitleBurnStyle: SubtitleBurnStyleSchema.default("zh-default"),
 }).superRefine((data, ctx) => {
   if (data.videoOnly && data.downloadVideo === false) {
     ctx.addIssue({
@@ -87,6 +91,20 @@ export const AcquireOptionsSchema = z.object({
       code: z.ZodIssueCode.custom,
       message: "--subtitle-file 需要配合 --subtitle-source file 使用",
       path: ["subtitleSource"],
+    });
+  }
+  if (data.subtitleBurnStyle === "bilingual-explainer" && data.subtitleBilingual === "off") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "--subtitle-burn-style bilingual-explainer 需要配合 --subtitle-bilingual 使用",
+      path: ["subtitleBilingual"],
+    });
+  }
+  if (data.subtitleBilingual !== "off" && data.subtitleZh === "off") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "--subtitle-bilingual 需要配合 --subtitle-zh 使用（至少 srt/burned/both）",
+      path: ["subtitleZh"],
     });
   }
 });

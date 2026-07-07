@@ -66,6 +66,8 @@ export const projectSingleStage = (target: SingleStageTarget, flags: SingleStage
       subtitleTargetLang: flags.subtitleTargetLang,
       subtitleSource: flags.subtitleSource,
       subtitleFile: flags.subtitleFile,
+      subtitleBilingual: flags.subtitleBilingual,
+      subtitleBurnStyle: flags.subtitleBurnStyle,
     },
     article: {
       platform: flags.platform ?? "x",

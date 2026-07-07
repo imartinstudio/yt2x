@@ -28,6 +28,10 @@ export type PrepareYoutubeVideoOptions = {
   proxy?: string;
   videoClip?: VideoClipOptions;
   videoSubtitles?: VideoSubtitleOptions;
+  /** Bilingual subtitle mode — forwarded to runSubtitlePipeline via videoSubtitles extension. */
+  subtitleBilingual?: "off" | "srt" | "ass" | "burned" | "all";
+  /** Subtitle burn visual style — forwarded to runSubtitlePipeline. */
+  subtitleBurnStyle?: "zh-default" | "bilingual-explainer";
   /** When set, burned subtitle video is written here instead of videoDir. */
   burnedVideoOutDir?: string;
   skipPreflight?: boolean;
@@ -276,6 +280,8 @@ export const prepareYoutubeVideo = async (
           ...(opts.burnedVideoOutDir !== undefined ? { burnedVideoOutDir: opts.burnedVideoOutDir } : {}),
           ...(opts.force !== undefined ? { force: opts.force } : {}),
           videoLanguage,
+          ...(opts.subtitleBilingual !== undefined ? { subtitleBilingual: opts.subtitleBilingual } : {}),
+          ...(opts.subtitleBurnStyle !== undefined ? { subtitleBurnStyle: opts.subtitleBurnStyle } : {}),
         });
         result.warnings.push(...warnings);
       });

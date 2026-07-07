@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { burnBilingualSubtitles } from "./burn-bilingual-subtitles.js";
 import type { ProcessRunner } from "../process/index.js";
 
-// Mock verify-subtitles to avoid Python dependency in unit tests
+// Mock verify-subtitles and validateSrtIntegrity to avoid Python dependency
 vi.mock("./burn-subtitles.js", () => ({
   verifyBurnedSubtitles: vi.fn().mockResolvedValue({
     passed: true,
@@ -40,8 +40,44 @@ describe("burnBilingualSubtitles", () => {
       "1\n00:00:01,000 --> 00:00:03,000\n你好\n",
     );
 
+    // Smart mock: simulate Python renderer output, ffprobe, and ffmpeg
     runner = {
-      run: vi.fn().mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" }),
+      run: vi.fn().mockImplementation(async (opts) => {
+        if (opts.command === "python3") {
+          const args = opts.args ?? [];
+          if (args[0] === "-c") {
+            // Blank PNG creation via python3 -c "Image.new(...).save(\"PATH\")"
+            const pyCode = args[1] ?? "";
+            const match = pyCode.match(/\.save\("([^"]+)"\)/);
+            const pngPath = match?.[1];
+            if (pngPath) {
+              await mkdir(path.dirname(pngPath), { recursive: true });
+              await writeFile(pngPath, Buffer.from([0x89, 0x50, 0x4E, 0x47]));
+            }
+          } else {
+            // Bilingual render script: write manifest.json + cue PNGs
+            const renderDir = args[args.length - 1] ?? "/tmp/fallback";
+            await mkdir(renderDir, { recursive: true });
+            await writeFile(
+              path.join(renderDir, "manifest.json"),
+              JSON.stringify({
+                cues: [
+                  { index: 1, filename: "cue_0001.png", start: 1, end: 3, width: 800, height: 120 },
+                ],
+                video_width: 1280,
+                video_height: 0,
+              }),
+            );
+            // Write the actual cue PNG file too
+            await writeFile(path.join(renderDir, "cue_0001.png"), Buffer.from([0x89, 0x50, 0x4E, 0x47]));
+          }
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (opts.command === "ffprobe") {
+          return { exitCode: 0, stdout: "10.0\n", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }),
     };
   });
 

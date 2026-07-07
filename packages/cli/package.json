@@ -48,7 +48,7 @@
   "dependencies": {
     "@yt2x/core": "workspace:*",
     "@yt2x/adapters-node": "workspace:*",
-    "commander": "^13.1.0",
+    "commander": "^15.0.0",
     "pino": "^10.3.1",
     "pino-pretty": "^13.0.0",
     "zod": "^3.24.1"

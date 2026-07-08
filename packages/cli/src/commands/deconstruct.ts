@@ -12,6 +12,7 @@ import {
   generateClipsPosts,
   writeSelectedPostFiles,
   writeReports,
+  assertClipPublishReadiness,
 } from "@yt2x/adapters-node";
 import { resolveLlmConfig, defaultCliLlmProvider } from "../config/env.js";
 import { logger } from "../logger.js";
@@ -194,6 +195,17 @@ export const runDeconstructCommand = async (
       for (const fail of clipResults.filter((r) => !r.success)) {
         logger.warn({ candidate: fail.candidate.title, error: fail.error }, "  clip failed");
       }
+    }
+
+    try {
+      const readiness = await assertClipPublishReadiness(articleDir);
+      logger.info({ postCount: readiness.publishOrder.length }, "Deconstruct: clip publish readiness check passed");
+    } catch (err: unknown) {
+      logger.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        "Deconstruct: clip publish readiness check failed",
+      );
+      return 1;
     }
 
     // Generate reports (now with post text populated)

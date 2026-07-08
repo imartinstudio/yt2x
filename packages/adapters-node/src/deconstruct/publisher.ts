@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { DeconstructManifest } from "@yt2x/core";
+import { assertClipPublishReadiness } from "./publish-readiness.js";
 
 export type PublishClipsInput = {
   articleDir: string;
@@ -21,6 +22,7 @@ export const publishClips = async (input: PublishClipsInput): Promise<PublishCli
   const manifestPath = path.join(input.articleDir, "x-format", "clips", "clips-manifest.json");
   const manifestRaw = await readFile(manifestPath, "utf8");
   const manifest: DeconstructManifest = JSON.parse(manifestRaw);
+  await assertClipPublishReadiness(input.articleDir);
 
   const selected = manifest.clips.filter((c) => c.selected && c.text);
   if (selected.length === 0) {

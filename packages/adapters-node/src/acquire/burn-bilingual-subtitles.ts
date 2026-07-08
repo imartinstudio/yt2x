@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,8 +55,18 @@ const PYTHON_SCRIPT = path.resolve(
   "..", "..", "src", "acquire", "render-bilingual-subtitles.py",
 );
 
-/** Overlay frame rate — sub-second granularity avoids boundary artifacts. */
-const OVERLAY_FPS = 4;
+const WATERMARK_SCRIPT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..", "..", "src", "acquire", "gen-watermark.py",
+);
+
+const OVERLAY_FRAMES_SCRIPT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..", "..", "src", "acquire", "generate-overlay-frames.py",
+);
+
+/** Fallback when ffprobe cannot read frame rate. */
+const DEFAULT_OVERLAY_FPS = 30;
 
 /**
  * Burn bilingual subtitles into a video using Python PIL rendering + ffmpeg overlay.
@@ -67,8 +77,8 @@ const OVERLAY_FPS = 4;
  * 1. Validate SRT integrity.
  * 2. Python PIL renders each bilingual cue as a transparent RGBA PNG
  *    (Chinese yellow bold on top, English white italic on bottom).
- * 3. Generate one frame per OVERLAY_FPS second.
- * 4. ffmpeg overlays onto the main video.
+ * 3. Bake watermark + subtitles into full-frame overlay sequence at video FPS.
+ * 4. ffmpeg single-pass overlay onto the main video.
  * 5. Post-burn frame verification.
  *
  * Force / mtime logic:
@@ -141,9 +151,10 @@ export const burnBilingualSubtitles = async (
     }
   }
 
-  // 1. Probe video dimensions
+  // 1. Probe video dimensions and frame rate
   const videoWidth = await probeVideoWidth(opts.videoPath, opts.runner);
   const videoHeight = await probeVideoHeight(opts.videoPath, opts.runner);
+  const overlayFps = await probeVideoFrameRate(opts.videoPath, opts.runner);
 
   // 2. Render bilingual subtitle PNGs via Python PIL
   const renderDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-bilingual-render-"));
@@ -154,12 +165,6 @@ export const burnBilingualSubtitles = async (
     "--video-width", String(videoWidth),
     "--video-height", String(videoHeight),
   ];
-  if (opts.watermarkVideo) {
-    pyArgs.push("--watermark-video", opts.watermarkVideo);
-  }
-  if (opts.watermarkXlate) {
-    pyArgs.push("--watermark-xlate", opts.watermarkXlate);
-  }
   const renderResult = await opts.runner.run({
     command: "python3",
     args: pyArgs,
@@ -187,9 +192,9 @@ export const burnBilingualSubtitles = async (
   const maxH = Math.max(...cues.map((c) => c.height), 40);
   const lastEnd = cues[cues.length - 1]!.end;
   const videoDuration = await probeVideoDuration(opts.videoPath, opts.runner, lastEnd);
-  const totalSec = Math.ceil(Math.max(lastEnd + 5, videoDuration + 2));
+  const totalSec = videoDuration;
 
-  // 4. Create blank frame matching max subtitle height
+  // 4. Create blank subtitle strip for gaps between cues
   const blankPath = path.join(renderDir, "blank.png");
   const blankResult = await opts.runner.run({
     command: "python3",
@@ -204,83 +209,72 @@ export const burnBilingualSubtitles = async (
     throw new Error("failed to create blank PNG for bilingual burn");
   }
 
-  // 5. Generate overlay frames at OVERLAY_FPS
-  const framesDir = path.join(renderDir, "frames");
-  await mkdir(framesDir, { recursive: true });
-
-  const totalFrames = totalSec * OVERLAY_FPS;
-  const frameInterval = 1 / OVERLAY_FPS;
-
-  for (let i = 0; i < totalFrames; i++) {
-    const t = i * frameInterval;
-    const active = cues.find((c) => c.start <= t && c.end > t);
-    const src = active ? path.join(renderDir, active.filename) : blankPath;
-    const dst = path.join(framesDir, `frame_${String(i).padStart(5, "0")}.png`);
-    await copyFile(src, dst);
-  }
-  let watermarkInput: string | null = null;
+  // 5. Generate watermark PNG (composited into every overlay frame — no ffmpeg flicker)
+  let watermarkPath: string | null = null;
   if (opts.watermarkVideo || opts.watermarkXlate) {
     const wmPath = path.join(renderDir, "watermark.png");
-    const wmScriptPath = path.join(renderDir, "gen-watermark.py");
-    const wmScriptLines: string[] = [
-      "from PIL import Image, ImageDraw, ImageFont",
-      `w, h = ${videoWidth}, ${videoHeight}`,
-      'img = Image.new("RGBA", (w, h), (0, 0, 0, 0))',
-      "draw = ImageDraw.Draw(img)",
-      "try:",
-      '    font = ImageFont.truetype("/System/Library/Fonts/Hiragino Sans GB.ttc", 28, index=3)',
-      "except Exception:",
-      "    font = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', 28)",
-      "y = 16",
-    ];
+    const wmArgs = [WATERMARK_SCRIPT, wmPath];
     if (opts.watermarkVideo) {
-      wmScriptLines.push(`draw.text((24, y), "视频：` + opts.watermarkVideo + '", font=font, fill=(255, 255, 255, 230))');
-      wmScriptLines.push("y += 36");
+      wmArgs.push("--watermark-video", opts.watermarkVideo);
     }
     if (opts.watermarkXlate) {
-      wmScriptLines.push(`draw.text((24, y), "翻译：` + opts.watermarkXlate + '", font=font, fill=(255, 255, 255, 230))');
-      wmScriptLines.push("y += 36");
+      wmArgs.push("--watermark-xlate", opts.watermarkXlate);
     }
-    wmScriptLines.push(`img.save("${wmPath}")`);
-    await writeFile(wmScriptPath, wmScriptLines.join("\n"), "utf8");
     const wmResult = await opts.runner.run({
       command: "python3",
-      args: [wmScriptPath],
+      args: wmArgs,
       timeoutMs: 15_000,
     });
     if (wmResult.exitCode === 0) {
-      watermarkInput = wmPath;
+      watermarkPath = wmPath;
     } else {
       warnings.push(`watermark generation failed: ${wmResult.stderr ?? "unknown error"}`);
     }
   }
 
-  // 7. ffmpeg overlay: subtitles + persistent watermark (loop=1 for image)
-  const filterSteps = [
-    `[0:v][1:v]overlay=(W-w)/2:H-h-36[subbed]`,
+  // 6. Generate full-frame overlay sequence at source video FPS
+  const framesDir = path.join(renderDir, "frames");
+  const frameGenArgs = [
+    OVERLAY_FRAMES_SCRIPT,
+    renderDir,
+    framesDir,
+    blankPath,
+    "--fps", String(overlayFps),
+    "--total-sec", String(totalSec),
+    "--video-width", String(videoWidth),
+    "--video-height", String(videoHeight),
   ];
-  if (watermarkInput !== null) {
-    filterSteps.push(`[subbed][2:v]overlay=0:0[final]`);
-    filterSteps.push(`[final]format=yuv420p[vfinal]`);
-  } else {
-    filterSteps.push(`[subbed]format=yuv420p[vfinal]`);
+  if (watermarkPath !== null) {
+    frameGenArgs.push("--watermark", watermarkPath);
   }
-  const filterComplex = filterSteps.join(";");
+  const frameGenResult = await opts.runner.run({
+    command: "python3",
+    args: frameGenArgs,
+    timeoutMs: 10 * 60_000,
+    ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+  });
+  if (frameGenResult.exitCode !== 0) {
+    const excerpt = (frameGenResult.stderr ?? "").split("\n").slice(-10).join("\n");
+    await rm(renderDir, { recursive: true, force: true }).catch(() => {});
+    throw new Error(`overlay frame generation failed: ${excerpt}`);
+  }
+  // 7. ffmpeg overlay: single full-frame RGBA sequence (watermark + subtitles baked in)
+  const filterComplex = [
+    `[0:v][1:v]overlay=0:0:shortest=0:eof_action=pass`,
+    `format=yuv420p[vfinal]`,
+  ].join(",");
 
   const ffmpegArgs: string[] = [
     "-i", opts.videoPath,
-    "-framerate", String(OVERLAY_FPS),
+    "-framerate", String(overlayFps),
     "-i", path.join(framesDir, "frame_%05d.png"),
+    "-filter_complex", filterComplex,
+    "-map", "[vfinal]", "-map", "0:a",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+    "-profile:v", "high", "-level", "4.0",
+    "-c:a", "aac", "-b:a", "128k",
+    "-movflags", "+faststart", "-y", opts.outputPath,
   ];
-  if (watermarkInput !== null) {
-    ffmpegArgs.push("-loop", "1", "-i", watermarkInput);
-  }
-  ffmpegArgs.push("-filter_complex", filterComplex);
-  ffmpegArgs.push("-map", "[vfinal]", "-map", "0:a");
-  ffmpegArgs.push("-c:v", "libx264", "-pix_fmt", "yuv420p");
-  ffmpegArgs.push("-profile:v", "high", "-level", "4.0");
-  ffmpegArgs.push("-c:a", "aac", "-b:a", "128k");
-  ffmpegArgs.push("-movflags", "+faststart", "-y", opts.outputPath);
 
   const result = await opts.runner.run({
     command: "ffmpeg",
@@ -361,6 +355,40 @@ const probeVideoHeight = async (
   });
   const h = parseInt((result.stdout ?? "720").trim(), 10);
   return Number.isFinite(h) && h > 0 ? h : 720;
+};
+
+/** Parse ffprobe frame rate (e.g. "30/1" or "29.97"). */
+const parseFrameRate = (raw: string): number => {
+  const trimmed = raw.trim();
+  if (trimmed.includes("/")) {
+    const [numStr, denStr] = trimmed.split("/");
+    const num = Number(numStr);
+    const den = Number(denStr);
+    if (Number.isFinite(num) && Number.isFinite(den) && den > 0 && num > 0) {
+      return Math.max(1, Math.round(num / den));
+    }
+  }
+  const value = parseFloat(trimmed);
+  return Number.isFinite(value) && value > 0 ? Math.max(1, Math.round(value)) : DEFAULT_OVERLAY_FPS;
+};
+
+/** Probe video frame rate for overlay sequence generation. */
+const probeVideoFrameRate = async (
+  videoPath: string,
+  runner: ProcessRunner,
+): Promise<number> => {
+  const result = await runner.run({
+    command: "ffprobe",
+    args: [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=avg_frame_rate",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      videoPath,
+    ],
+    timeoutMs: 15_000,
+  });
+  return parseFrameRate(result.stdout ?? `${DEFAULT_OVERLAY_FPS}/1`);
 };
 
 /** Probe video duration in seconds, falling back to lastEnd + 10. */

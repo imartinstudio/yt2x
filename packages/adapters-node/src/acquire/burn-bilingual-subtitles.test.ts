@@ -54,6 +54,13 @@ describe("burnBilingualSubtitles", () => {
               await mkdir(path.dirname(pngPath), { recursive: true });
               await writeFile(pngPath, Buffer.from([0x89, 0x50, 0x4E, 0x47]));
             }
+          } else if ((args[0] ?? "").includes("generate-overlay-frames.py")) {
+            const framesDir = args[2] ?? "/tmp/fallback-frames";
+            await mkdir(framesDir, { recursive: true });
+            await writeFile(
+              path.join(framesDir, "frame_00000.png"),
+              Buffer.from([0x89, 0x50, 0x4E, 0x47]),
+            );
           } else {
             // Bilingual render script: args are [script, srt, outDir, --video-width, W, --video-height, H]
             const renderDir = args[2] ?? "/tmp/fallback";
@@ -74,6 +81,16 @@ describe("burnBilingualSubtitles", () => {
           return { exitCode: 0, stdout: "", stderr: "" };
         }
         if (opts.command === "ffprobe") {
+          const args = (opts.args ?? []).join(" ");
+          if (args.includes("width")) {
+            return { exitCode: 0, stdout: "1280\n", stderr: "" };
+          }
+          if (args.includes("height")) {
+            return { exitCode: 0, stdout: "720\n", stderr: "" };
+          }
+          if (args.includes("avg_frame_rate")) {
+            return { exitCode: 0, stdout: "30/1\n", stderr: "" };
+          }
           return { exitCode: 0, stdout: "10.0\n", stderr: "" };
         }
         return { exitCode: 0, stdout: "", stderr: "" };

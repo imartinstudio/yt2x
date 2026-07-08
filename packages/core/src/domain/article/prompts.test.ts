@@ -113,14 +113,16 @@ describe("buildArticleUserPrompt", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/禁止把可复制内容仅写成行内代码/);
   });
 
-  it("defines a 120-character lead and hook elements rule", () => {
+  it("defines a 120-character lead and enhanced title-hook rules", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/首屏 Hook 规则/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/120 字以内/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/具体痛点或常见误区/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/反差\/颠覆性判断/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/至少 3 个/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/近年来/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/本视频介绍了/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/标题钩子增强规则/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/认知反转 > 冲突 > 收益 > 功能/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/标题信息缺口检查/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/标题与导语一致性检查/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/最高优先级原则/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/可被读者预测/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/2GB 显存跑 AI Agent/);
   });
 
   it("defines mobile rhythm: max 2 consecutive paragraphs and 250-char cap", () => {

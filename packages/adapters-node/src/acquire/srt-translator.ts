@@ -27,8 +27,8 @@ const buildSystemPrompt = (sourceLang: string, targetLang: string): string =>
     "4. Return the SAME number of blocks you receive. No merging or splitting.",
     ...(isSimplifiedChineseTarget(targetLang)
       ? [
-          "5. The final subtitle text MUST be Simplified Chinese (zh-CN). Traditional Chinese output is FORBIDDEN. If you are unsure whether a character is Simplified or Traditional, choose Simplified. This is a hard requirement — do not violate it.",
-          "6. Keep technical terms, product names, commands, and API names in English when that is more natural.",
+          "5. The final subtitle text MUST be Simplified Chinese (zh-CN). Traditional Chinese output is FORBIDDEN. Pay special attention: use 么 (not 幺) for the particle in 什么/怎么/这么/那么. If you are unsure whether a character is Simplified or Traditional, choose Simplified. This is a hard requirement — do not violate it.",
+          "6. PROPER NOUNS MUST BE PRESERVED VERBATIM. This means: brand names (Fable, Claude, GPT, iPhone), product names, model names, technical terms, commands, API names, and code identifiers must appear EXACTLY as in the source text. Do NOT translate, transliterate, or localize them under any circumstance. If the source says 'Fable 5', the output must say 'Fable 5' — never '神谕5' or any other translation.",
           "7. Do not add explanations, notes, or any text outside the JSON array.",
         ]
       : ["5. Do not add explanations, notes, or any text outside the JSON array."]),
@@ -230,10 +230,82 @@ export const translateSrt = async (
     }
   }
 
-  if (translated.length !== cues.length) {
-    throw new Error(
-      `translation returned ${translated.length} blocks, expected ${cues.length}`,
+  // Phase 4: final single-cue targeted repair
+  if (translated.length !== blocks.length) {
+    const translatedIndices = new Set(translated.map((b) => b.index));
+    const missing = blocks.filter((b) => !translatedIndices.has(b.index));
+
+    if (missing.length > 0) {
+      for (const m of missing) {
+        try {
+          const repaired = await translateBatch([m], opts, true);
+          const added = repaired.filter((r) => !translatedIndices.has(r.index));
+          translated.push(...added);
+          if (added.length > 0) {
+            warnings.push(`phase 4: recovered missing cue #${m.index}`);
+          }
+        } catch {
+          warnings.push(`phase 4: failed to recover cue #${m.index}`);
+        }
+      }
+    }
+  }
+
+  // Phase 5: check for empty-text blocks (LLM sometimes returns empty string on repair)
+  const emptyBlocks = translated.filter((b) => b.text.trim().length === 0);
+  if (emptyBlocks.length > 0) {
+    const emptyIndices = emptyBlocks.map((b) => b.index);
+    const sourceBlocks = blocks.filter((b) => emptyIndices.includes(b.index));
+    warnings.push(
+      `phase 5: ${emptyBlocks.length} blocks have empty text (indices: ${emptyIndices.join(", ")}), repairing`,
     );
+    for (const src of sourceBlocks) {
+      try {
+        const repaired = await translateBatch([src], opts, true);
+        const valid = repaired.filter((r) => r.text.trim().length > 0);
+        if (valid.length > 0) {
+          // Replace empty block with repaired one
+          const idx = translated.findIndex((b) => b.index === src.index);
+          if (idx >= 0) translated[idx] = valid[0]!;
+          else translated.push(valid[0]!);
+          warnings.push(`phase 5: repaired empty cue #${src.index}`);
+        } else {
+          // Fill with source text as last resort
+          const idx = translated.findIndex((b) => b.index === src.index);
+          const fallback = { index: src.index, text: `[未翻译] ${src.text}` };
+          if (idx >= 0) translated[idx] = fallback;
+          else translated.push(fallback);
+          warnings.push(`phase 5: using source fallback for cue #${src.index}`);
+        }
+      } catch {
+        const idx = translated.findIndex((b) => b.index === src.index);
+        const fallback = { index: src.index, text: `[未翻译] ${src.text}` };
+        if (idx >= 0) translated[idx] = fallback;
+        else translated.push(fallback);
+        warnings.push(`phase 5: using source fallback for cue #${src.index} (repair failed)`);
+      }
+    }
+  }
+
+  // Final fallback: if mismatch is small (< 3% of cues), trim the result
+  // to match by filling missing cues with English text + warning.
+  if (translated.length !== cues.length) {
+    const missingCount = cues.length - translated.length;
+    if (missingCount > 0 && missingCount <= Math.max(2, Math.ceil(cues.length * 0.03))) {
+      const translatedIndices = new Set(translated.map((b) => b.index));
+      for (const block of blocks) {
+        if (!translatedIndices.has(block.index)) {
+          translated.push({ index: block.index, text: `[未翻译] ${block.text}` });
+          warnings.push(
+            `cue #${block.index} could not be translated after 5 repair phases; using English fallback`,
+          );
+        }
+      }
+    } else {
+      throw new Error(
+        `translation returned ${translated.length} blocks, expected ${cues.length} (${missingCount} missing after 5 repair phases)`,
+      );
+    }
   }
 
   let finalSrt = buildFinalSrt(cues, translated);
@@ -244,6 +316,36 @@ export const translateSrt = async (
     finalSrt = await simplifyChinese(finalSrt);
   } catch {
     // If conversion fails, keep original SRT
+  }
+
+  // Post-process: fix LLM CJK homoglyph mistakes
+  try {
+    const { fixLlmHomoglyphs } = await import("./simplify-chinese.js");
+    finalSrt = fixLlmHomoglyphs(finalSrt);
+  } catch {
+    // If fix fails, keep original SRT
+  }
+
+  // Post-process: preserve proper nouns from English source
+  try {
+    const { preserveProperNouns } = await import("./simplify-chinese.js");
+    // Apply per-cue: find English source text for each translated cue
+    const parsedZh = parseSubtitleBlocks(finalSrt);
+    const parsedEn = parseSubtitleBlocks(srtContent);
+    if (parsedZh.length === parsedEn.length) {
+      const fixedCues = parsedZh.map((zhCue, i) => {
+        const enCue = parsedEn[i]!;
+        const enText = enCue.text.join(" ");
+        const fixedText = preserveProperNouns(
+          zhCue.text.join(" "),
+          enText,
+        );
+        return { ...zhCue, text: [fixedText] };
+      });
+      finalSrt = serializeSrtBlocks(fixedCues);
+    }
+  } catch {
+    // If preservation fails, keep original SRT
   }
 
   return { srt: finalSrt, warnings };

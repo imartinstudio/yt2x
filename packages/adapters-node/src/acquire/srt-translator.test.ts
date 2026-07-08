@@ -49,10 +49,30 @@ describe("translateSrt", () => {
     expect(result).toContain("现在再见");
   });
 
-  it("throws when translation returns wrong block count", async () => {
+  it("completes with fallback when translation returns too few blocks", async () => {
+    // Phase 5 fallback: small mismatches (<3% or ≤2 cues) are filled with
+    // English source text + "[未翻译]" prefix instead of throwing.
     const llm = mockLlm(
       JSON.stringify([{ index: 1, text: "你好世界" }]),
     );
+
+    const result = await translateSrt(sampleSrt, {
+      llm,
+      model: "test",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+    });
+
+    // Should complete successfully with fallback warnings
+    expect(result.warnings.some((w) => w.includes("could not be translated"))).toBe(true);
+    // Output SRT should contain all 3 cues
+    const blocks = result.srt.trim().split("\n\n");
+    expect(blocks.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("throws when translation returns zero blocks", async () => {
+    // A complete failure (0 blocks) should still throw after all repair phases
+    const llm = mockLlm("[]");
 
     await expect(
       translateSrt(sampleSrt, {
@@ -61,7 +81,7 @@ describe("translateSrt", () => {
         sourceLang: "en",
         targetLang: "zh-CN",
       }),
-    ).rejects.toThrow(/expected 3/);
+    ).rejects.toThrow(/after 5 repair phases/);
   });
 
   it("throws when response is not a JSON array", async () => {

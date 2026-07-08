@@ -1,11 +1,13 @@
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import type { ProcessRunner } from "../process/index.js";
+import { fileURLToPath } from "node:url";
+import { type ProcessRunner } from "../process/index.js";
 import { validateSrtIntegrity, verifyBurnedSubtitles } from "./burn-subtitles.js";
 
 export type BurnBilingualSubtitlesOptions = {
-  /** Path to the bilingual ASS file */
-  assPath: string;
+  /** Path to the bilingual SRT file (for PNG rendering) */
+  srtPath: string;
   /** Path to the source video MP4 */
   videoPath: string;
   /** Output path for the burned MP4 */
@@ -18,60 +20,71 @@ export type BurnBilingualSubtitlesOptions = {
   zhSrtPath: string;
   /** Force re-burn even if output exists and is newer */
   force?: boolean;
-  /** Fonts directory for ffmpeg libass */
-  fontsDir?: string;
   /** Abort signal */
   signal?: AbortSignal;
+  /** YouTube channel handle for watermark (e.g. @nateherk) */
+  watermarkVideo?: string;
+  /** Translator handle for watermark (e.g. @php_martin) */
+  watermarkXlate?: string;
 };
 
 export type BurnBilingualSubtitlesResult = {
   burned: boolean;
   skipped: boolean;
-  skipReason?: "already_exists" | "missing_ass" | "missing_video" | "stale_burned_removed";
+  skipReason?: "already_exists" | "missing_srt" | "missing_video";
   warnings: string[];
 };
 
-/**
- * Escape a filesystem path for use in ffmpeg's subtitles filter.
- *
- * ffmpeg subtitles filter uses `:` as the option separator. Paths containing
- * `:` must be escaped with `\:`. On Windows, drive letters like `C:\` cause
- * issues; on macOS/Linux, colons in filenames are rare but possible.
- *
- * We also replace single backslashes with forward slashes for cross-platform
- * compatibility in the filter string.
- */
-const escapeFilterPath = (p: string): string => {
-  return p.replace(/\\/g, "/").replace(/:/g, "\\:");
+type CueManifestEntry = {
+  index: number;
+  filename: string;
+  start: number;
+  end: number;
+  width: number;
+  height: number;
 };
 
+type RenderManifest = {
+  cues: CueManifestEntry[];
+  video_width: number;
+  video_height: number;
+};
+
+const PYTHON_SCRIPT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..", "..", "src", "acquire", "render-bilingual-subtitles.py",
+);
+
+/** Overlay frame rate — sub-second granularity avoids boundary artifacts. */
+const OVERLAY_FPS = 4;
+
 /**
- * Burn bilingual ASS subtitles into a video using ffmpeg.
+ * Burn bilingual subtitles into a video using Python PIL rendering + ffmpeg overlay.
  *
- * Uses ffmpeg's subtitles filter with libass to burn styled bilingual
- * subtitles (Chinese on top, English on bottom) directly into the video.
+ * Falls back to PNG-based rendering since many ffmpeg distributions lack
+ * libass (--enable-libass) for the subtitles/ass filter.
  *
- * This is an independent ASS-burning path that does NOT replace the
- * existing PNG-based `burnSubtitles` used for single-language Chinese
- * subtitles.
+ * 1. Validate SRT integrity.
+ * 2. Python PIL renders each bilingual cue as a transparent RGBA PNG
+ *    (Chinese yellow bold on top, English white italic on bottom).
+ * 3. Generate one frame per OVERLAY_FPS second.
+ * 4. ffmpeg overlays onto the main video.
+ * 5. Post-burn frame verification.
  *
  * Force / mtime logic:
  * - `force: true` → unconditionally re-burn
- * - `force: false` (default) → skip if output exists and is newer than
- *   all source files (ASS, EN SRT, ZH SRT)
- * - If any source file is newer than the output, delete stale output
- *   and re-burn.
+ * - `force: false` → skip if output exists and is newer than all sources
  */
 export const burnBilingualSubtitles = async (
   opts: BurnBilingualSubtitlesOptions,
 ): Promise<BurnBilingualSubtitlesResult> => {
   const warnings: string[] = [];
 
-  // Verify ASS file exists
+  // Verify SRT file exists
   try {
-    await access(opts.assPath);
+    await access(opts.srtPath);
   } catch {
-    return { burned: false, skipped: true, skipReason: "missing_ass", warnings };
+    return { burned: false, skipped: true, skipReason: "missing_srt", warnings };
   }
 
   // Verify video file exists
@@ -90,29 +103,23 @@ export const burnBilingualSubtitles = async (
   if (!force) {
     try {
       await access(opts.outputPath);
-      const [outputStat, assStat, enStat, zhStat] = await Promise.all([
+      const [outputStat, srtStat, enStat, zhStat] = await Promise.all([
         stat(opts.outputPath),
-        stat(opts.assPath),
+        stat(opts.srtPath),
         stat(opts.enSrtPath),
         stat(opts.zhSrtPath),
       ]);
 
       const outputMtime = outputStat.mtimeMs;
       if (
-        assStat.mtimeMs <= outputMtime &&
+        srtStat.mtimeMs <= outputMtime &&
         enStat.mtimeMs <= outputMtime &&
         zhStat.mtimeMs <= outputMtime
       ) {
-        return {
-          burned: false,
-          skipped: true,
-          skipReason: "already_exists",
-          warnings,
-        };
+        return { burned: false, skipped: true, skipReason: "already_exists", warnings };
       }
 
       // Source is newer — remove stale output and re-burn
-      const { rm } = await import("node:fs/promises");
       await rm(opts.outputPath).catch(() => {});
     } catch {
       // Output doesn't exist — proceed with burn
@@ -120,49 +127,160 @@ export const burnBilingualSubtitles = async (
   }
 
   // Validate SRT integrity before burning
-  for (const srtPath of [opts.enSrtPath, opts.zhSrtPath]) {
-    const integrity = await validateSrtIntegrity(srtPath);
+  for (const p of [opts.enSrtPath, opts.zhSrtPath, opts.srtPath]) {
+    const integrity = await validateSrtIntegrity(p);
     if (!integrity.valid) {
       const fatal = integrity.issues.filter(
         (i) => i.kind === "overlap" || i.kind === "negative_duration" || i.kind === "no_cues",
       );
       if (fatal.length > 0) {
         throw new Error(
-          `SRT integrity check failed for ${path.basename(srtPath)}:\n${fatal.map((i) => `  - ${i.message}`).join("\n")}`,
+          `SRT integrity check failed for ${path.basename(p)}:\n${fatal.map((i) => `  - ${i.message}`).join("\n")}`,
         );
       }
     }
   }
 
-  // Font discovery warning
-  if (opts.fontsDir === undefined) {
-    warnings.push(
-      "no fontsDir provided; ffmpeg/libass may not find CJK fonts. " +
-        "Specify fontsDir to ensure Chinese characters render correctly.",
-    );
-  }
+  // 1. Probe video dimensions
+  const videoWidth = await probeVideoWidth(opts.videoPath, opts.runner);
+  const videoHeight = await probeVideoHeight(opts.videoPath, opts.runner);
 
-  // Build ffmpeg subtitles filter
-  // Escape the ASS path for the filter string (colons must be \:)
-  const escapedAssPath = escapeFilterPath(opts.assPath);
-  let subtitlesFilter = `subtitles=${escapedAssPath}`;
-  if (opts.fontsDir !== undefined) {
-    const escapedFontsDir = escapeFilterPath(opts.fontsDir);
-    subtitlesFilter += `:fontsdir=${escapedFontsDir}`;
-  }
-
-  const ffmpegArgs = [
-    "-i", opts.videoPath,
-    "-vf", subtitlesFilter,
-    "-c:v", "libx264",
-    "-pix_fmt", "yuv420p",
-    "-profile:v", "high",
-    "-level", "4.0",
-    "-c:a", "aac",
-    "-b:a", "128k",
-    "-movflags", "+faststart",
-    "-y", opts.outputPath,
+  // 2. Render bilingual subtitle PNGs via Python PIL
+  const renderDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-bilingual-render-"));
+  const pyArgs: string[] = [
+    PYTHON_SCRIPT,
+    opts.srtPath,
+    renderDir,
+    "--video-width", String(videoWidth),
+    "--video-height", String(videoHeight),
   ];
+  if (opts.watermarkVideo) {
+    pyArgs.push("--watermark-video", opts.watermarkVideo);
+  }
+  if (opts.watermarkXlate) {
+    pyArgs.push("--watermark-xlate", opts.watermarkXlate);
+  }
+  const renderResult = await opts.runner.run({
+    command: "python3",
+    args: pyArgs,
+    timeoutMs: 120_000,
+    ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+  });
+
+  if (renderResult.exitCode !== 0) {
+    const excerpt = (renderResult.stderr ?? "").split("\n").slice(-10).join("\n");
+    await rm(renderDir, { recursive: true, force: true }).catch(() => {});
+    throw new Error(`bilingual subtitle PNG rendering failed: ${excerpt}`);
+  }
+
+  // 2. Read manifest
+  const manifestRaw = await readFile(path.join(renderDir, "manifest.json"), "utf8");
+  const manifest = JSON.parse(manifestRaw) as RenderManifest;
+  const { cues, video_width: vw } = manifest;
+
+  if (cues.length === 0) {
+    await rm(renderDir, { recursive: true, force: true });
+    throw new Error("bilingual SRT file contains no subtitle cues");
+  }
+
+  // 3. Compute dimensions & duration
+  const maxH = Math.max(...cues.map((c) => c.height), 40);
+  const lastEnd = cues[cues.length - 1]!.end;
+  const videoDuration = await probeVideoDuration(opts.videoPath, opts.runner, lastEnd);
+  const totalSec = Math.ceil(Math.max(lastEnd + 5, videoDuration + 2));
+
+  // 4. Create blank frame matching max subtitle height
+  const blankPath = path.join(renderDir, "blank.png");
+  const blankResult = await opts.runner.run({
+    command: "python3",
+    args: [
+      "-c",
+      `from PIL import Image\nImage.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")`,
+    ],
+    timeoutMs: 10_000,
+  });
+  if (blankResult.exitCode !== 0) {
+    await rm(renderDir, { recursive: true, force: true }).catch(() => {});
+    throw new Error("failed to create blank PNG for bilingual burn");
+  }
+
+  // 5. Generate overlay frames at OVERLAY_FPS
+  const framesDir = path.join(renderDir, "frames");
+  await mkdir(framesDir, { recursive: true });
+
+  const totalFrames = totalSec * OVERLAY_FPS;
+  const frameInterval = 1 / OVERLAY_FPS;
+
+  for (let i = 0; i < totalFrames; i++) {
+    const t = i * frameInterval;
+    const active = cues.find((c) => c.start <= t && c.end > t);
+    const src = active ? path.join(renderDir, active.filename) : blankPath;
+    const dst = path.join(framesDir, `frame_${String(i).padStart(5, "0")}.png`);
+    await copyFile(src, dst);
+  }
+  let watermarkInput: string | null = null;
+  if (opts.watermarkVideo || opts.watermarkXlate) {
+    const wmPath = path.join(renderDir, "watermark.png");
+    const wmScriptPath = path.join(renderDir, "gen-watermark.py");
+    const wmScriptLines: string[] = [
+      "from PIL import Image, ImageDraw, ImageFont",
+      `w, h = ${videoWidth}, ${videoHeight}`,
+      'img = Image.new("RGBA", (w, h), (0, 0, 0, 0))',
+      "draw = ImageDraw.Draw(img)",
+      "try:",
+      '    font = ImageFont.truetype("/System/Library/Fonts/Hiragino Sans GB.ttc", 28, index=3)',
+      "except Exception:",
+      "    font = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', 28)",
+      "y = 16",
+    ];
+    if (opts.watermarkVideo) {
+      wmScriptLines.push(`draw.text((24, y), "视频：` + opts.watermarkVideo + '", font=font, fill=(255, 255, 255, 230))');
+      wmScriptLines.push("y += 36");
+    }
+    if (opts.watermarkXlate) {
+      wmScriptLines.push(`draw.text((24, y), "翻译：` + opts.watermarkXlate + '", font=font, fill=(255, 255, 255, 230))');
+      wmScriptLines.push("y += 36");
+    }
+    wmScriptLines.push(`img.save("${wmPath}")`);
+    await writeFile(wmScriptPath, wmScriptLines.join("\n"), "utf8");
+    const wmResult = await opts.runner.run({
+      command: "python3",
+      args: [wmScriptPath],
+      timeoutMs: 15_000,
+    });
+    if (wmResult.exitCode === 0) {
+      watermarkInput = wmPath;
+    } else {
+      warnings.push(`watermark generation failed: ${wmResult.stderr ?? "unknown error"}`);
+    }
+  }
+
+  // 7. ffmpeg overlay: subtitles + persistent watermark (loop=1 for image)
+  const filterSteps = [
+    `[0:v][1:v]overlay=(W-w)/2:H-h-36[subbed]`,
+  ];
+  if (watermarkInput !== null) {
+    filterSteps.push(`[subbed][2:v]overlay=0:0[final]`);
+    filterSteps.push(`[final]format=yuv420p[vfinal]`);
+  } else {
+    filterSteps.push(`[subbed]format=yuv420p[vfinal]`);
+  }
+  const filterComplex = filterSteps.join(";");
+
+  const ffmpegArgs: string[] = [
+    "-i", opts.videoPath,
+    "-framerate", String(OVERLAY_FPS),
+    "-i", path.join(framesDir, "frame_%05d.png"),
+  ];
+  if (watermarkInput !== null) {
+    ffmpegArgs.push("-loop", "1", "-i", watermarkInput);
+  }
+  ffmpegArgs.push("-filter_complex", filterComplex);
+  ffmpegArgs.push("-map", "[vfinal]", "-map", "0:a");
+  ffmpegArgs.push("-c:v", "libx264", "-pix_fmt", "yuv420p");
+  ffmpegArgs.push("-profile:v", "high", "-level", "4.0");
+  ffmpegArgs.push("-c:a", "aac", "-b:a", "128k");
+  ffmpegArgs.push("-movflags", "+faststart", "-y", opts.outputPath);
 
   const result = await opts.runner.run({
     command: "ffmpeg",
@@ -171,17 +289,19 @@ export const burnBilingualSubtitles = async (
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
 
+  await rm(renderDir, { recursive: true, force: true }).catch(() => {});
+
   if (result.exitCode !== 0) {
     const excerpt = (result.stderr ?? "").split("\n").slice(-20).join("\n");
     throw new Error(`ffmpeg bilingual subtitle burn failed with exit code ${result.exitCode}: ${excerpt}`);
   }
 
-  // Post-burn verification: compare burned output against original video
+  // 7. Post-burn verification
   try {
     const verification = await verifyBurnedSubtitles(
       opts.outputPath,
       opts.videoPath,
-      opts.enSrtPath,
+      opts.srtPath,
       opts.runner,
       opts.signal,
     );
@@ -201,4 +321,63 @@ export const burnBilingualSubtitles = async (
   }
 
   return { burned: true, skipped: false, warnings };
+};
+
+/** Probe video width. */
+const probeVideoWidth = async (
+  videoPath: string,
+  runner: ProcessRunner,
+): Promise<number> => {
+  const result = await runner.run({
+    command: "ffprobe",
+    args: [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=width",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      videoPath,
+    ],
+    timeoutMs: 15_000,
+  });
+  const w = parseInt((result.stdout ?? "1280").trim(), 10);
+  return Number.isFinite(w) && w > 0 ? w : 1280;
+};
+
+/** Probe video height. */
+const probeVideoHeight = async (
+  videoPath: string,
+  runner: ProcessRunner,
+): Promise<number> => {
+  const result = await runner.run({
+    command: "ffprobe",
+    args: [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=height",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      videoPath,
+    ],
+    timeoutMs: 15_000,
+  });
+  const h = parseInt((result.stdout ?? "720").trim(), 10);
+  return Number.isFinite(h) && h > 0 ? h : 720;
+};
+
+/** Probe video duration in seconds, falling back to lastEnd + 10. */
+const probeVideoDuration = async (
+  videoPath: string,
+  runner: ProcessRunner,
+  fallbackEnd: number,
+): Promise<number> => {
+  const probeResult = await runner.run({
+    command: "ffprobe",
+    args: [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      videoPath,
+    ],
+    timeoutMs: 15_000,
+  });
+  return parseFloat((probeResult.stdout ?? "0").trim()) || (fallbackEnd + 10);
 };

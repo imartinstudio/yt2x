@@ -171,6 +171,15 @@ export const generateXThreadContent = async (
 
   const thread = parseGeneratedThreadJson(resp.content);
 
+  // Post-process: fix common LLM CJK homoglyph errors (e.g. 幺→么)
+  try {
+    const { fixLlmHomoglyphs } = await import("../acquire/simplify-chinese.js");
+    thread.tweets = thread.tweets.map((t) => fixLlmHomoglyphs(t));
+    thread.hooks = thread.hooks.map((h) => ({ ...h, text: fixLlmHomoglyphs(h.text) }));
+  } catch {
+    // Keep original if import/processing fails
+  }
+
   // 验证 visuals 只引用 available_visuals 中存在的截图
   if (thread.visuals !== undefined && thread.visuals.length > 0) {
     const availVisuals = input.availableVisuals ?? [];

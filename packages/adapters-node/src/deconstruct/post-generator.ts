@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   CLIP_POST_CALL_TO_ACTION,
@@ -195,6 +195,18 @@ export const writeSelectedPostFiles = async (
   const clipsDir = path.join(articleDir, "x-format", "clips");
   const manifestPath = path.join(clipsDir, "clips-manifest.json");
   const postPaths: string[] = [];
+
+  // Remove stale post-*.md files from previous runs so they don't pollute
+  // the publish readiness check (e.g. old posts with wrong clipIds, series
+  // numbers, or video filenames).
+  try {
+    const existing = await readdir(clipsDir);
+    const stalePosts = existing.filter((f) => /^post-\d+-.+\.md$/.test(f));
+    await Promise.all(stalePosts.map((f) => unlink(path.join(clipsDir, f)).catch(() => {})));
+  } catch {
+    // Directory may not exist yet — that's fine.
+  }
+
   const selected = manifest.clips.filter((c) => c.selected === true);
 
   for (let i = 0; i < selected.length; i++) {

@@ -557,7 +557,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
         break;
       }
     } finally {
-      // progress handled internally
+      // no-op: error handling above is self-contained
     }
   }
 
@@ -568,5 +568,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
     logger.error({ count: errors.length }, "article completed with errors");
   }
 
+  if (exitCode === 0) {
+    progress?.printSummary();
+  } else {
+    progress?.clear();
+  }
   return exitCode;
 };

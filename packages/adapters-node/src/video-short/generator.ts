@@ -110,6 +110,14 @@ export const generateXVideoShortContent = async (
     videoShortPost = parseGeneratedVideoShortPostJson(repairResp.content);
   }
 
+  // Post-process: fix common LLM CJK homoglyph errors (e.g. 幺→么)
+  try {
+    const { fixLlmHomoglyphs } = await import("../acquire/simplify-chinese.js");
+    videoShortPost.text = fixLlmHomoglyphs(videoShortPost.text);
+  } catch {
+    // Keep original if import/processing fails
+  }
+
   const result: GenerateXVideoShortResult = {
     videoShortPost,
     model: resp.model,

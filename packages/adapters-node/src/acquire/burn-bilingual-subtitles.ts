@@ -219,48 +219,72 @@ export const burnBilingualSubtitles = async (
     await copyFile(src, dst);
   }
 
-  // 6. ffmpeg overlay onto main video with persistent watermark
-  const filterSteps = [
-    `[0:v][1:v]overlay=(W-w)/2:H-h-36[overlaid]`,
-  ];
-
-  // Add persistent watermark via drawtext (top-right, black semi-transparent box)
+  // 6. Generate watermark PNG (full-frame, transparent except text in top-right)
+  let watermarkInput: string | null = null;
   if (opts.watermarkVideo || opts.watermarkXlate) {
-    const fontFile = "/System/Library/Fonts/Helvetica.ttc";
-    const drawtextSteps: string[] = [];
-    if (opts.watermarkVideo) {
-      drawtextSteps.push(
-        `drawtext=fontfile=${fontFile}:text='视频\\:${(opts.watermarkVideo ?? "").replace(/:/g, "\\:")}':fontsize=28:fontcolor=white@0.9:box=1:boxcolor=black@0.4:boxborderw=6:x=w-tw-24:y=16`,
-      );
+    const wmPath = path.join(renderDir, "watermark.png");
+    const wmLines: string[] = [];
+    if (opts.watermarkVideo) wmLines.push(`视频：${opts.watermarkVideo}`);
+    if (opts.watermarkXlate) wmLines.push(`翻译：${opts.watermarkXlate}`);
+    const wmText = wmLines.join("\\n");
+    const wmResult = await opts.runner.run({
+      command: "python3",
+      args: [
+        "-c",
+        `from PIL import Image, ImageDraw, ImageFont
+w, h = ${videoWidth}, ${videoHeight}
+img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+draw = ImageDraw.Draw(img)
+try:
+    font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 28)
+except Exception:
+    font = ImageFont.load_default()
+lines = "${wmText}".split("\\\\n")
+y = 16
+for line in lines:
+    bbox = draw.textbbox((0, 0), line, font=font)
+    tw = bbox[2] - bbox[0]
+    # Semi-transparent black background box
+    draw.rectangle([w - tw - 32, y - 4, w - 12, y + 32], fill=(0, 0, 0, 100))
+    # White text
+    draw.text((w - tw - 24, y), line, font=font, fill=(255, 255, 255, 230))
+    y += 36
+img.save("${wmPath}")
+`,
+      ],
+      timeoutMs: 15_000,
+    });
+    if (wmResult.exitCode === 0) {
+      watermarkInput = wmPath;
     }
-    if (opts.watermarkXlate) {
-      drawtextSteps.push(
-        `drawtext=fontfile=${fontFile}:text='翻译\\:${(opts.watermarkXlate ?? "").replace(/:/g, "\\:")}':fontsize=28:fontcolor=white@0.9:box=1:boxcolor=black@0.4:boxborderw=6:x=w-tw-24:y=52`,
-      );
-    }
-    filterSteps.push(`[overlaid]${drawtextSteps.join(",")}[watermarked]`);
-    filterSteps.push(`[watermarked]format=yuv420p[vfinal]`);
+  }
+
+  // 7. ffmpeg overlay: subtitles + optional watermark
+  const filterSteps = [
+    `[0:v][1:v]overlay=(W-w)/2:H-h-36[subbed]`,
+  ];
+  if (watermarkInput !== null) {
+    filterSteps.push(`[subbed][2:v]overlay=0:0[final]`);
+    filterSteps.push(`[final]format=yuv420p[vfinal]`);
   } else {
-    filterSteps.push(`[overlaid]format=yuv420p[vfinal]`);
+    filterSteps.push(`[subbed]format=yuv420p[vfinal]`);
   }
   const filterComplex = filterSteps.join(";");
 
-  const ffmpegArgs = [
+  const ffmpegArgs: string[] = [
     "-i", opts.videoPath,
     "-framerate", String(OVERLAY_FPS),
     "-i", path.join(framesDir, "frame_%05d.png"),
-    "-filter_complex", filterComplex,
-    "-map", "[vfinal]",
-    "-map", "0:a",
-    "-c:v", "libx264",
-    "-pix_fmt", "yuv420p",
-    "-profile:v", "high",
-    "-level", "4.0",
-    "-c:a", "aac",
-    "-b:a", "128k",
-    "-movflags", "+faststart",
-    "-y", opts.outputPath,
   ];
+  if (watermarkInput !== null) {
+    ffmpegArgs.push("-i", watermarkInput);
+  }
+  ffmpegArgs.push("-filter_complex", filterComplex);
+  ffmpegArgs.push("-map", "[vfinal]", "-map", "0:a");
+  ffmpegArgs.push("-c:v", "libx264", "-pix_fmt", "yuv420p");
+  ffmpegArgs.push("-profile:v", "high", "-level", "4.0");
+  ffmpegArgs.push("-c:a", "aac", "-b:a", "128k");
+  ffmpegArgs.push("-movflags", "+faststart", "-y", opts.outputPath);
 
   const result = await opts.runner.run({
     command: "ffmpeg",

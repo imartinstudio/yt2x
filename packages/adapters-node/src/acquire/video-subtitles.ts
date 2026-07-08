@@ -337,6 +337,24 @@ const inferSubtitleLanguageFromName = (name: string, fallback: string): string =
   return match?.[1]?.replace("_", "-") ?? fallback;
 };
 
+/** Normalize YouTube uploader_id (e.g. @nateherk) for watermark display. */
+const normalizeUploaderHandle = (raw: string | undefined): string | undefined => {
+  const trimmed = raw?.trim();
+  if (trimmed === undefined || trimmed.length === 0) return undefined;
+  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
+};
+
+/** Read uploader_id from metadata.json for watermark attribution. */
+const resolveWatermarkUploaderId = async (videoDir: string): Promise<string | undefined> => {
+  try {
+    const metaRaw = await readFile(path.join(videoDir, "metadata.json"), "utf8");
+    const meta = JSON.parse(metaRaw) as { uploader_id?: string };
+    return normalizeUploaderHandle(meta.uploader_id);
+  } catch {
+    return undefined;
+  }
+};
+
 const subtitleLanguagePriority = (name: string, requestedLang: string): number => {
   const lang = inferSubtitleLanguageFromName(name, requestedLang);
   if (/^zh[-_]CN$/iu.test(lang)) return 0;
@@ -850,16 +868,8 @@ export const runSubtitlePipeline = async (
               : path.join(videoDir, "video");
           const burnedOutput = path.join(burnedSubdir, "full.bilingual-burned.mp4");
 
-          // Read uploader handle for watermark
-          let watermarkVideo: string | undefined;
-          try {
-            const metaPath = path.join(videoDir, "metadata.json");
-            const metaRaw = await readFile(metaPath, "utf8");
-            const meta = JSON.parse(metaRaw) as { uploader_id?: string };
-            watermarkVideo = meta.uploader_id;
-          } catch {
-            // No metadata — skip watermark
-          }
+          // Read uploader handle for watermark (e.g. @nateherk from metadata.uploader_id)
+          const watermarkVideo = await resolveWatermarkUploaderId(videoDir);
 
           const burnResult = await burnBilingualSubtitles({
             srtPath: bilingualSrtPath,

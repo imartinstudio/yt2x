@@ -246,13 +246,18 @@ def draw_text_with_outline(
 
 
 def measure_lines(
-    text_lines: list[str], font: ImageFont.FreeTypeFont, draw: ImageDraw.ImageDraw
+    text_lines: list[str],
+    font: ImageFont.FreeTypeFont,
+    draw: ImageDraw.ImageDraw,
+    *,
+    outline_width: int = 0,
 ) -> tuple[int, int, list[tuple[int, int, int, int]]]:
     """Measure wrapped text lines. Returns (max_width, total_height, line_bboxes)."""
     max_w = 0
     total_h = 0
     bboxes = []
-    gap = 2  # pixels between wrapped lines
+    # Leave room for outline strokes so wrapped lines do not overlap visually.
+    gap = max(4, outline_width * 2 + 4)
     for i, line_text in enumerate(text_lines):
         bbox = draw.textbbox((0, 0), line_text, font=font)
         w = bbox[2] - bbox[0]
@@ -280,14 +285,18 @@ def render_cue(
     zh_lines = wrap_text(cue["zh_text"], zh_font, max_text_width, temp_draw)
     en_lines = wrap_text(cue["en_text"], en_font, max_text_width, temp_draw)
 
-    # Measure wrapped lines
-    zh_max_w, zh_total_h, zh_bboxes = measure_lines(zh_lines, zh_font, temp_draw)
-    en_max_w, en_total_h, en_bboxes = measure_lines(en_lines, en_font, temp_draw)
+    # Measure wrapped lines (outline-aware spacing prevents double-layer ghosting)
+    zh_max_w, zh_total_h, zh_bboxes = measure_lines(
+        zh_lines, zh_font, temp_draw, outline_width=ZH_OUTLINE_W,
+    )
+    en_max_w, en_total_h, en_bboxes = measure_lines(
+        en_lines, en_font, temp_draw, outline_width=EN_OUTLINE_W,
+    )
 
     # Canvas dimensions
     zh_pad = ZH_OUTLINE_W * 2 + 4
     en_pad = EN_OUTLINE_W * 2 + 4
-    line_gap = 6  # vertical gap between Chinese and English blocks
+    line_gap = ZH_OUTLINE_W + EN_OUTLINE_W + 8  # gap between Chinese and English blocks
 
     content_w = max(zh_max_w, en_max_w)
     canvas_w = content_w + max(zh_pad, en_pad)

@@ -26,6 +26,13 @@ EN_FILL = (255, 255, 255, 255)  # pure white
 OUTLINE_COLOR = (0, 0, 0, 255)  # pure black
 MAX_WIDTH_FRAC = 0.98
 
+# Watermark (set via CLI --watermark-video / --watermark-xlate)
+WATERMARK_VIDEO = ""
+WATERMARK_XLATE = ""
+WATERMARK_FONT_SIZE = 18
+WATERMARK_FILL = (255, 255, 255, 100)  # semi-transparent white
+WATERMARK_POS = (20, 12)  # top-right offset from edge
+
 # Runtime values — set by main() after parsing video dimensions
 VIDEO_WIDTH = 1280
 VIDEO_HEIGHT = 720
@@ -51,11 +58,19 @@ REGULAR_FONT_CANDIDATES = [
     ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
 ]
 
-_TRAILING_PUNCT_RE = re.compile(r"[。！？；：，、,.!?;:]+$")
+# Punctuation to replace with spaces (in-text) or strip (trailing only)
+_INLINE_PUNCT_RE = re.compile(r"[，。！？；：、；：”“‘’「」『』【】（）,《》\.\,\!\?\;\:\"\'\(\)\[\·]]")
+_TRAILING_SPECIAL_RE = re.compile(r"['\'·]+$")
 
-def strip_trailing_punctuation(text: str) -> str:
-    """Remove trailing punctuation from subtitle text."""
-    return _TRAILING_PUNCT_RE.sub("", text).strip()
+def clean_subtitle_text(text: str) -> str:
+    """Clean subtitle text: replace inline punctuation with spaces, strip trailing noise."""
+    # Replace punctuation with a single space
+    text = _INLINE_PUNCT_RE.sub(" ", text)
+    # Strip trailing quotes and middle dots
+    text = _TRAILING_SPECIAL_RE.sub("", text)
+    # Collapse multiple spaces
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip()
 
 
 def find_font(
@@ -184,8 +199,8 @@ def parse_srt(srt_path: str) -> list[dict]:
 
         text_lines = lines[2:]
         # First line = Chinese (top), rest = English (bottom)
-        zh_text = strip_trailing_punctuation(text_lines[0]) if text_lines else ""
-        en_text = strip_trailing_punctuation(" ".join(text_lines[1:])) if len(text_lines) > 1 else ""
+        zh_text = clean_subtitle_text(text_lines[0]) if text_lines else ""
+        en_text = clean_subtitle_text(" ".join(text_lines[1:])) if len(text_lines) > 1 else ""
 
         cues.append(
             {
@@ -290,6 +305,29 @@ def render_cue(
             EN_FILL, OUTLINE_COLOR, EN_OUTLINE_W,
         )
 
+    # Watermark in top-right corner
+    if WATERMARK_VIDEO or WATERMARK_XLATE:
+        try:
+            wm_font = find_font(BOLD_FONT_CANDIDATES, WATERMARK_FONT_SIZE)
+        except Exception:
+            wm_font = ImageFont.load_default()
+        wm_lines = []
+        if WATERMARK_VIDEO:
+            wm_lines.append(f"视频：{WATERMARK_VIDEO}")
+        if WATERMARK_XLATE:
+            wm_lines.append(f"翻译：{WATERMARK_XLATE}")
+        wm_x = canvas_w - WATERMARK_POS[0]
+        wm_y = WATERMARK_POS[1]
+        for i, wm_text in enumerate(wm_lines):
+            bbox = draw.textbbox((0, 0), wm_text, font=wm_font)
+            wm_w = bbox[2] - bbox[0]
+            draw.text(
+                (wm_x - wm_w, wm_y + i * (WATERMARK_FONT_SIZE + 4)),
+                wm_text,
+                font=wm_font,
+                fill=WATERMARK_FILL,
+            )
+
     filename = f"cue_{cue['index']:04d}.png"
     img.save(out_dir / filename)
 
@@ -305,8 +343,9 @@ def render_cue(
 
 def main():
     global VIDEO_WIDTH, VIDEO_HEIGHT, ZH_FONT_SIZE, EN_FONT_SIZE, ZH_OUTLINE_W, EN_OUTLINE_W
+    global WATERMARK_VIDEO, WATERMARK_XLATE
 
-    # Parse args: <srt> <out_dir> [--video-width W] [--video-height H]
+    # Parse args: <srt> <out_dir> [--video-width W] [--video-height H] [--watermark-video T] [--watermark-xlate T]
     args = sys.argv[1:]
     srt_path = None
     out_dir = None
@@ -321,6 +360,12 @@ def main():
         elif args[i] == "--video-height" and i + 1 < len(args):
             video_h = int(args[i + 1])
             i += 2
+        elif args[i] == "--watermark-video" and i + 1 < len(args):
+            WATERMARK_VIDEO = args[i + 1]
+            i += 2
+        elif args[i] == "--watermark-xlate" and i + 1 < len(args):
+            WATERMARK_XLATE = args[i + 1]
+            i += 2
         elif srt_path is None:
             srt_path = args[i]
             i += 1
@@ -333,7 +378,8 @@ def main():
     if srt_path is None or out_dir is None:
         print(
             f"Usage: {sys.argv[0]} <bilingual.srt> <output_dir> "
-            f"[--video-width W] [--video-height H]",
+            f"[--video-width W] [--video-height H] "
+            f"[--watermark-video T] [--watermark-xlate T]",
             file=sys.stderr,
         )
         sys.exit(1)

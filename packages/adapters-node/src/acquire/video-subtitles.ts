@@ -850,6 +850,17 @@ export const runSubtitlePipeline = async (
               : path.join(videoDir, "video");
           const burnedOutput = path.join(burnedSubdir, "full.bilingual-burned.mp4");
 
+          // Read uploader handle for watermark
+          let watermarkVideo: string | undefined;
+          try {
+            const metaPath = path.join(videoDir, "metadata.json");
+            const metaRaw = await readFile(metaPath, "utf8");
+            const meta = JSON.parse(metaRaw) as { uploader_id?: string };
+            watermarkVideo = meta.uploader_id;
+          } catch {
+            // No metadata — skip watermark
+          }
+
           const burnResult = await burnBilingualSubtitles({
             srtPath: bilingualSrtPath,
             videoPath,
@@ -859,6 +870,8 @@ export const runSubtitlePipeline = async (
             zhSrtPath,
             ...(opts.force !== undefined ? { force: opts.force } : {}),
             ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+            ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
+            watermarkXlate: "@php_martin",
           });
 
           warnings.push(...burnResult.warnings);

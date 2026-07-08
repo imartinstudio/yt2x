@@ -22,6 +22,10 @@ export type BurnBilingualSubtitlesOptions = {
   force?: boolean;
   /** Abort signal */
   signal?: AbortSignal;
+  /** YouTube channel handle for watermark (e.g. @nateherk) */
+  watermarkVideo?: string;
+  /** Translator handle for watermark (e.g. @php_martin) */
+  watermarkXlate?: string;
 };
 
 export type BurnBilingualSubtitlesResult = {
@@ -143,15 +147,22 @@ export const burnBilingualSubtitles = async (
 
   // 2. Render bilingual subtitle PNGs via Python PIL
   const renderDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-bilingual-render-"));
+  const pyArgs: string[] = [
+    PYTHON_SCRIPT,
+    opts.srtPath,
+    renderDir,
+    "--video-width", String(videoWidth),
+    "--video-height", String(videoHeight),
+  ];
+  if (opts.watermarkVideo) {
+    pyArgs.push("--watermark-video", opts.watermarkVideo);
+  }
+  if (opts.watermarkXlate) {
+    pyArgs.push("--watermark-xlate", opts.watermarkXlate);
+  }
   const renderResult = await opts.runner.run({
     command: "python3",
-    args: [
-      PYTHON_SCRIPT,
-      opts.srtPath,
-      renderDir,
-      "--video-width", String(videoWidth),
-      "--video-height", String(videoHeight),
-    ],
+    args: pyArgs,
     timeoutMs: 120_000,
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });

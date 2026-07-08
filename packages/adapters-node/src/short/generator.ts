@@ -117,6 +117,14 @@ export const generateXShortContent = async (
 
   const shortPost = parseGeneratedShortPostJson(resp.content);
 
+  // Post-process: fix common LLM CJK homoglyph errors (e.g. 幺→么)
+  try {
+    const { fixLlmHomoglyphs } = await import("../acquire/simplify-chinese.js");
+    shortPost.text = fixLlmHomoglyphs(shortPost.text);
+  } catch {
+    // Keep original if import/processing fails
+  }
+
   // 验证 visual 只引用 available_visuals 中存在的截图
   if (shortPost.visual !== undefined) {
     const availVisuals = input.availableVisuals ?? [];

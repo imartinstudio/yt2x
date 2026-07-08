@@ -132,6 +132,26 @@ export const generatePlatformArticleContent = async (
   });
 
   const platformArticle = parseGeneratedPlatformArticleJson(resp.content, input.target);
+
+  // Post-process: fix common LLM CJK homoglyph errors (e.g. 幺→么) in text fields
+  try {
+    const { fixLlmHomoglyphs } = await import("../acquire/simplify-chinese.js");
+    if (platformArticle.target === "xiaohongshu" || platformArticle.target === "wechat") {
+      platformArticle.title = fixLlmHomoglyphs(platformArticle.title);
+      platformArticle.body = fixLlmHomoglyphs(platformArticle.body);
+    }
+    if (platformArticle.target === "wechat") {
+      platformArticle.summary = fixLlmHomoglyphs(platformArticle.summary);
+      platformArticle.lead = fixLlmHomoglyphs(platformArticle.lead);
+    }
+    if (platformArticle.target === "bilibili") {
+      platformArticle.title = fixLlmHomoglyphs(platformArticle.title);
+      platformArticle.description = fixLlmHomoglyphs(platformArticle.description);
+    }
+  } catch {
+    // Keep original if import/processing fails
+  }
+
   const result: GeneratePlatformArticleResult = {
     platformArticle,
     model: resp.model,

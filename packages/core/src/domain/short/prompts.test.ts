@@ -43,9 +43,9 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
   it("requires plain-text post formatting shared with thread posts", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/Post 文本格式规则必须和串推保持一致/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要使用 Markdown 加粗、行内代码、代码块、有序列表、无序列表/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/序号后必须换行/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/序号后加一个空格/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/emoji 数字/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要写成 `1\. 内容`/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要写成 `1\/ 内容`/);
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/不要输出多个备选版本/);
   });
 
@@ -64,7 +64,7 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
 
   it("forbids markdown tables in generated short posts", () => {
     expect(SHORT_X_SYSTEM_PROMPT).toMatch(/禁止在短帖中使用 Markdown 表格/);
-    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/冒号后换行、序号后换行规则/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/冒号后换行、序号后加空格规则/);
   });
 
   it("forbids markdown formatting inside short text", () => {

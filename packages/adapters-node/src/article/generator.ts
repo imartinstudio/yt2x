@@ -239,10 +239,11 @@ export const generateXArticleContent = async (
     visualPlan = validateArticleVisualPlan(content, input.availableVisuals);
   }
 
-  // Post-process: ensure Simplified Chinese output regardless of model preference
+  // Post-process: ensure Simplified Chinese and fix common LLM homoglyph errors
   try {
-    const { simplifyChinese } = await import("../acquire/simplify-chinese.js");
+    const { simplifyChinese, fixLlmHomoglyphs } = await import("../acquire/simplify-chinese.js");
     content = await simplifyChinese(content);
+    content = fixLlmHomoglyphs(content);
   } catch {
     // If conversion fails, keep original content
   }

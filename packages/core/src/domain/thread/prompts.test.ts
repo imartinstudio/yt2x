@@ -53,14 +53,14 @@ describe("THREAD_X_SYSTEM_PROMPT", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要使用 Markdown 加粗、行内代码、代码块、有序列表、无序列表/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/冒号后必须换行/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要加粗/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/序号后必须换行/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/序号后加一个空格/);
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/emoji 数字/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要写成 `1\. 内容`/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/不要写成 `1\/ 内容`/);
   });
 
   it("forbids markdown tables in generated tweets", () => {
     expect(THREAD_X_SYSTEM_PROMPT).toMatch(/禁止在 tweets 中使用 Markdown 表格/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/冒号后换行、序号后换行规则/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/冒号后换行、序号后加空格规则/);
   });
 
   it("forbids markdown formatting inside tweet text", () => {

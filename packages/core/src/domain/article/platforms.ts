@@ -62,7 +62,7 @@ export const PLATFORM_ARTICLE_SPECS = {
     coverSuggestion: false,
     timelineSuggestion: false,
     tone: "种草型、强情绪、强钩子，同时保持信息密度。",
-    format: "图文笔记文案。封面和配图由独立视觉规划流程处理。",
+    format: "纯文字 + emoji 图文笔记文案（禁止 Markdown），不超过 1000 字。封面和配图由独立视觉规划流程处理。",
   },
   wechat: {
     target: "wechat",

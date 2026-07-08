@@ -57,7 +57,15 @@ export const generateNotesContent = async (
   });
 
   // LLM 偶尔会在末尾给出 ```markdown ... ``` 包裹，去掉它
-  const content = stripCodeFenceWrapper(resp.content.trim());
+  let content = stripCodeFenceWrapper(resp.content.trim());
+
+  // Post-process: fix common LLM CJK homoglyph errors (e.g. 幺→么)
+  try {
+    const { fixLlmHomoglyphs } = await import("../acquire/simplify-chinese.js");
+    content = fixLlmHomoglyphs(content);
+  } catch {
+    // Keep original content if import/processing fails
+  }
 
   const result: GenerateNotesResult = {
     content,

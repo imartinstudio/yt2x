@@ -59,8 +59,25 @@ REGULAR_FONT_CANDIDATES = [
 ]
 
 # Punctuation to replace with spaces (in-text) or strip (trailing only)
-_INLINE_PUNCT_RE = re.compile(r"[，。！？；：、；：”“‘’「」『』【】（）,《》\.\,\!\?\;\:\"\'\(\)\[\·]]")
-_TRAILING_SPECIAL_RE = re.compile(r"['\'·]+$")
+_INLINE_PUNCT_CHARS = (
+    "\u3000-\u303F"   # CJK punctuation and symbols
+    "\uFF01-\uFF5E"   # Fullwidth Latin
+    "\u2018\u2019\u201C\u201D"  # smart quotes
+    "\u300C-\u3011"   # CJK brackets
+    "\u00B7"           # middle dot
+    ",.!?;:()[]"        # ASCII punctuation
+)
+# Build punctuation regex from unicode ranges
+# CRITICAL: ] must be first in the character class to avoid closing it
+_PUNCT_CHARS = "]"  # ] must be first
+_PUNCT_CHARS += "".join(chr(c) for c in range(0x3000, 0x3040))  # CJK symbols
+_PUNCT_CHARS += "".join(chr(c) for c in range(0xFF01, 0xFF5F))  # Fullwidth
+_PUNCT_CHARS += "".join(chr(c) for c in [0x2018, 0x2019, 0x201C, 0x201D])  # smart quotes
+_PUNCT_CHARS += "".join(chr(c) for c in range(0x300C, 0x3012))  # CJK brackets
+_PUNCT_CHARS += chr(0x00B7)  # middle dot
+_PUNCT_CHARS += ",.!?;:()["  # ASCII (except ] which is already first)
+_INLINE_PUNCT_RE = re.compile("[" + _PUNCT_CHARS + "]")
+_TRAILING_SPECIAL_RE = re.compile("[" + chr(0x00B7) + "'" + chr(0x0022) + "]+$")
 
 def clean_subtitle_text(text: str) -> str:
     """Clean subtitle text: replace inline punctuation with spaces, strip trailing noise."""

@@ -29,9 +29,9 @@ MAX_WIDTH_FRAC = 0.98
 # Watermark (set via CLI --watermark-video / --watermark-xlate)
 WATERMARK_VIDEO = ""
 WATERMARK_XLATE = ""
-WATERMARK_FONT_SIZE = 18
+WATERMARK_FONT_SIZE = 32
 WATERMARK_FILL = (255, 255, 255, 100)  # semi-transparent white
-WATERMARK_POS = (20, 12)  # top-right offset from edge
+WATERMARK_POS = (20, 16)  # top-left offset from edge
 
 # Runtime values — set by main() after parsing video dimensions
 VIDEO_WIDTH = 1280
@@ -80,11 +80,13 @@ _INLINE_PUNCT_RE = re.compile("[" + _PUNCT_CHARS + "]")
 _TRAILING_SPECIAL_RE = re.compile("[" + chr(0x00B7) + "'" + chr(0x0022) + "]+$")
 
 def clean_subtitle_text(text: str) -> str:
-    """Clean subtitle text: replace inline punctuation with spaces, strip trailing noise."""
+    """Clean subtitle text: replace inline punctuation with spaces, no trailing punctuation."""
     # Replace punctuation with a single space
     text = _INLINE_PUNCT_RE.sub(" ", text)
-    # Strip trailing quotes and middle dots
+    # Strip any remaining trailing punctuation (safety net)
     text = _TRAILING_SPECIAL_RE.sub("", text)
+    # Also strip trailing periods, commas etc that regex might have left as spaces
+    text = text.rstrip()
     # Collapse multiple spaces
     text = re.sub(r"\s{2,}", " ", text)
     return text.strip()
@@ -322,7 +324,7 @@ def render_cue(
             EN_FILL, OUTLINE_COLOR, EN_OUTLINE_W,
         )
 
-    # Watermark in top-right corner
+    # Watermark in top-left corner
     if WATERMARK_VIDEO or WATERMARK_XLATE:
         try:
             wm_font = find_font(BOLD_FONT_CANDIDATES, WATERMARK_FONT_SIZE)
@@ -333,13 +335,11 @@ def render_cue(
             wm_lines.append(f"视频：{WATERMARK_VIDEO}")
         if WATERMARK_XLATE:
             wm_lines.append(f"翻译：{WATERMARK_XLATE}")
-        wm_x = canvas_w - WATERMARK_POS[0]
+        wm_x = WATERMARK_POS[0]
         wm_y = WATERMARK_POS[1]
         for i, wm_text in enumerate(wm_lines):
-            bbox = draw.textbbox((0, 0), wm_text, font=wm_font)
-            wm_w = bbox[2] - bbox[0]
             draw.text(
-                (wm_x - wm_w, wm_y + i * (WATERMARK_FONT_SIZE + 4)),
+                (wm_x, wm_y + i * (WATERMARK_FONT_SIZE + 4)),
                 wm_text,
                 font=wm_font,
                 fill=WATERMARK_FILL,

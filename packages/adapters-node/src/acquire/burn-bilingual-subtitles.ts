@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -218,48 +218,44 @@ export const burnBilingualSubtitles = async (
     const dst = path.join(framesDir, `frame_${String(i).padStart(5, "0")}.png`);
     await copyFile(src, dst);
   }
-
-  // 6. Generate watermark PNG (full-frame, transparent except text in top-right)
   let watermarkInput: string | null = null;
   if (opts.watermarkVideo || opts.watermarkXlate) {
     const wmPath = path.join(renderDir, "watermark.png");
-    const wmLines: string[] = [];
-    if (opts.watermarkVideo) wmLines.push(`视频：${opts.watermarkVideo}`);
-    if (opts.watermarkXlate) wmLines.push(`翻译：${opts.watermarkXlate}`);
-    const wmText = wmLines.join("\\n");
+    const wmScriptPath = path.join(renderDir, "gen-watermark.py");
+    const wmScriptLines: string[] = [
+      "from PIL import Image, ImageDraw, ImageFont",
+      `w, h = ${videoWidth}, ${videoHeight}`,
+      'img = Image.new("RGBA", (w, h), (0, 0, 0, 0))',
+      "draw = ImageDraw.Draw(img)",
+      "try:",
+      '    font = ImageFont.truetype("/System/Library/Fonts/Hiragino Sans GB.ttc", 28, index=3)',
+      "except Exception:",
+      "    font = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', 28)",
+      "y = 16",
+    ];
+    if (opts.watermarkVideo) {
+      wmScriptLines.push(`draw.text((24, y), "视频：` + opts.watermarkVideo + '", font=font, fill=(255, 255, 255, 230))');
+      wmScriptLines.push("y += 36");
+    }
+    if (opts.watermarkXlate) {
+      wmScriptLines.push(`draw.text((24, y), "翻译：` + opts.watermarkXlate + '", font=font, fill=(255, 255, 255, 230))');
+      wmScriptLines.push("y += 36");
+    }
+    wmScriptLines.push(`img.save("${wmPath}")`);
+    await writeFile(wmScriptPath, wmScriptLines.join("\n"), "utf8");
     const wmResult = await opts.runner.run({
       command: "python3",
-      args: [
-        "-c",
-        `from PIL import Image, ImageDraw, ImageFont
-w, h = ${videoWidth}, ${videoHeight}
-img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-draw = ImageDraw.Draw(img)
-try:
-    font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 28)
-except Exception:
-    font = ImageFont.load_default()
-lines = "${wmText}".split("\\\\n")
-y = 16
-for line in lines:
-    bbox = draw.textbbox((0, 0), line, font=font)
-    tw = bbox[2] - bbox[0]
-    # Semi-transparent black background box
-    draw.rectangle([w - tw - 32, y - 4, w - 12, y + 32], fill=(0, 0, 0, 100))
-    # White text
-    draw.text((w - tw - 24, y), line, font=font, fill=(255, 255, 255, 230))
-    y += 36
-img.save("${wmPath}")
-`,
-      ],
+      args: [wmScriptPath],
       timeoutMs: 15_000,
     });
     if (wmResult.exitCode === 0) {
       watermarkInput = wmPath;
+    } else {
+      warnings.push(`watermark generation failed: ${wmResult.stderr ?? "unknown error"}`);
     }
   }
 
-  // 7. ffmpeg overlay: subtitles + optional watermark
+  // 7. ffmpeg overlay: subtitles + persistent watermark (loop=1 for image)
   const filterSteps = [
     `[0:v][1:v]overlay=(W-w)/2:H-h-36[subbed]`,
   ];
@@ -277,7 +273,7 @@ img.save("${wmPath}")
     "-i", path.join(framesDir, "frame_%05d.png"),
   ];
   if (watermarkInput !== null) {
-    ffmpegArgs.push("-i", watermarkInput);
+    ffmpegArgs.push("-loop", "1", "-i", watermarkInput);
   }
   ffmpegArgs.push("-filter_complex", filterComplex);
   ffmpegArgs.push("-map", "[vfinal]", "-map", "0:a");

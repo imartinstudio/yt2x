@@ -17,6 +17,7 @@ export default tseslint.config(
       "src/**",
       "coverage/**",
       "**/.hermes/**",
+      ".codex/**",
     ],
   },
   eslint.configs.recommended,

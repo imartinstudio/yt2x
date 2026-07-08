@@ -219,11 +219,31 @@ export const burnBilingualSubtitles = async (
     await copyFile(src, dst);
   }
 
-  // 6. ffmpeg overlay onto main video — preserve source resolution
-  const filterComplex = [
+  // 6. ffmpeg overlay onto main video with persistent watermark
+  const filterSteps = [
     `[0:v][1:v]overlay=(W-w)/2:H-h-36[overlaid]`,
-    `[overlaid]format=yuv420p[vfinal]`,
-  ].join(";");
+  ];
+
+  // Add persistent watermark via drawtext (top-right, black semi-transparent box)
+  if (opts.watermarkVideo || opts.watermarkXlate) {
+    const fontFile = "/System/Library/Fonts/Helvetica.ttc";
+    const drawtextSteps: string[] = [];
+    if (opts.watermarkVideo) {
+      drawtextSteps.push(
+        `drawtext=fontfile=${fontFile}:text='视频\\:${(opts.watermarkVideo ?? "").replace(/:/g, "\\:")}':fontsize=28:fontcolor=white@0.9:box=1:boxcolor=black@0.4:boxborderw=6:x=w-tw-24:y=16`,
+      );
+    }
+    if (opts.watermarkXlate) {
+      drawtextSteps.push(
+        `drawtext=fontfile=${fontFile}:text='翻译\\:${(opts.watermarkXlate ?? "").replace(/:/g, "\\:")}':fontsize=28:fontcolor=white@0.9:box=1:boxcolor=black@0.4:boxborderw=6:x=w-tw-24:y=52`,
+      );
+    }
+    filterSteps.push(`[overlaid]${drawtextSteps.join(",")}[watermarked]`);
+    filterSteps.push(`[watermarked]format=yuv420p[vfinal]`);
+  } else {
+    filterSteps.push(`[overlaid]format=yuv420p[vfinal]`);
+  }
+  const filterComplex = filterSteps.join(";");
 
   const ffmpegArgs = [
     "-i", opts.videoPath,

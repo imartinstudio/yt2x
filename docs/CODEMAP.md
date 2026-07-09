@@ -38,17 +38,6 @@ This map is intentionally short. Use it to route changes before reading code.
 - `packages/adapters-node/src/x-articles-draft/`: browser-draft materialization helpers.
 - `packages/adapters-node/src/process/`: process runner and stderr buffering.
 
-## Browser Extensions
-
-- `packages/x-article-extension/`: X Articles browser extension.
-- `packages/x-article-extension/src/content/x-articles.ts`: X Articles content script entry.
-- `packages/x-article-extension/src/dom/`: editor locators, insertion, cover upload, file input helpers.
-- `packages/x-article-extension/src/ui/`: import button/dialog/loading UI.
-- `packages/x-following-extension/`: X following/filter browser extension.
-- `packages/x-following-extension/src/content/following-manager.ts`: following extension content entry.
-- `packages/x-following-extension/src/dom/`: filtering, checkbox injection, X session helpers.
-- `packages/x-following-extension/src/ui/following-toolbar.ts`: following toolbar UI.
-
 ## Docs
 
 - `docs/CODEMAP.md`: routing map for code entry points.
@@ -71,8 +60,6 @@ This map is intentionally short. Use it to route changes before reading code.
 - Pipeline orchestration: `packages/cli/src/orchestrator/native-pipeline.ts`.
 - X publish behavior: `packages/cli/src/orchestrator/native-publish.ts` plus `packages/core/src/domain/publish/*`.
 - Clip/deconstruct behavior: `packages/cli/src/commands/deconstruct.ts`, `packages/adapters-node/src/deconstruct/*`, `packages/core/src/domain/deconstruct/*`.
-- X Articles extension import: `packages/x-article-extension/src/content/x-articles.ts`, then `src/dom/` or `src/ui/`.
-- X following extension filtering: `packages/x-following-extension/src/content/following-manager.ts`, then `src/dom/` or `src/ui/`.
 - Docs/usage update: `docs/USAGE.md` or `docs/DATA-CONTRACTS.md`; do not scan all task docs.
 
 ## Minimal Verification Routes
@@ -82,8 +69,6 @@ This map is intentionally short. Use it to route changes before reading code.
 - Article/platform prompt rules: `pnpm test packages/core/src/domain/article/platform-prompts.test.ts packages/core/src/domain/article/prompts.test.ts`.
 - Publish transforms: `pnpm test packages/core/src/domain/publish`.
 - Pipeline argument parsing: `pnpm test packages/cli/src/args packages/cli/src/commands/single-stage-projection.test.ts`.
-- X Articles extension: `pnpm --filter x-article-extension typecheck` and `pnpm --filter x-article-extension build`.
-- X following extension: `pnpm --filter x-following-extension typecheck` and `pnpm --filter x-following-extension build`.
 
 ## Avoid By Default
 

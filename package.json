@@ -20,7 +20,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b --pretty && pnpm --filter x-article-extension run build && pnpm --filter x-following-extension run build",
+    "build": "tsc -b --pretty",
     "clean": "pnpm -r run clean && rm -f .tsbuildinfo packages/*/.tsbuildinfo",
     "rebuild": "pnpm run clean && pnpm run build",
     "typecheck": "tsc -b --pretty",

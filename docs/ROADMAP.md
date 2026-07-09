@@ -38,9 +38,6 @@ yt2x 处于 v0.1 开源前打磨期：
   在非 dry-run 下误走 Tweet API；随后将 `article.md` 写入 X Articles 草稿箱（无 API）。
   详见 [ARTICLE-DRAFT-PUBLISH-TASK.md](./ARTICLE-DRAFT-PUBLISH-TASK.md)（**Task 7 安全阻断与
   browser-draft 基础通道已落地；真实 X 手测、pipeline 接入与可选 E2E 仍待完成**）。
-- **X Articles Chrome Markdown 导入插件**：在当前长文草稿编辑页注入导入入口，
-  复用 article 适配规则并保持只写草稿的安全边界。
-  详见 [CHROME-ARTICLE-IMPORT-TASK.md](./CHROME-ARTICLE-IMPORT-TASK.md)（**方案已完成，待实施**）。
 - LLM streaming 输出。
 - 本地模型 / Ollama provider。
 - 更细的成本统计与 usage 汇总。

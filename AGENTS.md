@@ -38,8 +38,6 @@
 - 主 `article.md` 生成规则：先读 `packages/core/src/domain/article/prompts.ts`。
 - pipeline 编排：先读 `packages/cli/src/orchestrator/native-pipeline.ts`。
 - X 发布：先读 `packages/cli/src/orchestrator/native-publish.ts` 和 `packages/core/src/domain/publish/*`。
-- X Articles 扩展：先读 `packages/x-article-extension/AGENTS.md`，再读对应 `src/content`、`src/dom` 或 `src/ui` 文件。
-- X following 扩展：先读 `packages/x-following-extension/AGENTS.md`，再读对应 `src/content`、`src/dom` 或 `src/ui` 文件。
 - 文档改动：先读 `docs/AGENTS.md` 和目标文档，不要扫描所有 docs。
 
 ## 上下文预算等级

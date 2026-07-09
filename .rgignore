@@ -20,7 +20,6 @@ coverage/
 *.mov
 
 packages/*/src/icons/
-packages/x-following-extension/screenshots/
 videos/*/renders/
 videos/*/assets/
 docs/superpowers/

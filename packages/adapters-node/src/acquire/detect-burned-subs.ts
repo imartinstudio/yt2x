@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProcessRunner } from "../process/index.js";
+import { resolvePythonWithPillow } from "./resolve-python.js";
 
 export type DetectBurnedSubtitlesResult = {
   /** 底部多帧边缘密度偏高，可能已有硬字幕（含英文/UI 误判）。 */
@@ -48,8 +49,9 @@ export const detectBurnedSubtitles = async (
   if (opts?.threshold !== undefined) args.push(String(opts.threshold));
 
   try {
+    const pythonBin = await resolvePythonWithPillow();
     const result = await runner.run({
-      command: "python3",
+      command: pythonBin,
       args,
       timeoutMs: 120_000,
       ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),

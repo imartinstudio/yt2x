@@ -1,9 +1,13 @@
 import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { burnSubtitles, validateSrtIntegrity, verifyBurnedSubtitles } from "./burn-subtitles.js";
 import type { ProcessRunner, ProcessSpec, ProcessResult } from "../process/index.js";
+
+vi.mock("./resolve-python.js", () => ({
+  resolvePythonWithPillow: vi.fn().mockResolvedValue("python3"),
+}));
 
 const seedSrt = async (text: string): Promise<string> => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "yt2x-burn-"));
@@ -339,10 +343,11 @@ Second line
     ).rejects.toThrow(); // manifest missing
 
     expect(calls.length).toBeGreaterThanOrEqual(1);
-    const py = calls[0]!;
-    expect(py.command).toBe("python3");
-    expect(py.args[0]).toContain("render-subtitles.py");
-    expect(py.args[1]).toBe(srtPath);
+    const py = calls.find(
+      (c) => c.command === "python3" && c.args[0]?.includes("render-subtitles.py"),
+    );
+    expect(py).toBeDefined();
+    expect(py!.args[1]).toBe(srtPath);
   });
 
   it("throws when SRT integrity check fails", async () => {

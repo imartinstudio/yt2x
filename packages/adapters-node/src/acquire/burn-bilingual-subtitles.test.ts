@@ -13,6 +13,10 @@ vi.mock("./burn-subtitles.js", () => ({
   validateSrtIntegrity: vi.fn().mockResolvedValue({ valid: true, issues: [] }),
 }));
 
+vi.mock("./resolve-python.js", () => ({
+  resolvePythonWithPillow: vi.fn().mockResolvedValue("python3"),
+}));
+
 describe("burnBilingualSubtitles", () => {
   let tmpDir: string;
   let runner: ProcessRunner;
@@ -52,15 +56,12 @@ describe("burnBilingualSubtitles", () => {
             const pngPath = match?.[1];
             if (pngPath) {
               await mkdir(path.dirname(pngPath), { recursive: true });
-              await writeFile(pngPath, Buffer.from([0x89, 0x50, 0x4E, 0x47]));
+              await writeFile(pngPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
             }
-          } else if ((args[0] ?? "").includes("generate-overlay-frames.py")) {
-            const framesDir = args[2] ?? "/tmp/fallback-frames";
-            await mkdir(framesDir, { recursive: true });
-            await writeFile(
-              path.join(framesDir, "frame_00000.png"),
-              Buffer.from([0x89, 0x50, 0x4E, 0x47]),
-            );
+          } else if ((args[0] ?? "").includes("gen-watermark.py")) {
+            const wmPath = args[1] ?? "/tmp/watermark.png";
+            await mkdir(path.dirname(wmPath), { recursive: true });
+            await writeFile(wmPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
           } else {
             // Bilingual render script: args are [script, srt, outDir, --video-width, W, --video-height, H]
             const renderDir = args[2] ?? "/tmp/fallback";
@@ -76,7 +77,7 @@ describe("burnBilingualSubtitles", () => {
               }),
             );
             // Write the actual cue PNG file too
-            await writeFile(path.join(renderDir, "cue_0001.png"), Buffer.from([0x89, 0x50, 0x4E, 0x47]));
+            await writeFile(path.join(renderDir, "cue_0001.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
           }
           return { exitCode: 0, stdout: "", stderr: "" };
         }
@@ -87,9 +88,6 @@ describe("burnBilingualSubtitles", () => {
           }
           if (args.includes("height")) {
             return { exitCode: 0, stdout: "720\n", stderr: "" };
-          }
-          if (args.includes("avg_frame_rate")) {
-            return { exitCode: 0, stdout: "30/1\n", stderr: "" };
           }
           return { exitCode: 0, stdout: "10.0\n", stderr: "" };
         }
@@ -121,6 +119,32 @@ describe("burnBilingualSubtitles", () => {
     expect(ffmpegCall).toBeDefined();
     const args = ffmpegCall![0]!.args;
     expect(args).toContain(opts.outputPath);
+    // Strip-based overlay: bottom margin formula, not full-frame 0:0
+    const filter = args?.[args.indexOf("-filter_complex") + 1] ?? "";
+    expect(filter).toContain("overlay=(W-w)/2:H-h-36");
+    expect(filter).not.toContain("overlay=0:0");
+    // No full-frame overlay generator
+    const pyCalls = calls.filter((c) => c[0]?.command === "python3");
+    expect(
+      pyCalls.some((c) => (c[0]?.args?.[0] ?? "").includes("generate-overlay-frames.py")),
+    ).toBe(false);
+  });
+
+  it("overlays static watermark when handles are provided", async () => {
+    const opts = {
+      ...defaultOpts(),
+      watermarkVideo: "@channel",
+      watermarkXlate: "@php_martin",
+    };
+    await burnBilingualSubtitles(opts);
+
+    const calls = vi.mocked(runner.run).mock.calls;
+    const ffmpegCall = calls.find((c) => c[0]?.command === "ffmpeg");
+    expect(ffmpegCall).toBeDefined();
+    const args = ffmpegCall![0]!.args ?? [];
+    expect(args).toContain("-loop");
+    const filter = args[args.indexOf("-filter_complex") + 1] ?? "";
+    expect(filter).toContain("overlay=24:16");
   });
 
   it("skips burn when output is newer than all sources (non-force)", async () => {

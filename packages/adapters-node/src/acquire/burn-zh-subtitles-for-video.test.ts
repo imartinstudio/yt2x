@@ -71,4 +71,19 @@ describe("burnZhSubtitlesForVideo", () => {
     expect(detectBurnedSubtitles).not.toHaveBeenCalled();
     expect(burnSubtitles).toHaveBeenCalled();
   });
+
+  it("forwards watermark handles to the single-language burner", async () => {
+    await burnZhSubtitlesForVideo({
+      videoDir: tmpDir,
+      runner,
+      skipIfChineseBurned: false,
+      watermarkVideo: "@channel",
+      watermarkXlate: "@php_martin",
+    });
+
+    expect(burnSubtitles).toHaveBeenCalledWith(expect.objectContaining({
+      watermarkVideo: "@channel",
+      watermarkXlate: "@php_martin",
+    }));
+  });
 });

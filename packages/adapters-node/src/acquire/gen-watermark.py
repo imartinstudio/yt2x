@@ -37,7 +37,7 @@ def main() -> None:
     if args.watermark_video:
         lines.append(f"视频：{args.watermark_video}")
     if args.watermark_xlate:
-        lines.append(f"翻译：{args.watermark_xlate}")
+        lines.append(f"字幕：{args.watermark_xlate}")
     if not lines:
         print("ERROR: at least one watermark line is required", file=sys.stderr)
         sys.exit(1)

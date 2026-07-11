@@ -28,6 +28,10 @@ export type BurnZhSubtitlesForVideoOptions = {
   force?: boolean;
   /** 视频原语言（来自 YouTube metadata.language）。若未提供，自动从 metadata.json 读取。 */
   videoLanguage?: string;
+  /** 来源频道账号，用于与双语烧录一致的水印。 */
+  watermarkVideo?: string;
+  /** 字幕作者账号，用于与双语烧录一致的水印。 */
+  watermarkXlate?: string;
 };
 
 export type BurnZhSubtitlesForVideoResult = {
@@ -161,6 +165,8 @@ export const burnZhSubtitlesForVideo = async (
     srtPath: zhSrtPath,
     outputPath: burnedPath,
     runner: opts.runner,
+    ...(opts.watermarkVideo !== undefined ? { watermarkVideo: opts.watermarkVideo } : {}),
+    ...(opts.watermarkXlate !== undefined ? { watermarkXlate: opts.watermarkXlate } : {}),
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
 

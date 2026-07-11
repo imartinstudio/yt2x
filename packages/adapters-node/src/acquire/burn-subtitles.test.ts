@@ -350,6 +350,66 @@ Second line
     expect(py!.args[1]).toBe(srtPath);
   });
 
+  it("overlays the same static watermark as the bilingual burner when handles are provided", async () => {
+    const srtPath = await seedSrt(`1
+00:00:01,000 --> 00:00:03,000
+\u6d4b\u8bd5
+`);
+    const calls: ProcessSpec[] = [];
+    const runner: ProcessRunner = {
+      run: async (spec: ProcessSpec) => {
+        calls.push(spec);
+        const args = spec.args ?? [];
+        if (spec.command === "python3" && args[0]?.includes("render-subtitles.py")) {
+          const renderDir = args[2]!;
+          await mkdir(renderDir, { recursive: true });
+          await writeFile(path.join(renderDir, "manifest.json"), JSON.stringify({
+            cues: [{ index: 1, filename: "cue_0001.png", start: 1, end: 3, width: 1280, height: 120 }],
+            video_width: 1280,
+          }));
+          await writeFile(path.join(renderDir, "cue_0001.png"), "png");
+        } else if (spec.command === "python3" && args[0] === "-c") {
+          const pngPath = args[1]!.match(/\.save\("([^"]+)"\)/)?.[1];
+          if (pngPath) await writeFile(pngPath, "png");
+        } else if (spec.command === "python3" && args[0]?.includes("gen-watermark.py")) {
+          await writeFile(args[1]!, "png");
+        } else if (spec.command === "ffmpeg") {
+          const pngPath = [...args].reverse().find((arg) => arg.endsWith(".png"));
+          if (pngPath) {
+            await mkdir(path.dirname(pngPath), { recursive: true });
+            await writeFile(pngPath, "png");
+          }
+        }
+        if (spec.command === "ffprobe") {
+          const joined = args.join(" ");
+          return makeResult(0, spec, joined.includes("width") ? "1280\n" : joined.includes("height") ? "720\n" : "10\n");
+        }
+        if (spec.command === "python3" && args[0]?.includes("verify-subtitles.py")) {
+          return makeResult(0, spec, "PASS score=85");
+        }
+        return makeResult(0, spec);
+      },
+    };
+
+    await burnSubtitles({
+      videoPath: "/v/full.mp4",
+      srtPath,
+      outputPath: "/v/full.zh-burned.mp4",
+      runner,
+      watermarkVideo: "@channel",
+      watermarkXlate: "@php_martin",
+    });
+
+    const watermarkCall = calls.find((call) => call.args?.[0]?.includes("gen-watermark.py"));
+    expect(watermarkCall?.args).toEqual(expect.arrayContaining([
+      "--watermark-video", "@channel", "--watermark-xlate", "@php_martin",
+    ]));
+    const ffmpegCall = calls.find((call) => call.command === "ffmpeg" && call.args?.includes("-filter_complex"));
+    const filter = ffmpegCall?.args?.[ffmpegCall.args.indexOf("-filter_complex") + 1] ?? "";
+    expect(ffmpegCall?.args).toContain("-loop");
+    expect(filter).toContain("overlay=24:16");
+  });
+
   it("throws when SRT integrity check fails", async () => {
     const srtPath = await seedSrt(`1
 00:00:05,000 --> 00:00:01,000

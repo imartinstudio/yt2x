@@ -11,6 +11,10 @@ export type BurnSubtitlesOptions = {
   outputPath: string;
   runner: ProcessRunner;
   signal?: AbortSignal;
+  /** YouTube channel handle for watermark (e.g. @nateherk) */
+  watermarkVideo?: string;
+  /** Subtitle author handle for watermark (e.g. @php_martin) */
+  watermarkXlate?: string;
 };
 
 type CueManifestEntry = {
@@ -38,8 +42,17 @@ const VERIFY_SCRIPT = path.resolve(
   "..", "..", "src", "acquire", "verify-subtitles.py",
 );
 
+const WATERMARK_SCRIPT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..", "..", "src", "acquire", "gen-watermark.py",
+);
+
 /** Overlay frame rate — sub-second granularity avoids boundary artifacts. */
 const OVERLAY_FPS = 4;
+
+/** Watermark position — identical to the bilingual renderer (top-left). */
+const WM_X = 24;
+const WM_Y = 16;
 
 // ---- SRT integrity validation ----
 
@@ -445,7 +458,39 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
     throw new Error(`failed to create blank PNG: ${detail}`);
   }
 
-  // 5. Generate overlay frames at OVERLAY_FPS (4 fps = 250 ms granularity).
+  // 5. Optional static watermark PNG (same generator and placement as bilingual burn).
+  let watermarkPath: string | null = null;
+  if (opts.watermarkVideo || opts.watermarkXlate) {
+    const wmPath = path.join(renderDir, "watermark.png");
+    const wmArgs = [WATERMARK_SCRIPT, wmPath];
+    if (opts.watermarkVideo) {
+      wmArgs.push("--watermark-video", opts.watermarkVideo);
+    }
+    if (opts.watermarkXlate) {
+      wmArgs.push("--watermark-xlate", opts.watermarkXlate);
+    }
+    try {
+      const wmResult = await opts.runner.run({
+        command: pythonBin,
+        args: wmArgs,
+        timeoutMs: 15_000,
+      });
+      if (wmResult.exitCode === 0) {
+        watermarkPath = wmPath;
+      } else {
+        console.warn(`watermark generation failed: ${wmResult.stderr ?? "unknown error"}`);
+      }
+    } catch (err: unknown) {
+      const detail = isProcessError(err)
+        ? (err.context.stderrExcerpt?.trim() || err.message)
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      console.warn(`watermark generation failed: ${detail}`);
+    }
+  }
+
+  // 6. Generate overlay frames at OVERLAY_FPS (4 fps = 250 ms granularity).
   //    This avoids boundary artifacts and missed short cues that plague 1 fps.
   const framesDir = path.join(renderDir, "frames");
   await mkdir(framesDir, { recursive: true });
@@ -492,20 +537,31 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
     }
   }
 
-  // 6. Run ffmpeg: image2 at OVERLAY_FPS → overlay onto main video.
+  // 7. Run ffmpeg: image2 at OVERLAY_FPS → overlay onto main video.
   //    No fps/setpts/format on the subtitle stream — those break alpha.
   //    Preserve native resolution (no downscale) so high-res detail is kept,
   //    matching the bilingual renderer. Bottom margin scales with resolution.
   const bottomMargin = Math.round(36 * (videoHeight / 720));
-  const filterComplex = [
-    `[0:v][1:v]overlay=(W-w)/2:H-h-${bottomMargin}[overlaid]`,
-    `[overlaid]format=yuv420p[vfinal]`,
-  ].join(";");
+  const filterComplex = watermarkPath !== null
+    ? [
+        `[0:v][1:v]overlay=(W-w)/2:H-h-${bottomMargin}[sub]`,
+        `[sub][2:v]overlay=${WM_X}:${WM_Y}[overlaid]`,
+        `[overlaid]format=yuv420p[vfinal]`,
+      ].join(";")
+    : [
+        `[0:v][1:v]overlay=(W-w)/2:H-h-${bottomMargin}[overlaid]`,
+        `[overlaid]format=yuv420p[vfinal]`,
+      ].join(";");
 
   const ffmpegArgs = [
     "-i", opts.videoPath,
     "-framerate", String(OVERLAY_FPS),
     "-i", path.join(framesDir, "frame_%05d.png"),
+  ];
+  if (watermarkPath !== null) {
+    ffmpegArgs.push("-loop", "1", "-i", watermarkPath);
+  }
+  ffmpegArgs.push(
     "-filter_complex", filterComplex,
     "-map", "[vfinal]",
     "-map", "0:a",
@@ -515,9 +571,10 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
     "-level", "4.0",
     "-c:a", "aac",
     "-b:a", "128k",
+    "-shortest",
     "-movflags", "+faststart",
     "-y", opts.outputPath,
-  ];
+  );
 
   const result = await opts.runner.run({
     command: "ffmpeg",

@@ -778,6 +778,7 @@ export const runSubtitlePipeline = async (
   }
 
   if ((mode === "burned" || mode === "both") && hasZhSrt) {
+    const watermarkVideo = await resolveWatermarkUploaderId(videoDir);
     const burnResult = await burnZhSubtitlesForVideo({
       videoDir,
       runner: opts.runner,
@@ -788,6 +789,8 @@ export const runSubtitlePipeline = async (
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       ...(opts.force !== undefined ? { force: opts.force } : {}),
       ...(opts.videoLanguage !== undefined ? { videoLanguage: opts.videoLanguage } : {}),
+      ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
+      watermarkXlate: "@php_martin",
     });
 
     if (burnResult.burnedPath !== undefined) {

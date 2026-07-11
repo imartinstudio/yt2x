@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isProcessError, type ProcessRunner } from "../process/index.js";
+import { resolvePythonWithPillow } from "./resolve-python.js";
 
 export type BurnSubtitlesOptions = {
   videoPath: string;
@@ -241,7 +242,8 @@ const verifyFramePair = async (
 
     // Compare frames via Python PIL. The script always exits 0 and writes
     // "PASS <score>" or "FAIL <reason>" to stdout.
-    const pyResult = await runSafe("python3", [VERIFY_SCRIPT, burnedFrame, origFrame], 10_000);
+    const pythonBin = await resolvePythonWithPillow();
+    const pyResult = await runSafe(pythonBin, [VERIFY_SCRIPT, burnedFrame, origFrame], 10_000);
 
     const output = pyResult.stdout.trim();
     if (output.startsWith("PASS")) {
@@ -363,14 +365,38 @@ export const burnSubtitles = async (opts: BurnSubtitlesOptions): Promise<void> =
     }
   }
 
-  // 1. Render subtitle PNGs
+  // 1. Render subtitle PNGs at the video's real resolution so fonts/wrapping
+  //    scale with it (matches the bilingual renderer).
+  const videoWidth = await probeVideoWidth(opts.videoPath, opts.runner);
+  const videoHeight = await probeVideoHeight(opts.videoPath, opts.runner);
+  const pythonBin = await resolvePythonWithPillow();
   const renderDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-render-"));
-  const renderResult = await opts.runner.run({
-    command: "python3",
-    args: [PYTHON_SCRIPT, opts.srtPath, renderDir],
-    timeoutMs: 60_000,
-    ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-  });
+  let renderResult;
+  try {
+    renderResult = await opts.runner.run({
+      command: pythonBin,
+      args: [
+        PYTHON_SCRIPT,
+        opts.srtPath,
+        renderDir,
+        "--video-width",
+        String(videoWidth),
+        "--video-height",
+        String(videoHeight),
+      ],
+      // 1080p CJK rendering can exceed 1 minute for long videos.
+      timeoutMs: 20 * 60_000,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+  } catch (err: unknown) {
+    await rm(renderDir, { recursive: true, force: true }).catch(() => {});
+    const detail = isProcessError(err)
+      ? (err.context.stderrExcerpt?.trim() || err.message)
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    throw new Error(`subtitle PNG rendering failed: ${detail}`);
+  }
 
   if (renderResult.exitCode !== 0) {
     const excerpt = (renderResult.stderr ?? "").split("\n").slice(-10).join("\n");
@@ -396,17 +422,27 @@ export const burnSubtitles = async (opts: BurnSubtitlesOptions): Promise<void> =
 
   // 4. Create blank frame matching max subtitle height
   const blankPath = path.join(renderDir, "blank.png");
-  const blankResult = await opts.runner.run({
-    command: "python3",
-    args: ["-c", `
+  try {
+    const blankResult = await opts.runner.run({
+      command: pythonBin,
+      args: ["-c", `
 from PIL import Image
 Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
 `],
-    timeoutMs: 10_000,
-  });
-  if (blankResult.exitCode !== 0) {
+      timeoutMs: 10_000,
+    });
+    if (blankResult.exitCode !== 0) {
+      await rm(renderDir, { recursive: true, force: true }).catch(() => {});
+      throw new Error("failed to create blank PNG");
+    }
+  } catch (err: unknown) {
     await rm(renderDir, { recursive: true, force: true }).catch(() => {});
-    throw new Error("failed to create blank PNG");
+    const detail = isProcessError(err)
+      ? (err.context.stderrExcerpt?.trim() || err.message)
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    throw new Error(`failed to create blank PNG: ${detail}`);
   }
 
   // 5. Generate overlay frames at OVERLAY_FPS (4 fps = 250 ms granularity).
@@ -458,9 +494,12 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
 
   // 6. Run ffmpeg: image2 at OVERLAY_FPS → overlay onto main video.
   //    No fps/setpts/format on the subtitle stream — those break alpha.
+  //    Preserve native resolution (no downscale) so high-res detail is kept,
+  //    matching the bilingual renderer. Bottom margin scales with resolution.
+  const bottomMargin = Math.round(36 * (videoHeight / 720));
   const filterComplex = [
-    `[0:v][1:v]overlay=(W-w)/2:H-h-36[overlaid]`,
-    `[overlaid]scale=w=min(1280\\,iw):h=min(720\\,ih),format=yuv420p[vfinal]`,
+    `[0:v][1:v]overlay=(W-w)/2:H-h-${bottomMargin}[overlaid]`,
+    `[overlaid]format=yuv420p[vfinal]`,
   ].join(";");
 
   const ffmpegArgs = [
@@ -514,6 +553,34 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
     );
   }
 };
+
+/** Probe a video stream integer dimension (width/height), with a fallback. */
+const probeVideoDimension = async (
+  videoPath: string,
+  runner: ProcessRunner,
+  entry: "width" | "height",
+  fallback: number,
+): Promise<number> => {
+  const probeResult = await runner.run({
+    command: "ffprobe",
+    args: [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", `stream=${entry}`,
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      videoPath,
+    ],
+    timeoutMs: 15_000,
+  });
+  const value = parseInt((probeResult.stdout ?? "").trim(), 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+const probeVideoWidth = (videoPath: string, runner: ProcessRunner): Promise<number> =>
+  probeVideoDimension(videoPath, runner, "width", 1280);
+
+const probeVideoHeight = (videoPath: string, runner: ProcessRunner): Promise<number> =>
+  probeVideoDimension(videoPath, runner, "height", 720);
 
 /** Probe video duration in seconds, falling back to lastEnd + 10. */
 const probeVideoDuration = async (

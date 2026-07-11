@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { detectBurnedSubtitles } from "./detect-burned-subs.js";
 import type { ProcessRunner } from "../process/index.js";
 
+vi.mock("./resolve-python.js", () => ({
+  resolvePythonWithPillow: vi.fn().mockResolvedValue("python3"),
+}));
+
 const runnerWithStdout = (stdout: string): ProcessRunner => ({
   run: vi.fn().mockResolvedValue({ exitCode: 0, stdout, stderr: "" }),
 });

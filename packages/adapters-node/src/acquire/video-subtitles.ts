@@ -633,6 +633,32 @@ export const runSubtitlePipeline = async (
     hasZhSrt = false;
   }
 
+  // When bilingual mode is active, validate that the existing zh.srt has the
+  // same cue count as the source en.srt. If the en.srt was regenerated (e.g.
+  // cleanupSrt merged cues), the stale zh.srt must be re-translated so the
+  // bilingual merge can align cues 1:1.
+  const bilingualActive = opts.subtitleBilingual !== undefined && opts.subtitleBilingual !== "off";
+  if (hasZhSrt && bilingualActive && subResult.sourceSubtitle !== undefined) {
+    try {
+      const enRaw = await readFile(subResult.sourceSubtitle, "utf8");
+      const zhRaw = await readFile(zhSrtPath, "utf8");
+      const enCues = parseSubtitleBlocks(enRaw);
+      const zhCues = parseSubtitleBlocks(zhRaw);
+      if (enCues.length !== zhCues.length) {
+        warnings.push(
+          `existing zh.srt has ${zhCues.length} cues but source en.srt has ${enCues.length} cues; re-translating for bilingual alignment`,
+        );
+        await rm(zhSrtPath).catch(() => {});
+        hasZhSrt = false;
+        // Remove stale translation fields from manifest
+        const { target_subtitle: _ts, translation_method: _tm, ...restManifest } = manifest;
+        manifest = { ...restManifest };
+      }
+    } catch {
+      // If we can't validate, proceed with existing zh.srt
+    }
+  }
+
   const hasLlm = opts.llm !== undefined && opts.llmModel !== undefined;
   const sourceLangCodeMatchesTarget = isAlreadyTargetLanguage(
     manifest.source_language,

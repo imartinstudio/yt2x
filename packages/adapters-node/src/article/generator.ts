@@ -37,6 +37,35 @@ const stripCodeFenceWrapper = (s: string): string => {
 
 const TRAILING_SOURCE_LINE_RE = /\n+(?:来源|Source)\s*[:：][^\n]*\s*$/i;
 const stripTrailingSourceAttribution = (s: string): string => s.replace(TRAILING_SOURCE_LINE_RE, "").trim();
+const ARTICLE_H1_RE = /^#\s+.*$/m;
+const MARKDOWN_H1_TEXT_RE = /^#\s+(.+?)\s*$/m;
+
+const restoreProtectedProductNames = (translatedTitle: string, sourceTitle: string): string => {
+  let title = translatedTitle;
+  if (/\bClaude Design\b/i.test(sourceTitle)) {
+    title = title
+      .replace(/Claude\s*设计(?=\p{Script=Han})/giu, "Claude Design ")
+      .replace(/Claude\s*设计/gi, "Claude Design");
+  }
+  return title;
+};
+
+/** structured notes 的 H1 是原标题的忠实中文转译；模型生成的营销标题不能覆盖它。 */
+const restoreFaithfulChineseTitle = (
+  content: string,
+  structuredNotesMd: string,
+  sourceTitle: unknown,
+): string => {
+  const notesTitle = structuredNotesMd.match(MARKDOWN_H1_TEXT_RE)?.[1]
+    ?.trim()
+    .replace(/^\*\*(.*?)\*\*$/, "$1")
+    .trim();
+  const fallbackTitle = typeof sourceTitle === "string" ? sourceTitle.trim() : "";
+  const candidateTitle = notesTitle?.length ? notesTitle : fallbackTitle;
+  const title = restoreProtectedProductNames(candidateTitle, fallbackTitle);
+  if (title.length === 0) return content;
+  return content.replace(ARTICLE_H1_RE, `# **${title}**`);
+};
 
 const ARTICLE_TOPIC_TAG_RE = /#[\p{L}\p{N}_]+/gu;
 const ARTICLE_TOPIC_TAG_REPAIR_PROMPT = `你刚才输出的 X 长文缺少合规的文末话题标签。
@@ -247,6 +276,11 @@ export const generateXArticleContent = async (
   } catch {
     // If conversion fails, keep original content
   }
+  content = restoreFaithfulChineseTitle(
+    content,
+    input.artifacts.structuredNotesMd,
+    input.artifacts.metadata.title,
+  );
 
   const result: GenerateXArticleResult = {
     content,

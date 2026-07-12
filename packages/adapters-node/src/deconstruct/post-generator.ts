@@ -121,7 +121,7 @@ export const generateClipsPosts = async (
       { role: "user", content: userPrompt },
     ],
     temperature: 0.4,
-    maxTokens: 4096,
+    maxTokens: 8192,
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
 

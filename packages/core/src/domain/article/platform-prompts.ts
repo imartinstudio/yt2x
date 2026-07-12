@@ -54,7 +54,7 @@ export const extractProtectedTitleTerms = (sourceTitle: string | undefined): str
 };
 
 export const getCanonicalTitleSeed = (input: PlatformArticlePromptInput): string | undefined =>
-  firstString(firstMarkdownH1(input.articleMd), input.metadata.title, input.metadata.fulltitle, input.metadata.original_title);
+  firstString(input.metadata.title, input.metadata.fulltitle, input.metadata.original_title, firstMarkdownH1(input.articleMd));
 
 const buildSharedRules = (spec: PlatformArticleSpec): string => `通用约束：
 - 目标平台：${spec.displayName}。

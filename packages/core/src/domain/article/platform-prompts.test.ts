@@ -64,7 +64,7 @@ describe("buildPlatformArticleUserPrompt", () => {
     expect(prompt).toMatch(/"id": "abc"/);
     expect(prompt).not.toMatch(/"formats"/);
     expect(prompt).toMatch(/## Unified title constraints/);
-    expect(prompt).toMatch(/Unified main title seed: Article/);
+    expect(prompt).toMatch(/Unified main title seed: Demo/);
     expect(prompt).toMatch(/## Source article\.md/);
     expect(prompt).toMatch(/# Article/);
     expect(prompt).toMatch(/strict JSON only/);
@@ -107,13 +107,13 @@ describe("buildPlatformArticleUserPrompt", () => {
 });
 
 describe("title helpers", () => {
-  it("prefers the article H1 as the canonical title seed", () => {
+  it("prefers the source video title as the canonical title seed", () => {
     expect(
       getCanonicalTitleSeed({
         metadata: { title: "Metadata title" },
         articleMd: "# Article title\n\nBody",
       }),
-    ).toBe("Article title");
+    ).toBe("Metadata title");
   });
 
   it("extracts protected title terms case-insensitively", () => {

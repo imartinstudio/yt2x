@@ -37,7 +37,7 @@ describe("generateXArticleContent", () => {
       return { content: "# T\n\nbody\n\n#AI #Codex #工作流", model: "m", finishReason: "stop" };
     });
     const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
-    expect(r.content).toBe("# T\n\nbody\n\n#AI #Codex #工作流");
+    expect(r.content).toBe("# **Notes**\n\nbody\n\n#AI #Codex #工作流");
     expect(r.videoId).toBe("vid");
     expect(r.visualPlan).toEqual([]);
   });
@@ -49,7 +49,36 @@ describe("generateXArticleContent", () => {
       finishReason: "stop",
     }));
     const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
-    expect(r.content).toBe("# T\n\nx\n\n#AI #Codex #工作流");
+    expect(r.content).toBe("# **Notes**\n\nx\n\n#AI #Codex #工作流");
+  });
+
+  it("uses the faithful Chinese title from structured notes instead of the model title", async () => {
+    const llm = makeLlm(() => ({
+      content: "# A different angle\n\nbody\n\n#AI #Codex #工作流",
+      model: "m",
+      finishReason: "stop",
+    }));
+
+    const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
+
+    expect(r.content).toBe("# **Notes**\n\nbody\n\n#AI #Codex #工作流");
+  });
+
+  it("restores an untranslated product name from the original title", async () => {
+    const llm = makeLlm(() => ({
+      content: "# 营销标题\n\nbody\n\n#AI #ClaudeDesign #工作流",
+      model: "m",
+      finishReason: "stop",
+    }));
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "# Claude 设计完整教程：从入门到精通\n\n- point",
+      metadata: { id: "vid", title: "Claude Design FULL Tutorial: Beginner to Pro" },
+    };
+
+    const r = await generateXArticleContent({ llm, model: "m", artifacts });
+
+    expect(r.content).toMatch(/^# \*\*Claude Design 完整教程：从入门到精通\*\*/);
   });
 
   it("strips trailing source attribution from generated article markdown", async () => {
@@ -59,7 +88,7 @@ describe("generateXArticleContent", () => {
       finishReason: "stop",
     }));
     const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
-    expect(r.content).toBe("# T\n\nbody\n\n#AI #Codex #工作流");
+    expect(r.content).toBe("# **Notes**\n\nbody\n\n#AI #Codex #工作流");
   });
 
   it("includes available_visuals in user prompt when provided", async () => {
@@ -105,7 +134,7 @@ describe("generateXArticleContent", () => {
     const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
 
     expect(llm.chat).toHaveBeenCalledTimes(2);
-    expect(r.content).toBe("# T\n\nbody\n\n#AI #Codex #工作流");
+    expect(r.content).toBe("# **Notes**\n\nbody\n\n#AI #Codex #工作流");
   });
 
   it("repairs screenshot refs placed between list items", async () => {

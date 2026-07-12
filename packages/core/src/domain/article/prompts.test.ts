@@ -125,6 +125,12 @@ describe("buildArticleUserPrompt", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/2GB 显存跑 AI Agent/);
   });
 
+  it("anchors the generated title to the original video title", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/原视频标题锚点/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不得替换原视频的核心主题/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/核心实体、主题和限定条件/);
+  });
+
   it("defines mobile rhythm: max 2 consecutive paragraphs and 250-char cap", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/移动端节奏规则/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/最多连续 2 个正文段落/);

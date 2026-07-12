@@ -72,6 +72,7 @@ Rules:
 - ${langRule}
 - Translate the H1 title semantically — do NOT apply prefix/suffix rules like "别再只看结论："
 - The H1 title is the single most important field. It must be a faithful semantic translation of the original video title, not a marketing rewrite.
+- Brand and product names in the original title must remain unchanged in the H1. For example, keep "Claude Design" exactly as "Claude Design"; never translate it as "Claude 设计".
 - Use ## for major section headings. Do NOT use numbered headings like "## 1. Topic".
 - Include Screenshot References ONLY when screenshots were captured (screenshotsJson is non-null).
 - Include TODO, Reusable Prompts, Technical Plan, Open Questions ONLY when the content genuinely warrants them. Omit sections that would be empty or generic.

@@ -35,6 +35,7 @@ describe("getNotesSystemPrompt", () => {
     const prompt = getNotesSystemPrompt();
     expect(prompt).toMatch(/# <AI semantic translation/);
     expect(prompt).toMatch(/Source: <YouTube URL>/);
+    expect(prompt).toMatch(/product names.*must remain unchanged/i);
   });
 
   it("requires conditional sections", () => {

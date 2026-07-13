@@ -89,8 +89,11 @@ const burnSubtitlesForVideo = async (
   videoId: string,
   force: boolean,
 ): Promise<void> => {
+  const articleSrtPath = path.join(articleOutRoot, videoId, "video", "full.zh.srt");
+  const hasArticleSrt = await access(articleSrtPath).then(() => true).catch(() => false);
   const result = await burnZhSubtitlesForVideo({
     videoDir: path.join(outRoot, videoId),
+    ...(hasArticleSrt ? { srtPath: articleSrtPath } : {}),
     burnedVideoOutDir: articleOutRoot,
     runner: defaultProcessRunner,
     skipIfChineseBurned: true,

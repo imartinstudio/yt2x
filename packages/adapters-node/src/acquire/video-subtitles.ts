@@ -779,8 +779,17 @@ export const runSubtitlePipeline = async (
 
   if ((mode === "burned" || mode === "both") && hasZhSrt) {
     const watermarkVideo = await resolveWatermarkUploaderId(videoDir);
+    const articleZhSrtPath = opts.burnedVideoOutDir !== undefined
+      ? path.join(opts.burnedVideoOutDir, path.basename(videoDir), "video", "full.zh.srt")
+      : undefined;
+    const burnSrtPath = articleZhSrtPath === undefined
+      ? zhSrtPath
+      : await access(articleZhSrtPath)
+        .then(() => articleZhSrtPath)
+        .catch(() => zhSrtPath);
     const burnResult = await burnZhSubtitlesForVideo({
       videoDir,
+      srtPath: burnSrtPath,
       runner: opts.runner,
       ...(opts.burnedVideoOutDir !== undefined ? { burnedVideoOutDir: opts.burnedVideoOutDir } : {}),
       ...(opts.skipBurnIfChineseBurned !== undefined

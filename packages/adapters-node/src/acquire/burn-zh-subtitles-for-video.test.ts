@@ -72,6 +72,50 @@ describe("burnZhSubtitlesForVideo", () => {
     expect(burnSubtitles).toHaveBeenCalled();
   });
 
+  it("burns the explicitly supplied Chinese SRT instead of the download copy", async () => {
+    const articleSrtPath = path.join(tmpDir, "article", "full.zh.srt");
+    await mkdir(path.dirname(articleSrtPath), { recursive: true });
+    await writeFile(articleSrtPath, "1\n00:00:00,000 --> 00:00:01,000\n文章字幕\n");
+
+    await burnZhSubtitlesForVideo({
+      videoDir: tmpDir,
+      srtPath: articleSrtPath,
+      runner,
+      skipIfChineseBurned: false,
+    });
+
+    expect(burnSubtitles).toHaveBeenCalledWith(expect.objectContaining({
+      srtPath: articleSrtPath,
+    }));
+  });
+
+  it("re-burns a cached video that has no subtitle-source fingerprint", async () => {
+    const burnedPath = path.join(tmpDir, "video", "full.zh-burned.mp4");
+    await writeFile(burnedPath, "old burned video");
+
+    await burnZhSubtitlesForVideo({
+      videoDir: tmpDir,
+      runner,
+      skipIfChineseBurned: false,
+    });
+
+    expect(burnSubtitles).toHaveBeenCalled();
+  });
+
+  it("re-burns when the cached subtitle-source fingerprint differs", async () => {
+    const burnedPath = path.join(tmpDir, "video", "full.zh-burned.mp4");
+    await writeFile(burnedPath, "old burned video");
+    await writeFile(`${burnedPath}.subtitle-source.sha256`, "old fingerprint\n");
+
+    await burnZhSubtitlesForVideo({
+      videoDir: tmpDir,
+      runner,
+      skipIfChineseBurned: false,
+    });
+
+    expect(burnSubtitles).toHaveBeenCalled();
+  });
+
   it("forwards watermark handles to the single-language burner", async () => {
     await burnZhSubtitlesForVideo({
       videoDir: tmpDir,

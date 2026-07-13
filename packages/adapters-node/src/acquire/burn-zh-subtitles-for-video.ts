@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { burnSubtitles } from "./burn-subtitles.js";
@@ -18,6 +19,8 @@ export type BurnZhSubtitlesSkipReason =
 export type BurnZhSubtitlesForVideoOptions = {
   /** 采集根目录，例如 files/downloads/<videoId> */
   videoDir: string;
+  /** 实际用于烧录的中文 SRT；未提供时使用采集目录的默认字幕。 */
+  srtPath?: string;
   runner: ProcessRunner;
   /** 烧录输出根目录；默认写入 videoDir/video/ */
   burnedVideoOutDir?: string;
@@ -44,6 +47,12 @@ export type BurnZhSubtitlesForVideoResult = {
 
 const subtitleManifestPath = (videoDir: string): string =>
   path.join(videoDir, "video", "subtitle-manifest.json");
+
+const subtitleSourceFingerprintPath = (burnedPath: string): string =>
+  `${burnedPath}.subtitle-source.sha256`;
+
+const subtitleFingerprint = async (srtPath: string): Promise<string> =>
+  createHash("sha256").update(await readFile(srtPath)).digest("hex");
 
 const updateBurnedVideoInManifest = async (
   videoDir: string,
@@ -77,7 +86,7 @@ export const burnZhSubtitlesForVideo = async (
   opts: BurnZhSubtitlesForVideoOptions,
 ): Promise<BurnZhSubtitlesForVideoResult> => {
   const videoSubdir = path.join(opts.videoDir, "video");
-  const zhSrtPath = path.join(videoSubdir, "full.zh.srt");
+  const zhSrtPath = opts.srtPath ?? path.join(videoSubdir, "full.zh.srt");
   const skipIfChineseBurned = opts.skipIfChineseBurned !== false;
 
   // ── Layer 1: video language check ──
@@ -116,6 +125,8 @@ export const burnZhSubtitlesForVideo = async (
       ? path.join(opts.burnedVideoOutDir, videoId, "video")
       : videoSubdir;
   const burnedPath = path.join(burnedSubdir, "full.zh-burned.mp4");
+  const videoPath = path.join(videoSubdir, mp4File);
+  const sourceFingerprint = await subtitleFingerprint(zhSrtPath);
 
   const force = opts.force === true;
 
@@ -125,24 +136,29 @@ export const burnZhSubtitlesForVideo = async (
       // --force: unconditionally remove stale burned video and re-burn
       await rm(burnedPath).catch(() => {});
     } else {
-      // Burned video exists — check if SRT is newer (e.g. after translation fix).
-      // If the SRT was updated, the stale burned video must be re-generated.
-      const [srtStat, burnedStat] = await Promise.all([
+      // The cached burn is valid only for the same SRT contents and source video.
+      // Older outputs have no fingerprint and are intentionally re-burned once.
+      const [srtStat, videoStat, burnedStat, cachedFingerprint] = await Promise.all([
         stat(zhSrtPath),
+        stat(videoPath),
         stat(burnedPath),
+        readFile(subtitleSourceFingerprintPath(burnedPath), "utf8").catch(() => ""),
       ]);
-      if (srtStat.mtimeMs <= burnedStat.mtimeMs) {
+      if (
+        srtStat.mtimeMs <= burnedStat.mtimeMs &&
+        videoStat.mtimeMs <= burnedStat.mtimeMs &&
+        cachedFingerprint.trim() === sourceFingerprint
+      ) {
         await updateBurnedVideoInManifest(opts.videoDir, burnedPath);
         return { burned: false, skipped: true, skipReason: "already_exists", burnedPath };
       }
-      // SRT is newer — remove stale burned video and re-burn
+      // An input or its identity changed — remove stale output and re-burn.
       await rm(burnedPath).catch(() => {});
     }
   } catch {
     /* continue */
   }
 
-  const videoPath = path.join(videoSubdir, mp4File);
   let detect: DetectBurnedSubtitlesResult | undefined;
 
   if (skipIfChineseBurned && !force) {
@@ -169,6 +185,8 @@ export const burnZhSubtitlesForVideo = async (
     ...(opts.watermarkXlate !== undefined ? { watermarkXlate: opts.watermarkXlate } : {}),
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
+
+  await writeFile(subtitleSourceFingerprintPath(burnedPath), `${sourceFingerprint}\n`, "utf8");
 
   await updateBurnedVideoInManifest(opts.videoDir, burnedPath);
 

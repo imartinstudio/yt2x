@@ -136,6 +136,77 @@ describe("prepareSourceSubtitle", () => {
     );
   });
 
+  it("uses the requested source language when both English and Chinese YouTube subtitles exist", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-source-language-"));
+    await writeFile(
+      path.join(root, "Demo.video123.en.vtt"),
+      "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nEnglish source\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, "Demo.video123.zh-CN.vtt"),
+      "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n中文字幕\n",
+      "utf8",
+    );
+
+    const result = await prepareSourceSubtitle({
+      videoDir: root,
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      source: "youtube",
+      preferSourceLanguage: true,
+    });
+
+    expect(result.manifest.source_language).toBe("en");
+    await expect(readFile(path.join(root, "video", "full.en.srt"), "utf8")).resolves.toContain("English source");
+  });
+
+  it("does not substitute Chinese subtitles for a missing bilingual source language", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-bilingual-source-missing-"));
+    await writeFile(
+      path.join(root, "Demo.video123.zh-CN.vtt"),
+      "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n中文字幕\n",
+      "utf8",
+    );
+
+    const result = await prepareSourceSubtitle({
+      videoDir: root,
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      source: "youtube",
+      preferSourceLanguage: true,
+    });
+
+    expect(result.sourceSubtitle).toBeUndefined();
+    expect(result.manifest.warnings).toEqual(["no YouTube subtitle file found (tried: en)"]);
+  });
+
+  it("falls back to local transcription when auto cannot find the bilingual source language", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-auto-transcribe-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(path.join(root, "video", "full.mp4"), "fake video");
+
+    const result = await prepareSourceSubtitle({
+      videoDir: root,
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      source: "auto",
+      preferSourceLanguage: true,
+      runner: {
+        run: async (spec) => {
+          if (spec.command === "whisper-cli") {
+            const outputIndex = spec.args!.indexOf("-of");
+            await writeFile(`${spec.args![outputIndex + 1]}.srt`, "1\n00:00:00,000 --> 00:00:01,000\nEnglish source\n");
+          }
+          return { exitCode: 0, signal: null, stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false, durationMs: 0, command: spec.command, args: spec.args ?? [] };
+        },
+      },
+    });
+
+    expect(result.manifest.source_method).toBe("local_transcription");
+    await expect(readFile(path.join(root, "video", "full.en.srt"), "utf8")).resolves.toContain("English source");
+  });
+
   it("records the actual Chinese script variant from the YouTube subtitle filename", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-hant-"));
     await mkdir(root, { recursive: true });

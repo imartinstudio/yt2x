@@ -1,8 +1,16 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
+
+vi.mock("./burn-zh-subtitles-for-video.js", () => ({
+  burnZhSubtitlesForVideo: vi.fn().mockResolvedValue({
+    burned: true,
+    skipped: false,
+  }),
+}));
+
 import {
   cleanupSrt,
   convertSubtitleTextToSrt,
@@ -11,6 +19,7 @@ import {
   prepareSourceSubtitle,
   runSubtitlePipeline,
 } from "./video-subtitles.js";
+import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
 
 describe("video subtitle SRT conversion", () => {
   it("converts VTT cues into numbered SRT blocks", () => {
@@ -192,6 +201,33 @@ describe("prepareSourceSubtitle", () => {
 });
 
 describe("runSubtitlePipeline", () => {
+  it("uses the article Chinese SRT for a direct burned-subtitle run", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-article-burn-"));
+    const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-article-out-"));
+    const sourceSrt = path.join(root, "source.srt");
+    const articleSrt = path.join(articleRoot, path.basename(root), "video", "full.zh.srt");
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await mkdir(path.dirname(articleSrt), { recursive: true });
+    await writeFile(path.join(root, "video", "full.mp4"), "fake video");
+    await writeFile(sourceSrt, "1\n00:00:00,000 --> 00:00:01,000\n下载目录字幕\n");
+    await writeFile(articleSrt, "1\n00:00:00,000 --> 00:00:01,000\n文章目录字幕\n");
+    vi.mocked(burnZhSubtitlesForVideo).mockClear();
+
+    await runSubtitlePipeline({
+      videoDir: root,
+      subtitle: { mode: "burned", sourceLang: "zh-CN", targetLang: "zh-CN", source: "file", file: sourceSrt },
+      llm: { chat: async () => ({ content: "", model: "test", finishReason: "stop" }) },
+      llmModel: "test",
+      runner: { run: async (spec) => ({ exitCode: 0, signal: null, stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false, durationMs: 0, command: spec.command, args: spec.args ?? [] }) },
+      burnedVideoOutDir: articleRoot,
+      skipBurnIfChineseBurned: false,
+    });
+
+    expect(burnZhSubtitlesForVideo).toHaveBeenCalledWith(expect.objectContaining({
+      srtPath: articleSrt,
+    }));
+  });
+
   it("translates Traditional Chinese subtitles to Simplified Chinese before marking full.zh.srt ready", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-hant-"));
     await mkdir(root, { recursive: true });

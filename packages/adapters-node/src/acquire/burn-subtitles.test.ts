@@ -408,6 +408,7 @@ Second line
     const filter = ffmpegCall?.args?.[ffmpegCall.args.indexOf("-filter_complex") + 1] ?? "";
     expect(ffmpegCall?.args).toContain("-loop");
     expect(filter).toContain("overlay=24:16");
+    expect(ffmpegCall?.timeoutMs).toBe(30 * 60_000);
   });
 
   it("throws when SRT integrity check fails", async () => {

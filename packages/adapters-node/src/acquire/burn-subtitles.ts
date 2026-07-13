@@ -579,7 +579,7 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
   const result = await opts.runner.run({
     command: "ffmpeg",
     args: ffmpegArgs,
-    timeoutMs: 15 * 60_000,
+    timeoutMs: 30 * 60_000,
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
 

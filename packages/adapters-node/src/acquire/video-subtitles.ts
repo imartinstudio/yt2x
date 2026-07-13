@@ -49,6 +49,8 @@ export type PrepareSourceSubtitleOptions = {
   sourceLang: string;
   targetLang: string;
   source: SubtitleSourceMode;
+  /** Prefer the requested source language over an already-translated target track. */
+  preferSourceLanguage?: boolean;
   file?: string;
   runner?: ProcessRunner;
   signal?: AbortSignal;
@@ -491,9 +493,10 @@ export const prepareSourceSubtitle = async (
       warnings.push(`local transcription failed: ${message}`);
     }
   } else {
-    // 优先取目标语言字幕（如中文），没有再取源语言（如英文）
+    // 单语中文流程优先复用目标语言字幕；双语流程则必须保留源语言轨，
+    // 否则 full.en.srt 可能实际写入中文，最终将中文与中文合并成“中英”字幕。
     const langsToTry = opts.sourceLang !== opts.targetLang
-      ? [opts.targetLang, opts.sourceLang]
+      ? (opts.preferSourceLanguage ? [opts.sourceLang] : [opts.targetLang, opts.sourceLang])
       : [opts.sourceLang];
     let actualLang = "";
     for (const lang of langsToTry) {
@@ -504,6 +507,12 @@ export const prepareSourceSubtitle = async (
         actualLang = found.language;
         break;
       }
+    }
+    if (sourceFile === null && opts.source === "auto" && opts.preferSourceLanguage && opts.runner !== undefined) {
+      return prepareSourceSubtitle({
+        ...opts,
+        source: "transcribe",
+      });
     }
     if (sourceFile === null) {
       warnings.push(`no YouTube subtitle file found (tried: ${langsToTry.join(", ")})`);
@@ -600,6 +609,7 @@ export const runSubtitlePipeline = async (
     sourceLang: subtitle.sourceLang,
     targetLang: subtitle.targetLang,
     source: subtitle.source,
+    preferSourceLanguage: opts.subtitleBilingual !== undefined && opts.subtitleBilingual !== "off",
     ...(subtitle.file !== undefined ? { file: subtitle.file } : {}),
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),

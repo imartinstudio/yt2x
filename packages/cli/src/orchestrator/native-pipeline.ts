@@ -324,8 +324,11 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
 
   // 如果用户要求烧录字幕，推迟到 article 阶段之后执行。
   // acquire 阶段只需生成 full.zh.srt，不需要烧录（无论 acquire 是否 skip）。
+  const bilingualBurnRequested =
+    args.acquire.subtitleBilingual === "burned" || args.acquire.subtitleBilingual === "all";
   const deferredBurn =
-    args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both";
+    (args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both") &&
+    !bilingualBurnRequested;
 
   try {
     if (args.control.continueFlag) {

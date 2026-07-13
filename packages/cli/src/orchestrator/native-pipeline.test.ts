@@ -22,6 +22,31 @@ vi.mock("./native-publish.js", () => ({
   executeNativePublish: executeNativePublishMock,
 }));
 
+vi.mock("./native-stage-common.js", () => ({
+  resolveNativeLlm: () => ({
+    ok: true,
+    adapter: { chat: async () => ({ content: "", model: "test", finishReason: "stop" }) },
+    model: "test",
+  }),
+}));
+
+const executeNativeAcquireMock = vi.hoisted(() => vi.fn(async (opts: { outDir: string }) => {
+  const videoId = "abc123def45";
+  await mkdir(path.join(opts.outDir, videoId), { recursive: true });
+  await writeFile(path.join(opts.outDir, videoId, "metadata.json"), JSON.stringify({ id: videoId }));
+  return 0;
+}));
+const burnZhSubtitlesForVideoMock = vi.hoisted(() => vi.fn(async () => ({ burned: true, skipped: false })));
+
+vi.mock("@yt2x/adapters-node", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    executeNativeAcquire: executeNativeAcquireMock,
+    burnZhSubtitlesForVideo: burnZhSubtitlesForVideoMock,
+  };
+});
+
 import { mergePipelineExitCode, runNativePipeline } from "./native-pipeline.js";
 
 const buildArgs = (overrides: Record<string, unknown>) =>
@@ -41,6 +66,8 @@ beforeEach(() => {
   executeNativeNotesMock.mockClear();
   executeNativeArticleMock.mockClear();
   executeNativePublishMock.mockClear();
+  executeNativeAcquireMock.mockClear();
+  burnZhSubtitlesForVideoMock.mockClear();
 });
 
 describe("mergePipelineExitCode", () => {
@@ -52,6 +79,23 @@ describe("mergePipelineExitCode", () => {
 });
 
 describe("runNativePipeline", () => {
+  it("keeps the normal burn path for bilingual burned subtitles", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-bilingual-burn-"));
+    const args = buildArgs({
+      control: { outDir: outRoot },
+      stages: { acquire: "auto", notes: "skip", article: "skip", publish: "skip" },
+      acquire: { subtitleZh: "burned", subtitleBilingual: "burned" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+
+    expect(code).toBe(0);
+    expect(executeNativeAcquireMock).toHaveBeenCalledWith(expect.objectContaining({
+      acquire: expect.objectContaining({ subtitleZh: "burned", subtitleBilingual: "burned" }),
+    }));
+    expect(burnZhSubtitlesForVideoMock).not.toHaveBeenCalled();
+  });
+
   it("with --acquire skip calls executeNativeNotes per video when pipeline-state manifest exists as dirs", async () => {
     const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-"));
     for (const id of ["aaa", "bbb"]) {

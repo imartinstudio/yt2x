@@ -571,7 +571,7 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
     "-level", "4.0",
     "-c:a", "aac",
     "-b:a", "128k",
-    "-shortest",
+    "-t", String(videoDuration + 2),
     "-movflags", "+faststart",
     "-y", opts.outputPath,
   );

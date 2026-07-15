@@ -323,8 +323,8 @@ export const burnBilingualSubtitles = async (
     "-c:v", "libx264", "-pix_fmt", "yuv420p",
     "-profile:v", "high", "-level", "4.0",
     "-c:a", "aac", "-b:a", "128k",
-    // End when the main video ends (watermark is looped).
-    "-shortest",
+    // Explicit duration limit (avoid -shortest + -loop 1 ffmpeg hang on macOS).
+    "-t", String(videoDuration + 2),
     "-movflags", "+faststart", "-y", opts.outputPath,
   );
 

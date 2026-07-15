@@ -88,6 +88,8 @@ export const buildPipelineTimingsPayload = (
 
 export type PipelineProgressHandle = {
   setActive: (label: string) => void;
+  /** 更新当前步骤的细粒度进度：detail 追加在 label 后展示，fraction 替代时间估算的步内进度。 */
+  setActiveDetail: (detail: string, fraction?: number) => void;
   record: (timingKey: string, durationMs: number, activeLabel?: string) => void;
   getTimingsPayload: () => PipelineTimingsPayload;
   clear: () => void;
@@ -111,6 +113,8 @@ const createProgressHandle = (opts: ProgressHandleOptions): PipelineProgressHand
   let completedUnits = 0;
   const timings = new Map<string, number>();
   let activeLabel = "";
+  let activeDetail = "";
+  let activeFraction: number | undefined;
   let activeSinceMs = 0;
   let spinnerFrame = 0;
   let lastPrintedPct = -1;
@@ -123,9 +127,14 @@ const createProgressHandle = (opts: ProgressHandleOptions): PipelineProgressHand
     }
     let units = completedUnits;
     if (activeSinceMs > 0 && completedUnits < totalUnits) {
-      const elapsed = performance.now() - activeSinceMs;
-      const inStep = Math.min(0.92, elapsed / ACTIVE_STEP_ESTIMATE_MS);
-      units += inStep;
+      if (activeFraction !== undefined) {
+        // 子进程上报的真实步内进度优先于时间估算。
+        units += Math.min(0.98, Math.max(0, activeFraction));
+      } else {
+        const elapsed = performance.now() - activeSinceMs;
+        const inStep = Math.min(0.92, elapsed / ACTIVE_STEP_ESTIMATE_MS);
+        units += inStep;
+      }
     }
     return Math.min(100, (units / totalUnits) * 100);
   };
@@ -133,11 +142,12 @@ const createProgressHandle = (opts: ProgressHandleOptions): PipelineProgressHand
   const formatLine = (): string => {
     const pct = displayPercent();
     const bar = formatProgressBar(pct);
+    const label = activeDetail.length > 0 ? `${activeLabel} · ${activeDetail}` : activeLabel;
     if (activeSinceMs > 0 && completedUnits < totalUnits) {
       const spin = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!;
-      return `${bar} ${spin} ${activeLabel}`;
+      return `${bar} ${spin} ${label}`;
     }
-    return `${bar} · ${activeLabel}`;
+    return `${bar} · ${label}`;
   };
 
   const stopTicker = (): void => {
@@ -182,16 +192,29 @@ const createProgressHandle = (opts: ProgressHandleOptions): PipelineProgressHand
   return {
     setActive(label: string) {
       activeLabel = label;
+      activeDetail = "";
+      activeFraction = undefined;
       activeSinceMs = performance.now();
       spinnerFrame = 0;
       startTicker();
       draw();
     },
 
+    setActiveDetail(detail: string, fraction?: number) {
+      activeDetail = detail;
+      activeFraction = fraction;
+      // 非 TTY 场景没有 ticker，直接重绘让百分比行推进。
+      if (!useTty) {
+        draw();
+      }
+    },
+
     record(timingKey: string, durationMs: number, activeLabelOverride?: string) {
       timings.set(timingKey, durationMs);
       completedUnits += 1;
       activeSinceMs = 0;
+      activeDetail = "";
+      activeFraction = undefined;
       if (activeLabelOverride !== undefined) {
         activeLabel = activeLabelOverride;
       }
@@ -236,12 +259,16 @@ export const acquireSubStepProgressFromHandle = (
 ): {
   onSubStepStart: (videoId: string, stepKey: string) => void;
   onSubStepEnd: (videoId: string, stepKey: string, durationMs: number) => void;
+  onSubStepProgress: (videoId: string, stepKey: string, detail: string, fraction: number) => void;
 } => ({
   onSubStepStart: (videoId, stepKey) => {
     handle.setActive(`${labelPrefix} · ${stepKey} · ${videoId}`);
   },
   onSubStepEnd: (videoId, stepKey, durationMs) => {
     handle.record(`${labelPrefix}.${videoId}.${stepKey}`, durationMs);
+  },
+  onSubStepProgress: (_videoId, _stepKey, detail, fraction) => {
+    handle.setActiveDetail(detail, fraction);
   },
 });
 

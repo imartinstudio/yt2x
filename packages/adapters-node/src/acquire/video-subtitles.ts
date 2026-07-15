@@ -5,6 +5,7 @@ import type { LlmPort } from "@yt2x/core";
 import type { ProcessRunner } from "../process/index.js";
 import { buildBilingualAss, mergeBilingualSrt } from "./bilingual-subtitles.js";
 import { burnBilingualSubtitles } from "./burn-bilingual-subtitles.js";
+import type { BurnProgressCallback } from "./burn-subtitles.js";
 import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
 import { translateSrt } from "./srt-translator.js";
 
@@ -586,11 +587,33 @@ export type RunSubtitlePipelineOptions = {
   subtitleBilingual?: "off" | "srt" | "ass" | "burned" | "all";
   /** 硬字幕烧制样式：zh-default / bilingual-explainer */
   subtitleBurnStyle?: "zh-default" | "bilingual-explainer";
+  /** 烧录等长耗时子阶段的进度回调（detail 为人类可读描述，fraction ∈ [0,1]）。 */
+  onProgress?: (detail: string, fraction: number) => void;
 };
 
 export type RunSubtitlePipelineResult = {
   manifest: SubtitleManifest;
   warnings: string[];
+};
+
+/** 把烧录阶段事件转成进度条可显示的 detail + fraction。 */
+const reportBurnProgress = (
+  onProgress: ((detail: string, fraction: number) => void) | undefined,
+  prefix: string,
+): BurnProgressCallback | undefined => {
+  if (onProgress === undefined) {
+    return undefined;
+  }
+  return (e) => {
+    const fraction = e.total > 0 ? e.done / e.total : 0;
+    const detail =
+      e.phase === "render"
+        ? `${prefix}字幕渲染 ${e.done}/${e.total}`
+        : e.phase === "frames"
+          ? `${prefix}帧序列 ${e.done}/${e.total}`
+          : `${prefix}烧录 ${Math.round(fraction * 100)}%`;
+    onProgress(detail, fraction);
+  };
 };
 
 export const runSubtitlePipeline = async (
@@ -810,6 +833,10 @@ export const runSubtitlePipeline = async (
       ...(opts.videoLanguage !== undefined ? { videoLanguage: opts.videoLanguage } : {}),
       ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
       watermarkXlate: "@php_martin",
+      ...(() => {
+        const onProgress = reportBurnProgress(opts.onProgress, "中文");
+        return onProgress !== undefined ? { onProgress } : {};
+      })(),
     });
 
     if (burnResult.burnedPath !== undefined) {
@@ -930,6 +957,10 @@ export const runSubtitlePipeline = async (
             ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
             ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
             watermarkXlate: "@php_martin",
+            ...(() => {
+              const onProgress = reportBurnProgress(opts.onProgress, "双语");
+              return onProgress !== undefined ? { onProgress } : {};
+            })(),
           });
 
           warnings.push(...burnResult.warnings);

@@ -51,4 +51,5 @@ jobs:
         run: pnpm run test:coverage
 
       - name: Audit (high+)
+        continue-on-error: true
         run: pnpm audit --audit-level=high

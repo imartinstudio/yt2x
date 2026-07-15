@@ -15,7 +15,42 @@ export type BurnSubtitlesOptions = {
   watermarkVideo?: string;
   /** Subtitle author handle for watermark (e.g. @php_martin) */
   watermarkXlate?: string;
+  /** Progress callback for the long-running render/frames/encode phases */
+  onProgress?: BurnProgressCallback;
 };
+
+/** Progress event for the long-running burn phases. */
+export type BurnProgressEvent = {
+  /** render = PIL cue PNG rendering, frames = overlay frame copies, encode = ffmpeg */
+  phase: "render" | "frames" | "encode";
+  done: number;
+  total: number;
+};
+
+export type BurnProgressCallback = (event: BurnProgressEvent) => void;
+
+/** Parse a `PROGRESS <done>/<total>` line emitted by the Python renderers. */
+export const parseRenderProgressLine = (
+  line: string,
+): { done: number; total: number } | null => {
+  const m = /^PROGRESS (\d+)\/(\d+)$/.exec(line.trim());
+  if (m === null) {
+    return null;
+  }
+  return { done: Number(m[1]), total: Number(m[2]) };
+};
+
+/** Parse an `out_time=HH:MM:SS.micro` line from `ffmpeg -progress pipe:1` into seconds. */
+export const parseFfmpegOutTime = (line: string): number | null => {
+  const m = /^out_time=(\d+):(\d{2}):(\d{2}(?:\.\d+)?)$/.exec(line.trim());
+  if (m === null) {
+    return null;
+  }
+  return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+};
+
+/** Report overlay frame-copy progress every N frames (copies are fast but numerous). */
+export const FRAME_PROGRESS_INTERVAL = 500;
 
 type CueManifestEntry = {
   index: number;
@@ -399,6 +434,12 @@ export const burnSubtitles = async (opts: BurnSubtitlesOptions): Promise<void> =
       ],
       // 1080p CJK rendering can exceed 1 minute for long videos.
       timeoutMs: 20 * 60_000,
+      onStdoutLine: (line) => {
+        const progress = parseRenderProgressLine(line);
+        if (progress !== null) {
+          opts.onProgress?.({ phase: "render", ...progress });
+        }
+      },
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
   } catch (err: unknown) {
@@ -504,6 +545,9 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
     const src = active ? path.join(renderDir, active.filename) : blankPath;
     const dst = path.join(framesDir, `frame_${String(i).padStart(5, "0")}.png`);
     await copyFile(src, dst);
+    if ((i + 1) % FRAME_PROGRESS_INTERVAL === 0 || i + 1 === totalFrames) {
+      opts.onProgress?.({ phase: "frames", done: i + 1, total: totalFrames });
+    }
   }
 
   // Verify every cue has frame coverage
@@ -571,8 +615,10 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
     "-level", "4.0",
     "-c:a", "aac",
     "-b:a", "128k",
-    "-shortest",
+    "-t", String(videoDuration + 2),
     "-movflags", "+faststart",
+    // Machine-readable progress on stdout for the onProgress callback.
+    "-nostats", "-progress", "pipe:1",
     "-y", opts.outputPath,
   );
 
@@ -580,6 +626,16 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
     command: "ffmpeg",
     args: ffmpegArgs,
     timeoutMs: 30 * 60_000,
+    onStdoutLine: (line) => {
+      const sec = parseFfmpegOutTime(line);
+      if (sec !== null) {
+        opts.onProgress?.({
+          phase: "encode",
+          done: Math.min(Math.round(sec), Math.round(videoDuration)),
+          total: Math.round(videoDuration),
+        });
+      }
+    },
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
 

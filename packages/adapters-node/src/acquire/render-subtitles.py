@@ -351,6 +351,10 @@ def main():
             "width": img.width,
             "height": img.height,
         })
+        done = i + 1
+        if done % 25 == 0 or done == len(cues):
+            # Machine-readable progress for the Node caller (stdout, flushed).
+            print(f"PROGRESS {done}/{len(cues)}", flush=True)
 
     manifest_path = out_dir / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:

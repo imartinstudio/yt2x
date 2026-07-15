@@ -2,7 +2,13 @@ import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { burnSubtitles, validateSrtIntegrity, verifyBurnedSubtitles } from "./burn-subtitles.js";
+import {
+  burnSubtitles,
+  parseFfmpegOutTime,
+  parseRenderProgressLine,
+  validateSrtIntegrity,
+  verifyBurnedSubtitles,
+} from "./burn-subtitles.js";
 import type { ProcessRunner, ProcessSpec, ProcessResult } from "../process/index.js";
 
 vi.mock("./resolve-python.js", () => ({
@@ -501,6 +507,37 @@ Test
 });
 
 // Helpers
+
+// ---------------------------------------------------------------------------
+// burn progress line parsing
+// ---------------------------------------------------------------------------
+
+describe("parseRenderProgressLine", () => {
+  it("parses PROGRESS <done>/<total> lines", () => {
+    expect(parseRenderProgressLine("PROGRESS 50/980")).toEqual({ done: 50, total: 980 });
+    expect(parseRenderProgressLine("PROGRESS 980/980")).toEqual({ done: 980, total: 980 });
+  });
+
+  it("returns null for non-progress lines", () => {
+    expect(parseRenderProgressLine("Rendered 980 bilingual cues to /tmp")).toBeNull();
+    expect(parseRenderProgressLine("PROGRESS abc/2")).toBeNull();
+    expect(parseRenderProgressLine("")).toBeNull();
+  });
+});
+
+describe("parseFfmpegOutTime", () => {
+  it("parses out_time=HH:MM:SS.micro lines to seconds", () => {
+    expect(parseFfmpegOutTime("out_time=00:01:30.500000")).toBeCloseTo(90.5);
+    expect(parseFfmpegOutTime("out_time=01:00:00.000000")).toBe(3600);
+  });
+
+  it("returns null for other -progress key/value lines", () => {
+    expect(parseFfmpegOutTime("frame=123")).toBeNull();
+    expect(parseFfmpegOutTime("out_time=N/A")).toBeNull();
+    expect(parseFfmpegOutTime("progress=continue")).toBeNull();
+  });
+});
+
 
 const makeResult = (
   exitCode: number,

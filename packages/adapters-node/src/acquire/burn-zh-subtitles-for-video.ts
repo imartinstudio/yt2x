@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { burnSubtitles } from "./burn-subtitles.js";
+import { burnSubtitles, type BurnProgressCallback } from "./burn-subtitles.js";
 import { detectBurnedSubtitles, type DetectBurnedSubtitlesResult } from "./detect-burned-subs.js";
 import type { ProcessRunner } from "../process/index.js";
 
@@ -35,6 +35,8 @@ export type BurnZhSubtitlesForVideoOptions = {
   watermarkVideo?: string;
   /** 字幕作者账号，用于与双语烧录一致的水印。 */
   watermarkXlate?: string;
+  /** 渲染 / 帧序列 / 编码阶段进度回调（透传给 burnSubtitles）。 */
+  onProgress?: BurnProgressCallback;
 };
 
 export type BurnZhSubtitlesForVideoResult = {
@@ -183,6 +185,7 @@ export const burnZhSubtitlesForVideo = async (
     runner: opts.runner,
     ...(opts.watermarkVideo !== undefined ? { watermarkVideo: opts.watermarkVideo } : {}),
     ...(opts.watermarkXlate !== undefined ? { watermarkXlate: opts.watermarkXlate } : {}),
+    ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
 

@@ -242,6 +242,9 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
             onStepEnd: (stepKey: string, durationMs: number) => {
               opts.progress?.onSubStepEnd?.(videoId, stepKey, durationMs);
             },
+            onStepProgress: (stepKey: string, detail: string, fraction: number) => {
+              opts.progress?.onSubStepProgress?.(videoId, stepKey, detail, fraction);
+            },
           }
         : undefined;
 

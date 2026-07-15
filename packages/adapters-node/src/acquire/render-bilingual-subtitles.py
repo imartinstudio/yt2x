@@ -384,9 +384,13 @@ def main():
         sys.exit(1)
 
     manifest_entries = []
-    for cue in cues:
+    for i, cue in enumerate(cues):
         entry = render_cue(cue, en_font, out_dir)
         manifest_entries.append(entry)
+        done = i + 1
+        if done % 25 == 0 or done == len(cues):
+            # Machine-readable progress for the Node caller (stdout, flushed).
+            print(f"PROGRESS {done}/{len(cues)}", flush=True)
 
     # Log a sample for debugging
     if cues:

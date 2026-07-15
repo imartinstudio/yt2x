@@ -3,7 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isProcessError, type ProcessRunner } from "../process/index.js";
-import { validateSrtIntegrity, verifyBurnedSubtitles } from "./burn-subtitles.js";
+import {
+  FRAME_PROGRESS_INTERVAL,
+  parseFfmpegOutTime,
+  parseRenderProgressLine,
+  validateSrtIntegrity,
+  verifyBurnedSubtitles,
+  type BurnProgressCallback,
+} from "./burn-subtitles.js";
 import { resolvePythonWithPillow } from "./resolve-python.js";
 
 export type BurnBilingualSubtitlesOptions = {
@@ -27,6 +34,8 @@ export type BurnBilingualSubtitlesOptions = {
   watermarkVideo?: string;
   /** Translator handle for watermark (e.g. @php_martin) */
   watermarkXlate?: string;
+  /** Progress callback for the long-running render/frames/encode phases */
+  onProgress?: BurnProgressCallback;
 };
 
 export type BurnBilingualSubtitlesResult = {
@@ -184,6 +193,12 @@ export const burnBilingualSubtitles = async (
       command: pythonBin,
       args: pyArgs,
       timeoutMs: RENDER_TIMEOUT_MS,
+      onStdoutLine: (line) => {
+        const progress = parseRenderProgressLine(line);
+        if (progress !== null) {
+          opts.onProgress?.({ phase: "render", ...progress });
+        }
+      },
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
   } catch (err: unknown) {
@@ -273,6 +288,9 @@ export const burnBilingualSubtitles = async (
     const src = active ? path.join(renderDir, active.filename) : blankPath;
     const dst = path.join(framesDir, `frame_${String(i).padStart(5, "0")}.png`);
     await copyFile(src, dst);
+    if ((i + 1) % FRAME_PROGRESS_INTERVAL === 0 || i + 1 === totalFrames) {
+      opts.onProgress?.({ phase: "frames", done: i + 1, total: totalFrames });
+    }
   }
 
   // Verify every cue has frame coverage
@@ -325,7 +343,10 @@ export const burnBilingualSubtitles = async (
     "-c:a", "aac", "-b:a", "128k",
     // Explicit duration limit (avoid -shortest + -loop 1 ffmpeg hang on macOS).
     "-t", String(videoDuration + 2),
-    "-movflags", "+faststart", "-y", opts.outputPath,
+    "-movflags", "+faststart",
+    // Machine-readable progress on stdout for the onProgress callback.
+    "-nostats", "-progress", "pipe:1",
+    "-y", opts.outputPath,
   );
 
   let result;
@@ -334,6 +355,16 @@ export const burnBilingualSubtitles = async (
       command: "ffmpeg",
       args: ffmpegArgs,
       timeoutMs: 30 * 60_000,
+      onStdoutLine: (line) => {
+        const sec = parseFfmpegOutTime(line);
+        if (sec !== null) {
+          opts.onProgress?.({
+            phase: "encode",
+            done: Math.min(Math.round(sec), Math.round(videoDuration)),
+            total: Math.round(videoDuration),
+          });
+        }
+      },
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
   } catch (err: unknown) {

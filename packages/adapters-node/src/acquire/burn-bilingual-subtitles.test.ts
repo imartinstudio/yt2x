@@ -2,16 +2,22 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { burnBilingualSubtitles } from "./burn-bilingual-subtitles.js";
+import type * as BurnSubtitlesModule from "./burn-subtitles.js";
 import type { ProcessRunner } from "../process/index.js";
 
 // Mock verify-subtitles and validateSrtIntegrity to avoid Python dependency
-vi.mock("./burn-subtitles.js", () => ({
-  verifyBurnedSubtitles: vi.fn().mockResolvedValue({
-    passed: true,
-    checks: [],
-  }),
-  validateSrtIntegrity: vi.fn().mockResolvedValue({ valid: true, issues: [] }),
-}));
+// (keep the real progress-line parsers used by burnBilingualSubtitles)
+vi.mock("./burn-subtitles.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof BurnSubtitlesModule>();
+  return {
+    ...actual,
+    verifyBurnedSubtitles: vi.fn().mockResolvedValue({
+      passed: true,
+      checks: [],
+    }),
+    validateSrtIntegrity: vi.fn().mockResolvedValue({ valid: true, issues: [] }),
+  };
+});
 
 vi.mock("./resolve-python.js", () => ({
   resolvePythonWithPillow: vi.fn().mockResolvedValue("python3"),
@@ -128,6 +134,34 @@ describe("burnBilingualSubtitles", () => {
     expect(
       pyCalls.some((c) => (c[0]?.args?.[0] ?? "").includes("generate-overlay-frames.py")),
     ).toBe(false);
+  });
+
+  it("reports render, frames, and encode progress via onProgress", async () => {
+    const baseImpl = vi.mocked(runner.run).getMockImplementation()!;
+    vi.mocked(runner.run).mockImplementation(async (spec) => {
+      if (
+        spec.command === "python3" &&
+        (spec.args?.[0] ?? "").includes("render-bilingual-subtitles.py")
+      ) {
+        spec.onStdoutLine?.("PROGRESS 1/1");
+      }
+      if (spec.command === "ffmpeg") {
+        expect(spec.args).toContain("-progress");
+        spec.onStdoutLine?.("frame=40");
+        spec.onStdoutLine?.("out_time=00:00:05.000000");
+      }
+      return baseImpl(spec);
+    });
+
+    const events: Array<{ phase: string; done: number; total: number }> = [];
+    await burnBilingualSubtitles({
+      ...defaultOpts(),
+      onProgress: (e) => events.push(e),
+    });
+
+    expect(events).toContainEqual({ phase: "render", done: 1, total: 1 });
+    expect(events).toContainEqual({ phase: "encode", done: 5, total: 10 });
+    expect(events.some((e) => e.phase === "frames" && e.done === e.total)).toBe(true);
   });
 
   it("overlays static watermark when handles are provided", async () => {

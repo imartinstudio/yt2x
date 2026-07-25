@@ -6,7 +6,7 @@ export type ChatMessage = {
 };
 
 export type ChatRequest = {
-  /** Provider 模型 ID（如 "gpt-4o-mini", "claude-sonnet-4-...", "deepseek-chat"） */
+  /** Provider 模型 ID（如 "gpt-4o-mini", "claude-sonnet-4-...", "deepseek-v4-pro"） */
   model: string;
   messages: ChatMessage[];
   /** 0.0 - 2.0；不传走 provider 默认 */

@@ -15,7 +15,8 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "claude-sonnet-4-20250514": 200_000,
   "claude-opus-4-20250514": 200_000,
   "claude-haiku-4-5-20251001": 200_000,
-  "deepseek-chat": 128_000,
+  "deepseek-chat": 128_000,  // legacy alias
+  "deepseek-v4-pro": 128_000,
   "deepseek-v4-flash": 128_000,
   "deepseek-reasoner": 64_000,
   "moonshot-v1-8k": 8_192,

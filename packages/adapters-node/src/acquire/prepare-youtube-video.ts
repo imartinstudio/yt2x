@@ -282,6 +282,9 @@ export const prepareYoutubeVideo = async (
           videoLanguage,
           ...(opts.subtitleBilingual !== undefined ? { subtitleBilingual: opts.subtitleBilingual } : {}),
           ...(opts.subtitleBurnStyle !== undefined ? { subtitleBurnStyle: opts.subtitleBurnStyle } : {}),
+          onProgress: (detail, fraction) => {
+            opts.progress?.onStepProgress?.("subtitle-zh", detail, fraction);
+          },
         });
         result.warnings.push(...warnings);
       });

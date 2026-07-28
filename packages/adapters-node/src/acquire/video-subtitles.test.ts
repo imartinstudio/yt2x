@@ -404,14 +404,161 @@ Second sentence.
       .resolves.toContain("自然中文句");
     await expect(readFile(path.join(articleVideoDir, "full.bilingual.srt"), "utf8"))
       .resolves.toContain("自然中文句\nFirst sentence. Second sentence.");
-    await expect(readFile(path.join(articleVideoDir, "full.bilingual.semantic.json"), "utf8"))
-      .resolves.toContain('"kind": "semantic-bilingual"');
+    const readyManifest = JSON.parse(
+      await readFile(path.join(articleVideoDir, "full.bilingual.semantic.json"), "utf8"),
+    ) as { kind: string; status: string; stages: Record<string, string> };
+    expect(readyManifest).toMatchObject({
+      kind: "semantic-bilingual",
+      status: "ready",
+      stages: {
+        translation: "done",
+        alignment: "done",
+        segmentation: "done",
+        layout: "done",
+      },
+    });
     await expect(readdir(root)).resolves.toEqual(["source.en.srt", "video"]);
     await expect(readdir(path.join(root, "video"))).resolves.toEqual([]);
     expect(result.manifest.bilingual_subtitle).toBe("video/full.bilingual.srt");
 
     await runSubtitlePipeline(pipelineOptions);
     expect(llm.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a failed semantic manifest and never falls back to cue-aligned delivery", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-strict-invalid-semantic-"));
+    const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-strict-invalid-article-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(
+      path.join(root, "source.en.srt"),
+      "1\n00:00:00,000 --> 00:00:02,000\nComplete source sentence.\n",
+      "utf8",
+    );
+    await writeFile(path.join(root, "video", "full.mp4"), "source video", "utf8");
+    const articleVideoDir = path.join(articleRoot, path.basename(root), "video");
+
+    await expect(
+      runSubtitlePipeline({
+        videoDir: root,
+        subtitle: {
+          mode: "srt",
+          sourceLang: "en",
+          targetLang: "zh-CN",
+          source: "auto",
+        },
+        subtitleBilingual: "all",
+        llm: {
+          chat: async () => ({
+            content: "not-json",
+            model: "test",
+            finishReason: "stop",
+          }),
+        },
+        llmModel: "test",
+        burnedVideoOutDir: articleRoot,
+        runner: {
+          run: async (spec) => ({
+            exitCode: 0,
+            signal: null,
+            stdout: "",
+            stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            durationMs: 0,
+            command: spec.command,
+            args: spec.args ?? [],
+          }),
+        },
+      }),
+    ).rejects.toThrow(/semantic response is not valid JSON/iu);
+
+    const manifest = JSON.parse(
+      await readFile(path.join(articleVideoDir, "full.bilingual.semantic.json"), "utf8"),
+    ) as { kind: string; status: string; error?: { code?: string } };
+    expect(manifest).toMatchObject({
+      kind: "semantic-bilingual",
+      status: "failed",
+      error: { code: "invalid-json" },
+    });
+    await expect(readFile(path.join(articleVideoDir, "full.bilingual-burned.mp4"))).rejects.toThrow();
+  });
+
+  it("fails delivery when an unsplittable semantic group misses the layout gate", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-strict-hard-layout-"));
+    const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-strict-hard-article-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(
+      path.join(root, "source.en.srt"),
+      "1\n00:00:00,000 --> 00:00:02,000\nOne source cue without a safe internal timing boundary.\n",
+      "utf8",
+    );
+    const articleVideoDir = path.join(articleRoot, path.basename(root), "video");
+
+    await expect(
+      runSubtitlePipeline({
+        videoDir: root,
+        subtitle: {
+          mode: "srt",
+          sourceLang: "en",
+          targetLang: "zh-CN",
+          source: "auto",
+        },
+        subtitleBilingual: "srt",
+        llm: {
+          chat: async () => ({
+            content: JSON.stringify({
+              groups: [{ sourceStartIndex: 1, sourceEndIndex: 1, zhText: "无法安全拆分的长句" }],
+            }),
+            model: "test",
+            finishReason: "stop",
+          }),
+        },
+        llmModel: "test",
+        burnedVideoOutDir: articleRoot,
+        runner: {
+          run: async (spec) => {
+            if (spec.args?.includes("--measure")) {
+              const outputIndex = spec.args.indexOf("--output");
+              await writeFile(
+                spec.args[outputIndex + 1]!,
+                JSON.stringify([
+                  {
+                    cueIndex: 1,
+                    zhWidth: 1600,
+                    fitWidth: 1024,
+                    lineCount: 3,
+                    severity: "hard",
+                    resolvedFonts: { zh: "PingFang SC", en: "Lexend Deca" },
+                  },
+                ]),
+                "utf8",
+              );
+            }
+            return {
+              exitCode: 0,
+              signal: null,
+              stdout: "",
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              durationMs: 0,
+              command: spec.command,
+              args: spec.args ?? [],
+            };
+          },
+        },
+      }),
+    ).rejects.toThrow(/quality gate failed/iu);
+
+    const manifest = JSON.parse(
+      await readFile(path.join(articleVideoDir, "full.bilingual.semantic.json"), "utf8"),
+    ) as { status: string; stages: { layout: string }; quality: { readyForBurn: boolean } };
+    expect(manifest).toMatchObject({
+      status: "failed",
+      stages: { layout: "failed" },
+      quality: { readyForBurn: false },
+    });
+    await expect(readFile(path.join(articleVideoDir, "full.bilingual-burned.mp4"))).rejects.toThrow();
   });
 
   it("uses the article Chinese SRT for a direct burned-subtitle run", async () => {

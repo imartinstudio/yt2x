@@ -21,10 +21,13 @@ _BASE_ZH_FONT_SIZE = 30
 _BASE_EN_FONT_SIZE = 16
 _BASE_ZH_OUTLINE_W = 8
 _BASE_EN_OUTLINE_W = 0
+_BASE_SHADOW_DISTANCE = 2
+_BASE_SHADOW_BLUR = 2
 
 ZH_FILL = (255, 255, 255, 255)
 EN_FILL = (255, 255, 255, 255)  # pure white
 OUTLINE_COLOR = (0, 0, 0, 255)  # pure black
+SHADOW_COLOR = (64, 64, 64, 255)
 MAX_WIDTH_FRAC = 0.80
 
 # Runtime values — set by main() after parsing video dimensions
@@ -34,24 +37,25 @@ EN_FONT_SIZE = _BASE_EN_FONT_SIZE
 ZH_FONT_SIZE = _BASE_ZH_FONT_SIZE
 ZH_OUTLINE_W = _BASE_ZH_OUTLINE_W
 EN_OUTLINE_W = _BASE_EN_OUTLINE_W
+SHADOW_DISTANCE = _BASE_SHADOW_DISTANCE
+SHADOW_BLUR = _BASE_SHADOW_BLUR
 
 # Font candidates (face index for bold weights):
 #   PingFang.ttc: 0=Regular, 1=Medium, 2=Semibold
 #   Hiragino Sans GB.ttc: 0=W3, 3=W6(bold)
 ZH_FONT_CANDIDATES = [
-    ("/System/Library/Fonts/PingFang.ttc", 2),
-    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),
-    ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
-    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
+    ("/System/Library/Fonts/PingFang.ttc", 2, "PingFang SC"),
+    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3, "Hiragino Sans GB"),
+    ("/System/Library/Fonts/STHeiti Medium.ttc", 0, "STHeiti"),
+    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0, "Arial Unicode"),
 ]
 
 EN_FONT_CANDIDATES = [
-    (str(Path.home() / "Library/Fonts/LexendDeca.ttf"), 0),
-    ("/Library/Fonts/LexendDeca.ttf", 0),
-    ("/System/Library/Fonts/PingFang.ttc", 1),
-    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),
-    ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
-    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
+    (str(Path.home() / "Library/Fonts/LexendDeca.ttf"), 0, "Lexend Deca"),
+    ("/Library/Fonts/LexendDeca.ttf", 0, "Lexend Deca"),
+    ("/System/Library/Fonts/PingFang.ttc", 1, "PingFang SC"),
+    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3, "Hiragino Sans GB"),
+    ("/System/Library/Fonts/STHeiti Medium.ttc", 0, "STHeiti"),
 ]
 
 def clean_subtitle_text(text: str) -> str:
@@ -76,12 +80,12 @@ def clean_subtitle_text(text: str) -> str:
 
 
 def find_font(
-    candidates: list[tuple[str, int]], size: int
+    candidates: list[tuple[str, int, str]], size: int
 ) -> tuple[ImageFont.FreeTypeFont, str]:
-    for path, face_index in candidates:
+    for path, face_index, family_name in candidates:
         if Path(path).exists():
             try:
-                return ImageFont.truetype(path, size, index=face_index), Path(path).stem
+                return ImageFont.truetype(path, size, index=face_index), family_name
             except Exception:
                 continue
     return ImageFont.load_default(), "Pillow default"
@@ -199,6 +203,13 @@ def draw_text_with_outline(
 ):
     """Draw text with outline by stamping in all 8 directions + corners."""
     x, y = xy
+    for spread in range(SHADOW_BLUR + 1):
+        draw.text(
+            (x + SHADOW_DISTANCE + spread, y + SHADOW_DISTANCE + spread),
+            text,
+            font=font,
+            fill=SHADOW_COLOR,
+        )
     for dx in range(-outline_width, outline_width + 1):
         for dy in range(-outline_width, outline_width + 1):
             if dx == 0 and dy == 0:
@@ -258,7 +269,7 @@ def render_cue(
     # Canvas dimensions
     zh_pad = ZH_OUTLINE_W * 2 + 4
     en_pad = EN_OUTLINE_W * 2 + 4
-    line_gap = ZH_OUTLINE_W + EN_OUTLINE_W + 8  # gap between Chinese and English blocks
+    line_gap = 0
 
     content_w = max(zh_max_w, en_max_w)
     canvas_w = content_w + max(zh_pad, en_pad)
@@ -282,7 +293,7 @@ def render_cue(
     # Draw English (bottom)
     en_y = zh_y + zh_total_h + line_gap + ZH_OUTLINE_W
     for line_text, (_, ly, lw, lh) in zip(en_lines, en_bboxes):
-        ex = (canvas_w - lw) // 2
+        ex = max(ZH_OUTLINE_W, EN_OUTLINE_W) + 2
         draw_text_with_outline(
             draw, line_text, (ex, en_y + ly), en_font,
             EN_FILL, OUTLINE_COLOR, EN_OUTLINE_W,
@@ -302,7 +313,8 @@ def render_cue(
 
 
 def main():
-    global VIDEO_WIDTH, VIDEO_HEIGHT, EN_FONT_SIZE, ZH_FONT_SIZE, ZH_OUTLINE_W, EN_OUTLINE_W
+    global VIDEO_WIDTH, VIDEO_HEIGHT, EN_FONT_SIZE, ZH_FONT_SIZE
+    global ZH_OUTLINE_W, EN_OUTLINE_W, SHADOW_DISTANCE, SHADOW_BLUR
     # Parse args: <srt> <out_dir> [--video-width W] [--video-height H]
     args = sys.argv[1:]
     srt_path = None
@@ -354,6 +366,8 @@ def main():
     EN_FONT_SIZE = round(_BASE_EN_FONT_SIZE * scale)
     ZH_OUTLINE_W = max(1, round(_BASE_ZH_OUTLINE_W * scale))
     EN_OUTLINE_W = max(0, round(_BASE_EN_OUTLINE_W * scale))
+    SHADOW_DISTANCE = max(1, round(_BASE_SHADOW_DISTANCE * scale))
+    SHADOW_BLUR = max(1, round(_BASE_SHADOW_BLUR * scale))
 
     en_font, en_font_name = find_font(EN_FONT_CANDIDATES, EN_FONT_SIZE)
     _, zh_font_name = find_font(ZH_FONT_CANDIDATES, ZH_FONT_SIZE)

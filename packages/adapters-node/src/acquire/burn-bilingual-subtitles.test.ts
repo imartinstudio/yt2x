@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -149,6 +149,25 @@ describe("burnBilingualSubtitles", () => {
     expect(result).toEqual([
       expect.objectContaining({ cueIndex: 1, severity: "fit", fitWidth: 1024 }),
     ]);
+  });
+
+  it("keeps the approved BaoCut-inspired 720p style contract in the renderer", async () => {
+    const renderer = await readFile(
+      path.join(process.cwd(), "packages/adapters-node/src/acquire/render-bilingual-subtitles.py"),
+      "utf8",
+    );
+
+    expect(renderer).toContain("_BASE_ZH_FONT_SIZE = 30");
+    expect(renderer).toContain("_BASE_EN_FONT_SIZE = 16");
+    expect(renderer).toContain("_BASE_ZH_OUTLINE_W = 8");
+    expect(renderer).toContain("_BASE_EN_OUTLINE_W = 0");
+    expect(renderer).toContain("MAX_WIDTH_FRAC = 0.80");
+    expect(renderer).toContain('"/Library/Fonts/LexendDeca.ttf"');
+    expect(renderer).toContain('"PingFang SC"');
+    expect(renderer).toContain('"Hiragino Sans GB"');
+    expect(renderer).toContain('"STHeiti"');
+    expect(renderer).toContain("SHADOW_COLOR = (64, 64, 64, 255)");
+    expect(renderer).toContain("line_gap = 0");
   });
 
   it("writes output to the specified outputPath", async () => {

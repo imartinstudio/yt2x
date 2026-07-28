@@ -123,6 +123,29 @@ pnpm yt2x acquire --urls "<YOUTUBE_URL>" --video-only
 
 重新下载视频时，yt2x 会清理旧的 `video/full.*` / `video/clip.*` 并让 `yt-dlp` 覆盖输出，避免 `clip-manifest.json` 已更新但视频文件仍是旧文件。用户侧不需要传 `--force-overwrites`；这是 yt2x 内部传给 `yt-dlp` 的实现细节。
 
+### 语义双语字幕
+
+双语字幕默认启用语义分组：先把连续英文 cue 组织成完整中文句，再用最终渲染器测量
+80% 画面宽度；只有 `hard` 组会在安全的原文语义断点上做第二轮定向重排。可用
+`--no-subtitle-semantic` 关闭语义分组，改用逐 cue 对齐回退。
+
+```bash
+# 生成文章侧双语 SRT（语义分组默认开启）
+pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --subtitle-bilingual srt
+
+# 明确使用逐 cue 回退
+pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --subtitle-bilingual srt --no-subtitle-semantic
+```
+
+双语模式在 `files/articles/<videoId>/video/` 写入 `full.en.srt`、
+`full.zh.srt`、`full.bilingual.srt` 和 `full.bilingual.semantic.json`；ASS 或烧录模式
+还会按需生成 `full.bilingual.ass`、`full.bilingual-burned.mp4`。下载目录只作为字幕和
+视频源读取，语义路径与逐 cue 回退都不会修改其中的字幕。
+
+Lexend Deca 可用时用于原文；缺失时依次回退到 PingFang SC、Hiragino Sans GB、
+STHeiti，并把实际字体写入语义 manifest。非法模型输出会以带错误码的 warning 回退到
+逐 cue 产物。内容或展示质量门不通过时仍保留 SRT 和质量报告，但不会烧录 MP4。
+
 `--force` 是 yt2x 的阶段级覆盖语义：当前主要用于 notes / pipeline 中覆盖已有阶段产物，不是 `acquire` 单阶段参数。`yt2x acquire --video-only` 变更 `--video-start` / `--video-end` / `--video-duration` 时会按新范围重新下载，不需要 `--force`。
 
 #### pipeline 中的视频下载组合

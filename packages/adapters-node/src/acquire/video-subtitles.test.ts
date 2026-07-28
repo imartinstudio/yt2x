@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
+import type { ProcessRunner } from "../process/index.js";
 
 vi.mock("./burn-zh-subtitles-for-video.js", () => ({
   burnZhSubtitlesForVideo: vi.fn().mockResolvedValue({
@@ -272,6 +273,86 @@ describe("prepareSourceSubtitle", () => {
 });
 
 describe("runSubtitlePipeline", () => {
+  it("writes semantic bilingual assets only to the article directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-semantic-source-"));
+    const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-semantic-article-"));
+    const sourceSrt = path.join(root, "source.en.srt");
+    const originalSource = `1
+00:00:00,000 --> 00:00:01,500
+First sentence.
+
+2
+00:00:01,500 --> 00:00:03,000
+Second sentence.
+`;
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(sourceSrt, originalSource);
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({
+          groups: [{ sourceStartIndex: 1, sourceEndIndex: 2, zhText: "自然中文句" }],
+        }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const runner: ProcessRunner = {
+      run: async (spec) => {
+        if (spec.args?.includes("--measure")) {
+          const outputIndex = spec.args?.indexOf("--output") ?? -1;
+          const output = spec.args?.[outputIndex + 1];
+          await writeFile(output!, JSON.stringify([{
+            cueIndex: 1,
+            zhWidth: 200,
+            fitWidth: 1024,
+            lineCount: 1,
+            severity: "fit",
+            resolvedFonts: { zh: "PingFang", en: "Lexend Deca" },
+          }]));
+        }
+        return {
+          exitCode: 0, signal: null, stdout: "", stderr: "",
+          stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+          command: spec.command, args: spec.args ?? [],
+        };
+      },
+    };
+    const pipelineOptions = {
+      videoDir: root,
+      subtitle: {
+        mode: "srt" as const,
+        sourceLang: "en",
+        targetLang: "zh-CN",
+        source: "file" as const,
+        file: sourceSrt,
+      },
+      subtitleBilingual: "srt" as const,
+      subtitleSemantic: true,
+      llm,
+      llmModel: "test",
+      burnedVideoOutDir: articleRoot,
+      runner,
+    };
+    const result = await runSubtitlePipeline(pipelineOptions);
+
+    const articleVideoDir = path.join(articleRoot, path.basename(root), "video");
+    await expect(readFile(sourceSrt, "utf8")).resolves.toBe(originalSource);
+    await expect(readFile(path.join(articleVideoDir, "full.en.srt"), "utf8"))
+      .resolves.toContain("First sentence. Second sentence.");
+    await expect(readFile(path.join(articleVideoDir, "full.zh.srt"), "utf8"))
+      .resolves.toContain("自然中文句");
+    await expect(readFile(path.join(articleVideoDir, "full.bilingual.srt"), "utf8"))
+      .resolves.toContain("自然中文句\nFirst sentence. Second sentence.");
+    await expect(readFile(path.join(articleVideoDir, "full.bilingual.semantic.json"), "utf8"))
+      .resolves.toContain('"kind": "semantic-bilingual"');
+    await expect(readFile(path.join(root, "video", "full.zh.srt"), "utf8")).rejects.toThrow();
+    expect(result.manifest.bilingual_subtitle).toBe("video/full.bilingual.srt");
+
+    await runSubtitlePipeline(pipelineOptions);
+    expect(llm.chat).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the article Chinese SRT for a direct burned-subtitle run", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-article-burn-"));
     const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-article-out-"));

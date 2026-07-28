@@ -79,6 +79,11 @@ type RequestedGroup = {
   zhText: string;
 };
 
+type RequestedReplacement = {
+  parentGroupId: string;
+  groups: RequestedGroup[];
+};
+
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 
 const normalizeText = (lines: readonly string[]): string =>
@@ -118,6 +123,54 @@ const parseGroupsResponse = (raw: string): RequestedGroup[] => {
       sourceStartIndex: group.sourceStartIndex as number,
       sourceEndIndex: group.sourceEndIndex as number,
       zhText: group.zhText,
+    };
+  });
+};
+
+const parseReplacementsResponse = (raw: string): RequestedReplacement[] => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error: unknown) {
+    throw new SemanticProjectionError("invalid-second-pass", "second-pass response is not valid JSON", {
+      cause: error,
+    });
+  }
+  const replacements = (parsed as { replacements?: unknown } | null)?.replacements;
+  if (!Array.isArray(replacements)) {
+    throw new SemanticProjectionError(
+      "invalid-second-pass",
+      'second-pass response must contain a "replacements" array',
+    );
+  }
+  return replacements.map((item) => {
+    if (typeof item !== "object" || item === null) {
+      throw new SemanticProjectionError("invalid-second-pass", "replacement must be an object");
+    }
+    const value = item as { parentGroupId?: unknown; groups?: unknown };
+    if (typeof value.parentGroupId !== "string" || !Array.isArray(value.groups)) {
+      throw new SemanticProjectionError("invalid-second-pass", "replacement fields are invalid");
+    }
+    return {
+      parentGroupId: value.parentGroupId,
+      groups: value.groups.map((group) => {
+        if (typeof group !== "object" || group === null) {
+          throw new SemanticProjectionError("invalid-second-pass", "replacement group must be an object");
+        }
+        const candidate = group as Record<string, unknown>;
+        if (
+          !Number.isInteger(candidate.sourceStartIndex) ||
+          !Number.isInteger(candidate.sourceEndIndex) ||
+          typeof candidate.zhText !== "string"
+        ) {
+          throw new SemanticProjectionError("invalid-second-pass", "replacement group fields are invalid");
+        }
+        return {
+          sourceStartIndex: candidate.sourceStartIndex as number,
+          sourceEndIndex: candidate.sourceEndIndex as number,
+          zhText: candidate.zhText,
+        };
+      }),
     };
   });
 };
@@ -215,6 +268,76 @@ const serializeProjection = (
   };
 };
 
+const isNaturalSplit = (
+  cue: ReturnType<typeof parseSubtitleBlocks>[number],
+): boolean => /[.!?;:。！？；：][”’"']?$/u.test(normalizeText(cue.text));
+
+const replaceHardGroups = (
+  groups: readonly SemanticSubtitleGroup[],
+  replacements: readonly RequestedReplacement[],
+  cues: ReturnType<typeof parseSubtitleBlocks>,
+): SemanticSubtitleGroup[] => {
+  const byParent = new Map(replacements.map((replacement) => [replacement.parentGroupId, replacement]));
+  const next: SemanticSubtitleGroup[] = [];
+  for (const group of groups) {
+    const replacement = byParent.get(group.groupId);
+    if (replacement === undefined) {
+      next.push(group);
+      continue;
+    }
+    let expected = group.sourceStartIndex;
+    for (const child of replacement.groups) {
+      if (
+        child.sourceStartIndex !== expected ||
+        child.sourceEndIndex < child.sourceStartIndex ||
+        child.sourceEndIndex > group.sourceEndIndex ||
+        child.zhText.trim().length === 0
+      ) {
+        throw new SemanticProjectionError("invalid-second-pass", `invalid replacement for ${group.groupId}`);
+      }
+      if (child.sourceEndIndex < group.sourceEndIndex) {
+        const boundaryCue = cues.find((cue) => cue.index === child.sourceEndIndex);
+        if (boundaryCue === undefined || !isNaturalSplit(boundaryCue)) {
+          throw new SemanticProjectionError(
+            "invalid-second-pass",
+            `replacement for ${group.groupId} uses an unsafe source boundary`,
+          );
+        }
+      }
+      expected = child.sourceEndIndex + 1;
+    }
+    if (replacement.groups.length < 2 || expected !== group.sourceEndIndex + 1) {
+      throw new SemanticProjectionError(
+        "invalid-second-pass",
+        `replacement for ${group.groupId} does not cover its parent`,
+      );
+    }
+    next.push(...validateAndMaterializeGroups(replacement.groups, cues.filter(
+      (cue) => cue.index >= group.sourceStartIndex && cue.index <= group.sourceEndIndex,
+    )));
+    byParent.delete(group.groupId);
+  }
+  if (byParent.size > 0) {
+    throw new SemanticProjectionError("invalid-second-pass", "second pass referenced a non-hard group");
+  }
+  return next;
+};
+
+const validateMeasurements = (
+  groups: readonly SemanticSubtitleGroup[],
+  measurements: readonly SubtitleLayoutMeasurement[],
+): void => {
+  if (
+    measurements.length !== groups.length ||
+    measurements.some((measurement, index) => measurement.cueIndex !== index + 1)
+  ) {
+    throw new SemanticProjectionError(
+      "invalid-layout-measurement",
+      "layout measurements must cover every projected cue in order",
+    );
+  }
+};
+
 export const evaluateSemanticBilingualDelivery = (input: {
   groups: readonly SemanticSubtitleGroup[];
   measurements: readonly SubtitleLayoutMeasurement[];
@@ -281,17 +404,51 @@ export const projectSemanticBilingualSubtitles = async (
   });
 
   const requested = parseGroupsResponse(response.content.trim());
-  const groups = validateAndMaterializeGroups(requested, cues);
-  const serialized = serializeProjection(groups, cues);
-  const measurements = await opts.measureLayout(serialized.bilingualSrt);
-  if (
-    measurements.length !== groups.length ||
-    measurements.some((measurement, index) => measurement.cueIndex !== index + 1)
-  ) {
-    throw new SemanticProjectionError(
-      "invalid-layout-measurement",
-      "layout measurements must cover every projected cue in order",
-    );
+  let groups = validateAndMaterializeGroups(requested, cues);
+  let serialized = serializeProjection(groups, cues);
+  let measurements = await opts.measureLayout(serialized.bilingualSrt);
+  validateMeasurements(groups, measurements);
+
+  const hardGroups = measurements.flatMap((measurement) => {
+    const group = groups[measurement.cueIndex - 1];
+    return measurement.severity === "hard" &&
+      group !== undefined &&
+      group.sourceStartIndex < group.sourceEndIndex
+      ? [group]
+      : [];
+  });
+  if (hardGroups.length > 0) {
+    const response = await opts.llm.chat({
+      model: opts.model,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "Re-align only the supplied hard subtitle groups at natural source-cue boundaries.",
+            'Return {"replacements":[{"parentGroupId":"...","groups":[{"sourceStartIndex":1,"sourceEndIndex":1,"zhText":"..."}]}]}.',
+            "Each replacement must split its parent into at least two contiguous groups.",
+            "Do not reference or rewrite groups that are not supplied.",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            hardGroups,
+            sourceCues: cues.filter((cue) =>
+              hardGroups.some((group) =>
+                cue.index >= group.sourceStartIndex && cue.index <= group.sourceEndIndex)),
+          }),
+        },
+      ],
+      temperature: 0.1,
+      maxTokens: 8192,
+      jsonMode: true,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+    groups = replaceHardGroups(groups, parseReplacementsResponse(response.content.trim()), cues);
+    serialized = serializeProjection(groups, cues);
+    measurements = await opts.measureLayout(serialized.bilingualSrt);
+    validateMeasurements(groups, measurements);
   }
   const quality = evaluateSemanticBilingualDelivery({ groups, measurements });
 

@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import {
   type BurnProgressCallback,
 } from "./burn-subtitles.js";
 import { resolvePythonWithPillow } from "./resolve-python.js";
+import type { SubtitleLayoutMeasurement } from "./semantic-bilingual-subtitles.js";
 
 export type BurnBilingualSubtitlesOptions = {
   /** Path to the bilingual SRT file (for PNG rendering) */
@@ -87,6 +88,40 @@ const WATERMARK_Y = 16;
  * enough headroom without waiting forever on a hung process.
  */
 const RENDER_TIMEOUT_MS = 20 * 60_000;
+
+export const measureBilingualSubtitleLayout = async (opts: {
+  srtContent: string;
+  videoWidth: number;
+  videoHeight: number;
+  runner: ProcessRunner;
+  signal?: AbortSignal;
+}): Promise<SubtitleLayoutMeasurement[]> => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-bilingual-measure-"));
+  const srtPath = path.join(tempDir, "input.srt");
+  const outputPath = path.join(tempDir, "metrics.json");
+  try {
+    await writeFile(srtPath, opts.srtContent, "utf8");
+    const pythonBin = await resolvePythonWithPillow();
+    const result = await opts.runner.run({
+      command: pythonBin,
+      args: [
+        PYTHON_SCRIPT,
+        "--measure", srtPath,
+        "--output", outputPath,
+        "--video-width", String(opts.videoWidth),
+        "--video-height", String(opts.videoHeight),
+      ],
+      timeoutMs: RENDER_TIMEOUT_MS,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`bilingual layout measurement failed: ${result.stderr}`);
+    }
+    return JSON.parse(await readFile(outputPath, "utf8")) as SubtitleLayoutMeasurement[];
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+};
 
 /**
  * Burn bilingual subtitles into a video using Python PIL rendering + ffmpeg overlay.

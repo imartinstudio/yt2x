@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -277,7 +277,65 @@ describe("prepareSourceSubtitle", () => {
 });
 
 describe("runSubtitlePipeline", () => {
-  it("writes semantic bilingual assets only to the article directory", async () => {
+  it("fails bilingual delivery without a downloaded source subtitle and leaves downloads unchanged", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-strict-missing-source-"));
+    const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-strict-article-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(path.join(root, "video", "full.mp4"), "source video", "utf8");
+    const commands: string[] = [];
+    const runner: ProcessRunner = {
+      run: async (spec) => {
+        commands.push(spec.command);
+        if (spec.command === "whisper-cli") {
+          const outputIndex = spec.args!.indexOf("-of");
+          await writeFile(
+            `${spec.args![outputIndex + 1]}.srt`,
+            "1\n00:00:00,000 --> 00:00:01,000\nEnglish source\n",
+            "utf8",
+          );
+        }
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 0,
+          command: spec.command,
+          args: spec.args ?? [],
+        };
+      },
+    };
+
+    await expect(
+      runSubtitlePipeline({
+        videoDir: root,
+        subtitle: {
+          mode: "srt",
+          sourceLang: "en",
+          targetLang: "zh-CN",
+          source: "auto",
+        },
+        subtitleBilingual: "all",
+        llm: {
+          chat: async () => ({
+            content: JSON.stringify([{ index: 1, text: "中文翻译" }]),
+            model: "test",
+            finishReason: "stop",
+          }),
+        },
+        llmModel: "test",
+        burnedVideoOutDir: articleRoot,
+        runner,
+      }),
+    ).rejects.toThrow(/downloaded source subtitle.*required/iu);
+
+    expect(commands).toEqual([]);
+    await expect(readdir(path.join(root, "video"))).resolves.toEqual(["full.mp4"]);
+  });
+
+  it("reads an auto-discovered source without changing the downloads tree", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-semantic-source-"));
     const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-semantic-article-"));
     const sourceSrt = path.join(root, "source.en.srt");
@@ -328,11 +386,9 @@ Second sentence.
         mode: "srt" as const,
         sourceLang: "en",
         targetLang: "zh-CN",
-        source: "file" as const,
-        file: sourceSrt,
+        source: "auto" as const,
       },
       subtitleBilingual: "srt" as const,
-      subtitleSemantic: true,
       llm,
       llmModel: "test",
       burnedVideoOutDir: articleRoot,
@@ -350,7 +406,8 @@ Second sentence.
       .resolves.toContain("自然中文句\nFirst sentence. Second sentence.");
     await expect(readFile(path.join(articleVideoDir, "full.bilingual.semantic.json"), "utf8"))
       .resolves.toContain('"kind": "semantic-bilingual"');
-    await expect(readFile(path.join(root, "video", "full.zh.srt"), "utf8")).rejects.toThrow();
+    await expect(readdir(root)).resolves.toEqual(["source.en.srt", "video"]);
+    await expect(readdir(path.join(root, "video"))).resolves.toEqual([]);
     expect(result.manifest.bilingual_subtitle).toBe("video/full.bilingual.srt");
 
     await runSubtitlePipeline(pipelineOptions);

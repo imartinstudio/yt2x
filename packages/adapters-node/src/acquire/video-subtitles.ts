@@ -958,8 +958,17 @@ const runArticleBilingualPipeline = async (
 export const runSubtitlePipeline = async (
   opts: RunSubtitlePipelineOptions,
 ): Promise<RunSubtitlePipelineResult> => {
+  const requestedBilingualMode = opts.subtitleBilingual ?? "off";
+  if (requestedBilingualMode !== "off" && opts.burnedVideoOutDir === undefined) {
+    throw new Error("article output directory is required for bilingual subtitle delivery");
+  }
   const articleResult = await runArticleBilingualPipeline(opts);
   if (articleResult !== undefined) return articleResult;
+  if (requestedBilingualMode !== "off") {
+    throw new Error(
+      `downloaded source subtitle for language "${opts.subtitle.sourceLang}" is required for bilingual subtitle delivery`,
+    );
+  }
   const { videoDir, subtitle } = opts;
   const mode = subtitle.mode;
   const warnings: string[] = [];

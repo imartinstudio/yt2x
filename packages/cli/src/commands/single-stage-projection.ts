@@ -67,7 +67,6 @@ export const projectSingleStage = (target: SingleStageTarget, flags: SingleStage
       subtitleSource: flags.subtitleSource,
       subtitleFile: flags.subtitleFile,
       subtitleBilingual: flags.subtitleBilingual,
-      subtitleSemantic: flags.subtitleSemantic,
       subtitleBurnStyle: flags.subtitleBurnStyle,
     },
     article: {

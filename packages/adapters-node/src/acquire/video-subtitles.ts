@@ -596,8 +596,6 @@ export type RunSubtitlePipelineOptions = {
   videoLanguage?: string;
   /** 双语字幕模式：off / srt / ass / burned / all */
   subtitleBilingual?: "off" | "srt" | "ass" | "burned" | "all";
-  /** 双语字幕是否使用语义分组（默认 true）。 */
-  subtitleSemantic?: boolean;
   /** 硬字幕烧制样式：zh-default / bilingual-explainer */
   subtitleBurnStyle?: "zh-default" | "bilingual-explainer";
   /** 烧录等长耗时子阶段的进度回调（detail 为人类可读描述，fraction ∈ [0,1]）。 */
@@ -635,7 +633,14 @@ const LAYOUT_RULE_VERSION = "baocut-layout-v1";
 const STYLE_VERSION = "baocut-bilingual-v1";
 
 type ArticleBilingualManifest = {
-  kind: "semantic-bilingual" | "cue-aligned-fallback";
+  kind: "semantic-bilingual";
+  status: "ready" | "failed";
+  stages: {
+    translation: "done" | "failed";
+    alignment: "done" | "failed";
+    segmentation: "done" | "failed";
+    layout: "done" | "failed";
+  };
   version: number;
   sourceSha256: string;
   translationRuleVersion: string;
@@ -646,9 +651,10 @@ type ArticleBilingualManifest = {
   videoWidth: number;
   videoHeight: number;
   videoWidthFraction: number;
-  groups: SemanticBilingualProjection["groups"];
-  files: Record<"en" | "zh" | "bilingual", { sha256: string }>;
+  groups?: SemanticBilingualProjection["groups"];
+  files?: Record<"en" | "zh" | "bilingual", { sha256: string }>;
   quality: SemanticBilingualProjection["quality"];
+  error?: { code: string; message: string };
 };
 
 const contentSha256 = (value: string): string =>
@@ -694,40 +700,6 @@ const findReadOnlyBilingualSource = async (
   return undefined;
 };
 
-const createCueAlignedProjection = async (opts: {
-  sourceSrt: string;
-  llm: LlmPort;
-  model: string;
-  sourceLang: string;
-  targetLang: string;
-  signal?: AbortSignal;
-}): Promise<SemanticBilingualProjection> => {
-  const translated = await translateSrt(opts.sourceSrt, {
-    llm: opts.llm,
-    model: opts.model,
-    sourceLang: opts.sourceLang,
-    targetLang: opts.targetLang,
-    ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-  });
-  const enCues = parseSubtitleBlocks(opts.sourceSrt);
-  const zhCues = parseSubtitleBlocks(translated.srt);
-  const groups = enCues.map((cue, index) => ({
-    groupId: contentSha256(`${cue.index}:${cue.index}:${cue.text.join(" ")}`),
-    sourceStartIndex: cue.index,
-    sourceEndIndex: cue.index,
-    sourceText: cue.text.join(" ").trim(),
-    zhText: zhCues[index]?.text.join(" ").trim() ?? "",
-  }));
-  return {
-    enSrt: opts.sourceSrt,
-    zhSrt: translated.srt,
-    bilingualSrt: mergeBilingualSrt(opts.sourceSrt, translated.srt),
-    sourceSha256: contentSha256(opts.sourceSrt),
-    groups,
-    quality: { readyForBurn: true, issues: [] },
-  };
-};
-
 const readValidArticleCache = async (opts: {
   articleVideoDir: string;
   sourceSha256: string;
@@ -737,6 +709,12 @@ const readValidArticleCache = async (opts: {
     const raw = await readFile(path.join(opts.articleVideoDir, "full.bilingual.semantic.json"), "utf8");
     const manifest = JSON.parse(raw) as ArticleBilingualManifest;
     if (
+      manifest.kind !== "semantic-bilingual" ||
+      manifest.status !== "ready" ||
+      Object.values(manifest.stages).some((status) => status !== "done") ||
+      manifest.quality.readyForBurn !== true ||
+      manifest.files === undefined ||
+      manifest.groups === undefined ||
       manifest.sourceSha256 !== opts.sourceSha256 ||
       manifest.translationRuleVersion !== TRANSLATION_RULE_VERSION ||
       manifest.llmModel !== opts.model
@@ -793,9 +771,10 @@ const runArticleBilingualPipeline = async (
       "utf8",
     );
     const measurements = await measureLayout(bilingualSrt);
-    const quality = cached.groups === undefined
-      ? cached.quality
-      : evaluateSemanticBilingualDelivery({ groups: cached.groups, measurements });
+    const quality = evaluateSemanticBilingualDelivery({
+      groups: cached.groups!,
+      measurements,
+    });
     const resolvedFonts = measurements[0]?.resolvedFonts ?? cached.resolvedFonts;
     const refreshed = {
       ...cached,
@@ -806,6 +785,11 @@ const runArticleBilingualPipeline = async (
       videoHeight: 720,
       videoWidthFraction: 0.8,
       quality,
+      status: quality.readyForBurn ? "ready" : "failed",
+      stages: {
+        ...cached.stages,
+        layout: quality.readyForBurn ? "done" : "failed",
+      },
     };
     if (JSON.stringify(refreshed) !== JSON.stringify(cached)) {
       await atomicWrite(
@@ -813,23 +797,25 @@ const runArticleBilingualPipeline = async (
         `${JSON.stringify(refreshed, null, 2)}\n`,
       );
     }
-    if ((bilingualMode === "burned" || bilingualMode === "all") && quality.readyForBurn) {
+    if (!quality.readyForBurn) {
+      throw new Error("semantic bilingual quality gate failed");
+    }
+    if (bilingualMode === "burned" || bilingualMode === "all") {
       const names = await readdir(path.join(opts.videoDir, "video")).catch(() => [] as string[]);
       const mp4 = names.find((name) => /\.mp4$/iu.test(name) && !/burned/iu.test(name));
-      if (mp4 !== undefined) {
-        await burnBilingualSubtitles({
-          srtPath: path.join(articleVideoDir, "full.bilingual.srt"),
-          enSrtPath: path.join(articleVideoDir, "full.en.srt"),
-          zhSrtPath: path.join(articleVideoDir, "full.zh.srt"),
-          videoPath: path.join(opts.videoDir, "video", mp4),
-          outputPath: path.join(articleVideoDir, "full.bilingual-burned.mp4"),
-          runner: opts.runner,
-          ...(opts.force !== undefined ? { force: opts.force } : {}),
-          ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-        });
+      if (mp4 === undefined) {
+        throw new Error("downloaded source video is required for bilingual subtitle burning");
       }
-    } else if (!quality.readyForBurn) {
-      warnings.push("semantic bilingual quality gate blocked burn");
+      await burnBilingualSubtitles({
+        srtPath: path.join(articleVideoDir, "full.bilingual.srt"),
+        enSrtPath: path.join(articleVideoDir, "full.en.srt"),
+        zhSrtPath: path.join(articleVideoDir, "full.zh.srt"),
+        videoPath: path.join(opts.videoDir, "video", mp4),
+        outputPath: path.join(articleVideoDir, "full.bilingual-burned.mp4"),
+        runner: opts.runner,
+        ...(opts.force !== undefined ? { force: opts.force } : {}),
+        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      });
     }
     return {
       manifest: {
@@ -846,40 +832,43 @@ const runArticleBilingualPipeline = async (
   }
 
   let projection: SemanticBilingualProjection;
-  let kind: ArticleBilingualManifest["kind"] = "semantic-bilingual";
-  if (opts.subtitleSemantic !== false) {
-    try {
-      projection = await projectSemanticBilingualSubtitles({
-        sourceSrt: source.content,
-        llm: opts.llm,
-        model: opts.llmModel,
-        measureLayout,
-        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-      });
-    } catch (error: unknown) {
-      if (!(error instanceof SemanticProjectionError)) throw error;
-      warnings.push(`semantic bilingual fallback: ${error.code}`);
-      kind = "cue-aligned-fallback";
-      projection = await createCueAlignedProjection({
-        sourceSrt: source.content,
-        llm: opts.llm,
-        model: opts.llmModel,
-        sourceLang: opts.subtitle.sourceLang,
-        targetLang: opts.subtitle.targetLang,
-        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-      });
-    }
-  } else {
-    kind = "cue-aligned-fallback";
-    warnings.push("semantic bilingual disabled; using cue-aligned fallback");
-    projection = await createCueAlignedProjection({
+  try {
+    projection = await projectSemanticBilingualSubtitles({
       sourceSrt: source.content,
       llm: opts.llm,
       model: opts.llmModel,
-      sourceLang: opts.subtitle.sourceLang,
-      targetLang: opts.subtitle.targetLang,
+      measureLayout,
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
+  } catch (error: unknown) {
+    if (!(error instanceof SemanticProjectionError)) throw error;
+    const failedManifest: ArticleBilingualManifest = {
+      kind: "semantic-bilingual",
+      status: "failed",
+      stages: {
+        translation: "failed",
+        alignment: "failed",
+        segmentation: "failed",
+        layout: "failed",
+      },
+      version: SEMANTIC_VERSION,
+      sourceSha256,
+      translationRuleVersion: TRANSLATION_RULE_VERSION,
+      llmModel: opts.llmModel,
+      layoutRuleVersion: LAYOUT_RULE_VERSION,
+      styleVersion: STYLE_VERSION,
+      resolvedFonts: { zh: "unknown", en: "unknown" },
+      videoWidth: 1280,
+      videoHeight: 720,
+      videoWidthFraction: 0.8,
+      quality: { readyForBurn: false, issues: [] },
+      error: { code: error.code, message: error.message },
+    };
+    await atomicWrite(
+      path.join(articleVideoDir, "full.bilingual.semantic.json"),
+      `${JSON.stringify(failedManifest, null, 2)}\n`,
+    );
+    throw error;
   }
 
   const measurements = await measureLayout(projection.bilingualSrt);
@@ -894,7 +883,14 @@ const runArticleBilingualPipeline = async (
     bilingual: { sha256: contentSha256(projection.bilingualSrt) },
   };
   const articleManifest: ArticleBilingualManifest = {
-    kind,
+    kind: "semantic-bilingual",
+    status: projection.quality.readyForBurn ? "ready" : "failed",
+    stages: {
+      translation: "done",
+      alignment: "done",
+      segmentation: "done",
+      layout: projection.quality.readyForBurn ? "done" : "failed",
+    },
     version: SEMANTIC_VERSION,
     sourceSha256,
     translationRuleVersion: TRANSLATION_RULE_VERSION,
@@ -918,6 +914,17 @@ const runArticleBilingualPipeline = async (
     path.join(articleVideoDir, "full.bilingual.semantic.json"),
     `${JSON.stringify(articleManifest, null, 2)}\n`,
   );
+  if (!projection.quality.readyForBurn) {
+    throw new Error("semantic bilingual quality gate failed");
+  }
+  const validatedManifest = await readValidArticleCache({
+    articleVideoDir,
+    sourceSha256,
+    model: opts.llmModel,
+  });
+  if (validatedManifest === undefined) {
+    throw new Error("semantic bilingual delivery manifest or subtitle hashes failed validation");
+  }
 
   if (bilingualMode === "ass" || bilingualMode === "all") {
     await atomicWrite(
@@ -934,20 +941,19 @@ const runArticleBilingualPipeline = async (
   if ((bilingualMode === "burned" || bilingualMode === "all") && projection.quality.readyForBurn) {
     const names = await readdir(path.join(opts.videoDir, "video")).catch(() => [] as string[]);
     const mp4 = names.find((name) => /\.mp4$/iu.test(name) && !/burned/iu.test(name));
-    if (mp4 !== undefined) {
-      await burnBilingualSubtitles({
-        srtPath: path.join(articleVideoDir, "full.bilingual.srt"),
-        enSrtPath: path.join(articleVideoDir, "full.en.srt"),
-        zhSrtPath: path.join(articleVideoDir, "full.zh.srt"),
-        videoPath: path.join(opts.videoDir, "video", mp4),
-        outputPath: path.join(articleVideoDir, "full.bilingual-burned.mp4"),
-        runner: opts.runner,
-        ...(opts.force !== undefined ? { force: opts.force } : {}),
-        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-      });
+    if (mp4 === undefined) {
+      throw new Error("downloaded source video is required for bilingual subtitle burning");
     }
-  } else if (!projection.quality.readyForBurn) {
-    warnings.push("semantic bilingual quality gate blocked burn");
+    await burnBilingualSubtitles({
+      srtPath: path.join(articleVideoDir, "full.bilingual.srt"),
+      enSrtPath: path.join(articleVideoDir, "full.en.srt"),
+      zhSrtPath: path.join(articleVideoDir, "full.zh.srt"),
+      videoPath: path.join(opts.videoDir, "video", mp4),
+      outputPath: path.join(articleVideoDir, "full.bilingual-burned.mp4"),
+      runner: opts.runner,
+      ...(opts.force !== undefined ? { force: opts.force } : {}),
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
   }
 
   return {
@@ -973,8 +979,17 @@ const runArticleBilingualPipeline = async (
 export const runSubtitlePipeline = async (
   opts: RunSubtitlePipelineOptions,
 ): Promise<RunSubtitlePipelineResult> => {
+  const requestedBilingualMode = opts.subtitleBilingual ?? "off";
+  if (requestedBilingualMode !== "off" && opts.burnedVideoOutDir === undefined) {
+    throw new Error("article output directory is required for bilingual subtitle delivery");
+  }
   const articleResult = await runArticleBilingualPipeline(opts);
   if (articleResult !== undefined) return articleResult;
+  if (requestedBilingualMode !== "off") {
+    throw new Error(
+      `downloaded source subtitle for language "${opts.subtitle.sourceLang}" is required for bilingual subtitle delivery`,
+    );
+  }
   const { videoDir, subtitle } = opts;
   const mode = subtitle.mode;
   const warnings: string[] = [];

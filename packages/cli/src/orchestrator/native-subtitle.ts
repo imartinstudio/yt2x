@@ -19,7 +19,6 @@ export type SubtitleFlags = NativeLlmCliFlags & {
   subtitleSource?: string;
   subtitleFile?: string;
   subtitleBilingual?: string;
-  subtitleSemantic?: boolean;
   subtitleBurnStyle?: string;
   articleOutDir?: string;
   /** Commander sets this when --no-skip-burn-if-chinese-burned is passed */
@@ -87,7 +86,6 @@ export const executeNativeSubtitle = async (flags: SubtitleFlags): Promise<numbe
       skipBurnIfChineseBurned,
       ...(flags.force !== undefined ? { force: flags.force } : {}),
       subtitleBilingual: (flags.subtitleBilingual as "off" | "srt" | "ass" | "burned" | "all") ?? "off",
-      subtitleSemantic: flags.subtitleSemantic !== false,
       subtitleBurnStyle: (flags.subtitleBurnStyle as "zh-default" | "bilingual-explainer") ?? "zh-default",
     });
 

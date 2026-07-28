@@ -125,26 +125,29 @@ pnpm yt2x acquire --urls "<YOUTUBE_URL>" --video-only
 
 ### 语义双语字幕
 
-双语字幕默认启用语义分组：先把连续英文 cue 组织成完整中文句，再用最终渲染器测量
-80% 画面宽度；只有 `hard` 组会在安全的原文语义断点上做第二轮定向重排。可用
-`--no-subtitle-semantic` 关闭语义分组，改用逐 cue 对齐回退。
+双语字幕只有语义流程：先把连续英文 cue 翻译并组织成完整中文句，再用最终渲染器测量
+80% 画面宽度；只有 `hard` 组会在安全的原文语义断点上做第二轮定向重排。没有关闭
+语义处理或退回逐 cue 交付的入口。
 
 ```bash
-# 生成文章侧双语 SRT（语义分组默认开启）
-pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --subtitle-bilingual srt
+# 生成文章侧语义双语 SRT
+pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --subtitle-zh srt --subtitle-bilingual srt
 
-# 明确使用逐 cue 回退
-pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --subtitle-bilingual srt --no-subtitle-semantic
+# 通过全部交付门后生成 ASS 和双语烧录视频
+pnpm yt2x pipeline --urls "<YOUTUBE_URL>" --subtitle-zh srt --subtitle-bilingual all
 ```
 
 双语模式在 `files/articles/<videoId>/video/` 写入 `full.en.srt`、
 `full.zh.srt`、`full.bilingual.srt` 和 `full.bilingual.semantic.json`；ASS 或烧录模式
 还会按需生成 `full.bilingual.ass`、`full.bilingual-burned.mp4`。下载目录只作为字幕和
-视频源读取，语义路径与逐 cue 回退都不会修改其中的字幕。
+视频源读取，不会创建或修改二创字幕、ASS、manifest、烧录视频或本地转写临时文件。
+双语模式找不到已下载的源语言 SRT/VTT 时直接失败，不会在下载目录启动本地 ASR。
 
 Lexend Deca 可用时用于原文；缺失时依次回退到 PingFang SC、Hiragino Sans GB、
-STHeiti，并把实际字体写入语义 manifest。非法模型输出会以带错误码的 warning 回退到
-逐 cue 产物。内容或展示质量门不通过时仍保留 SRT 和质量报告，但不会烧录 MP4。
+STHeiti，并把实际字体写入语义 manifest。翻译、覆盖、时间对齐、语义断句、布局或
+文件 SHA 任一校验失败时，命令以非零状态退出并在文章目录保留
+`status: "failed"` 的机器可读报告；不会生成或复用烧录 MP4。只有 manifest 为
+`semantic-bilingual/ready`、四阶段全部完成且质量门通过时才允许烧录。
 
 `--force` 是 yt2x 的阶段级覆盖语义：当前主要用于 notes / pipeline 中覆盖已有阶段产物，不是 `acquire` 单阶段参数。`yt2x acquire --video-only` 变更 `--video-start` / `--video-end` / `--video-duration` 时会按新范围重新下载，不需要 `--force`。
 

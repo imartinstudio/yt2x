@@ -112,10 +112,12 @@ describe("projectSingleStage", () => {
       subtitleSourceLang: "en",
       subtitleTargetLang: "zh-CN",
       subtitleSource: "youtube",
+      subtitleSemantic: false,
     });
     expect(args.acquire.subtitleZh).toBe("srt");
     expect(args.acquire.subtitleSourceLang).toBe("en");
     expect(args.acquire.subtitleTargetLang).toBe("zh-CN");
     expect(args.acquire.subtitleSource).toBe("youtube");
+    expect(args.acquire.subtitleSemantic).toBe(false);
   });
 });

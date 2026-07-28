@@ -60,3 +60,15 @@ export {
   type BurnBilingualSubtitlesOptions,
   type BurnBilingualSubtitlesResult,
 } from "./burn-bilingual-subtitles.js";
+export {
+  SemanticProjectionError,
+  evaluateSemanticBilingualDelivery,
+  projectSemanticBilingualSubtitles,
+  type SemanticBilingualProjection,
+  type SemanticBilingualQualityIssue,
+  type SemanticBilingualQualityReport,
+  type SemanticProjectionErrorCode,
+  type SemanticProjectionOptions,
+  type SemanticSubtitleGroup,
+  type SubtitleLayoutMeasurement,
+} from "./semantic-bilingual-subtitles.js";

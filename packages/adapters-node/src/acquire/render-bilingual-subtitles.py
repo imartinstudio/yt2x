@@ -4,8 +4,8 @@
 Input: bilingual SRT file (Chinese line 1, English line 2 per cue)
 Output: PNG frames in a directory + manifest.json
 
-Style: Chinese yellow bold large on top, English white italic smaller on bottom.
-No background box — uses black outline for readability on any background.
+Style: BaoCut-inspired white bilingual subtitles. Simplified Chinese is bold
+and outlined on top; the English source is smaller below it.
 """
 
 import json
@@ -16,42 +16,46 @@ from functools import lru_cache
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
-# Base style parameters. The Chinese font auto-scales per cue between MIN and
-# MAX (absolute px) to keep each cue on one line when possible; English keeps a
-# fixed size scaled with resolution.
-ZH_MIN_FONT_SIZE = 52
-ZH_MAX_FONT_SIZE = 72
-_BASE_EN_FONT_SIZE = 32
-_BASE_ZH_OUTLINE_W = 4
-_BASE_EN_OUTLINE_W = 2
+# 720p reference values, scaled proportionally for other heights.
+_BASE_ZH_FONT_SIZE = 30
+_BASE_EN_FONT_SIZE = 16
+_BASE_ZH_OUTLINE_W = 8
+_BASE_EN_OUTLINE_W = 0
+_BASE_SHADOW_DISTANCE = 2
+_BASE_SHADOW_BLUR = 2
 
-ZH_FILL = (255, 227, 2, 255)  # warm golden yellow (#FFE302)
+ZH_FILL = (255, 255, 255, 255)
 EN_FILL = (255, 255, 255, 255)  # pure white
 OUTLINE_COLOR = (0, 0, 0, 255)  # pure black
-MAX_WIDTH_FRAC = 0.98
+SHADOW_COLOR = (64, 64, 64, 255)
+MAX_WIDTH_FRAC = 0.80
 
 # Runtime values — set by main() after parsing video dimensions
 VIDEO_WIDTH = 1280
 VIDEO_HEIGHT = 720
 EN_FONT_SIZE = _BASE_EN_FONT_SIZE
+ZH_FONT_SIZE = _BASE_ZH_FONT_SIZE
 ZH_OUTLINE_W = _BASE_ZH_OUTLINE_W
 EN_OUTLINE_W = _BASE_EN_OUTLINE_W
+SHADOW_DISTANCE = _BASE_SHADOW_DISTANCE
+SHADOW_BLUR = _BASE_SHADOW_BLUR
 
 # Font candidates (face index for bold weights):
 #   PingFang.ttc: 0=Regular, 1=Medium, 2=Semibold
 #   Hiragino Sans GB.ttc: 0=W3, 3=W6(bold)
-BOLD_FONT_CANDIDATES = [
-    ("/System/Library/Fonts/PingFang.ttc", 2),
-    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),
-    ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
-    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
+ZH_FONT_CANDIDATES = [
+    ("/System/Library/Fonts/PingFang.ttc", 2, "PingFang SC"),
+    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3, "Hiragino Sans GB"),
+    ("/System/Library/Fonts/STHeiti Medium.ttc", 0, "STHeiti"),
+    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0, "Arial Unicode"),
 ]
 
-REGULAR_FONT_CANDIDATES = [
-    ("/System/Library/Fonts/PingFang.ttc", 1),
-    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),
-    ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
-    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
+EN_FONT_CANDIDATES = [
+    (str(Path.home() / "Library/Fonts/LexendDeca.ttf"), 0, "Lexend Deca"),
+    ("/Library/Fonts/LexendDeca.ttf", 0, "Lexend Deca"),
+    ("/System/Library/Fonts/PingFang.ttc", 1, "PingFang SC"),
+    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3, "Hiragino Sans GB"),
+    ("/System/Library/Fonts/STHeiti Medium.ttc", 0, "STHeiti"),
 ]
 
 def clean_subtitle_text(text: str) -> str:
@@ -76,21 +80,21 @@ def clean_subtitle_text(text: str) -> str:
 
 
 def find_font(
-    candidates: list[tuple[str, int]], size: int
-) -> ImageFont.FreeTypeFont:
-    for path, face_index in candidates:
+    candidates: list[tuple[str, int, str]], size: int
+) -> tuple[ImageFont.FreeTypeFont, str]:
+    for path, face_index, family_name in candidates:
         if Path(path).exists():
             try:
-                return ImageFont.truetype(path, size, index=face_index)
+                return ImageFont.truetype(path, size, index=face_index), family_name
             except Exception:
                 continue
-    return ImageFont.load_default()
+    return ImageFont.load_default(), "Pillow default"
 
 
 @lru_cache(maxsize=None)
 def _zh_font(size: int) -> ImageFont.FreeTypeFont:
     """Cached bold Chinese font at the given size."""
-    return find_font(BOLD_FONT_CANDIDATES, size)
+    return find_font(ZH_FONT_CANDIDATES, size)[0]
 
 
 # Tokenizer: a Latin/number word (with inner . ' - kept, e.g. 4.5, v0.1,
@@ -199,6 +203,13 @@ def draw_text_with_outline(
 ):
     """Draw text with outline by stamping in all 8 directions + corners."""
     x, y = xy
+    for spread in range(SHADOW_BLUR + 1):
+        draw.text(
+            (x + SHADOW_DISTANCE + spread, y + SHADOW_DISTANCE + spread),
+            text,
+            font=font,
+            fill=SHADOW_COLOR,
+        )
     for dx in range(-outline_width, outline_width + 1):
         for dy in range(-outline_width, outline_width + 1):
             if dx == 0 and dy == 0:
@@ -230,24 +241,6 @@ def measure_lines(
     return max_w, total_h, bboxes
 
 
-def _fit_zh_lines(
-    text: str, draw: ImageDraw.ImageDraw, max_width: int
-) -> tuple[ImageFont.FreeTypeFont, list[str]]:
-    """Pick the largest Chinese font in [MIN, MAX] that fits on one line.
-
-    Falls back to the min size + word-safe wrapping only when even the smallest
-    size cannot fit the text on a single line.
-    """
-    if not text:
-        return _zh_font(ZH_MAX_FONT_SIZE), [""]
-    for size in range(ZH_MAX_FONT_SIZE, ZH_MIN_FONT_SIZE - 1, -1):
-        font = _zh_font(size)
-        if _line_width(text, font, draw) <= max_width:
-            return font, [text]
-    font = _zh_font(ZH_MIN_FONT_SIZE)
-    return font, wrap_text(text, font, max_width, draw)
-
-
 def render_cue(
     cue: dict,
     en_font: ImageFont.FreeTypeFont,
@@ -260,8 +253,9 @@ def render_cue(
     temp = Image.new("RGBA", (1, 1))
     temp_draw = ImageDraw.Draw(temp)
 
-    # Chinese: auto-scale to fit one line; English: fixed size, word-safe wrap.
-    zh_font, zh_lines = _fit_zh_lines(cue["zh_text"], temp_draw, max_text_width)
+    # Fixed reference sizes keep measurement and final rendering identical.
+    zh_font = _zh_font(ZH_FONT_SIZE)
+    zh_lines = wrap_text(cue["zh_text"], zh_font, max_text_width, temp_draw)
     en_lines = wrap_text(cue["en_text"], en_font, max_text_width, temp_draw)
 
     # Measure wrapped lines (outline-aware spacing prevents double-layer ghosting)
@@ -275,7 +269,7 @@ def render_cue(
     # Canvas dimensions
     zh_pad = ZH_OUTLINE_W * 2 + 4
     en_pad = EN_OUTLINE_W * 2 + 4
-    line_gap = ZH_OUTLINE_W + EN_OUTLINE_W + 8  # gap between Chinese and English blocks
+    line_gap = 0
 
     content_w = max(zh_max_w, en_max_w)
     canvas_w = content_w + max(zh_pad, en_pad)
@@ -299,7 +293,7 @@ def render_cue(
     # Draw English (bottom)
     en_y = zh_y + zh_total_h + line_gap + ZH_OUTLINE_W
     for line_text, (_, ly, lw, lh) in zip(en_lines, en_bboxes):
-        ex = (canvas_w - lw) // 2
+        ex = max(ZH_OUTLINE_W, EN_OUTLINE_W) + 2
         draw_text_with_outline(
             draw, line_text, (ex, en_y + ly), en_font,
             EN_FILL, OUTLINE_COLOR, EN_OUTLINE_W,
@@ -319,17 +313,26 @@ def render_cue(
 
 
 def main():
-    global VIDEO_WIDTH, VIDEO_HEIGHT, EN_FONT_SIZE, ZH_OUTLINE_W, EN_OUTLINE_W
+    global VIDEO_WIDTH, VIDEO_HEIGHT, EN_FONT_SIZE, ZH_FONT_SIZE
+    global ZH_OUTLINE_W, EN_OUTLINE_W, SHADOW_DISTANCE, SHADOW_BLUR
     # Parse args: <srt> <out_dir> [--video-width W] [--video-height H]
     args = sys.argv[1:]
     srt_path = None
     out_dir = None
+    measure_path = None
+    output_path = None
     video_w = 1280
     video_h = 720
 
     i = 0
     while i < len(args):
-        if args[i] == "--video-width" and i + 1 < len(args):
+        if args[i] == "--measure" and i + 1 < len(args):
+            measure_path = args[i + 1]
+            i += 2
+        elif args[i] == "--output" and i + 1 < len(args):
+            output_path = args[i + 1]
+            i += 2
+        elif args[i] == "--video-width" and i + 1 < len(args):
             video_w = int(args[i + 1])
             i += 2
         elif args[i] == "--video-height" and i + 1 < len(args):
@@ -344,7 +347,7 @@ def main():
         else:
             i += 1
 
-    if srt_path is None or out_dir is None:
+    if measure_path is None and (srt_path is None or out_dir is None):
         print(
             f"Usage: {sys.argv[0]} <bilingual.srt> <output_dir> "
             f"[--video-width W] [--video-height H]",
@@ -359,29 +362,53 @@ def main():
     VIDEO_WIDTH = video_w
     VIDEO_HEIGHT = video_h
     scale = VIDEO_HEIGHT / 720
-    # Chinese font auto-scales per cue in [ZH_MIN, ZH_MAX] (absolute px).
+    ZH_FONT_SIZE = round(_BASE_ZH_FONT_SIZE * scale)
     EN_FONT_SIZE = round(_BASE_EN_FONT_SIZE * scale)
     ZH_OUTLINE_W = max(1, round(_BASE_ZH_OUTLINE_W * scale))
-    EN_OUTLINE_W = max(1, round(_BASE_EN_OUTLINE_W * scale))
+    EN_OUTLINE_W = max(0, round(_BASE_EN_OUTLINE_W * scale))
+    SHADOW_DISTANCE = max(1, round(_BASE_SHADOW_DISTANCE * scale))
+    SHADOW_BLUR = max(1, round(_BASE_SHADOW_BLUR * scale))
 
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    print(
-        f"Video: {VIDEO_WIDTH}x{VIDEO_HEIGHT}",
-        file=sys.stderr,
-    )
-
-    en_font = find_font(REGULAR_FONT_CANDIDATES, EN_FONT_SIZE)
-
-    en_path = en_font.path if hasattr(en_font, "path") else "default"
-    print(f"ZH font: auto {ZH_MIN_FONT_SIZE}-{ZH_MAX_FONT_SIZE}px", file=sys.stderr)
-    print(f"EN font: {en_path} ({EN_FONT_SIZE}px)", file=sys.stderr)
-
-    cues = parse_srt(srt_path)
+    en_font, en_font_name = find_font(EN_FONT_CANDIDATES, EN_FONT_SIZE)
+    _, zh_font_name = find_font(ZH_FONT_CANDIDATES, ZH_FONT_SIZE)
+    cues = parse_srt(measure_path or srt_path)
     if not cues:
         print("ERROR: no cues found in SRT", file=sys.stderr)
         sys.exit(1)
+
+    if measure_path is not None:
+        if output_path is None:
+            print("ERROR: --measure requires --output", file=sys.stderr)
+            sys.exit(1)
+        draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        fit_width = int(VIDEO_WIDTH * MAX_WIDTH_FRAC)
+        zh_font = _zh_font(ZH_FONT_SIZE)
+        metrics = []
+        for cue in cues:
+            raw_width = _line_width(cue["zh_text"], zh_font, draw)
+            zh_lines = wrap_text(cue["zh_text"], zh_font, fit_width, draw)
+            en_lines = wrap_text(cue["en_text"], en_font, fit_width, draw)
+            line_count = max(len(zh_lines), len(en_lines))
+            severity = "fit" if raw_width <= fit_width and line_count == 1 else (
+                "aim" if line_count <= 2 else "hard"
+            )
+            metrics.append({
+                "cueIndex": cue["index"],
+                "zhWidth": raw_width,
+                "fitWidth": fit_width,
+                "lineCount": line_count,
+                "severity": severity,
+                "resolvedFonts": {"zh": zh_font_name, "en": en_font_name},
+            })
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, ensure_ascii=False)
+        return
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Video: {VIDEO_WIDTH}x{VIDEO_HEIGHT}", file=sys.stderr)
+    print(f"ZH font: {zh_font_name} ({ZH_FONT_SIZE}px)", file=sys.stderr)
+    print(f"EN font: {en_font_name} ({EN_FONT_SIZE}px)", file=sys.stderr)
 
     manifest_entries = []
     for i, cue in enumerate(cues):

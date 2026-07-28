@@ -1,7 +1,10 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { burnBilingualSubtitles } from "./burn-bilingual-subtitles.js";
+import {
+  burnBilingualSubtitles,
+  measureBilingualSubtitleLayout,
+} from "./burn-bilingual-subtitles.js";
 import type * as BurnSubtitlesModule from "./burn-subtitles.js";
 import type { ProcessRunner } from "../process/index.js";
 
@@ -114,6 +117,57 @@ describe("burnBilingualSubtitles", () => {
     enSrtPath: path.join(tmpDir, "video", "full.en.srt"),
     zhSrtPath: path.join(tmpDir, "video", "full.zh.srt"),
     runner,
+  });
+
+  it("uses the renderer measurement mode without producing cue images", async () => {
+    vi.mocked(runner.run).mockImplementationOnce(async (spec) => {
+      const outputIndex = spec.args?.indexOf("--output") ?? -1;
+      const outputPath = spec.args?.[outputIndex + 1];
+      expect(spec.args).toEqual(expect.arrayContaining([
+        "--measure",
+        "--video-width", "1280",
+        "--video-height", "720",
+      ]));
+      await writeFile(outputPath!, JSON.stringify([{
+        cueIndex: 1,
+        zhWidth: 320,
+        fitWidth: 1024,
+        lineCount: 1,
+        severity: "fit",
+        resolvedFonts: { zh: "PingFang SC", en: "Lexend Deca" },
+      }]));
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+
+    const result = await measureBilingualSubtitleLayout({
+      srtContent: "1\n00:00:01,000 --> 00:00:03,000\n你好\nHello\n",
+      videoWidth: 1280,
+      videoHeight: 720,
+      runner,
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({ cueIndex: 1, severity: "fit", fitWidth: 1024 }),
+    ]);
+  });
+
+  it("keeps the approved BaoCut-inspired 720p style contract in the renderer", async () => {
+    const renderer = await readFile(
+      path.join(process.cwd(), "packages/adapters-node/src/acquire/render-bilingual-subtitles.py"),
+      "utf8",
+    );
+
+    expect(renderer).toContain("_BASE_ZH_FONT_SIZE = 30");
+    expect(renderer).toContain("_BASE_EN_FONT_SIZE = 16");
+    expect(renderer).toContain("_BASE_ZH_OUTLINE_W = 8");
+    expect(renderer).toContain("_BASE_EN_OUTLINE_W = 0");
+    expect(renderer).toContain("MAX_WIDTH_FRAC = 0.80");
+    expect(renderer).toContain('"/Library/Fonts/LexendDeca.ttf"');
+    expect(renderer).toContain('"PingFang SC"');
+    expect(renderer).toContain('"Hiragino Sans GB"');
+    expect(renderer).toContain('"STHeiti"');
+    expect(renderer).toContain("SHADOW_COLOR = (64, 64, 64, 255)");
+    expect(renderer).toContain("line_gap = 0");
   });
 
   it("writes output to the specified outputPath", async () => {

@@ -49,6 +49,7 @@ export const registerPipelineCommand = (program: Command): void => {
     .option("--subtitle-source <mode>", "Subtitle source: auto|youtube|transcribe|file", "auto")
     .option("--subtitle-file <path>", "Existing SRT/VTT subtitle file when --subtitle-source file is used")
     .option("--subtitle-bilingual <mode>", "Bilingual subtitle mode: off|srt|ass|burned|all", "off")
+    .option("--no-subtitle-semantic", "Disable semantic grouping for bilingual subtitles")
     .option("--subtitle-burn-style <style>", "Subtitle burn style: zh-default|bilingual-explainer", "zh-default")
     .option("--continue-from", "Resume from last failed step")
     .option("--error-strategy <mode>", "On stage failure: stop|skip", "stop")

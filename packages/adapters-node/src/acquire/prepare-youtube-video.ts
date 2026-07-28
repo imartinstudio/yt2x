@@ -30,6 +30,8 @@ export type PrepareYoutubeVideoOptions = {
   videoSubtitles?: VideoSubtitleOptions;
   /** Bilingual subtitle mode — forwarded to runSubtitlePipeline via videoSubtitles extension. */
   subtitleBilingual?: "off" | "srt" | "ass" | "burned" | "all";
+  /** Use semantic sentence grouping for bilingual subtitles. */
+  subtitleSemantic?: boolean;
   /** Subtitle burn visual style — forwarded to runSubtitlePipeline. */
   subtitleBurnStyle?: "zh-default" | "bilingual-explainer";
   /** When set, burned subtitle video is written here instead of videoDir. */
@@ -281,6 +283,7 @@ export const prepareYoutubeVideo = async (
           ...(opts.force !== undefined ? { force: opts.force } : {}),
           videoLanguage,
           ...(opts.subtitleBilingual !== undefined ? { subtitleBilingual: opts.subtitleBilingual } : {}),
+          ...(opts.subtitleSemantic !== undefined ? { subtitleSemantic: opts.subtitleSemantic } : {}),
           ...(opts.subtitleBurnStyle !== undefined ? { subtitleBurnStyle: opts.subtitleBurnStyle } : {}),
           onProgress: (detail, fraction) => {
             opts.progress?.onStepProgress?.("subtitle-zh", detail, fraction);

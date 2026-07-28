@@ -68,25 +68,43 @@
 
 ## 3. Native article 产物（`files/articles/<videoId>/`）
 
-| 文件                            | 说明                                             |
-| ------------------------------- | ------------------------------------------------ |
-| `article.md`                    | 长文章草稿 Markdown；暂不通过 X API 自动发布     |
-| `run.json`                      | 文章生成元数据（模型、耗时、usage 等）           |
-| `x-thread.md`                   | 专门生成的 X 串推 Markdown                       |
-| `x-hooks.json`                  | 串推首推候选                                     |
-| `x-short.md`                    | 单条 X 短帖                                      |
-| `images/cover.*`                | 可选；从笔记目录 `screenshots/` 复制             |
-| `video/full.*` / `video/clip.*` | 可选；从采集目录复制完整视频或手动片段供长文引用 |
-| `x-thread-visuals.json`         | 可选；串推配图计划（v0.2）                       |
-| `x-short-visual.json`           | 可选；短文配图计划（v0.2）                       |
-| `xiaohongshu-article.md`        | 计划；小红书图文笔记适配稿                       |
-| `xiaohongshu-metadata.json`     | 计划；小红书标题、核心标签和封面/配图建议        |
-| `wechat-article.md`             | 计划；微信公众号 Markdown 长文适配稿             |
-| `wechat-metadata.json`          | 计划；公众号标题候选、摘要、导语和封面图建议     |
-| `bilibili-article.md`           | 计划；哔哩哔哩标题、简介、分区和标签建议         |
-| `bilibili-metadata.json`        | 计划；哔哩哔哩标题、标签和章节时间线草案         |
+| 文件                                 | 说明                                             |
+| ------------------------------------ | ------------------------------------------------ |
+| `article.md`                         | 长文章草稿 Markdown；暂不通过 X API 自动发布     |
+| `run.json`                           | 文章生成元数据（模型、耗时、usage 等）           |
+| `x-thread.md`                        | 专门生成的 X 串推 Markdown                       |
+| `x-hooks.json`                       | 串推首推候选                                     |
+| `x-short.md`                         | 单条 X 短帖                                      |
+| `images/cover.*`                     | 可选；从笔记目录 `screenshots/` 复制             |
+| `video/full.*` / `video/clip.*`      | 可选；从采集目录复制完整视频或手动片段供长文引用 |
+| `video/full.en.srt`                  | 双语模式按完整语义句投影后的英文原文字幕         |
+| `video/full.zh.srt`                  | 双语模式按完整语义句投影后的简体中文译文字幕     |
+| `video/full.bilingual.srt`           | 译文在上、原文在下且共享时间轴的交付字幕         |
+| `video/full.bilingual.ass`           | 可选；双语 ASS 版本                              |
+| `video/full.bilingual.semantic.json` | 双语投影、布局指纹、字体回退结果与质量报告       |
+| `video/full.bilingual-burned.mp4`    | 可选；仅在内容和展示质量门都通过后生成           |
+| `x-thread-visuals.json`              | 可选；串推配图计划（v0.2）                       |
+| `x-short-visual.json`                | 可选；短文配图计划（v0.2）                       |
+| `xiaohongshu-article.md`             | 计划；小红书图文笔记适配稿                       |
+| `xiaohongshu-metadata.json`          | 计划；小红书标题、核心标签和封面/配图建议        |
+| `wechat-article.md`                  | 计划；微信公众号 Markdown 长文适配稿             |
+| `wechat-metadata.json`               | 计划；公众号标题候选、摘要、导语和封面图建议     |
+| `bilibili-article.md`                | 计划；哔哩哔哩标题、简介、分区和标签建议         |
+| `bilibili-metadata.json`             | 计划；哔哩哔哩标题、标签和章节时间线草案         |
 
 `article.md` 落盘时会固定补齐首屏素材与尾注：如果存在 `images/cover.*`，H1 后的第一张图就是封面；如果存在下载视频片段，首个 `##` 小节前会插入引用 `video/clip.*` 的 `<video>`；LLM 正文末尾应输出 3-5 个从主题提取的 X 话题标签，之后再追加固定格式 `👇完整视频：` 与原视频地址。
+
+双语字幕把 `files/downloads/<videoId>/` 视为只读源资产。语义投影和
+`--no-subtitle-semantic` 逐 cue 回退都只写上述 article `video/` 文件，不会在下载目录
+新建、覆盖或删除字幕。`full.bilingual.semantic.json` 的 `kind` 为
+`semantic-bilingual` 或 `cue-aligned-fallback`；其中记录源字幕 SHA、翻译规则与模型、
+布局和样式版本、实际解析字体、视频尺寸、`videoWidthFraction: 0.8`、三份 SRT 的 SHA
+以及质量报告。
+
+缓存分为翻译与展示两层：源 SHA、翻译规则、模型和三份 SRT SHA 都一致时复用翻译；
+字体回退结果、视频尺寸、宽度比例或布局/样式版本变化时，只重新测量、定向重排和烧录，
+不会无故重新翻译。内容验证失败会进入文章侧逐 cue 回退；`hard` 布局、超过两行或其他
+展示质量失败会保留 SRT 和报告，但阻止生成烧录 MP4。
 
 `x-thread.md` / `x-short.md` 面向 X post 发布，生成阶段不得使用 Markdown 加粗、行内代码、代码块、有序列表、无序列表、Markdown 链接、引用或表格。对比、参数、步骤或结构化信息应写成纯文本短行。冒号式标题或标签必须在冒号后换行；数字序号、圈号序号和 emoji 数字序号都必须让序号单独占一行，内容从下一行开始。
 

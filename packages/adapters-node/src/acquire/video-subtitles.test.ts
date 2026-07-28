@@ -12,6 +12,10 @@ vi.mock("./burn-zh-subtitles-for-video.js", () => ({
   }),
 }));
 
+vi.mock("./resolve-python.js", () => ({
+  resolvePythonWithPillow: vi.fn().mockResolvedValue("python3"),
+}));
+
 import {
   cleanupSrt,
   convertSubtitleTextToSrt,

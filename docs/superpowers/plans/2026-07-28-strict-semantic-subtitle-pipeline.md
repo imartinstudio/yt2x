@@ -33,6 +33,7 @@
 ### Task 1: 锁死双语 CLI 与烧录前置条件
 
 **Files:**
+
 - Modify: `packages/cli/src/args/pipeline.ts`
 - Modify: `packages/cli/src/args/pipeline.test.ts`
 - Modify: `packages/cli/src/commands/pipeline.ts`
@@ -47,6 +48,7 @@
 - Modify: `packages/adapters-node/src/acquire/prepare-youtube-video.ts`
 
 **Interfaces:**
+
 - Consumes: `subtitleBilingual: "off" | "srt" | "ass" | "burned" | "all"`.
 - Produces: 双语非 `off` 时无可关闭语义处理的参数；适配器不再接收 `subtitleSemantic`.
 
@@ -56,8 +58,9 @@
 
 ```ts
 expect(parsed.acquire).not.toHaveProperty("subtitleSemantic");
-expect(() => program.parse(["node", "yt2x", "pipeline", "--no-subtitle-semantic"]))
-  .toThrow(/unknown option/u);
+expect(() => program.parse(["node", "yt2x", "pipeline", "--no-subtitle-semantic"])).toThrow(
+  /unknown option/u,
+);
 ```
 
 - [ ] **Step 2: 运行失败测试**
@@ -79,10 +82,12 @@ Expected: PASS。
 ### Task 2: 让下载目录成为真正只读的双语源
 
 **Files:**
+
 - Modify: `packages/adapters-node/src/acquire/video-subtitles.ts`
 - Modify: `packages/adapters-node/src/acquire/video-subtitles.test.ts`
 
 **Interfaces:**
+
 - Produces: `resolveReadOnlyBilingualSource(videoDir, sourceLang, explicitFile?)`，只读取已有 SRT/VTT 并返回内存中的标准 SRT；不复制、不清理回写、不转写。
 - Consumes: `runArticleBilingualPipeline` 直接使用上述内存源。
 
@@ -98,8 +103,9 @@ expect(llm.chat).not.toHaveBeenCalled();
 
 // auto 已有 title.en.vtt：成功，只在 article/video 写 semantic 产物
 expect(await snapshotTree(downloadDir)).toEqual(before);
-await expect(readFile(articleVideoDir + "/full.bilingual.semantic.json", "utf8"))
-  .resolves.toContain('"status": "ready"');
+await expect(
+  readFile(articleVideoDir + "/full.bilingual.semantic.json", "utf8"),
+).resolves.toContain('"status": "ready"');
 ```
 
 另增加 spy，断言双语模式从不调用 `prepareSourceSubtitle` 对应的本地转写 runner 命令。
@@ -132,12 +138,14 @@ Expected: PASS。
 ### Task 3: 删除逐 cue 回退并建立不可伪造的烧录凭证
 
 **Files:**
+
 - Modify: `packages/adapters-node/src/acquire/semantic-bilingual-subtitles.ts`
 - Modify: `packages/adapters-node/src/acquire/semantic-bilingual-subtitles.test.ts`
 - Modify: `packages/adapters-node/src/acquire/video-subtitles.ts`
 - Modify: `packages/adapters-node/src/acquire/video-subtitles.test.ts`
 
 **Interfaces:**
+
 - Produces manifest:
 
 ```ts
@@ -187,11 +195,13 @@ Expected: PASS。
 ### Task 4: 文档、全链路回归和仓库验证
 
 **Files:**
+
 - Modify: `docs/DATA-CONTRACTS.md`
 - Modify: `docs/USAGE.md`
 - Modify: `docs/superpowers/specs/2026-07-28-semantic-bilingual-subtitles-design.md`
 
 **Interfaces:**
+
 - Documents: 唯一语义路径、无 opt-out、无逐 cue 回退、Downloads 严格只读、失败不烧录。
 
 - [ ] **Step 1: 更新契约文档**

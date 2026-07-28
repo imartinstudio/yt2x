@@ -95,16 +95,19 @@
 `article.md` 落盘时会固定补齐首屏素材与尾注：如果存在 `images/cover.*`，H1 后的第一张图就是封面；如果存在下载视频片段，首个 `##` 小节前会插入引用 `video/clip.*` 的 `<video>`；LLM 正文末尾应输出 3-5 个从主题提取的 X 话题标签，之后再追加固定格式 `👇完整视频：` 与原视频地址。
 
 双语字幕把 `files/downloads/<videoId>/` 视为只读源资产。语义投影和
-`--no-subtitle-semantic` 逐 cue 回退都只写上述 article `video/` 文件，不会在下载目录
-新建、覆盖或删除字幕。`full.bilingual.semantic.json` 的 `kind` 为
-`semantic-bilingual` 或 `cue-aligned-fallback`；其中记录源字幕 SHA、翻译规则与模型、
-布局和样式版本、实际解析字体、视频尺寸、`videoWidthFraction: 0.8`、三份 SRT 的 SHA
-以及质量报告。
+烧录只写上述 article `video/` 文件，不会在下载目录新建、覆盖或删除字幕、ASS、
+manifest、烧录视频或本地转写临时文件。双语模式只读取已经下载的源语言 SRT/VTT；
+找不到时直接失败，不调用本地 ASR。`full.bilingual.semantic.json` 的 `kind` 固定为
+`semantic-bilingual`；其中记录 `status`、翻译/对齐/断句/布局四阶段状态、源字幕 SHA、
+翻译规则与模型、布局和样式版本、实际解析字体、视频尺寸、
+`videoWidthFraction: 0.8`、三份 SRT 的 SHA 以及质量报告。
 
 缓存分为翻译与展示两层：源 SHA、翻译规则、模型和三份 SRT SHA 都一致时复用翻译；
 字体回退结果、视频尺寸、宽度比例或布局/样式版本变化时，只重新测量、定向重排和烧录，
-不会无故重新翻译。内容验证失败会进入文章侧逐 cue 回退；`hard` 布局、超过两行或其他
-展示质量失败会保留 SRT 和报告，但阻止生成烧录 MP4。
+不会无故重新翻译。内容验证、语义边界或展示质量失败会写
+`status: "failed"` 的文章侧审计报告并使命令非零退出；不存在逐 cue 交付回退。
+烧录前必须重新校验 `kind: "semantic-bilingual"`、`status: "ready"`、四阶段全部
+`done`、质量门通过以及三份 SRT SHA 完全匹配，否则不调用烧录器。
 
 `x-thread.md` / `x-short.md` 面向 X post 发布，生成阶段不得使用 Markdown 加粗、行内代码、代码块、有序列表、无序列表、Markdown 链接、引用或表格。对比、参数、步骤或结构化信息应写成纯文本短行。冒号式标题或标签必须在冒号后换行；数字序号、圈号序号和 emoji 数字序号都必须让序号单独占一行，内容从下一行开始。
 

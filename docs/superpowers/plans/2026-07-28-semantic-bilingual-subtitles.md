@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Superseded delivery rules:** The opt-out and cue-aligned fallback steps below are historical. The mandatory no-fallback, downloads-read-only delivery contract is defined by `2026-07-28-strict-semantic-subtitle-pipeline.md` and the updated design specification.
+
 **Goal:** 从只读的下载原始英文字幕生成文章目录专用的语义中英双语字幕，按 BaoCut 的两阶段对齐和交付质量门安全烧录。
 
 **Architecture:** 新增独立的语义字幕投影模块：阶段一按完整中文句将连续源 cue 组装为稳定组；阶段二只对真实渲染测量为 `hard` 的稳定组重对齐。语义与逐 cue 回退都只写 `files/articles/<videoId>/video/`；下载目录绝不写回。烧录器仅消费文章侧、通过内容与展示质量门的 `full.bilingual.srt`。

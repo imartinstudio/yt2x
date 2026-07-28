@@ -24,7 +24,6 @@ export const registerSubtitleCommand = (program: Command): void => {
       .option("--subtitle-source <mode>", "Subtitle source: auto|youtube|transcribe|file", "auto")
       .option("--subtitle-file <path>", "Existing SRT/VTT subtitle file when --subtitle-source file")
       .option("--subtitle-bilingual <mode>", "Bilingual subtitle mode: off|srt|ass|burned|all", "off")
-      .option("--no-subtitle-semantic", "Disable semantic grouping for bilingual subtitles")
       .option("--subtitle-burn-style <style>", "Subtitle burn style: zh-default|bilingual-explainer", "zh-default")
       .option("--article-out-dir <path>", "Output dir for burned video (default: files/articles)")
       .option(

@@ -70,7 +70,6 @@ export const AcquireOptionsSchema = z.object({
   subtitleSource: SubtitleSourceSchema.default("auto"),
   subtitleFile: z.string().min(1).optional(),
   subtitleBilingual: SubtitleBilingualModeSchema.default("off"),
-  subtitleSemantic: z.boolean().default(true),
   subtitleBurnStyle: SubtitleBurnStyleSchema.default("zh-default"),
 }).superRefine((data, ctx) => {
   if (data.videoOnly && data.downloadVideo === false) {

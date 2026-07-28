@@ -240,24 +240,15 @@ describe("PipelineArgsSchema", () => {
     const parsed = PipelineArgsSchema.parse(baseInput);
     expect(parsed.acquire.subtitleBilingual).toBe("off");
     expect(parsed.acquire.subtitleBurnStyle).toBe("zh-default");
-    expect(parsed.acquire.subtitleSemantic).toBe(true);
+    expect(parsed.acquire).not.toHaveProperty("subtitleSemantic");
   });
 
-  it("accepts opting out of semantic bilingual subtitles", () => {
+  it("does not expose the removed semantic subtitle opt-out", () => {
     const parsed = PipelineArgsSchema.parse({
       ...baseInput,
       acquire: { subtitleSemantic: false },
     });
-    expect(parsed.acquire.subtitleSemantic).toBe(false);
-  });
-
-  it("rejects non-boolean semantic subtitle values", () => {
-    expect(() =>
-      PipelineArgsSchema.parse({
-        ...baseInput,
-        acquire: { subtitleSemantic: "off" },
-      }),
-    ).toThrow();
+    expect(parsed.acquire).not.toHaveProperty("subtitleSemantic");
   });
 
   it("accepts valid subtitleBilingual modes when subtitleZh is enabled", () => {

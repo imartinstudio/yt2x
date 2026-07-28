@@ -80,14 +80,13 @@ describe("parseCommanderPipelineFlags", () => {
       subtitleTargetLang: "zh-CN",
       subtitleSource: "file",
       subtitleFile: "/tmp/source.vtt",
-      subtitleSemantic: false,
     });
     expect(args.acquire.subtitleZh).toBe("both");
     expect(args.acquire.subtitleSourceLang).toBe("en");
     expect(args.acquire.subtitleTargetLang).toBe("zh-CN");
     expect(args.acquire.subtitleSource).toBe("file");
     expect(args.acquire.subtitleFile).toBe("/tmp/source.vtt");
-    expect(args.acquire.subtitleSemantic).toBe(false);
+    expect(args.acquire).not.toHaveProperty("subtitleSemantic");
   });
 
   it("supports opting out of the default video download", () => {

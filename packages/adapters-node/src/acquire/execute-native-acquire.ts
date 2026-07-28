@@ -44,7 +44,6 @@ export type NativeAcquireOptions = {
     subtitleSource?: "auto" | "youtube" | "transcribe" | "file";
     subtitleFile?: string;
     subtitleBilingual?: "off" | "srt" | "ass" | "burned" | "all";
-    subtitleSemantic?: boolean;
     subtitleBurnStyle?: "zh-default" | "bilingual-explainer";
   };
   stages: NativeAcquireStageModes;
@@ -286,7 +285,6 @@ export const executeNativeAcquire = async (opts: NativeAcquireOptions): Promise<
         ...(opts.articleOutDir !== undefined ? { burnedVideoOutDir: opts.articleOutDir } : {}),
         ...(opts.control.force !== undefined ? { force: opts.control.force } : {}),
         ...(acquire.subtitleBilingual !== undefined ? { subtitleBilingual: acquire.subtitleBilingual } : {}),
-        ...(acquire.subtitleSemantic !== undefined ? { subtitleSemantic: acquire.subtitleSemantic } : {}),
         ...(acquire.subtitleBurnStyle !== undefined ? { subtitleBurnStyle: acquire.subtitleBurnStyle } : {}),
         runner,
         timeoutMs,

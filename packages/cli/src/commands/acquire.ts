@@ -27,7 +27,6 @@ export const registerAcquireCommand = (program: Command): void => {
     .option("--subtitle-source <mode>", "Subtitle source: auto|youtube|transcribe|file", "auto")
     .option("--subtitle-file <path>", "Existing SRT/VTT subtitle file when --subtitle-source file is used")
     .option("--subtitle-bilingual <mode>", "Bilingual subtitle mode: off|srt|ass|burned|all", "off")
-    .option("--no-subtitle-semantic", "Disable semantic grouping for bilingual subtitles")
     .option("--subtitle-burn-style <style>", "Subtitle burn style: zh-default|bilingual-explainer", "zh-default")
     .option("--error-strategy <mode>", "On failure: stop|skip", "stop")
     .option("--force", "Re-run acquire even when process-status marks it done")

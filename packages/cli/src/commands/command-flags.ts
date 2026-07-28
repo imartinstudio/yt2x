@@ -23,6 +23,7 @@ export type SingleStageFlags = {
   subtitleSource?: string;
   subtitleFile?: string;
   subtitleBilingual?: string;
+  subtitleSemantic?: boolean;
   subtitleBurnStyle?: string;
   platform?: string;
   maxChars?: string;

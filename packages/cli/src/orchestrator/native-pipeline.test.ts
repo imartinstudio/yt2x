@@ -91,7 +91,11 @@ describe("runNativePipeline", () => {
 
     expect(code).toBe(0);
     expect(executeNativeAcquireMock).toHaveBeenCalledWith(expect.objectContaining({
-      acquire: expect.objectContaining({ subtitleZh: "burned", subtitleBilingual: "burned" }),
+      acquire: expect.objectContaining({
+        subtitleZh: "burned",
+        subtitleBilingual: "burned",
+        subtitleSemantic: true,
+      }),
     }));
     expect(burnZhSubtitlesForVideoMock).not.toHaveBeenCalled();
   });

@@ -585,6 +585,8 @@ export type RunSubtitlePipelineOptions = {
   videoLanguage?: string;
   /** 双语字幕模式：off / srt / ass / burned / all */
   subtitleBilingual?: "off" | "srt" | "ass" | "burned" | "all";
+  /** 双语字幕是否使用语义分组（默认 true）。 */
+  subtitleSemantic?: boolean;
   /** 硬字幕烧制样式：zh-default / bilingual-explainer */
   subtitleBurnStyle?: "zh-default" | "bilingual-explainer";
   /** 烧录等长耗时子阶段的进度回调（detail 为人类可读描述，fraction ∈ [0,1]）。 */

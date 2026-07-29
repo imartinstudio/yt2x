@@ -112,3 +112,17 @@ Optional final note about scope, compatibility, or operational impact.
 3. **演示必须有收尾**。如果片段展示了一个操作流程（安装→配置→演示→结论），必须包含"结论"部分，不能砍在演示中间。
 4. **校验方法**：裁剪前用 ffprobe 获取时长，裁剪后用 SRT 校验最后一个字幕条目是否以句号/问号/感叹号等结束标点结尾。如果不是，视为危险信号。
 5. **宁可留长，不可剪短**。不确定结束点时选择偏长而非偏短。过长的片段可以在后续手动修剪。
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues（`gh` CLI）。See `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+默认五标签：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。See `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文：`CONTEXT.md` + `docs/adr/`。See `docs/agents/domain.md`。

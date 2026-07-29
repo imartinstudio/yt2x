@@ -76,6 +76,7 @@ export {
 export {
   SemanticProjectionError,
   projectSemanticBilingualSubtitles,
+  repairSubtitleArtifacts,
   type SemanticBilingualProjection,
   type SemanticBilingualQualityIssue,
   type SemanticBilingualQualityReport,
@@ -83,4 +84,5 @@ export {
   type SemanticProjectionOptions,
   type SemanticSubtitleGroup,
   type SubtitleLayoutMeasurement,
+  type SubtitleRepairResult,
 } from "./semantic-bilingual-subtitles.js";

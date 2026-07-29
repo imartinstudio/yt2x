@@ -25,6 +25,7 @@ export type SubtitleFlags = NativeLlmCliFlags & {
   noSkipBurnIfChineseBurned?: boolean;
   verbose?: boolean;
   force?: boolean;
+  alignAudio?: boolean;
 };
 
 /** 退出码常亮 */
@@ -87,6 +88,7 @@ export const executeNativeSubtitle = async (flags: SubtitleFlags): Promise<numbe
       ...(flags.force !== undefined ? { force: flags.force } : {}),
       subtitleBilingual: (flags.subtitleBilingual as "off" | "srt" | "ass" | "burned" | "all") ?? "off",
       subtitleBurnStyle: (flags.subtitleBurnStyle as "zh-default" | "bilingual-explainer") ?? "zh-default",
+      ...(flags.alignAudio === true ? { enableForcedAlignment: true } : {}),
     });
 
     for (const w of warnings) {

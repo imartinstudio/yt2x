@@ -57,12 +57,24 @@ export {
 } from "./burn-zh-subtitles-for-video.js";
 export {
   burnBilingualSubtitles,
+  measureBilingualSubtitleLayout,
   type BurnBilingualSubtitlesOptions,
   type BurnBilingualSubtitlesResult,
 } from "./burn-bilingual-subtitles.js";
 export {
+  auditSubtitleArtifacts,
+  isSubtitleAuditReadyForDelivery,
+  SUBTITLE_AUDIT_THRESHOLDS,
+  type SubtitleAuditDeliveryMode,
+  type SubtitleAuditInput,
+  type SubtitleAuditIssue,
+  type SubtitleAuditIssueCode,
+  type SubtitleAuditManifest,
+  type SubtitleAuditMeasurement,
+  type SubtitleAuditResult,
+} from "./audit-subtitles.js";
+export {
   SemanticProjectionError,
-  evaluateSemanticBilingualDelivery,
   projectSemanticBilingualSubtitles,
   type SemanticBilingualProjection,
   type SemanticBilingualQualityIssue,

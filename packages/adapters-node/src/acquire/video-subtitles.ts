@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { access, copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { LlmPort } from "@yt2x/core";
 import type { ProcessRunner } from "../process/index.js";
 import { buildBilingualAss, mergeBilingualSrt } from "./bilingual-subtitles.js";
@@ -11,14 +12,26 @@ import {
 } from "./burn-bilingual-subtitles.js";
 import type { BurnProgressCallback } from "./burn-subtitles.js";
 import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
+import { resolvePythonWithTorchaudio } from "./resolve-python.js";
 import { translateSrt } from "./srt-translator.js";
 import {
-  evaluateSemanticBilingualDelivery,
+  auditSubtitleArtifacts,
+  isSubtitleAuditReadyForDelivery,
+  type SubtitleAuditIssue,
+  type SubtitleAuditResult,
+} from "./audit-subtitles.js";
+import {
   projectSemanticBilingualSubtitles,
   SemanticProjectionError,
   type SemanticBilingualProjection,
   type SubtitleLayoutMeasurement,
+  type WordTiming,
 } from "./semantic-bilingual-subtitles.js";
+
+const FORCED_ALIGN_SCRIPT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..", "..", "src", "acquire", "forced-align.py",
+);
 
 export type SubtitleSourceMode = "auto" | "youtube" | "transcribe" | "file";
 
@@ -600,6 +613,14 @@ export type RunSubtitlePipelineOptions = {
   subtitleBurnStyle?: "zh-default" | "bilingual-explainer";
   /** 烧录等长耗时子阶段的进度回调（detail 为人类可读描述，fraction ∈ [0,1]）。 */
   onProgress?: (detail: string, fraction: number) => void;
+  /**
+   * 用词级强制对齐（forced alignment, MMS_FA via torchaudio）替代按字符占比
+   * 猜测的分句时长。默认关闭——探测/运行 torchaudio 有真实耗时（每视频多跑
+   * 一次音频对齐），且这是本仓库唯一依赖 torch 的重型可选能力，不应该悄悄
+   * 对所有用户生效。显式开启后，探测不到 torchaudio 或对齐失败都会静默退回
+   * 原有按比例猜测的行为，不阻塞流水线。
+   */
+  enableForcedAlignment?: boolean;
 };
 
 export type RunSubtitlePipelineResult = {
@@ -653,12 +674,20 @@ type ArticleBilingualManifest = {
   videoWidthFraction: number;
   groups?: SemanticBilingualProjection["groups"];
   files?: Record<"en" | "zh" | "bilingual", { sha256: string }>;
-  quality: SemanticBilingualProjection["quality"];
+  quality: { readyForBurn: boolean; issues: SubtitleAuditIssue[] };
   error?: { code: string; message: string };
 };
 
 const contentSha256 = (value: string): string =>
   createHash("sha256").update(value).digest("hex");
+
+const semanticDeliveryQuality = (
+  report: SubtitleAuditResult,
+  mode: "off" | "srt" | "ass" | "burned" | "all",
+): ArticleBilingualManifest["quality"] => ({
+  readyForBurn: mode !== "off" && isSubtitleAuditReadyForDelivery(report, mode),
+  issues: report.issues,
+});
 
 const atomicWrite = async (filePath: string, content: string): Promise<void> => {
   await mkdir(path.dirname(filePath), { recursive: true });
@@ -734,6 +763,75 @@ const readValidArticleCache = async (opts: {
   }
 };
 
+/**
+ * Best-effort word-level timing via forced alignment (see forced-align.py).
+ * A pure optimization, never a requirement: returns undefined whenever
+ * torchaudio isn't available, no source video can be found, or anything in
+ * the process fails — callers must fall back to the existing proportional
+ * split-point guess, never treat a missing result as an error.
+ */
+const computeWordTimings = async (opts: {
+  videoDir: string;
+  sourceSrt: string;
+  runner: ProcessRunner;
+  signal?: AbortSignal;
+}): Promise<WordTiming[] | undefined> => {
+  const pythonBin = await resolvePythonWithTorchaudio();
+  if (pythonBin === undefined) return undefined;
+
+  const names = await readdir(path.join(opts.videoDir, "video")).catch(() => [] as string[]);
+  const mp4 = names.find((name) => /\.mp4$/iu.test(name) && !/burned/iu.test(name));
+  if (mp4 === undefined) return undefined;
+
+  const words = parseSubtitleBlocks(opts.sourceSrt)
+    .flatMap((cue) => cue.text.join(" ").split(/\s+/u))
+    .filter((w) => w.length > 0);
+  if (words.length === 0) return undefined;
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-align-"));
+  try {
+    const wavPath = path.join(tempDir, "audio.wav");
+    const wordsPath = path.join(tempDir, "words.json");
+    const outputPath = path.join(tempDir, "alignment.json");
+
+    await opts.runner.run({
+      command: "ffmpeg",
+      args: [
+        "-y", "-i", path.join(opts.videoDir, "video", mp4),
+        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+        wavPath,
+      ],
+      timeoutMs: 120_000,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+
+    await writeFile(wordsPath, JSON.stringify(words), "utf8");
+
+    const result = await opts.runner.run({
+      command: pythonBin,
+      args: [FORCED_ALIGN_SCRIPT, "--audio", wavPath, "--words", wordsPath, "--output", outputPath],
+      timeoutMs: 600_000,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+    if (result.exitCode !== 0) return undefined;
+
+    const raw = await readFile(outputPath, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed.filter(
+      (e): e is WordTiming =>
+        typeof e === "object" && e !== null &&
+        typeof (e as WordTiming).word === "string" &&
+        typeof (e as WordTiming).start === "number" &&
+        typeof (e as WordTiming).end === "number",
+    );
+  } catch {
+    return undefined;
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+};
+
 const runArticleBilingualPipeline = async (
   opts: RunSubtitlePipelineOptions,
 ): Promise<RunSubtitlePipelineResult | undefined> => {
@@ -766,15 +864,21 @@ const runArticleBilingualPipeline = async (
     model: opts.llmModel,
   });
   if (cached !== undefined) {
-    const bilingualSrt = await readFile(
-      path.join(articleVideoDir, "full.bilingual.srt"),
-      "utf8",
-    );
+    const [enSrt, zhSrt, bilingualSrt] = await Promise.all([
+      readFile(path.join(articleVideoDir, "full.en.srt"), "utf8"),
+      readFile(path.join(articleVideoDir, "full.zh.srt"), "utf8"),
+      readFile(path.join(articleVideoDir, "full.bilingual.srt"), "utf8"),
+    ]);
     const measurements = await measureLayout(bilingualSrt);
-    const quality = evaluateSemanticBilingualDelivery({
-      groups: cached.groups!,
+    const audit = auditSubtitleArtifacts({
+      sourceSrt: source.content,
+      enSrt,
+      zhSrt,
+      bilingualSrt,
+      manifest: cached,
       measurements,
     });
+    const quality = semanticDeliveryQuality(audit, bilingualMode);
     const resolvedFonts = measurements[0]?.resolvedFonts ?? cached.resolvedFonts;
     const refreshed = {
       ...cached,
@@ -797,8 +901,12 @@ const runArticleBilingualPipeline = async (
         `${JSON.stringify(refreshed, null, 2)}\n`,
       );
     }
+    await atomicWrite(
+      path.join(articleVideoDir, "full.bilingual.audit.json"),
+      `${JSON.stringify(audit, null, 2)}\n`,
+    );
     if (!quality.readyForBurn) {
-      throw new Error("semantic bilingual quality gate failed");
+      throw new Error("semantic bilingual quality gate blocked delivery");
     }
     if (bilingualMode === "burned" || bilingualMode === "all") {
       const names = await readdir(path.join(opts.videoDir, "video")).catch(() => [] as string[]);
@@ -831,6 +939,15 @@ const runArticleBilingualPipeline = async (
     };
   }
 
+  const wordTimings = opts.enableForcedAlignment === true
+    ? await computeWordTimings({
+        videoDir: opts.videoDir,
+        sourceSrt: source.content,
+        runner: opts.runner,
+        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      })
+    : undefined;
+
   let projection: SemanticBilingualProjection;
   try {
     projection = await projectSemanticBilingualSubtitles({
@@ -839,6 +956,7 @@ const runArticleBilingualPipeline = async (
       model: opts.llmModel,
       measureLayout,
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      ...(wordTimings !== undefined ? { wordTimings } : {}),
     });
   } catch (error: unknown) {
     if (!(error instanceof SemanticProjectionError)) throw error;
@@ -872,24 +990,40 @@ const runArticleBilingualPipeline = async (
   }
 
   const measurements = await measureLayout(projection.bilingualSrt);
-  projection = {
-    ...projection,
-    quality: evaluateSemanticBilingualDelivery({ groups: projection.groups, measurements }),
-  };
   const resolvedFonts = measurements[0]?.resolvedFonts ?? { zh: "unknown", en: "unknown" };
+  await Promise.all([
+    atomicWrite(path.join(articleVideoDir, "full.en.srt"), projection.enSrt),
+    atomicWrite(path.join(articleVideoDir, "full.zh.srt"), projection.zhSrt),
+    atomicWrite(path.join(articleVideoDir, "full.bilingual.srt"), projection.bilingualSrt),
+  ]);
+  const [enSrt, zhSrt, bilingualSrt] = await Promise.all([
+    readFile(path.join(articleVideoDir, "full.en.srt"), "utf8"),
+    readFile(path.join(articleVideoDir, "full.zh.srt"), "utf8"),
+    readFile(path.join(articleVideoDir, "full.bilingual.srt"), "utf8"),
+  ]);
+  const audit = auditSubtitleArtifacts({
+    sourceSrt: source.content,
+    enSrt,
+    zhSrt,
+    bilingualSrt,
+    manifest: { sourceSha256 },
+    measurements,
+  });
+  projection = { ...projection, enSrt, zhSrt, bilingualSrt };
+  const quality = semanticDeliveryQuality(audit, bilingualMode);
   const files = {
-    en: { sha256: contentSha256(projection.enSrt) },
-    zh: { sha256: contentSha256(projection.zhSrt) },
-    bilingual: { sha256: contentSha256(projection.bilingualSrt) },
+    en: { sha256: contentSha256(enSrt) },
+    zh: { sha256: contentSha256(zhSrt) },
+    bilingual: { sha256: contentSha256(bilingualSrt) },
   };
   const articleManifest: ArticleBilingualManifest = {
     kind: "semantic-bilingual",
-    status: projection.quality.readyForBurn ? "ready" : "failed",
+    status: quality.readyForBurn ? "ready" : "failed",
     stages: {
       translation: "done",
       alignment: "done",
       segmentation: "done",
-      layout: projection.quality.readyForBurn ? "done" : "failed",
+      layout: quality.readyForBurn ? "done" : "failed",
     },
     version: SEMANTIC_VERSION,
     sourceSha256,
@@ -903,19 +1037,20 @@ const runArticleBilingualPipeline = async (
     videoWidthFraction: 0.8,
     groups: projection.groups,
     files,
-    quality: projection.quality,
+    quality,
   };
   await Promise.all([
-    atomicWrite(path.join(articleVideoDir, "full.en.srt"), projection.enSrt),
-    atomicWrite(path.join(articleVideoDir, "full.zh.srt"), projection.zhSrt),
-    atomicWrite(path.join(articleVideoDir, "full.bilingual.srt"), projection.bilingualSrt),
+    atomicWrite(
+      path.join(articleVideoDir, "full.bilingual.semantic.json"),
+      `${JSON.stringify(articleManifest, null, 2)}\n`,
+    ),
+    atomicWrite(
+      path.join(articleVideoDir, "full.bilingual.audit.json"),
+      `${JSON.stringify(audit, null, 2)}\n`,
+    ),
   ]);
-  await atomicWrite(
-    path.join(articleVideoDir, "full.bilingual.semantic.json"),
-    `${JSON.stringify(articleManifest, null, 2)}\n`,
-  );
-  if (!projection.quality.readyForBurn) {
-    throw new Error("semantic bilingual quality gate failed");
+  if (!quality.readyForBurn) {
+    throw new Error("semantic bilingual quality gate blocked delivery");
   }
   const validatedManifest = await readValidArticleCache({
     articleVideoDir,
@@ -938,7 +1073,7 @@ const runArticleBilingualPipeline = async (
     );
   }
 
-  if ((bilingualMode === "burned" || bilingualMode === "all") && projection.quality.readyForBurn) {
+  if (bilingualMode === "burned" || bilingualMode === "all") {
     const names = await readdir(path.join(opts.videoDir, "video")).catch(() => [] as string[]);
     const mp4 = names.find((name) => /\.mp4$/iu.test(name) && !/burned/iu.test(name));
     if (mp4 === undefined) {

@@ -1,0 +1,311 @@
+import { createHash } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import {
+  auditSubtitleArtifacts,
+  isSubtitleAuditReadyForDelivery,
+  type SubtitleAuditInput,
+} from "./audit-subtitles.js";
+
+const srt = (
+  cues: readonly { start?: string; end?: string; lines: readonly string[] }[],
+): string =>
+  `${cues.map((cue, index) => [
+    index + 1,
+    `${cue.start ?? `00:00:0${index},000`} --> ${cue.end ?? `00:00:0${index + 1},000`}`,
+    ...cue.lines,
+  ].join("\n")).join("\n\n")}\n`;
+
+const sourceSrt = srt([
+  { start: "00:00:00,000", end: "00:00:02,000", lines: ["Hello world."] },
+  { start: "00:00:02,000", end: "00:00:04,000", lines: ["Ship Codex safely."] },
+]);
+const enSrt = sourceSrt;
+const zhSrt = srt([
+  { start: "00:00:00,000", end: "00:00:02,000", lines: ["你好，世界。"] },
+  { start: "00:00:02,000", end: "00:00:04,000", lines: ["安全交付 Codex。"] },
+]);
+const bilingualSrt = srt([
+  {
+    start: "00:00:00,000",
+    end: "00:00:02,000",
+    lines: ["你好，世界。", "Hello world."],
+  },
+  {
+    start: "00:00:02,000",
+    end: "00:00:04,000",
+    lines: ["安全交付 Codex。", "Ship Codex safely."],
+  },
+]);
+const sourceSha256 = createHash("sha256").update(sourceSrt).digest("hex");
+
+const validInput = (overrides: Partial<SubtitleAuditInput> = {}): SubtitleAuditInput => ({
+  sourceSrt,
+  enSrt,
+  zhSrt,
+  bilingualSrt,
+  manifest: { sourceSha256 },
+  ...overrides,
+});
+
+describe("auditSubtitleArtifacts", () => {
+  it("passes artifacts that satisfy every available invariant", () => {
+    expect(auditSubtitleArtifacts(validInput())).toEqual({
+      verdict: "pass",
+      issues: [],
+    });
+  });
+
+  it("reports source-sha when the manifest does not match the source artifact", () => {
+    const result = auditSubtitleArtifacts(validInput({
+      manifest: { sourceSha256: "stale" },
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "source-sha",
+      severity: "content",
+    }));
+    expect(result.verdict).toBe("fail");
+  });
+
+  it("reports coverage-loss when article English drops a source word", () => {
+    const result = auditSubtitleArtifacts(validInput({
+      enSrt: srt([
+        { lines: ["Hello."] },
+        { lines: ["Ship Codex safely."] },
+      ]),
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "coverage-loss",
+      severity: "content",
+    }));
+  });
+
+  it("reports empty-text when an aligned Chinese cue is blank", () => {
+    const result = auditSubtitleArtifacts(validInput({
+      zhSrt: srt([
+        { lines: ["你好，世界。"] },
+        { lines: [" "] },
+      ]),
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "empty-text",
+      severity: "content",
+      cueIndex: 2,
+    }));
+  });
+
+  it("reports empty-text when an aligned subtitle artifact contains no cues", () => {
+    const result = auditSubtitleArtifacts(validInput({ zhSrt: "" }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "empty-text",
+      severity: "content",
+    }));
+  });
+
+  it("reports timing-invalid when a cue has a non-positive duration", () => {
+    const result = auditSubtitleArtifacts(validInput({
+      enSrt: srt([
+        { start: "00:00:01,000", end: "00:00:01,000", lines: ["Hello world."] },
+        { lines: ["Ship Codex safely."] },
+      ]),
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "timing-invalid",
+      severity: "content",
+      cueIndex: 1,
+    }));
+  });
+
+  it("reports timing-overlap when adjacent cues overlap in one artifact", () => {
+    const result = auditSubtitleArtifacts(validInput({
+      zhSrt: srt([
+        { end: "00:00:01,500", lines: ["你好，世界。"] },
+        { start: "00:00:01,000", end: "00:00:02,000", lines: ["安全交付 Codex。"] },
+      ]),
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "timing-overlap",
+      severity: "content",
+      cueIndex: 2,
+    }));
+  });
+
+  it("reports bilingual-timing when aligned artifacts use different windows", () => {
+    const result = auditSubtitleArtifacts(validInput({
+      bilingualSrt: srt([
+        { end: "00:00:00,900", lines: ["你好，世界。", "Hello world."] },
+        { lines: ["安全交付 Codex。", "Ship Codex safely."] },
+      ]),
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "bilingual-timing",
+      severity: "content",
+      cueIndex: 1,
+    }));
+  });
+
+  it("reports adjacent-duplicate when identical Chinese maps to different English", () => {
+    const result = auditSubtitleArtifacts(validInput({
+      zhSrt: srt([
+        { lines: ["重复译文。"] },
+        { lines: ["重复译文。"] },
+      ]),
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "adjacent-duplicate",
+      severity: "content",
+      cueIndex: 2,
+    }));
+  });
+
+  it("reports glossary-violation when a protected English term is translated away", () => {
+    const result = auditSubtitleArtifacts(validInput({
+      zhSrt: srt([
+        { lines: ["你好，世界。"] },
+        { lines: ["安全交付代码助手。"] },
+      ]),
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "glossary-violation",
+      severity: "content",
+      cueIndex: 2,
+    }));
+  });
+
+  it("reports hard-layout when a measured cue exceeds the hard threshold", () => {
+    const result = auditSubtitleArtifacts(validInput({
+      measurements: [{ cueIndex: 1, severity: "hard", lineCount: 2 }],
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "hard-layout",
+      severity: "presentation",
+      cueIndex: 1,
+    }));
+    expect(result.verdict).toBe("warn");
+  });
+
+  it("reports line-count when rendering needs more than two lines", () => {
+    const result = auditSubtitleArtifacts(validInput({
+      measurements: [{ cueIndex: 2, severity: "aim", lineCount: 3 }],
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "line-count",
+      severity: "presentation",
+      cueIndex: 2,
+    }));
+  });
+
+  it("reports cps when Chinese reading speed exceeds nine characters per second", () => {
+    const fastZh = srt([
+      { lines: ["一二三四五六七八九十"] },
+      { lines: ["安全交付 Codex。"] },
+    ]);
+    const result = auditSubtitleArtifacts(validInput({
+      zhSrt: fastZh,
+      bilingualSrt: srt([
+        { lines: ["一二三四五六七八九十", "Hello world."] },
+        { lines: ["安全交付 Codex。", "Ship Codex safely."] },
+      ]),
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "cps",
+      severity: "presentation",
+      cueIndex: 1,
+    }));
+  });
+
+  it("reports flash when a delivered cue is shorter than one second", () => {
+    const shortEn = srt([
+      { end: "00:00:00,800", lines: ["Hello world."] },
+      { start: "00:00:00,800", end: "00:00:02,000", lines: ["Ship Codex safely."] },
+    ]);
+    const shortZh = srt([
+      { end: "00:00:00,800", lines: ["你好。"] },
+      { start: "00:00:00,800", end: "00:00:02,000", lines: ["交付 Codex。"] },
+    ]);
+    const result = auditSubtitleArtifacts(validInput({
+      enSrt: shortEn,
+      zhSrt: shortZh,
+      bilingualSrt: srt([
+        { end: "00:00:00,800", lines: ["你好。", "Hello world."] },
+        {
+          start: "00:00:00,800",
+          end: "00:00:02,000",
+          lines: ["交付 Codex。", "Ship Codex safely."],
+        },
+      ]),
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "flash",
+      severity: "presentation",
+      cueIndex: 1,
+    }));
+  });
+
+  it("reports unsafe-layout when a hard cue has no safe source cue boundary", () => {
+    const oneSource = srt([
+      {
+        start: "00:00:00,000",
+        end: "00:00:03,000",
+        lines: ["Hello world. Ship Codex safely."],
+      },
+    ]);
+    const result = auditSubtitleArtifacts({
+      sourceSrt: oneSource,
+      enSrt: oneSource,
+      zhSrt: srt([{
+        start: "00:00:00,000",
+        end: "00:00:03,000",
+        lines: ["你好，安全交付 Codex。"],
+      }]),
+      bilingualSrt: srt([{
+        start: "00:00:00,000",
+        end: "00:00:03,000",
+        lines: ["你好，安全交付 Codex。", "Hello world. Ship Codex safely."],
+      }]),
+      manifest: {
+        sourceSha256: createHash("sha256").update(oneSource).digest("hex"),
+      },
+      measurements: [{ cueIndex: 1, severity: "hard", lineCount: 2 }],
+    });
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "unsafe-layout",
+      severity: "presentation",
+      cueIndex: 1,
+    }));
+  });
+});
+
+describe("isSubtitleAuditReadyForDelivery", () => {
+  it("blocks content in every mode and presentation only for burned delivery", () => {
+    const contentReport = {
+      verdict: "fail" as const,
+      issues: [{ code: "empty-text" as const, severity: "content" as const, message: "empty" }],
+    };
+    const presentationReport = {
+      verdict: "warn" as const,
+      issues: [{ code: "flash" as const, severity: "presentation" as const, message: "fast" }],
+    };
+
+    for (const mode of ["srt", "ass", "burned", "all"] as const) {
+      expect(isSubtitleAuditReadyForDelivery(contentReport, mode)).toBe(false);
+    }
+    expect(isSubtitleAuditReadyForDelivery(presentationReport, "srt")).toBe(true);
+    expect(isSubtitleAuditReadyForDelivery(presentationReport, "ass")).toBe(true);
+    expect(isSubtitleAuditReadyForDelivery(presentationReport, "burned")).toBe(false);
+    expect(isSubtitleAuditReadyForDelivery(presentationReport, "all")).toBe(false);
+  });
+});

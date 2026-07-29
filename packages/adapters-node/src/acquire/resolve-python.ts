@@ -86,3 +86,52 @@ export const resetResolvedPythonCache = (): void => {
   cachedPython = undefined;
   resolvePromise = undefined;
 };
+
+/**
+ * torchaudio (needed for forced-alignment word timing) is a heavy, optional
+ * dependency — unlike Pillow, its absence must degrade gracefully rather
+ * than fail the whole pipeline. Returns `undefined` instead of throwing.
+ */
+export const hasTorchaudio = async (bin: string): Promise<boolean> => {
+  try {
+    const { stdout } = await execFileAsync(
+      bin,
+      ["-c", "import torchaudio; print('ok')"],
+      { timeout: 10_000, env: process.env },
+    );
+    return stdout.includes("ok");
+  } catch {
+    return false;
+  }
+};
+
+let cachedTorchaudioPython: string | undefined;
+let resolveTorchaudioPromise: Promise<string | undefined> | undefined;
+
+export const resolvePythonWithTorchaudio = async (): Promise<string | undefined> => {
+  if (cachedTorchaudioPython !== undefined) return cachedTorchaudioPython;
+  if (resolveTorchaudioPromise !== undefined) return resolveTorchaudioPromise;
+
+  resolveTorchaudioPromise = (async () => {
+    for (const bin of CANDIDATES) {
+      if (!(await isExecutable(bin))) continue;
+      if (await hasTorchaudio(bin)) {
+        cachedTorchaudioPython = bin;
+        return bin;
+      }
+    }
+    return undefined;
+  })();
+
+  try {
+    return await resolveTorchaudioPromise;
+  } finally {
+    resolveTorchaudioPromise = undefined;
+  }
+};
+
+/** Test helper: clear the cache between cases. */
+export const resetResolvedTorchaudioPythonCache = (): void => {
+  cachedTorchaudioPython = undefined;
+  resolveTorchaudioPromise = undefined;
+};

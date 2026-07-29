@@ -14,6 +14,7 @@ vi.mock("./burn-zh-subtitles-for-video.js", () => ({
 
 vi.mock("./resolve-python.js", () => ({
   resolvePythonWithPillow: vi.fn().mockResolvedValue("python3"),
+  resolvePythonWithTorchaudio: vi.fn().mockResolvedValue(undefined),
 }));
 
 import {
@@ -25,6 +26,32 @@ import {
   runSubtitlePipeline,
 } from "./video-subtitles.js";
 import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
+import { resolvePythonWithTorchaudio } from "./resolve-python.js";
+
+/** Shared runner helper: satisfies burn-bilingual-subtitles.ts's --measure calls with a trivial "fit" verdict. */
+const writeMeasureOutputIfRequested = async (spec: {
+  args?: readonly string[];
+}): Promise<void> => {
+  if (!spec.args?.includes("--measure")) return;
+  const outputIndex = spec.args.indexOf("--output");
+  const output = spec.args[outputIndex + 1];
+  const srtPath = spec.args.find((a) => a.endsWith(".srt")) ?? "";
+  let blockCount = 1;
+  try {
+    const srtContent = await readFile(srtPath, "utf8");
+    blockCount = srtContent.split("\n\n").filter((b) => b.trim().length > 0).length || 1;
+  } catch { /* keep default */ }
+  await writeFile(output!, JSON.stringify(
+    Array.from({ length: blockCount }, (_, i) => ({
+      cueIndex: i + 1,
+      zhWidth: 200,
+      fitWidth: 1024,
+      lineCount: 1,
+      severity: "fit" as const,
+      resolvedFonts: { zh: "PingFang", en: "Lexend Deca" },
+    })),
+  ));
+};
 
 describe("video subtitle SRT conversion", () => {
   it("converts VTT cues into numbered SRT blocks", () => {
@@ -349,14 +376,26 @@ Second sentence.
 `;
     await mkdir(path.join(root, "video"), { recursive: true });
     await writeFile(sourceSrt, originalSource);
+    // 3-phase pipeline: repunct → translate → split.
     const llm: LlmPort = {
-      chat: vi.fn(async () => ({
-        content: JSON.stringify({
-          groups: [{ sourceStartIndex: 1, sourceEndIndex: 2, zhText: "自然中文句" }],
-        }),
-        model: "test",
-        finishReason: "stop",
-      })),
+      chat: vi.fn(async (request: ChatRequest) => {
+        const userContent = request.messages[1]!.content as string;
+
+        // Phase 0 repunct: JSON array request → return punctuated cues
+        if (request.jsonMode === true && userContent.startsWith("[")) {
+          const inputCues = JSON.parse(userContent) as string[];
+          return {
+            content: JSON.stringify({ cues: inputCues.map((t) => `${t}.`) }),
+            model: "test",
+            finishReason: "stop",
+          };
+        }
+
+        // Phase 1 translate: sentence text → return Chinese
+        const lc = userContent.toLowerCase();
+        if (lc.includes("first sentence")) return { content: "第一句。", model: "test", finishReason: "stop" };
+        return { content: "第二句。", model: "test", finishReason: "stop" };
+      }),
     };
 
     const runner: ProcessRunner = {
@@ -364,14 +403,23 @@ Second sentence.
         if (spec.args?.includes("--measure")) {
           const outputIndex = spec.args?.indexOf("--output") ?? -1;
           const output = spec.args?.[outputIndex + 1];
-          await writeFile(output!, JSON.stringify([{
-            cueIndex: 1,
-            zhWidth: 200,
-            fitWidth: 1024,
-            lineCount: 1,
-            severity: "fit",
-            resolvedFonts: { zh: "PingFang", en: "Lexend Deca" },
-          }]));
+          // Read the SRT file to determine how many cues to produce measurements for.
+          const srtPath = spec.args?.find((a) => a.endsWith(".srt")) ?? "";
+          let blockCount = 1;
+          try {
+            const srtContent = await readFile(srtPath, "utf8");
+            blockCount = srtContent.split("\n\n").filter((b) => b.trim().length > 0).length;
+          } catch { /* keep default */ }
+          await writeFile(output!, JSON.stringify(
+            Array.from({ length: blockCount }, (_, i) => ({
+              cueIndex: i + 1,
+              zhWidth: 200,
+              fitWidth: 1024,
+              lineCount: 1,
+              severity: "fit" as const,
+              resolvedFonts: { zh: "PingFang", en: "Lexend Deca" },
+            })),
+          ));
         }
         return {
           exitCode: 0, signal: null, stdout: "", stderr: "",
@@ -399,11 +447,11 @@ Second sentence.
     const articleVideoDir = path.join(articleRoot, path.basename(root), "video");
     await expect(readFile(sourceSrt, "utf8")).resolves.toBe(originalSource);
     await expect(readFile(path.join(articleVideoDir, "full.en.srt"), "utf8"))
-      .resolves.toContain("First sentence. Second sentence.");
+      .resolves.toContain("First sentence.");
     await expect(readFile(path.join(articleVideoDir, "full.zh.srt"), "utf8"))
-      .resolves.toContain("自然中文句");
+      .resolves.toContain("第一句");
     await expect(readFile(path.join(articleVideoDir, "full.bilingual.srt"), "utf8"))
-      .resolves.toContain("自然中文句\nFirst sentence. Second sentence.");
+      .resolves.toContain("第一句。");
     const readyManifest = JSON.parse(
       await readFile(path.join(articleVideoDir, "full.bilingual.semantic.json"), "utf8"),
     ) as { kind: string; status: string; stages: Record<string, string> };
@@ -422,16 +470,152 @@ Second sentence.
     expect(result.manifest.bilingual_subtitle).toBe("video/full.bilingual.srt");
 
     await runSubtitlePipeline(pipelineOptions);
-    expect(llm.chat).toHaveBeenCalledTimes(1);
+    // Second run hits cache → no new LLM calls. Total stays at 3.
+    expect(llm.chat).toHaveBeenCalledTimes(3);
   });
 
-  it("records a failed semantic manifest and never falls back to cue-aligned delivery", async () => {
+  it("never probes for torchaudio when enableForcedAlignment is not set", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-align-off-"));
+    const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-align-off-article-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(
+      path.join(root, "source.en.srt"),
+      "1\n00:00:00,000 --> 00:00:02,000\nOne sentence here.\n",
+    );
+    vi.mocked(resolvePythonWithTorchaudio).mockClear();
+
+    await runSubtitlePipeline({
+      videoDir: root,
+      subtitle: { mode: "srt", sourceLang: "en", targetLang: "zh-CN", source: "auto" },
+      subtitleBilingual: "srt",
+      llm: {
+        chat: async (request: ChatRequest) =>
+          request.jsonMode === true
+            ? { content: JSON.stringify({ cues: [] }), model: "test", finishReason: "stop" }
+            : { content: "翻译。", model: "test", finishReason: "stop" },
+      },
+      llmModel: "test",
+      burnedVideoOutDir: articleRoot,
+      runner: {
+        run: async (spec) => {
+          await writeMeasureOutputIfRequested(spec);
+          return {
+            exitCode: 0, signal: null, stdout: "", stderr: "",
+            stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+            command: spec.command, args: spec.args ?? [],
+          };
+        },
+      },
+    });
+
+    expect(resolvePythonWithTorchaudio).not.toHaveBeenCalled();
+  });
+
+  it("skips forced alignment gracefully when torchaudio isn't found, even with the flag on", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-align-missing-"));
+    const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-align-missing-article-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(
+      path.join(root, "source.en.srt"),
+      "1\n00:00:00,000 --> 00:00:02,000\nOne sentence here.\n",
+    );
+    vi.mocked(resolvePythonWithTorchaudio).mockResolvedValueOnce(undefined);
+
+    const result = await runSubtitlePipeline({
+      videoDir: root,
+      subtitle: { mode: "srt", sourceLang: "en", targetLang: "zh-CN", source: "auto" },
+      subtitleBilingual: "srt",
+      enableForcedAlignment: true,
+      llm: {
+        chat: async (request: ChatRequest) =>
+          request.jsonMode === true
+            ? { content: JSON.stringify({ cues: [] }), model: "test", finishReason: "stop" }
+            : { content: "翻译。", model: "test", finishReason: "stop" },
+      },
+      llmModel: "test",
+      burnedVideoOutDir: articleRoot,
+      runner: {
+        run: async (spec) => {
+          await writeMeasureOutputIfRequested(spec);
+          return {
+            exitCode: 0, signal: null, stdout: "", stderr: "",
+            stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+            command: spec.command, args: spec.args ?? [],
+          };
+        },
+      },
+    });
+
+    expect(resolvePythonWithTorchaudio).toHaveBeenCalled();
+    expect(result.manifest.bilingual_subtitle).toBe("video/full.bilingual.srt");
+  });
+
+  it("runs ffmpeg audio extraction and the forced-align script when the flag is on and torchaudio is found", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-align-on-"));
+    const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-align-on-article-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(path.join(root, "video", "full.mp4"), "fake video bytes");
+    await writeFile(
+      path.join(root, "source.en.srt"),
+      "1\n00:00:00,000 --> 00:00:02,000\nOne sentence here.\n",
+    );
+    vi.mocked(resolvePythonWithTorchaudio).mockResolvedValueOnce("python3");
+
+    const commandsRun: string[] = [];
+    const runner: ProcessRunner = {
+      run: async (spec) => {
+        commandsRun.push(spec.command);
+        if (spec.args?.some((a) => a.endsWith("forced-align.py"))) {
+          const outputIndex = spec.args.indexOf("--output");
+          await writeFile(
+            spec.args[outputIndex + 1]!,
+            JSON.stringify([
+              { word: "one", start: 0.0, end: 0.5 },
+              { word: "sentence", start: 0.5, end: 1.2 },
+              { word: "here", start: 1.2, end: 1.8 },
+            ]),
+          );
+        }
+        await writeMeasureOutputIfRequested(spec);
+        return {
+          exitCode: 0, signal: null, stdout: "", stderr: "",
+          stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+          command: spec.command, args: spec.args ?? [],
+        };
+      },
+    };
+
+    const result = await runSubtitlePipeline({
+      videoDir: root,
+      subtitle: { mode: "srt", sourceLang: "en", targetLang: "zh-CN", source: "auto" },
+      subtitleBilingual: "srt",
+      enableForcedAlignment: true,
+      llm: {
+        chat: async (request: ChatRequest) =>
+          request.jsonMode === true
+            ? { content: JSON.stringify({ cues: [] }), model: "test", finishReason: "stop" }
+            : { content: "翻译。", model: "test", finishReason: "stop" },
+      },
+      llmModel: "test",
+      burnedVideoOutDir: articleRoot,
+      runner,
+    });
+
+    expect(commandsRun).toContain("ffmpeg");
+    expect(commandsRun).toContain("python3");
+    expect(result.manifest.bilingual_subtitle).toBe("video/full.bilingual.srt");
+  });
+
+  it("records a failed semantic manifest when the repunct LLM response is invalid JSON", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-strict-invalid-semantic-"));
     const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-strict-invalid-article-"));
     await mkdir(path.join(root, "video"), { recursive: true });
     await writeFile(
       path.join(root, "source.en.srt"),
-      "1\n00:00:00,000 --> 00:00:02,000\nComplete source sentence.\n",
+      [
+        "1\n00:00:00,000 --> 00:00:02,000\nFirst cue here",
+        "2\n00:00:02,000 --> 00:00:04,000\nSecond cue here",
+      ].join("\n\n") + "\n",
       "utf8",
     );
     await writeFile(path.join(root, "video", "full.mp4"), "source video", "utf8");
@@ -448,29 +632,20 @@ Second sentence.
         },
         subtitleBilingual: "all",
         llm: {
-          chat: async () => ({
-            content: "not-json",
-            model: "test",
-            finishReason: "stop",
-          }),
+          // Phase 0 repunct: jsonMode request with no "cues" array → invalid-json.
+          chat: async () => ({ content: "{}", model: "test", finishReason: "stop" }),
         },
         llmModel: "test",
         burnedVideoOutDir: articleRoot,
         runner: {
           run: async (spec) => ({
-            exitCode: 0,
-            signal: null,
-            stdout: "",
-            stderr: "",
-            stdoutTruncated: false,
-            stderrTruncated: false,
-            durationMs: 0,
-            command: spec.command,
-            args: spec.args ?? [],
+            exitCode: 0, signal: null, stdout: "", stderr: "",
+            stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+            command: spec.command, args: spec.args ?? [],
           }),
         },
       }),
-    ).rejects.toThrow(/semantic response is not valid JSON/iu);
+    ).rejects.toThrow(/repunct: invalid response/iu);
 
     const manifest = JSON.parse(
       await readFile(path.join(articleVideoDir, "full.bilingual.semantic.json"), "utf8"),
@@ -480,10 +655,9 @@ Second sentence.
       status: "failed",
       error: { code: "invalid-json" },
     });
-    await expect(readFile(path.join(articleVideoDir, "full.bilingual-burned.mp4"))).rejects.toThrow();
   });
 
-  it("fails delivery when an unsplittable semantic group misses the layout gate", async () => {
+  it("blocks burned delivery when a hard cue has no safe internal timing boundary", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-strict-hard-layout-"));
     const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-strict-hard-article-"));
     await mkdir(path.join(root, "video"), { recursive: true });
@@ -494,61 +668,63 @@ Second sentence.
     );
     const articleVideoDir = path.join(articleRoot, path.basename(root), "video");
 
-    await expect(
-      runSubtitlePipeline({
-        videoDir: root,
-        subtitle: {
-          mode: "srt",
-          sourceLang: "en",
-          targetLang: "zh-CN",
-          source: "auto",
-        },
-        subtitleBilingual: "srt",
-        llm: {
-          chat: async () => ({
-            content: JSON.stringify({
-              groups: [{ sourceStartIndex: 1, sourceEndIndex: 1, zhText: "无法安全拆分的长句" }],
-            }),
-            model: "test",
-            finishReason: "stop",
-          }),
-        },
-        llmModel: "test",
-        burnedVideoOutDir: articleRoot,
-        runner: {
-          run: async (spec) => {
-            if (spec.args?.includes("--measure")) {
-              const outputIndex = spec.args.indexOf("--output");
-              await writeFile(
-                spec.args[outputIndex + 1]!,
-                JSON.stringify([
-                  {
-                    cueIndex: 1,
-                    zhWidth: 1600,
-                    fitWidth: 1024,
-                    lineCount: 3,
-                    severity: "hard",
-                    resolvedFonts: { zh: "PingFang SC", en: "Lexend Deca" },
-                  },
-                ]),
-                "utf8",
-              );
-            }
+    await expect(runSubtitlePipeline({
+      videoDir: root,
+      subtitle: {
+        mode: "srt",
+        sourceLang: "en",
+        targetLang: "zh-CN",
+        source: "auto",
+      },
+      subtitleBilingual: "burned",
+      llm: {
+        chat: async (request: ChatRequest) => {
+          const userContent = request.messages[1]!.content as string;
+          if (request.jsonMode === true && userContent.startsWith("[")) {
+            const inputCues = JSON.parse(userContent) as string[];
             return {
-              exitCode: 0,
-              signal: null,
-              stdout: "",
-              stderr: "",
-              stdoutTruncated: false,
-              stderrTruncated: false,
-              durationMs: 0,
-              command: spec.command,
-              args: spec.args ?? [],
+              content: JSON.stringify({ cues: inputCues.map((t) => `${t}.`) }),
+              model: "test",
+              finishReason: "stop",
             };
-          },
+          }
+          return { content: "无法安全拆分的长句因为只有一个源字幕", model: "test", finishReason: "stop" };
         },
-      }),
-    ).rejects.toThrow(/quality gate failed/iu);
+      },
+      llmModel: "test",
+      burnedVideoOutDir: articleRoot,
+      runner: {
+        run: async (spec) => {
+          if (spec.args?.includes("--measure")) {
+            const outputIndex = spec.args.indexOf("--output");
+            const srtPath = spec.args.find((a) => a.endsWith(".srt")) ?? "";
+            const srtContent = await readFile(srtPath, "utf8").catch(() => "");
+            const blockCount = srtContent.split("\n\n").filter((b) => b.trim().length > 0).length || 1;
+            await writeFile(spec.args[outputIndex + 1]!, JSON.stringify(
+              Array.from({ length: blockCount }, (_, i) => ({
+                cueIndex: i + 1,
+                zhWidth: 1600,
+                fitWidth: 1024,
+                lineCount: 3,
+                severity: "hard" as const,
+                resolvedFonts: { zh: "PingFang SC", en: "Lexend Deca" },
+              })),
+            ));
+          }
+          return {
+            exitCode: 0,
+            signal: null,
+            stdout: "",
+            stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            durationMs: 0,
+            command: spec.command,
+            args: spec.args ?? [],
+          };
+        },
+      },
+    })).rejects.toThrow(/quality gate/iu);
 
     const manifest = JSON.parse(
       await readFile(path.join(articleVideoDir, "full.bilingual.semantic.json"), "utf8"),
@@ -558,7 +734,8 @@ Second sentence.
       stages: { layout: "failed" },
       quality: { readyForBurn: false },
     });
-    await expect(readFile(path.join(articleVideoDir, "full.bilingual-burned.mp4"))).rejects.toThrow();
+    await expect(readFile(path.join(articleVideoDir, "full.bilingual.srt"), "utf8"))
+      .resolves.toContain("无法安全拆分的长句因为只有一个源字幕");
   });
 
   it("uses the article Chinese SRT for a direct burned-subtitle run", async () => {

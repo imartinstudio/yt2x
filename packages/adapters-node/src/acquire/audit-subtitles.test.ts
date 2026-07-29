@@ -150,19 +150,29 @@ describe("auditSubtitleArtifacts", () => {
     }));
   });
 
-  it("reports adjacent-duplicate when identical Chinese maps to different English", () => {
+  it("does not flag identical Chinese repeated across cues with different English", () => {
+    // A Chinese caption legitimately spans several shorter English sub-cues
+    // (Chinese is more compact than English) — this must never be treated
+    // as a content bug. See semantic-bilingual-subtitles.ts's long-sentence
+    // split, which produces exactly this shape by design.
     const result = auditSubtitleArtifacts(validInput({
+      enSrt: srt([
+        { lines: ["However,"] },
+        { lines: ["I sometimes hear from people."] },
+      ]),
       zhSrt: srt([
-        { lines: ["重复译文。"] },
-        { lines: ["重复译文。"] },
+        { lines: ["不过，我有时听别人说，"] },
+        { lines: ["不过，我有时听别人说，"] },
+      ]),
+      bilingualSrt: srt([
+        { lines: ["不过，我有时听别人说，", "However,"] },
+        { lines: ["不过，我有时听别人说，", "I sometimes hear from people."] },
       ]),
     }));
 
-    expect(result.issues).toContainEqual(expect.objectContaining({
-      code: "adjacent-duplicate",
-      severity: "content",
-      cueIndex: 2,
-    }));
+    expect(result.issues).not.toContainEqual(
+      expect.objectContaining({ code: "adjacent-duplicate" }),
+    );
   });
 
   it("reports glossary-violation when a protected English term is translated away", () => {
@@ -252,6 +262,37 @@ describe("auditSubtitleArtifacts", () => {
       severity: "presentation",
       cueIndex: 1,
     }));
+  });
+
+  it("measures cps and flash over the combined duration when identical Chinese repeats across consecutive cues", () => {
+    // Regression: a real run flagged cps/flash on a cue whose text was
+    // identical to its neighbor and only individually looked too fast/short.
+    // 8 Chinese characters shown for 0.4s alone would read at 20 cps and
+    // count as a flash — but the SAME unchanged text is actually on screen
+    // for a combined 2.0s (4 cps, comfortably over 1s), because it repeats
+    // onto the next cue rather than changing.
+    const repeatedZh = srt([
+      { end: "00:00:00,400", lines: ["一二三四五六七八"] },
+      { start: "00:00:00,400", end: "00:00:02,000", lines: ["一二三四五六七八"] },
+    ]);
+    const result = auditSubtitleArtifacts(validInput({
+      zhSrt: repeatedZh,
+      enSrt: srt([
+        { end: "00:00:00,400", lines: ["However,"] },
+        { start: "00:00:00,400", end: "00:00:02,000", lines: ["I sometimes hear from people."] },
+      ]),
+      bilingualSrt: srt([
+        { end: "00:00:00,400", lines: ["一二三四五六七八", "However,"] },
+        {
+          start: "00:00:00,400",
+          end: "00:00:02,000",
+          lines: ["一二三四五六七八", "I sometimes hear from people."],
+        },
+      ]),
+    }));
+
+    expect(result.issues).not.toContainEqual(expect.objectContaining({ code: "cps" }));
+    expect(result.issues).not.toContainEqual(expect.objectContaining({ code: "flash" }));
   });
 
   it("reports unsafe-layout when a hard cue has no safe source cue boundary", () => {

@@ -18,7 +18,6 @@ export type SubtitleAuditIssueCode =
   | "timing-invalid"
   | "timing-overlap"
   | "bilingual-timing"
-  | "adjacent-duplicate"
   | "glossary-violation"
   | "hard-layout"
   | "line-count"
@@ -107,8 +106,33 @@ const words = (srt: string): string[] =>
     .toLocaleLowerCase("en")
     .match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu) ?? [];
 
-const normalizedCueText = (cue: ParsedCue): string =>
-  cue.lines.join(" ").normalize("NFKC").replace(/\s+/gu, " ").trim().toLocaleLowerCase();
+type IdenticalTextSpan = {
+  text: string;
+  firstIndex: number;
+  startRaw: string;
+  startSeconds: number;
+  endSeconds: number;
+};
+
+const groupConsecutiveIdenticalText = (cues: readonly ParsedCue[]): IdenticalTextSpan[] => {
+  const spans: IdenticalTextSpan[] = [];
+  for (const cue of cues) {
+    const text = cue.lines.join(" ").trim();
+    const last = spans[spans.length - 1];
+    if (last !== undefined && last.text === text) {
+      last.endSeconds = cue.endSeconds;
+    } else {
+      spans.push({
+        text,
+        firstIndex: cue.index,
+        startRaw: cue.startRaw,
+        startSeconds: cue.startSeconds,
+        endSeconds: cue.endSeconds,
+      });
+    }
+  }
+  return spans;
+};
 
 const lcsLength = (left: readonly string[], right: readonly string[]): number => {
   let previous = new Array<number>(right.length + 1).fill(0);
@@ -273,22 +297,12 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
   const enCues = aligned[0];
   const zhCues = aligned[1];
   const sourceCues = parseSrt(input.sourceSrt);
-  for (let index = 1; index < Math.min(enCues.length, zhCues.length); index++) {
-    const previousZh = normalizedCueText(zhCues[index - 1]!);
-    const currentZh = normalizedCueText(zhCues[index]!);
-    const previousEn = normalizedCueText(enCues[index - 1]!);
-    const currentEn = normalizedCueText(enCues[index]!);
-    if (currentZh.length > 0 && currentZh === previousZh && currentEn !== previousEn) {
-      issues.push({
-        code: "adjacent-duplicate",
-        severity: "content",
-        cueIndex: zhCues[index]!.index,
-        timestamp: zhCues[index]!.startRaw,
-        text: zhCues[index]!.lines.join(" "),
-        message: `Chinese cue ${zhCues[index]!.index} duplicates the previous cue for different English`,
-      });
-    }
-  }
+  // NOTE: identical Chinese text repeated across consecutive cues with
+  // different English is NOT flagged here. It's the expected shape whenever
+  // one Chinese caption spans several shorter English sub-cues (Chinese is
+  // more compact than English) — see
+  // docs/superpowers/plans/2026-07-29-subtitle-audit-and-self-calibration.md
+  // for the earlier (wrong) version of this rule and why it was removed.
   const protectedTerms = [...PROTECTED_GLOSSARY_TERMS, ...PROTECTED_NAMES];
   for (let index = 0; index < Math.min(enCues.length, zhCues.length); index++) {
     const enText = enCues[index]!.lines.join(" ");
@@ -355,29 +369,37 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
       });
     }
   }
-  for (const cue of zhCues) {
-    const duration = cue.endSeconds - cue.startSeconds;
+  // A run of consecutive cues showing the identical Chinese text is one
+  // continuous reading unit (the expected shape when one translated piece
+  // spans several shorter English sub-cues, or a short sentence repeats
+  // across its whole source span) — measure reading speed and minimum
+  // display time over the WHOLE run's duration, not each cue's own slice.
+  // Scoring the same unchanged text against each individual cue's short
+  // duration manufactures cps/flash findings that don't reflect what a
+  // viewer actually experiences.
+  for (const span of groupConsecutiveIdenticalText(zhCues)) {
+    const duration = span.endSeconds - span.startSeconds;
     if (!Number.isFinite(duration) || duration <= 0) continue;
-    const characterCount = Array.from(cue.lines.join("").replace(/\s/gu, "")).length;
+    const characterCount = Array.from(span.text.replace(/\s/gu, "")).length;
     const cps = characterCount / duration;
     if (cps > SUBTITLE_AUDIT_THRESHOLDS.maxCps) {
       issues.push({
         code: "cps",
         severity: "presentation",
-        cueIndex: cue.index,
-        timestamp: cue.startRaw,
-        text: cue.lines.join(" "),
-        message: `Chinese cue ${cue.index} reads at ${cps.toFixed(2)} characters per second`,
+        cueIndex: span.firstIndex,
+        timestamp: span.startRaw,
+        text: span.text,
+        message: `Chinese cue ${span.firstIndex} reads at ${cps.toFixed(2)} characters per second`,
       });
     }
     if (duration < SUBTITLE_AUDIT_THRESHOLDS.minCueDurationSeconds) {
       issues.push({
         code: "flash",
         severity: "presentation",
-        cueIndex: cue.index,
-        timestamp: cue.startRaw,
-        text: cue.lines.join(" "),
-        message: `cue ${cue.index} is visible for only ${duration.toFixed(3)} seconds`,
+        cueIndex: span.firstIndex,
+        timestamp: span.startRaw,
+        text: span.text,
+        message: `cue ${span.firstIndex} is visible for only ${duration.toFixed(3)} seconds`,
       });
     }
   }

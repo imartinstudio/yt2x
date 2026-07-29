@@ -5,11 +5,16 @@ import {
   allocateCuesByWeight,
   applySeamCuts,
   buildSeamDisplay,
+  compactDenseBlocks,
   ensureEnoughFineCues,
   enforceHardCeiling,
+  ensureProtectedTermsPreserved,
   findProtectedSpans,
   findWordTimingsForCue,
+  mergeBriefBlocks,
+  mergeShortPieces,
   projectSemanticBilingualSubtitles,
+  repairSubtitleArtifacts,
   requestCompactRewrite,
   requestContentAlignedSplit,
   splitLongZh,
@@ -658,6 +663,88 @@ describe("findProtectedSpans", () => {
   });
 });
 
+describe("ensureProtectedTermsPreserved", () => {
+  it("returns the translation unchanged when no protected term is missing", async () => {
+    const llm: LlmPort = { chat: vi.fn() };
+
+    const result = await ensureProtectedTermsPreserved(
+      "where you have a grill with docs,",
+      "你拿着Grill with Docs一起过一遍，",
+      llm,
+      "test-model",
+    );
+
+    expect(result).toBe("你拿着Grill with Docs一起过一遍，");
+    expect(llm.chat).not.toHaveBeenCalled();
+  });
+
+  it("retries and uses the fix when the LLM restores the missing term", async () => {
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: "你拿着Grill with Docs一起过一遍，",
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await ensureProtectedTermsPreserved(
+      "where you have a grill with docs,",
+      "你拿着文档一起过一遍，",
+      llm,
+      "test-model",
+    );
+
+    expect(result).toBe("你拿着Grill with Docs一起过一遍，");
+    expect(llm.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the original translation when the retry still doesn't include the term", async () => {
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: "你拿着文档一起过一遍，", // still missing "Grill with Docs"
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await ensureProtectedTermsPreserved(
+      "where you have a grill with docs,",
+      "你拿着文档一起过一遍，",
+      llm,
+      "test-model",
+    );
+
+    expect(result).toBe("你拿着文档一起过一遍，");
+  });
+
+  it("keeps the original translation when the retry call itself rejects", async () => {
+    const llm: LlmPort = { chat: vi.fn(async () => { throw new Error("network down"); }) };
+
+    const result = await ensureProtectedTermsPreserved(
+      "where you have a grill with docs,",
+      "你拿着文档一起过一遍，",
+      llm,
+      "test-model",
+    );
+
+    expect(result).toBe("你拿着文档一起过一遍，");
+  });
+
+  it("does not fire for a term that never appears in the English source", async () => {
+    const llm: LlmPort = { chat: vi.fn() };
+
+    const result = await ensureProtectedTermsPreserved(
+      "just a normal sentence.",
+      "普通的一句话。",
+      llm,
+      "test-model",
+    );
+
+    expect(result).toBe("普通的一句话。");
+    expect(llm.chat).not.toHaveBeenCalled();
+  });
+});
+
 describe("requestCompactRewrite", () => {
   const llmReturning = (content: string): LlmPort => ({
     chat: vi.fn(async () => ({ content, model: "test", finishReason: "stop" })),
@@ -703,6 +790,395 @@ describe("requestCompactRewrite", () => {
     const llm: LlmPort = { chat: vi.fn(async () => { throw new Error("network down"); }) };
     const result = await requestCompactRewrite("source text", "原来的长翻译", 2, 20, llm, "test-model");
     expect(result).toBeNull();
+  });
+});
+
+describe("repairSubtitleArtifacts", () => {
+  const srt = (cues: readonly { start: string; end: string; text: string }[]): string =>
+    `${cues.map((c, i) => `${i + 1}\n${c.start} --> ${c.end}\n${c.text}`).join("\n\n")}\n`;
+
+  it("fixes a missing protected term without touching anything else", async () => {
+    const enSrt = srt([{ start: "00:00:00,000", end: "00:00:02,000", text: "where you have a grill with docs," }]);
+    const zhSrt = srt([{ start: "00:00:00,000", end: "00:00:02,000", text: "你拿着文档一起过一遍，" }]);
+    const bilingualSrt = srt([
+      { start: "00:00:00,000", end: "00:00:02,000", text: "你拿着文档一起过一遍，\nwhere you have a grill with docs," },
+    ]);
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: "你拿着Grill with Docs一起过一遍，",
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await repairSubtitleArtifacts({ enSrt, zhSrt, bilingualSrt, llm, model: "test-model" });
+
+    expect(result.changed).toBe(true);
+    expect(parseSubtitleBlocks(result.zhSrt)[0]!.text).toEqual(["你拿着Grill with Docs一起过一遍，"]);
+    expect(parseSubtitleBlocks(result.bilingualSrt)[0]!.text).toEqual([
+      "你拿着Grill with Docs一起过一遍，",
+      "where you have a grill with docs,",
+    ]);
+  });
+
+  it("compacts a cue that reads too fast", async () => {
+    const dense = "一二三四五六七八九十一二三四五六七八九十"; // 20 chars / 2s = 10 cps
+    const compact = "一二三四五六七八九十";
+    const enSrt = srt([{ start: "00:00:00,000", end: "00:00:02,000", text: "a dense sentence" }]);
+    const zhSrt = srt([{ start: "00:00:00,000", end: "00:00:02,000", text: dense }]);
+    const bilingualSrt = srt([{ start: "00:00:00,000", end: "00:00:02,000", text: `${dense}\na dense sentence` }]);
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({ text: compact }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await repairSubtitleArtifacts({ enSrt, zhSrt, bilingualSrt, llm, model: "test-model" });
+
+    expect(result.changed).toBe(true);
+    expect(parseSubtitleBlocks(result.zhSrt)[0]!.text).toEqual([compact]);
+  });
+
+  it("reports unchanged when nothing needed repair", async () => {
+    const enSrt = srt([{ start: "00:00:00,000", end: "00:00:04,000", text: "a normal sentence." }]);
+    const zhSrt = srt([{ start: "00:00:00,000", end: "00:00:04,000", text: "一句普通的话。" }]);
+    const bilingualSrt = srt([
+      { start: "00:00:00,000", end: "00:00:04,000", text: "一句普通的话。\na normal sentence." },
+    ]);
+    const llm: LlmPort = { chat: vi.fn() };
+
+    const result = await repairSubtitleArtifacts({ enSrt, zhSrt, bilingualSrt, llm, model: "test-model" });
+
+    expect(result).toEqual({ enSrt, zhSrt, bilingualSrt, changed: false });
+    expect(llm.chat).not.toHaveBeenCalled();
+  });
+
+  it("applies a term fix to every cue in an identical-text repeat span, not just one", async () => {
+    const enSrt = srt([
+      { start: "00:00:00,000", end: "00:00:01,000", text: "and grill" },
+      { start: "00:00:01,000", end: "00:00:03,000", text: "with docs have been popular," },
+    ]);
+    const zhSrt = srt([
+      { start: "00:00:00,000", end: "00:00:01,000", text: "文档一起过一遍已经流行了，" },
+      { start: "00:00:01,000", end: "00:00:03,000", text: "文档一起过一遍已经流行了，" },
+    ]);
+    const bilingualSrt = srt([
+      { start: "00:00:00,000", end: "00:00:01,000", text: "文档一起过一遍已经流行了，\nand grill" },
+      { start: "00:00:01,000", end: "00:00:03,000", text: "文档一起过一遍已经流行了，\nwith docs have been popular," },
+    ]);
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: "Grill with Docs一起过一遍已经流行了，",
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await repairSubtitleArtifacts({ enSrt, zhSrt, bilingualSrt, llm, model: "test-model" });
+
+    const zhTexts = parseSubtitleBlocks(result.zhSrt).map((c) => c.text.join(""));
+    expect(zhTexts).toEqual([
+      "Grill with Docs一起过一遍已经流行了，",
+      "Grill with Docs一起过一遍已经流行了，",
+    ]);
+  });
+});
+
+describe("compactDenseBlocks", () => {
+  it("compacts a block that reads too fast, using the rewrite when it's shorter", async () => {
+    // 20 chars / 2s = 10 cps > 9.
+    const dense = "一二三四五六七八九十一二三四五六七八九十";
+    const compact = "一二三四五六七八九十";
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:02,000", zhText: dense, enText: "a dense sentence" },
+    ];
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({ text: compact }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await compactDenseBlocks(blocks, llm, "test-model");
+
+    expect(result).toEqual([{ ...blocks[0], zhText: compact }]);
+  });
+
+  it("keeps the original when the rewrite doesn't actually shorten it", async () => {
+    const dense = "一二三四五六七八九十一二三四五六七八九十";
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:02,000", zhText: dense, enText: "a dense sentence" },
+    ];
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({ text: dense }), // no shorter than before
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await compactDenseBlocks(blocks, llm, "test-model");
+
+    expect(result).toEqual(blocks);
+  });
+
+  it("keeps the original when the compact rewrite call fails validation", async () => {
+    const dense = "一二三四五六七八九十一二三四五六七八九十";
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:02,000", zhText: dense, enText: "a dense sentence" },
+    ];
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({ content: JSON.stringify({}), model: "test", finishReason: "stop" })),
+    };
+
+    const result = await compactDenseBlocks(blocks, llm, "test-model");
+
+    expect(result).toEqual(blocks);
+  });
+
+  it("does not touch a block that already reads comfortably", async () => {
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:04,000", zhText: "一二三四", enText: "fine" },
+    ];
+    const llm: LlmPort = { chat: vi.fn() };
+
+    const result = await compactDenseBlocks(blocks, llm, "test-model");
+
+    expect(result).toEqual(blocks);
+    expect(llm.chat).not.toHaveBeenCalled();
+  });
+
+  it("does not touch a repeat run whose combined cps is already fine, even if a single 1s slice alone would look too fast", async () => {
+    const dense = "一二三四五六七八九十一二三四五六七八九十"; // 20 chars over 2s combined = 10 cps... too fast per-slice at 1s
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:01,000", zhText: dense, enText: "part one" },
+      { start: "00:00:01,000", end: "00:00:04,000", zhText: dense, enText: "part two" },
+    ];
+    const llm: LlmPort = { chat: vi.fn() };
+
+    const result = await compactDenseBlocks(blocks, llm, "test-model");
+
+    expect(result).toEqual(blocks);
+    expect(llm.chat).not.toHaveBeenCalled();
+  });
+
+  it("compacts a whole repeat run when the run's own combined cps is too fast, applying the rewrite to every block in it", async () => {
+    // Regression: mergeBriefBlocks got a span-aware fix for the same shape
+    // (a run's true reading time is its combined duration, and a fix must
+    // apply to every block in the run, not one) — compactDenseBlocks had the
+    // identical gap: skipping every block in a run meant a run that's
+    // genuinely too fast even over its full combined duration was never
+    // eligible for compaction at all.
+    const dense = "一二三四五六七八九十一二三四五六七八九十"; // 20 chars
+    const compact = "一二三四五六七八九十";
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:01,000", zhText: dense, enText: "part one" },
+      { start: "00:00:01,000", end: "00:00:02,000", zhText: dense, enText: "part two" },
+    ];
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({ text: compact }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await compactDenseBlocks(blocks, llm, "test-model");
+
+    expect(result).toEqual([
+      { ...blocks[0], zhText: compact },
+      { ...blocks[1], zhText: compact },
+    ]);
+  });
+});
+
+describe("mergeBriefBlocks", () => {
+  it("merges a standalone brief block into its neighbor, keeping each block's own timing and English text", () => {
+    // The merge extends the SAME combined Chinese text across both blocks
+    // rather than collapsing them into one — this preserves the "one static
+    // Chinese caption over several distinct English sub-cues" shape instead
+    // of losing the brief block's own English text into a combined block.
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:02,000", zhText: "第一段", enText: "First part" },
+      { start: "00:00:02,000", end: "00:00:02,400", zhText: "你知道吗，", enText: "You know," },
+      { start: "00:00:02,400", end: "00:00:04,400", zhText: "第三段内容", enText: "Third part" },
+    ];
+
+    const result = mergeBriefBlocks(blocks, 20);
+
+    expect(result).toEqual([
+      { start: "00:00:00,000", end: "00:00:02,000", zhText: "第一段", enText: "First part" },
+      { start: "00:00:02,000", end: "00:00:02,400", zhText: "你知道吗，第三段内容", enText: "You know," },
+      { start: "00:00:02,400", end: "00:00:04,400", zhText: "你知道吗，第三段内容", enText: "Third part" },
+    ]);
+  });
+
+  it("does NOT touch a block that is part of an identical-text repeat run, even if its own 1-second slice alone would read too fast", () => {
+    // Regression: a run of 6 identical-text blocks (one long translated
+    // piece correctly spanning several original 1s sub-cues) was getting
+    // one of its own repeated blocks flagged as "too fast" when scored
+    // against just its own 1-second slice (17 chars / 1s ≈ 17 cps), even
+    // though the run's true combined reading time (6s) is fine. Merging
+    // that one slice into a neighbor broke the run's uniform text.
+    const repeated = "测测测测测测测测测测测测测测测测。"; // 17 chars
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:01,000", zhText: repeated, enText: "one" },
+      { start: "00:00:01,000", end: "00:00:02,000", zhText: repeated, enText: "two" },
+      { start: "00:00:02,000", end: "00:00:03,000", zhText: repeated, enText: "three" },
+      { start: "00:00:03,000", end: "00:00:04,000", zhText: "了", enText: "four" },
+    ];
+
+    const result = mergeBriefBlocks(blocks, 20);
+
+    expect(result).toEqual(blocks);
+  });
+
+  it("merges a whole repeat run into an adjacent span when the run's own combined duration is still too brief", () => {
+    // Regression: a real 2-cue run ("Now," on a proportionally-tiny 0.13s
+    // slice + its continuation) combined to just under the 1s floor. The
+    // per-sentence mergeShortPieces had no earlier block of its own sentence
+    // to merge into (it was the sentence's first piece); this cross-sentence
+    // pass previously skipped the whole run because EVERY block in it had an
+    // identical neighbor, so `isTooBrief` never fired for any of them.
+    const run = "如果你喜欢我的教学方式，";
+    const blocks = [
+      { start: "00:00:08,280", end: "00:00:09,280", zhText: "换掉它们。", enText: "change them." },
+      { start: "00:00:09,280", end: "00:00:09,407", zhText: run, enText: "Now," },
+      { start: "00:00:09,407", end: "00:00:10,200", zhText: run, enText: "if you like the way I teach," },
+    ];
+
+    const result = mergeBriefBlocks(blocks, 20);
+
+    const merged = "换掉它们。如果你喜欢我的教学方式，";
+    expect(result).toEqual([
+      { start: "00:00:08,280", end: "00:00:09,280", zhText: merged, enText: "change them." },
+      { start: "00:00:09,280", end: "00:00:09,407", zhText: merged, enText: "Now," },
+      { start: "00:00:09,407", end: "00:00:10,200", zhText: merged, enText: "if you like the way I teach," },
+    ]);
+  });
+
+  it("skips a merge that would exceed the hard limit and leaves the block as-is", () => {
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:02,000", zhText: "测".repeat(20), enText: "Long part" },
+      { start: "00:00:02,000", end: "00:00:02,400", zhText: "你知道吗，", enText: "You know," },
+    ];
+
+    const result = mergeBriefBlocks(blocks, 20);
+
+    expect(result).toEqual(blocks);
+  });
+
+  it("does not touch blocks that already read comfortably", () => {
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:02,000", zhText: "第一段", enText: "First part" },
+      { start: "00:00:02,000", end: "00:00:04,000", zhText: "第二段", enText: "Second part" },
+    ];
+
+    const result = mergeBriefBlocks(blocks, 20);
+
+    expect(result).toEqual(blocks);
+  });
+});
+
+describe("mergeShortPieces", () => {
+  const cue = (start: string, end: string): { start: string; end: string; text: string[] } => ({
+    start,
+    end,
+    text: ["placeholder"],
+  });
+
+  it("merges a too-brief piece into the next piece when it fits the hard limit", () => {
+    // Piece 1 covers only cue 1 (00:00:00.000-00:00:00.400 = 0.4s, under the
+    // 1s floor) — a real shape for a short clause like "现在，" landing on a
+    // brief original ASR cue.
+    const cues = [
+      cue("00:00:00,000", "00:00:00,400"),
+      cue("00:00:00,400", "00:00:02,000"),
+    ];
+    const pieces = [
+      { throughCue: 1, zhText: "现在，" },
+      { throughCue: 2, zhText: "如果你喜欢我的教学方式，" },
+    ];
+
+    const result = mergeShortPieces(pieces, cues, 20);
+
+    expect(result).toEqual([{ throughCue: 2, zhText: "现在，如果你喜欢我的教学方式，" }]);
+  });
+
+  it("merges into the previous piece when the next merge would exceed the hard limit", () => {
+    const cues = [
+      cue("00:00:00,000", "00:00:02,000"),
+      cue("00:00:02,000", "00:00:02,400"),
+    ];
+    const pieces = [
+      { throughCue: 1, zhText: "第一段内容比较长占了大半空间" }, // 14 wide
+      { throughCue: 2, zhText: "太短了" }, // piece 2 is the brief one (0.4s)
+    ];
+    // Merging piece 2 forward isn't possible (it's the last piece), so it
+    // must merge backward into piece 1. Combined width (14+3=17) fits 20.
+
+    const result = mergeShortPieces(pieces, cues, 20);
+
+    expect(result).toEqual([{ throughCue: 2, zhText: "第一段内容比较长占了大半空间太短了" }]);
+  });
+
+  it("merges a piece that reads too fast even when its own duration is at least a second", () => {
+    const cues = [
+      cue("00:00:00,000", "00:00:01,200"), // 1.2s — passes the duration floor
+      cue("00:00:01,200", "00:00:03,000"),
+    ];
+    const wide = "一二三四五六七八九十一二三"; // 13 chars / 1.2s ≈ 10.8 cps > 9
+    const pieces = [
+      { throughCue: 1, zhText: wide },
+      { throughCue: 2, zhText: "接下来的内容" },
+    ];
+
+    const result = mergeShortPieces(pieces, cues, 20);
+
+    expect(result).toEqual([{ throughCue: 2, zhText: `${wide}接下来的内容` }]);
+  });
+
+  it("leaves a too-brief piece alone when no direction fits the hard limit", () => {
+    const cues = [
+      cue("00:00:00,000", "00:00:00,400"),
+      cue("00:00:00,400", "00:00:02,000"),
+    ];
+    const pieces = [
+      { throughCue: 1, zhText: "现在，" },
+      // Neighbor is already right at the hard limit — merging would blow it.
+      { throughCue: 2, zhText: "测".repeat(20) },
+    ];
+
+    const result = mergeShortPieces(pieces, cues, 20);
+
+    expect(result).toEqual(pieces);
+  });
+
+  it("does not touch pieces that already read comfortably", () => {
+    const cues = [
+      cue("00:00:00,000", "00:00:02,000"),
+      cue("00:00:02,000", "00:00:04,000"),
+    ];
+    const pieces = [
+      { throughCue: 1, zhText: "第一段" },
+      { throughCue: 2, zhText: "第二段" },
+    ];
+
+    const result = mergeShortPieces(pieces, cues, 20);
+
+    expect(result).toEqual(pieces);
+  });
+
+  it("passes a single piece through unchanged", () => {
+    const cues = [cue("00:00:00,000", "00:00:00,200")];
+    const pieces = [{ throughCue: 1, zhText: "现在，" }];
+
+    const result = mergeShortPieces(pieces, cues, 20);
+
+    expect(result).toEqual(pieces);
   });
 });
 

@@ -120,6 +120,12 @@ const secondsToTimestamp = (sec: number): string => {
 
 const REPUNCT_PAGE_SIZE = 8;
 
+// Flat weight baseline added to every comma-split fragment's character
+// length before computing its proportional time share (see
+// splitCuesAtCommas) — keeps a short fragment's guessed duration from
+// collapsing toward zero next to a much longer one.
+const PROPORTIONAL_SPLIT_BASE_CHARS = 20;
+
 // ── Phase 0: Insert commas at natural boundaries, then split deterministically ──
 // BaoCut-inspired: the LLM only INSERTS punctuation (a choice task), it does NOT
 // rewrite text.  We then split at commas deterministically.  Each cue gets a
@@ -314,9 +320,19 @@ const splitCuesAtCommas = (
         t = end;
       }
     } else {
-      const totalLen = finalParts.reduce((s, p) => s + p.length, 0);
+      // Proportional-by-length guess (no real word timing available). A
+      // short lead-in fragment like "Now," split from a much longer
+      // continuation would otherwise get a near-zero share (e.g. 4 chars
+      // out of 90 on a 2.9s cue -> 0.13s) — nowhere close to how long it's
+      // actually spoken, since a short clause is typically followed by a
+      // real pause, not proportionally less time. Add a flat baseline to
+      // every fragment's weight before computing shares, so a short
+      // fragment's floor rises toward a fairer minimum without meaningfully
+      // taking time away from a genuinely long neighbor.
+      const weights = finalParts.map((p) => p.length + PROPORTIONAL_SPLIT_BASE_CHARS);
+      const totalWeight = weights.reduce((s, w) => s + w, 0);
       for (let p = 0; p < finalParts.length; p++) {
-        const frac = finalParts[p]!.length / totalLen;
+        const frac = weights[p]! / totalWeight;
         const dur = (cueEnd - cueStart) * frac;
         const end = p === finalParts.length - 1 ? cueEnd : t + dur;
         result.push({
@@ -352,6 +368,10 @@ const HARD_CJK = 20;
 // BaoCut treats one second of source speech on each side as the floor for a
 // "natural" split; below that a cut produces an unreadable flash.
 const MIN_SPLIT_DURATION_S = 1;
+
+// Matches SUBTITLE_AUDIT_THRESHOLDS.maxCps in audit-subtitles.ts — kept as a
+// separate local constant to avoid a dependency in that direction.
+const MAX_CPS_BEFORE_MERGE = 9;
 
 const CJK_PATTERN = /[一-鿿㐀-䶿\u{f900}-\u{faff}]/u;
 const LATIN_ALNUM_PATTERN = /[A-Za-z0-9]/u;
@@ -680,6 +700,66 @@ export const ensureEnoughFineCues = (
 };
 
 /**
+ * The Phase-1 translation prompt already tells the model to keep glossary
+ * terms and names untranslated, but real runs occasionally translate one
+ * away anyway (e.g. "Grill with Docs" -> "文档一起过一遍") — an LLM
+ * consistency miss, not a prompt-design gap the instruction text can fix by
+ * itself. This is a deterministic, mechanical check-and-retry: find which
+ * protected terms/names actually appear in the English source but are
+ * missing from the translation, and if any are, ask for ONE corrected
+ * rewrite naming exactly those terms. Only accepts the rewrite if it
+ * actually restored every missing term (never accepts a partial fix or an
+ * empty/malformed response) — otherwise keeps the original translation
+ * rather than risking a worse, unrelated rewrite.
+ */
+export const ensureProtectedTermsPreserved = async (
+  enText: string,
+  zhText: string,
+  llm: LlmPort,
+  model: string,
+  signal?: AbortSignal,
+): Promise<string> => {
+  const lowerEn = enText.toLocaleLowerCase("en");
+  const missing = PROTECTED_TERMS.filter(
+    (term) => lowerEn.includes(term.toLocaleLowerCase("en")) && !zhText.includes(term),
+  );
+  if (missing.length === 0) return zhText;
+
+  try {
+    const resp = await llm.chat({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "This Simplified Chinese translation is missing some terms that must be",
+            "kept in their original English form. Rewrite the translation to",
+            "include every listed term exactly as spelled, changing as little else",
+            "as possible.",
+            `Terms that must appear verbatim: ${missing.join(", ")}`,
+            "Return ONLY the corrected Chinese text — no explanation, no quotes.",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({ englishSource: enText, currentTranslation: zhText }),
+        },
+      ],
+      temperature: 0.1,
+      maxTokens: 512,
+      ...(signal !== undefined ? { signal } : {}),
+    });
+
+    const fixed = resp.content.trim();
+    if (fixed.length === 0) return zhText;
+    if (missing.some((term) => !fixed.includes(term))) return zhText;
+    return fixed;
+  } catch {
+    return zhText;
+  }
+};
+
+/**
  * BaoCut's align contract falls back to a "rewrite" (with a reasonCode) only
  * when a deterministic recut genuinely cannot fit the budget — never as the
  * default path. This mirrors that: called only when growing cues still isn't
@@ -741,6 +821,347 @@ export const requestCompactRewrite = async (
  * (1-based, the first piece starting at cue 1).
  */
 export type ContentAlignedPiece = { throughCue: number; zhText: string };
+
+/**
+ * Merges a piece that would display too briefly or read too fast into a
+ * neighboring piece, instead of leaving a standalone fragment to flash past
+ * on its own (e.g. a short "Now," or "然后……" clause whose own source cue
+ * only spans a fraction of a second — content-correct alignment doesn't fix
+ * this, since the piece is genuinely a distinct clause, not a duplicate of
+ * its neighbor). Content from both pieces is combined into one Chinese text
+ * — never dropped — and a merge only happens when the combined text still
+ * fits `hardLimit`; a piece that can't be merged either direction within
+ * budget is left as-is, for the audit layer's cps/flash checks to surface
+ * as presentation debt rather than being silently patched over.
+ */
+export const mergeShortPieces = (
+  pieces: readonly ContentAlignedPiece[],
+  cues: readonly FineCue[],
+  hardLimit: number,
+): ContentAlignedPiece[] => {
+  const result = pieces.map((p) => ({ ...p }));
+
+  const durationOf = (start: number, end: number): number =>
+    timestampToSeconds(cues[end - 1]!.end) - timestampToSeconds(cues[start]!.start);
+  const isTooBrief = (index: number): boolean => {
+    const start = index === 0 ? 0 : result[index - 1]!.throughCue;
+    const duration = durationOf(start, result[index]!.throughCue);
+    if (!Number.isFinite(duration) || duration <= 0) return false;
+    const characterCount = result[index]!.zhText.replace(/\s/gu, "").length;
+    return duration < MIN_SPLIT_DURATION_S || characterCount / duration > MAX_CPS_BEFORE_MERGE;
+  };
+  const tryMerge = (into: number, from: number): boolean => {
+    const combined = into < from
+      ? `${result[into]!.zhText}${result[from]!.zhText}`
+      : `${result[from]!.zhText}${result[into]!.zhText}`;
+    if (visualWidth(combined) > hardLimit) return false;
+    result[into] = { throughCue: Math.max(result[into]!.throughCue, result[from]!.throughCue), zhText: combined };
+    result.splice(from, 1);
+    return true;
+  };
+
+  let mergedSomething = true;
+  while (mergedSomething && result.length > 1) {
+    mergedSomething = false;
+    for (let i = 0; i < result.length; i++) {
+      if (!isTooBrief(i)) continue;
+      if (i < result.length - 1 && tryMerge(i + 1, i)) { mergedSomething = true; break; }
+      if (i > 0 && tryMerge(i - 1, i)) { mergedSomething = true; break; }
+    }
+  }
+  return result;
+};
+
+type MergeableBlock = { start: string; end: string; zhText: string; enText: string };
+
+/**
+ * Global counterpart to `mergeShortPieces`, run once over the whole file's
+ * finalized display blocks (after every sentence has been translated and
+ * timed). `mergeShortPieces` only ever sees one sentence's own cues, so it
+ * can't help a short sentence that is its own single brief cue (e.g. "你知道
+ * 吗，" landing on a 0.5s original cue with nothing else in that sentence to
+ * combine with) or a brief cue sitting right at a sentence boundary. This
+ * pass merges any such block into an adjacent one — regardless of which
+ * sentence either came from — combining both languages' text, and skips a
+ * block whose immediate neighbor already shows identical Chinese (that's an
+ * intentional repeat span; combining into it would just duplicate text).
+ * A merge that would exceed `hardLimit` is skipped, same as `mergeShortPieces`.
+ */
+type BriefBlockSpan = { indices: number[]; zhText: string; start: string; end: string };
+
+const buildIdenticalTextSpans = <T extends MergeableBlock>(blocks: readonly T[]): BriefBlockSpan[] => {
+  const spans: BriefBlockSpan[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const last = spans[spans.length - 1];
+    if (last !== undefined && last.zhText === blocks[i]!.zhText) {
+      last.indices.push(i);
+      last.end = blocks[i]!.end;
+    } else {
+      spans.push({ indices: [i], zhText: blocks[i]!.zhText, start: blocks[i]!.start, end: blocks[i]!.end });
+    }
+  }
+  return spans;
+};
+
+/**
+ * Same brief/fast criterion as `mergeShortPieces`, applied to the whole
+ * file's final display blocks (after every sentence has been translated and
+ * timed) instead of one sentence's own cues. It has to work in SPANS, not
+ * individual blocks: a run of consecutive blocks sharing identical Chinese
+ * text (one piece spanning several English sub-cues, or a whole short
+ * sentence repeated across its span) is one continuous reading unit, and its
+ * true duration is the whole run's combined span — not any single block's
+ * own slice, nor the two-piece view `mergeShortPieces` had while it was
+ * still confined to one sentence. A run that's STILL too brief even at its
+ * full combined duration (e.g. a short lead-in clause on a source cue too
+ * short to reach 1s on its own, immediately followed by a long clause that
+ * already has nowhere to grow within the width budget) needs to merge with
+ * an ADJACENT span — including one from a different sentence — which
+ * `mergeShortPieces` can never do, since it only ever sees one sentence's
+ * own cues.
+ *
+ * Merging two spans applies the combined text to EVERY block in BOTH spans,
+ * not just an edge block — this keeps the "one static Chinese caption over
+ * several distinct English sub-cues" shape the merge is trying to produce,
+ * rather than making only one block in the run disagree with its neighbors.
+ * A merge that would exceed `hardLimit` is skipped, same as `mergeShortPieces`.
+ */
+export const mergeBriefBlocks = <T extends MergeableBlock>(
+  blocks: readonly T[],
+  hardLimit: number,
+): T[] => {
+  const result = blocks.map((b) => ({ ...b }));
+
+  let mergedSomething = true;
+  while (mergedSomething && result.length > 1) {
+    mergedSomething = false;
+    const spans = buildIdenticalTextSpans(result);
+
+    for (let s = 0; s < spans.length; s++) {
+      const span = spans[s]!;
+      const duration = timestampToSeconds(span.end) - timestampToSeconds(span.start);
+      if (!Number.isFinite(duration) || duration <= 0) continue;
+      const characterCount = span.zhText.replace(/\s/gu, "").length;
+      const tooBrief = duration < MIN_SPLIT_DURATION_S || characterCount / duration > MAX_CPS_BEFORE_MERGE;
+      if (!tooBrief) continue;
+
+      const mergeWith = (target: BriefBlockSpan, targetComesFirst: boolean): boolean => {
+        const combined = targetComesFirst
+          ? `${target.zhText}${span.zhText}`
+          : `${span.zhText}${target.zhText}`;
+        if (visualWidth(combined) > hardLimit) return false;
+        for (const idx of [...span.indices, ...target.indices]) {
+          result[idx] = { ...result[idx]!, zhText: combined };
+        }
+        return true;
+      };
+
+      if (s < spans.length - 1 && mergeWith(spans[s + 1]!, false)) { mergedSomething = true; break; }
+      if (s > 0 && mergeWith(spans[s - 1]!, true)) { mergedSomething = true; break; }
+    }
+  }
+  return result;
+};
+
+/**
+ * Runs after `mergeBriefBlocks`, for whatever still reads too fast once
+ * merging alone can't help (merging is capped by `hardLimit`, so two already
+ * over-dense neighbors can max out the display width without ever reaching a
+ * safe reading speed). Unlike merging, this changes wording: it asks for one
+ * compact rewrite of just that block's Chinese text, targeted at the
+ * character budget its own display duration actually allows. A block that's
+ * part of an identical-text repeat run is skipped — its real reading time is
+ * the whole run's combined duration (already correctly under budget, or a
+ * decision `mergeShortPieces` already made upstream), not this one slice.
+ * Only accepts the rewrite if it's a genuine improvement (never worse than
+ * the original); otherwise keeps the original wording, leaving the audit's
+ * cps check to disclose it as presentation debt rather than silently patching
+ * over a rewrite that didn't actually help.
+ */
+/**
+ * Reading-speed compaction, deliberately separate from `requestCompactRewrite`.
+ * That function's budget is `visualWidth` (a Latin letter costs half a CJK
+ * cell) because it exists to fit a display line's physical width. cps is
+ * measured in raw characters per second (matching the audit's own count —
+ * see audit-subtitles.ts), so a line with English terms in it (e.g. "Grill
+ * Me") has a visualWidth well under its true character count — reusing the
+ * width-budget function here meant the model (and its own validation) saw
+ * "already fits" and returned the original text unchanged, even though the
+ * *character* count was still over the cps budget. This asks for a rewrite
+ * bounded by raw character count instead.
+ */
+const requestCpsCompactRewrite = async (
+  sourceText: string,
+  currentTranslation: string,
+  targetCharacterCount: number,
+  llm: LlmPort,
+  model: string,
+  signal?: AbortSignal,
+): Promise<string | null> => {
+  try {
+    const resp = await llm.chat({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "This Simplified Chinese subtitle line reads faster than a viewer can",
+            `comfortably follow. Rewrite it to at most ${targetCharacterCount}`,
+            "characters total (count every character except spaces — this includes",
+            "punctuation and any kept-as-English term) so it reads at a normal pace.",
+            "Preserve the full meaning — use shorter synonyms and drop redundant",
+            "words, but do not drop information the source conveys.",
+            "Keep any product names, people's names, and technical terms exactly",
+            "as they appear in the current translation.",
+            'Return JSON: {"text":"..."}',
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({ source: sourceText, currentTranslation, targetCharacterCount }),
+        },
+      ],
+      temperature: 0.1,
+      maxTokens: 512,
+      jsonMode: true,
+      ...(signal !== undefined ? { signal } : {}),
+    });
+
+    const parsed = JSON.parse(resp.content.trim()) as { text?: unknown };
+    if (typeof parsed.text !== "string" || parsed.text.trim().length === 0) return null;
+    return parsed.text.trim();
+  } catch {
+    return null;
+  }
+};
+
+export const compactDenseBlocks = async <T extends MergeableBlock>(
+  blocks: readonly T[],
+  llm: LlmPort,
+  model: string,
+  signal?: AbortSignal,
+): Promise<T[]> => {
+  const result = blocks.map((b) => ({ ...b }));
+  // Span-based for the same reason mergeBriefBlocks is: a run of consecutive
+  // blocks sharing identical Chinese text is one continuous reading unit, so
+  // its true cps is measured over the whole run's combined duration — and if
+  // that's still too fast, the rewrite has to apply to every block in the
+  // run, not just one (a single differing block would break the repeat
+  // pattern this is supposed to preserve).
+  for (const span of buildIdenticalTextSpans(result)) {
+    const duration = timestampToSeconds(span.end) - timestampToSeconds(span.start);
+    if (!Number.isFinite(duration) || duration <= 0) continue;
+    const characterCount = span.zhText.replace(/\s/gu, "").length;
+    if (characterCount / duration <= MAX_CPS_BEFORE_MERGE) continue;
+
+    const targetChars = Math.max(1, Math.floor(duration * MAX_CPS_BEFORE_MERGE));
+    const sourceText = span.indices.map((idx) => result[idx]!.enText).join(" ");
+    const compact = await requestCpsCompactRewrite(
+      sourceText,
+      span.zhText,
+      targetChars,
+      llm,
+      model,
+      signal,
+    );
+    if (compact === null) continue;
+    const newCharacterCount = compact.replace(/\s/gu, "").length;
+    if (newCharacterCount < characterCount) {
+      for (const idx of span.indices) {
+        result[idx] = { ...result[idx]!, zhText: compact };
+      }
+    }
+  }
+  return result;
+};
+
+const repairMissingTermsInBlocks = async <T extends MergeableBlock>(
+  blocks: readonly T[],
+  llm: LlmPort,
+  model: string,
+  signal?: AbortSignal,
+): Promise<T[]> => {
+  const result = blocks.map((b) => ({ ...b }));
+  for (const span of buildIdenticalTextSpans(result)) {
+    const enText = span.indices.map((idx) => result[idx]!.enText).join(" ");
+    const fixed = await ensureProtectedTermsPreserved(enText, span.zhText, llm, model, signal);
+    if (fixed !== span.zhText) {
+      for (const idx of span.indices) {
+        result[idx] = { ...result[idx]!, zhText: fixed };
+      }
+    }
+  }
+  return result;
+};
+
+export type SubtitleRepairResult = {
+  enSrt: string;
+  zhSrt: string;
+  bilingualSrt: string;
+  changed: boolean;
+};
+
+/**
+ * Targeted repair over already-generated, already-delivered subtitle
+ * artifacts — no re-translation, no re-running the full pipeline. Operates
+ * directly on the on-disk SRT content (the same "only trust the artifact"
+ * boundary the audit layer uses), so it works regardless of which internal
+ * path (content-aligned split, weight-based fallback, short-sentence repeat)
+ * produced a given cue.
+ *
+ * Two passes, both bounded to ONE attempt per span (never retried, matching
+ * BaoCut's "one targeted repair, then report" policy — this is meant to be
+ * run once after an audit, not looped until clean):
+ *   1. `ensureProtectedTermsPreserved` per identical-text span, for a
+ *      protected term the translation dropped.
+ *   2. `compactDenseBlocks`, for a span still reading too fast.
+ * Deliberately does NOT re-run `mergeBriefBlocks` — merging changes the cue
+ * count/structure, which is a bigger change than "repair" should make to an
+ * artifact a human may already be reviewing; a brief/flash finding that
+ * merging alone could fix is left for a human decision instead of being
+ * silently restructured.
+ *
+ * A span a pass can't improve is left as-is — the caller's own before/after
+ * audit is what tells a human which findings still need attention.
+ */
+export const repairSubtitleArtifacts = async (input: {
+  enSrt: string;
+  zhSrt: string;
+  bilingualSrt: string;
+  llm: LlmPort;
+  model: string;
+  signal?: AbortSignal;
+}): Promise<SubtitleRepairResult> => {
+  const enCues = parseSubtitleBlocks(input.enSrt);
+  const zhCues = parseSubtitleBlocks(input.zhSrt);
+  if (enCues.length !== zhCues.length) {
+    return { enSrt: input.enSrt, zhSrt: input.zhSrt, bilingualSrt: input.bilingualSrt, changed: false };
+  }
+
+  const original = enCues.map((en, i) => ({
+    start: en.start,
+    end: en.end,
+    enText: en.text.join(" "),
+    zhText: zhCues[i]!.text.join(" "),
+  }));
+
+  let blocks = await repairMissingTermsInBlocks(original, input.llm, input.model, input.signal);
+  blocks = await compactDenseBlocks(blocks, input.llm, input.model, input.signal);
+
+  const changed = blocks.some((b, i) => b.zhText !== original[i]!.zhText);
+  if (!changed) {
+    return { enSrt: input.enSrt, zhSrt: input.zhSrt, bilingualSrt: input.bilingualSrt, changed: false };
+  }
+
+  const zhSrt = serializeSrtBlocks(
+    blocks.map((b, i) => ({ index: i + 1, start: b.start, end: b.end, text: [b.zhText] })),
+  );
+  const bilingualSrt = serializeSrtBlocks(
+    blocks.map((b, i) => ({ index: i + 1, start: b.start, end: b.end, text: [b.zhText, b.enText] })),
+  );
+
+  return { enSrt: input.enSrt, zhSrt, bilingualSrt, changed: true };
+};
 
 /**
  * Splits a long sentence's Chinese translation into pieces anchored to the
@@ -972,7 +1393,13 @@ export const projectSemanticBilingualSubtitles = async (
         maxTokens: 512,
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       });
-      return resp.content.trim();
+      return ensureProtectedTermsPreserved(
+        sentence.enText,
+        resp.content.trim(),
+        opts.llm,
+        opts.model,
+        opts.signal,
+      );
     },
   );
 
@@ -1070,19 +1497,25 @@ export const projectSemanticBilingualSubtitles = async (
         cueCounts = allocateCuesByWeight(parts.map((p) => visualWidth(p)), workingCues.length);
       }
 
+      let throughCue = 0;
+      const piecesForMerge: ContentAlignedPiece[] = parts.map((zhText, p) => {
+        throughCue += cueCounts[p]!;
+        return { throughCue, zhText };
+      });
+      const mergedPieces = mergeShortPieces(piecesForMerge, workingCues, HARD_CJK);
+
       let cueCursor = 0;
-      for (let p = 0; p < parts.length; p++) {
-        const endCue = cueCursor + cueCounts[p]!;
-        for (let c = cueCursor; c < endCue; c++) {
+      for (const piece of mergedPieces) {
+        for (let c = cueCursor; c < piece.throughCue; c++) {
           translatedBlocks.push({
             index: translatedBlocks.length + 1,
             start: workingCues[c]!.start,
             end: workingCues[c]!.end,
-            zhText: parts[p]!,
+            zhText: piece.zhText,
             enText: normalizeText(workingCues[c]!.text),
           });
         }
-        cueCursor = endCue;
+        cueCursor = piece.throughCue;
       }
     }
   }
@@ -1102,9 +1535,18 @@ export const projectSemanticBilingualSubtitles = async (
     validBlocks.push(cur);
   }
 
+  // Cross-sentence pass: catch a brief/fast block that mergeShortPieces
+  // couldn't reach because it's a whole short sentence on its own single
+  // cue, or sits right at a sentence boundary.
+  const mergedBlocks = mergeBriefBlocks(validBlocks, HARD_CJK);
+
+  // Whatever still reads too fast after merging (merging alone is capped by
+  // the width budget) gets one targeted compact rewrite.
+  const finalBlocks = await compactDenseBlocks(mergedBlocks, opts.llm, opts.model, opts.signal);
+
   // Build per-cue bilingual SRT from valid blocks.
   const bilingualSrt = serializeSrtBlocks(
-    validBlocks.map((b, i) => ({
+    finalBlocks.map((b, i) => ({
       index: i + 1,
       start: b.start,
       end: b.end,
@@ -1113,7 +1555,7 @@ export const projectSemanticBilingualSubtitles = async (
   );
 
   const enSrt = serializeSrtBlocks(
-    validBlocks.map((b, i) => ({
+    finalBlocks.map((b, i) => ({
       index: i + 1,
       start: b.start,
       end: b.end,
@@ -1122,7 +1564,7 @@ export const projectSemanticBilingualSubtitles = async (
   );
 
   const zhSrt = serializeSrtBlocks(
-    validBlocks.map((b, i) => ({
+    finalBlocks.map((b, i) => ({
       index: i + 1,
       start: b.start,
       end: b.end,

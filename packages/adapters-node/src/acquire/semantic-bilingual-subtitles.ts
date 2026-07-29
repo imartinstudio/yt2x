@@ -735,6 +735,159 @@ export const requestCompactRewrite = async (
   }
 };
 
+/**
+ * A translated piece anchored to a contiguous range of the sentence's own
+ * source cues: it covers cues `(previous piece's throughCue, throughCue]`
+ * (1-based, the first piece starting at cue 1).
+ */
+export type ContentAlignedPiece = { throughCue: number; zhText: string };
+
+/**
+ * Splits a long sentence's Chinese translation into pieces anchored to the
+ * actual English cues each piece covers, instead of guessing cue counts from
+ * character-weight ratios (see `allocateCuesByWeight`). The weight-based
+ * split has no idea which source cue a piece's content came from, so a term
+ * or clause can land on the wrong side of a cue boundary whenever the weight
+ * ratio doesn't match where it's actually spoken — a real DeepSeek run
+ * showed "Discord"/"PRD"/"Grill with Docs" consistently appear in the
+ * Chinese one cue before the English cue that actually says them.
+ *
+ * The LLM is given the sentence's already-translated Chinese text plus its
+ * numbered source cues, and returns each piece's `throughCue`: the last cue
+ * (1-based) that piece's text covers. Pieces must cover every cue from 1 to
+ * `cues.length` exactly once, in order, with no gaps. Returns null (never
+ * throws) on any malformed, out-of-order, non-covering, over-budget, or
+ * content-drifted response — the caller falls back to the weight-based
+ * split, so a miss only costs alignment precision, not correctness.
+ */
+export const requestContentAlignedSplit = async (
+  cues: readonly FineCue[],
+  zhFull: string,
+  hardLimit: number,
+  llm: LlmPort,
+  model: string,
+  signal?: AbortSignal,
+): Promise<ContentAlignedPiece[] | null> => {
+  if (cues.length === 0) return null;
+  try {
+    const resp = await llm.chat({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You already translated an English sentence into the Simplified Chinese",
+            "text given below. Split that Chinese translation into pieces so each",
+            "piece can be shown as a subtitle caption directly above the specific",
+            "numbered English cues it translates — never above a cue whose content",
+            "it doesn't cover, and never omitting a cue whose content it does cover.",
+            "",
+            "Assign each piece a 'throughCue': the number of the LAST cue (from the",
+            "numbered list below) that piece's Chinese text covers. The first piece",
+            "implicitly starts at cue 1; each next piece starts right after the",
+            "previous piece's throughCue. The final piece's throughCue must equal",
+            "the highest cue number — every cue must belong to exactly one piece,",
+            "in order, with no gaps.",
+            "Prefer to just split the given Chinese translation as-is, preserving its",
+            "wording — a separate pass will shorten any piece that turns out too wide",
+            "to display, so don't worry about length here.",
+            "",
+            "IMPORTANT: some Chinese words are kept in their original English form",
+            "(names, product names, technical terms). If a piece's Chinese text",
+            "contains such an English word, that piece's cue range MUST include the",
+            "specific numbered cue whose English text actually says that word — even",
+            "if a different cut point would otherwise read more naturally in Chinese.",
+            "Prefer a boundary that keeps the term with its cue over one that doesn't.",
+            'Return JSON: {"pieces":[{"throughCue":2,"text":"..."},{"throughCue":5,"text":"..."}]}',
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            zhTranslation: zhFull,
+            cues: cues.map((c, i) => ({ idx: i + 1, text: normalizeText(c.text) })),
+          }),
+        },
+      ],
+      temperature: 0.1,
+      maxTokens: 1024,
+      jsonMode: true,
+      ...(signal !== undefined ? { signal } : {}),
+    });
+
+    const parsed = JSON.parse(resp.content.trim()) as {
+      pieces?: { throughCue?: unknown; text?: unknown }[];
+    };
+    if (!Array.isArray(parsed.pieces) || parsed.pieces.length === 0) return null;
+
+    // Structural validation only here — NOT width. A piece kept intentionally
+    // wide to keep a protected term with its cue (see the prompt above) is a
+    // presentation concern for the width-compaction pass below, not a reason
+    // to discard an otherwise-correct content alignment.
+    const rawPieces: ContentAlignedPiece[] = [];
+    let prevThrough = 0;
+    for (const piece of parsed.pieces) {
+      const throughCue = piece.throughCue;
+      const text = piece.text;
+      if (typeof throughCue !== "number" || !Number.isInteger(throughCue)) return null;
+      if (typeof text !== "string" || text.trim().length === 0) return null;
+      if (throughCue <= prevThrough || throughCue > cues.length) return null;
+      rawPieces.push({ throughCue, zhText: text.trim() });
+      prevThrough = throughCue;
+    }
+    if (prevThrough !== cues.length) return null; // must cover every cue, exactly once
+
+    // Guard against gross content drift (dropped or invented text) rather
+    // than a genuine split: the reconstructed pieces should be comparable in
+    // length to the translation they were split from.
+    const reconstructedLen = rawPieces.reduce((s, p) => s + p.zhText.length, 0);
+    const zhLen = zhFull.length;
+    if (zhLen > 0 && (reconstructedLen < zhLen * 0.6 || reconstructedLen > zhLen * 1.5)) {
+      return null;
+    }
+
+    // Width-compaction pass: a piece that must keep a term with its cue can
+    // legitimately come back over budget (e.g. two protected terms sharing
+    // one clause). Ask for a compact rewrite of just that piece, grounded in
+    // its own cue range's source text. If compaction itself fails or still
+    // doesn't fit, keep the original wording rather than discarding an
+    // otherwise-correct alignment — the audit layer's presentation checks
+    // (hard-layout/cps/line-count) exist precisely to surface this as
+    // presentation debt instead of it silently vanishing either way.
+    const pieces: ContentAlignedPiece[] = [];
+    let cueCursor = 0;
+    for (const raw of rawPieces) {
+      if (visualWidth(raw.zhText) <= hardLimit) {
+        pieces.push(raw);
+        cueCursor = raw.throughCue;
+        continue;
+      }
+      const pieceSourceText = cues
+        .slice(cueCursor, raw.throughCue)
+        .map((c) => normalizeText(c.text))
+        .join(" ");
+      const compact = await requestCompactRewrite(
+        pieceSourceText,
+        raw.zhText,
+        1,
+        hardLimit,
+        llm,
+        model,
+        signal,
+      );
+      pieces.push({
+        throughCue: raw.throughCue,
+        zhText: compact !== null && compact.length === 1 ? compact[0]! : raw.zhText,
+      });
+      cueCursor = raw.throughCue;
+    }
+
+    return pieces;
+  } catch {
+    return null;
+  }
+};
+
 export const projectSemanticBilingualSubtitles = async (
   opts: SemanticProjectionOptions,
 ): Promise<SemanticBilingualProjection> => {
@@ -850,45 +1003,72 @@ export const projectSemanticBilingualSubtitles = async (
         });
       }
     } else {
-      // Long sentence: split into parts (content-driven, not capped by the
-      // available cue count), enforce the hard ceiling on every part, then
-      // grow the source cues if there aren't enough display slots yet.
-      let parts = enforceHardCeiling(
-        splitLongZh(zhFull, Math.max(1, Math.ceil(zhWeight / TARGET_CJK))),
-        HARD_CJK,
-      );
-      const workingCues = cues.length >= parts.length
+      // Long sentence: grow the source cues to roughly the display-slot
+      // count the translation needs, then ask the LLM to split the
+      // translation into pieces anchored to a contiguous range of THOSE
+      // cues — so a piece can never claim (or omit) content that a
+      // neighboring cue actually contains. Falls back to the old
+      // weight-proportional split when the aligned call is unavailable or
+      // fails validation.
+      const targetPieceCount = Math.max(1, Math.ceil(zhWeight / TARGET_CJK));
+      const workingCues = cues.length >= targetPieceCount
         ? cues
-        : ensureEnoughFineCues(cues, parts.length, opts.wordTimings);
-      if (workingCues.length < parts.length) {
-        // Couldn't grow enough cues for the ideal split — re-target the
-        // split to the cue count actually available, still hard-ceiling
-        // checked (a naive tail-merge here could recreate an oversized part).
-        parts = enforceHardCeiling(splitLongZh(zhFull, workingCues.length), HARD_CJK);
-        if (parts.length > workingCues.length) {
-          // Even a deterministic recut can't fit the cues actually
-          // available — ask the LLM for a more compact rephrasing (BaoCut's
-          // "rewrite" action), and only merge the excess as a last resort if
-          // that fails too.
-          const rewritten = await requestCompactRewrite(
-            sentenceCues[s]!.enText,
-            zhFull,
-            workingCues.length,
-            HARD_CJK,
-            opts.llm,
-            opts.model,
-            opts.signal,
-          );
-          if (rewritten !== null) {
-            parts = rewritten;
-          } else {
-            const keep = parts.slice(0, workingCues.length - 1);
-            const mergedTail = parts.slice(workingCues.length - 1).join("");
-            parts = [...keep, mergedTail];
+        : ensureEnoughFineCues(cues, targetPieceCount, opts.wordTimings);
+
+      const aligned = await requestContentAlignedSplit(
+        workingCues,
+        zhFull,
+        HARD_CJK,
+        opts.llm,
+        opts.model,
+        opts.signal,
+      );
+
+      let parts: string[];
+      let cueCounts: number[];
+
+      if (aligned !== null) {
+        parts = aligned.map((piece) => piece.zhText);
+        cueCounts = [];
+        let prevThrough = 0;
+        for (const piece of aligned) {
+          cueCounts.push(piece.throughCue - prevThrough);
+          prevThrough = piece.throughCue;
+        }
+      } else {
+        // Content-aligned split unavailable — fall back to the
+        // weight-proportional path.
+        parts = enforceHardCeiling(splitLongZh(zhFull, targetPieceCount), HARD_CJK);
+        if (workingCues.length < parts.length) {
+          // Couldn't grow enough cues for the ideal split — re-target the
+          // split to the cue count actually available, still hard-ceiling
+          // checked (a naive tail-merge here could recreate an oversized part).
+          parts = enforceHardCeiling(splitLongZh(zhFull, workingCues.length), HARD_CJK);
+          if (parts.length > workingCues.length) {
+            // Even a deterministic recut can't fit the cues actually
+            // available — ask the LLM for a more compact rephrasing (BaoCut's
+            // "rewrite" action), and only merge the excess as a last resort if
+            // that fails too.
+            const rewritten = await requestCompactRewrite(
+              sentenceCues[s]!.enText,
+              zhFull,
+              workingCues.length,
+              HARD_CJK,
+              opts.llm,
+              opts.model,
+              opts.signal,
+            );
+            if (rewritten !== null) {
+              parts = rewritten;
+            } else {
+              const keep = parts.slice(0, workingCues.length - 1);
+              const mergedTail = parts.slice(workingCues.length - 1).join("");
+              parts = [...keep, mergedTail];
+            }
           }
         }
+        cueCounts = allocateCuesByWeight(parts.map((p) => visualWidth(p)), workingCues.length);
       }
-      const cueCounts = allocateCuesByWeight(parts.map((p) => visualWidth(p)), workingCues.length);
 
       let cueCursor = 0;
       for (let p = 0; p < parts.length; p++) {

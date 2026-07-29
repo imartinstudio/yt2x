@@ -11,6 +11,7 @@ import {
   findWordTimingsForCue,
   projectSemanticBilingualSubtitles,
   requestCompactRewrite,
+  requestContentAlignedSplit,
   splitLongZh,
   visualWidth,
   type SubtitleLayoutMeasurement,
@@ -370,6 +371,59 @@ thirteen fourteen.
     expect(counts[longerIdx]).toBeGreaterThan(counts[shorterIdx]!);
   });
 
+  it("keeps a protected term's Chinese and English on the same cue instead of the length-proportional split putting it on the wrong one", async () => {
+    // Regression: a real DeepSeek run showed "Discord" appear in the Chinese
+    // shown on the cue BEFORE the English cue that actually says "Discord
+    // chat" (same shape for "PRD" and "Grill with Docs" elsewhere in the
+    // same video). The old split has no idea which English cue a Chinese
+    // fragment's content came from — it only knows the two parts' relative
+    // character weight — so a term reliably lands on the wrong side whenever
+    // the weight ratio doesn't match where the term is actually spoken.
+    const sourceSrt = `1
+00:00:00,000 --> 00:00:02,000
+You get me to answer your questions in office hours
+
+2
+00:00:02,000 --> 00:00:04,000
+and in the Discord chat.
+`;
+    const zhFull = "你在办公时间和Discord聊天里让我回答你的问题。";
+    const llm: LlmPort = {
+      chat: vi.fn(async (request: ChatRequest) => {
+        const userContent = request.messages[1]!.content as string;
+        if (request.jsonMode === true && userContent.includes("zhTranslation")) {
+          // Content-aligned split: cue 1 covers "office hours" (Discord not
+          // mentioned yet), cue 2 covers "and in the Discord chat."
+          return {
+            content: JSON.stringify({
+              pieces: [
+                { throughCue: 1, text: "你在办公时间" },
+                { throughCue: 2, text: "和Discord聊天里让我回答你的问题。" },
+              ],
+            }),
+            model: "test",
+            finishReason: "stop",
+          };
+        }
+        if (request.jsonMode === true) {
+          return { content: JSON.stringify({ cues: [] }), model: "test", finishReason: "stop" };
+        }
+        return { content: zhFull, model: "test", finishReason: "stop" };
+      }),
+    };
+
+    const result = await projectSemanticBilingualSubtitles({
+      sourceSrt,
+      llm,
+      model: "test-model",
+      measureLayout: fitMeasurement,
+    });
+
+    const blocks = parseSubtitleBlocks(result.bilingualSrt);
+    const discordEnBlock = blocks.find((b) => b.text[1]?.includes("Discord"));
+    expect(discordEnBlock?.text[0]).toContain("Discord");
+  });
+
   it("inserts commas via the LLM then splits deterministically at them, producing multiple output cues from one source cue", async () => {
     const sourceSrt = `1
 00:00:00,000 --> 00:00:04,000
@@ -648,6 +702,126 @@ describe("requestCompactRewrite", () => {
   it("returns null instead of throwing when the LLM call itself rejects", async () => {
     const llm: LlmPort = { chat: vi.fn(async () => { throw new Error("network down"); }) };
     const result = await requestCompactRewrite("source text", "原来的长翻译", 2, 20, llm, "test-model");
+    expect(result).toBeNull();
+  });
+});
+
+describe("requestContentAlignedSplit", () => {
+  const cues = [
+    { start: "00:00:00,000", end: "00:00:02,000", text: ["first cue text"] },
+    { start: "00:00:02,000", end: "00:00:04,000", text: ["second cue text"] },
+  ];
+
+  it("returns pieces unchanged when every piece already fits the hard limit", async () => {
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({
+          pieces: [
+            { throughCue: 1, text: "第一段" },
+            { throughCue: 2, text: "第二段" },
+          ],
+        }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await requestContentAlignedSplit(cues, "第一段第二段", 20, llm, "test-model");
+
+    expect(result).toEqual([
+      { throughCue: 1, zhText: "第一段" },
+      { throughCue: 2, zhText: "第二段" },
+    ]);
+    // Only the alignment call — no compaction needed.
+    expect(llm.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("compacts a piece that comes back over the hard limit instead of rejecting the whole split", async () => {
+    const overWidth = "测".repeat(25); // 25 visual cells, over a 20 limit
+    const compacted = "测".repeat(18);
+    const llm: LlmPort = {
+      chat: vi.fn(async (request: ChatRequest) => {
+        const userContent = request.messages[1]!.content as string;
+        if (userContent.includes("pieceCount")) {
+          return {
+            content: JSON.stringify({ pieces: [compacted] }),
+            model: "test",
+            finishReason: "stop",
+          };
+        }
+        return {
+          content: JSON.stringify({
+            pieces: [{ throughCue: 1, text: "第一段" }, { throughCue: 2, text: overWidth }],
+          }),
+          model: "test",
+          finishReason: "stop",
+        };
+      }),
+    };
+
+    const result = await requestContentAlignedSplit(
+      cues,
+      `第一段${overWidth}`,
+      20,
+      llm,
+      "test-model",
+    );
+
+    expect(result).toEqual([
+      { throughCue: 1, zhText: "第一段" },
+      { throughCue: 2, zhText: compacted },
+    ]);
+  });
+
+  it("keeps the original over-width piece when compaction itself fails, instead of discarding the alignment", async () => {
+    const overWidth = "测".repeat(25);
+    const llm: LlmPort = {
+      chat: vi.fn(async (request: ChatRequest) => {
+        const userContent = request.messages[1]!.content as string;
+        if (userContent.includes("pieceCount")) {
+          // Compact rewrite fails validation (wrong piece count).
+          return { content: JSON.stringify({ pieces: [] }), model: "test", finishReason: "stop" };
+        }
+        return {
+          content: JSON.stringify({
+            pieces: [{ throughCue: 1, text: "第一段" }, { throughCue: 2, text: overWidth }],
+          }),
+          model: "test",
+          finishReason: "stop",
+        };
+      }),
+    };
+
+    const result = await requestContentAlignedSplit(
+      cues,
+      `第一段${overWidth}`,
+      20,
+      llm,
+      "test-model",
+    );
+
+    // Compaction failed, but the content-correct alignment is still returned
+    // (over budget) rather than being thrown away — the audit layer's
+    // presentation checks (hard-layout/cps) are what should catch this next,
+    // not a silent fall back to the weight-based split that could misplace
+    // content again.
+    expect(result).toEqual([
+      { throughCue: 1, zhText: "第一段" },
+      { throughCue: 2, zhText: overWidth },
+    ]);
+  });
+
+  it("still rejects a response with broken cue coverage even though width is no longer checked upfront", async () => {
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        // Gap: doesn't cover cue 2 at all.
+        content: JSON.stringify({ pieces: [{ throughCue: 1, text: "第一段" }] }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await requestContentAlignedSplit(cues, "第一段第二段", 20, llm, "test-model");
     expect(result).toBeNull();
   });
 });

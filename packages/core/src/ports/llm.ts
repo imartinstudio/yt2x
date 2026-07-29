@@ -13,6 +13,8 @@ export type ChatRequest = {
   temperature?: number;
   /** 输出 token 上限；不传走 provider 默认 */
   maxTokens?: number;
+  /** 控制支持该能力的 provider 是否启用推理模式。 */
+  reasoningMode?: "enabled" | "disabled";
   /**
    * 启用 JSON mode（response 必须是合法 JSON）。
    * - OpenAI 兼容：发送 `response_format: { type: "json_object" }`

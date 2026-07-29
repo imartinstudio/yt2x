@@ -1,10 +1,44 @@
 import { describe, expect, it } from "vitest";
+import type { ChatRequest, LlmPort } from "@yt2x/core";
+import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import {
   extractJsonStringField,
   parseJsonWithRepairs,
   stripJsonFenceWrapper,
 } from "../llm/parse-json.js";
-import { parseGeneratedVideoShortPostJson } from "./generator.js";
+import { generateXVideoShortContent, parseGeneratedVideoShortPostJson } from "./generator.js";
+
+const fakeArtifacts: StructuredNotesArtifacts = {
+  videoDir: "/tmp/v",
+  videoId: "vid",
+  structuredNotesMd: "# Notes\n\n- point",
+  metadata: { id: "vid", title: "Hello" },
+};
+
+describe("generateXVideoShortContent", () => {
+  it("requests a bounded non-thinking JSON completion", async () => {
+    const llm: LlmPort = {
+      chat: async (req: ChatRequest) => {
+        expect(req.reasoningMode).toBe("disabled");
+        expect(req.jsonMode).toBe(true);
+        expect(req.maxTokens).toBe(2048);
+        return {
+          content: JSON.stringify({ text: "可直接发布的视频短帖" }),
+          model: "deepseek-v4-pro",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const result = await generateXVideoShortContent({
+      llm,
+      model: "deepseek-v4-pro",
+      artifacts: fakeArtifacts,
+    });
+
+    expect(result.videoShortPost.text).toBe("可直接发布的视频短帖");
+  });
+});
 
 describe("parseGeneratedVideoShortPostJson", () => {
   it("accepts json fence wrappers", () => {

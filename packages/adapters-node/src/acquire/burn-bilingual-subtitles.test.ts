@@ -59,13 +59,15 @@ describe("burnBilingualSubtitles", () => {
         if (opts.command === "python3") {
           const args = opts.args ?? [];
           if (args[0] === "-c") {
-            // Blank PNG creation via python3 -c "Image.new(...).save(\"PATH\")"
+            // Blank PNG creation via python3 -c "Image.new(...).save(\"PATH\")\n..."
+            // — one script now creates both the zh_blank and en_blank PNGs.
             const pyCode = args[1] ?? "";
-            const match = pyCode.match(/\.save\("([^"]+)"\)/);
-            const pngPath = match?.[1];
-            if (pngPath) {
-              await mkdir(path.dirname(pngPath), { recursive: true });
-              await writeFile(pngPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+            for (const match of pyCode.matchAll(/\.save\("([^"]+)"\)/g)) {
+              const pngPath = match[1];
+              if (pngPath) {
+                await mkdir(path.dirname(pngPath), { recursive: true });
+                await writeFile(pngPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+              }
             }
           } else if ((args[0] ?? "").includes("gen-watermark.py")) {
             const wmPath = args[1] ?? "/tmp/watermark.png";
@@ -78,15 +80,19 @@ describe("burnBilingualSubtitles", () => {
             await writeFile(
               path.join(renderDir, "manifest.json"),
               JSON.stringify({
-                cues: [
-                  { index: 1, filename: "cue_0001.png", start: 1, end: 3, width: 800, height: 120 },
+                zh_cues: [
+                  { index: 0, filename: "zh_0000.png", start: 1, end: 3, width: 800, height: 40 },
+                ],
+                en_cues: [
+                  { index: 1, filename: "en_0001.png", start: 1, end: 3, width: 200, height: 20 },
                 ],
                 video_width: 1280,
                 video_height: 0,
               }),
             );
-            // Write the actual cue PNG file too
-            await writeFile(path.join(renderDir, "cue_0001.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+            // Write the actual layer PNG files too
+            await writeFile(path.join(renderDir, "zh_0000.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+            await writeFile(path.join(renderDir, "en_0001.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
           }
           return { exitCode: 0, stdout: "", stderr: "" };
         }
@@ -159,15 +165,33 @@ describe("burnBilingualSubtitles", () => {
 
     expect(renderer).toContain("_BASE_ZH_FONT_SIZE = 30");
     expect(renderer).toContain("_BASE_EN_FONT_SIZE = 16");
-    expect(renderer).toContain("_BASE_ZH_OUTLINE_W = 4");
+    expect(renderer).toContain("_BASE_ZH_OUTLINE_W = 2");
     expect(renderer).toContain("_BASE_EN_OUTLINE_W = 0");
+    // English has no outline, so its shadow must stay tight against the
+    // glyphs rather than trailing behind them.
+    expect(renderer).toContain("_BASE_EN_SHADOW_DISTANCE = 1");
+    expect(renderer).toContain("_BASE_EN_SHADOW_BLUR = 0");
     expect(renderer).toContain("MAX_WIDTH_FRAC = 0.80");
     expect(renderer).toContain('"/Library/Fonts/LexendDeca.ttf"');
     expect(renderer).toContain('"PingFang SC"');
     expect(renderer).toContain('"Hiragino Sans GB"');
     expect(renderer).toContain('"STHeiti"');
     expect(renderer).toContain("SHADOW_COLOR = (64, 64, 64, 255)");
-    expect(renderer).toContain("line_gap = 0");
+
+    // ZH and EN render as independent layers of FIXED-SIZE, full-width
+    // canvases with the text pre-centered. Constant frame dimensions are what
+    // stop ffmpeg reconfiguring its filter graph mid-stream (which made the
+    // Chinese row flicker exactly when the English row changed cues).
+    expect(renderer).toContain("def render_text_row(");
+    expect(renderer).toContain("def measure_text_block(");
+    expect(renderer).toContain("def group_zh_runs(");
+    expect(renderer).toContain('Image.new("RGBA", (VIDEO_WIDTH, row_h)');
+
+    const burner = await readFile(
+      path.join(process.cwd(), "packages/adapters-node/src/acquire/burn-bilingual-subtitles.ts"),
+      "utf8",
+    );
+    expect(burner).toContain("const ZH_EN_ROW_GAP_BASE = 4;");
   });
 
   it("writes output to the specified outputPath", async () => {
@@ -179,10 +203,14 @@ describe("burnBilingualSubtitles", () => {
     expect(ffmpegCall).toBeDefined();
     const args = ffmpegCall![0]!.args;
     expect(args).toContain(opts.outputPath);
-    // Strip-based overlay: bottom margin formula, not full-frame 0:0
+    // Two independent strip layers: EN at the bottom margin, ZH stacked at a
+    // fixed offset above it (bottomMargin 36 + en height 20 + gap 4 = 60).
+    // x is a constant 0 — layers are full-width canvases with text already
+    // centered inside, so ffmpeg never re-derives centering per frame.
     const filter = args?.[args.indexOf("-filter_complex") + 1] ?? "";
-    expect(filter).toContain("overlay=(W-w)/2:H-h-36");
-    expect(filter).not.toContain("overlay=0:0");
+    expect(filter).toContain("overlay=0:H-h-36");
+    expect(filter).toContain("overlay=0:H-h-60");
+    expect(filter).not.toContain("(W-w)/2");
     // No full-frame overlay generator
     const pyCalls = calls.filter((c) => c[0]?.command === "python3");
     expect(

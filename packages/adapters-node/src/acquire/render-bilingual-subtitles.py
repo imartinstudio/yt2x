@@ -19,10 +19,16 @@ from PIL import Image, ImageDraw, ImageFont
 # 720p reference values, scaled proportionally for other heights.
 _BASE_ZH_FONT_SIZE = 30
 _BASE_EN_FONT_SIZE = 16
-_BASE_ZH_OUTLINE_W = 4
+_BASE_ZH_OUTLINE_W = 2
 _BASE_EN_OUTLINE_W = 0
-_BASE_SHADOW_DISTANCE = 1
-_BASE_SHADOW_BLUR = 2
+# Chinese carries a real outline, so its drop shadow only needs to lift the
+# text off the picture — a long offset reads as a smear at caption size.
+_BASE_ZH_SHADOW_DISTANCE = 1
+_BASE_ZH_SHADOW_BLUR = 1
+# English has no outline and sits at half the Chinese size; it needs a tight,
+# close shadow for legibility, not an offset one that trails behind the glyphs.
+_BASE_EN_SHADOW_DISTANCE = 1
+_BASE_EN_SHADOW_BLUR = 0
 
 ZH_FILL = (255, 255, 255, 255)
 EN_FILL = (255, 255, 255, 255)  # pure white
@@ -37,8 +43,10 @@ EN_FONT_SIZE = _BASE_EN_FONT_SIZE
 ZH_FONT_SIZE = _BASE_ZH_FONT_SIZE
 ZH_OUTLINE_W = _BASE_ZH_OUTLINE_W
 EN_OUTLINE_W = _BASE_EN_OUTLINE_W
-SHADOW_DISTANCE = _BASE_SHADOW_DISTANCE
-SHADOW_BLUR = _BASE_SHADOW_BLUR
+ZH_SHADOW_DISTANCE = _BASE_ZH_SHADOW_DISTANCE
+ZH_SHADOW_BLUR = _BASE_ZH_SHADOW_BLUR
+EN_SHADOW_DISTANCE = _BASE_EN_SHADOW_DISTANCE
+EN_SHADOW_BLUR = _BASE_EN_SHADOW_BLUR
 
 # Font candidates (face index for bold weights):
 #   PingFang.ttc: 0=Regular, 1=Medium, 2=Semibold
@@ -200,12 +208,14 @@ def draw_text_with_outline(
     fill: tuple[int, int, int, int],
     outline_color: tuple[int, int, int, int],
     outline_width: int,
+    shadow_distance: int,
+    shadow_blur: int,
 ):
     """Draw text with outline by stamping in all 8 directions + corners."""
     x, y = xy
-    for spread in range(SHADOW_BLUR + 1):
+    for spread in range(shadow_blur + 1):
         draw.text(
-            (x + SHADOW_DISTANCE + spread, y + SHADOW_DISTANCE + spread),
+            (x + shadow_distance + spread, y + shadow_distance + spread),
             text,
             font=font,
             fill=SHADOW_COLOR,
@@ -241,80 +251,96 @@ def measure_lines(
     return max_w, total_h, bboxes
 
 
-def render_cue(
-    cue: dict,
-    en_font: ImageFont.FreeTypeFont,
-    out_dir: Path,
-) -> dict:
-    """Render one bilingual cue as a transparent PNG, return manifest entry."""
+def group_zh_runs(cues: list[dict]) -> list[dict]:
+    """Collapse consecutive cues sharing identical zh_text into one run.
+
+    A translated piece that spans several English sub-cues shows the SAME
+    Chinese text on each of them (see semantic-bilingual-subtitles.ts's
+    mergeShortPieces/mergeBriefBlocks) — that's the intended "one static
+    Chinese caption over several short English captions" shape, not a
+    rendering duplicate. Collapsing the run here means the whole span reuses
+    ONE rendered image, so the Chinese layer never re-selects or resizes
+    while only the English underneath is changing.
+    """
+    runs: list[dict] = []
+    for cue in cues:
+        if runs and runs[-1]["zh_text"] == cue["zh_text"]:
+            runs[-1]["end_s"] = cue["end_s"]
+        else:
+            runs.append({
+                "zh_text": cue["zh_text"],
+                "start_s": cue["start_s"],
+                "end_s": cue["end_s"],
+            })
+    return runs
+
+
+def measure_text_block(
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    outline_width: int,
+    shadow_distance: int,
+    shadow_blur: int,
+) -> tuple[list[str], list[tuple[int, int, int, int]], int]:
+    """Wrap + measure one language's text. Returns (lines, bboxes, block_h),
+    where block_h includes the vertical room the outline and drop shadow need."""
     max_text_width = int(VIDEO_WIDTH * MAX_WIDTH_FRAC)
+    temp_draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    lines = wrap_text(text, font, max_text_width, temp_draw)
+    _, total_h, bboxes = measure_lines(lines, font, temp_draw, outline_width=outline_width)
+    pad_v = outline_width * 2 + shadow_distance + shadow_blur + 4
+    return lines, bboxes, total_h + pad_v
 
-    # Temporary draw for measurement
-    temp = Image.new("RGBA", (1, 1))
-    temp_draw = ImageDraw.Draw(temp)
 
-    # Fixed reference sizes keep measurement and final rendering identical.
-    zh_font = _zh_font(ZH_FONT_SIZE)
-    zh_lines = wrap_text(cue["zh_text"], zh_font, max_text_width, temp_draw)
-    en_lines = wrap_text(cue["en_text"], en_font, max_text_width, temp_draw)
+def render_text_row(
+    lines: list[str],
+    bboxes: list[tuple[int, int, int, int]],
+    font: ImageFont.FreeTypeFont,
+    outline_width: int,
+    fill: tuple[int, int, int, int],
+    shadow_distance: int,
+    shadow_blur: int,
+    row_h: int,
+    align_bottom: bool,
+    out_path: Path,
+) -> tuple[int, int]:
+    """Render one language's text horizontally centered on a FIXED-SIZE
+    canvas: the full video width by this layer's constant row height.
 
-    # Measure wrapped lines (outline-aware spacing prevents double-layer ghosting)
-    zh_max_w, zh_total_h, zh_bboxes = measure_lines(
-        zh_lines, zh_font, temp_draw, outline_width=ZH_OUTLINE_W,
-    )
-    en_max_w, en_total_h, en_bboxes = measure_lines(
-        en_lines, en_font, temp_draw, outline_width=EN_OUTLINE_W,
-    )
+    Every PNG in a layer therefore has identical dimensions. That matters for
+    two reasons: ffmpeg's image2 sequence never has to reconfigure its filter
+    graph mid-stream (a size change there momentarily disturbs the whole
+    overlay chain — the real cause of the Chinese row flickering exactly when
+    the English row switched cues), and centering is exact by construction
+    rather than depending on `overlay=(W-w)/2` re-deriving it from a
+    per-frame image width.
 
-    # Canvas dimensions
-    zh_pad = ZH_OUTLINE_W * 2 + 4
-    en_pad = EN_OUTLINE_W * 2 + 4
-    line_gap = 0
-
-    content_w = max(zh_max_w, en_max_w)
-    canvas_w = content_w + max(zh_pad, en_pad)
-    # Clamp to max width — text is already wrapped, so canvas_w should fit
-    canvas_w = min(canvas_w, max_text_width)
-
-    canvas_h = zh_total_h + line_gap + en_total_h + zh_pad + en_pad
-
-    img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    `align_bottom` pins content to the bottom of its row (used for the
+    Chinese row, so its last line stays a constant distance above the English
+    row regardless of how many lines it wrapped to); otherwise content is
+    pinned to the top (used for English, directly under Chinese)."""
+    img = Image.new("RGBA", (VIDEO_WIDTH, row_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # Draw Chinese (top)
-    zh_y = ZH_OUTLINE_W + 2
-    for line_text, (_, ly, lw, lh) in zip(zh_lines, zh_bboxes):
-        lx = (canvas_w - lw) // 2
+    content_h = (bboxes[-1][3] if bboxes else 0) + outline_width * 2 + shadow_distance + shadow_blur + 4
+    y0 = (row_h - content_h) if align_bottom else 0
+    y0 += outline_width + 2
+
+    for line_text, (_, ly, lw, _lh) in zip(lines, bboxes):
+        lx = (VIDEO_WIDTH - lw) // 2
         draw_text_with_outline(
-            draw, line_text, (lx, zh_y + ly), zh_font,
-            ZH_FILL, OUTLINE_COLOR, ZH_OUTLINE_W,
+            draw, line_text, (lx, y0 + ly), font, fill, OUTLINE_COLOR,
+            outline_width, shadow_distance, shadow_blur,
         )
 
-    # Draw English (bottom)
-    en_y = zh_y + zh_total_h + line_gap + ZH_OUTLINE_W
-    for line_text, (_, ly, lw, lh) in zip(en_lines, en_bboxes):
-        ex = max(ZH_OUTLINE_W, EN_OUTLINE_W) + 2
-        draw_text_with_outline(
-            draw, line_text, (ex, en_y + ly), en_font,
-            EN_FILL, OUTLINE_COLOR, EN_OUTLINE_W,
-        )
-
-    filename = f"cue_{cue['index']:04d}.png"
-    img.save(out_dir / filename)
-
-    return {
-        "index": cue["index"],
-        "filename": filename,
-        "start": cue["start_s"],
-        "end": cue["end_s"],
-        "width": canvas_w,
-        "height": canvas_h,
-    }
+    img.save(out_path)
+    return VIDEO_WIDTH, row_h
 
 
 def main():
     global VIDEO_WIDTH, VIDEO_HEIGHT, EN_FONT_SIZE, ZH_FONT_SIZE
-    global ZH_OUTLINE_W, EN_OUTLINE_W, SHADOW_DISTANCE, SHADOW_BLUR
+    global ZH_OUTLINE_W, EN_OUTLINE_W
+    global ZH_SHADOW_DISTANCE, ZH_SHADOW_BLUR, EN_SHADOW_DISTANCE, EN_SHADOW_BLUR
     # Parse args: <srt> <out_dir> [--video-width W] [--video-height H]
     args = sys.argv[1:]
     srt_path = None
@@ -366,8 +392,10 @@ def main():
     EN_FONT_SIZE = round(_BASE_EN_FONT_SIZE * scale)
     ZH_OUTLINE_W = max(1, round(_BASE_ZH_OUTLINE_W * scale))
     EN_OUTLINE_W = max(0, round(_BASE_EN_OUTLINE_W * scale))
-    SHADOW_DISTANCE = max(1, round(_BASE_SHADOW_DISTANCE * scale))
-    SHADOW_BLUR = max(1, round(_BASE_SHADOW_BLUR * scale))
+    ZH_SHADOW_DISTANCE = max(1, round(_BASE_ZH_SHADOW_DISTANCE * scale))
+    ZH_SHADOW_BLUR = max(0, round(_BASE_ZH_SHADOW_BLUR * scale))
+    EN_SHADOW_DISTANCE = max(1, round(_BASE_EN_SHADOW_DISTANCE * scale))
+    EN_SHADOW_BLUR = max(0, round(_BASE_EN_SHADOW_BLUR * scale))
 
     en_font, en_font_name = find_font(EN_FONT_CANDIDATES, EN_FONT_SIZE)
     _, zh_font_name = find_font(ZH_FONT_CANDIDATES, ZH_FONT_SIZE)
@@ -410,14 +438,62 @@ def main():
     print(f"ZH font: {zh_font_name} ({ZH_FONT_SIZE}px)", file=sys.stderr)
     print(f"EN font: {en_font_name} ({EN_FONT_SIZE}px)", file=sys.stderr)
 
-    manifest_entries = []
-    for i, cue in enumerate(cues):
-        entry = render_cue(cue, en_font, out_dir)
-        manifest_entries.append(entry)
-        done = i + 1
-        if done % 25 == 0 or done == len(cues):
-            # Machine-readable progress for the Node caller (stdout, flushed).
-            print(f"PROGRESS {done}/{len(cues)}", flush=True)
+    # Two independent layers: a ZH run only re-renders (and only re-selects a
+    # different frame) when the Chinese text itself actually changes, never
+    # because the English cue underneath moved on to its next fragment.
+    #
+    # Pass 1 measures every block so each layer can pick ONE constant row
+    # height; pass 2 renders every block onto that fixed-size canvas.
+    zh_font = _zh_font(ZH_FONT_SIZE)
+    zh_runs = group_zh_runs(cues)
+
+    zh_layouts = [
+        measure_text_block(run["zh_text"], zh_font, ZH_OUTLINE_W, ZH_SHADOW_DISTANCE, ZH_SHADOW_BLUR)
+        for run in zh_runs
+    ]
+    en_layouts = [
+        measure_text_block(cue["en_text"], en_font, EN_OUTLINE_W, EN_SHADOW_DISTANCE, EN_SHADOW_BLUR)
+        for cue in cues
+    ]
+    zh_row_h = max((h for _, _, h in zh_layouts), default=0) or 1
+    en_row_h = max((h for _, _, h in en_layouts), default=0) or 1
+
+    total_units = len(zh_runs) + len(cues)
+    done = 0
+
+    zh_entries = []
+    for i, (run, (lines, bboxes, _)) in enumerate(zip(zh_runs, zh_layouts)):
+        filename = f"zh_{i:04d}.png"
+        w, h = render_text_row(
+            lines, bboxes, zh_font, ZH_OUTLINE_W, ZH_FILL,
+            ZH_SHADOW_DISTANCE, ZH_SHADOW_BLUR, zh_row_h,
+            True, out_dir / filename,
+        )
+        zh_entries.append({
+            "index": i, "filename": filename,
+            "start": run["start_s"], "end": run["end_s"],
+            "width": w, "height": h,
+        })
+        done += 1
+        if done % 25 == 0 or done == total_units:
+            print(f"PROGRESS {done}/{total_units}", flush=True)
+
+    en_entries = []
+    for cue, (lines, bboxes, _) in zip(cues, en_layouts):
+        filename = f"en_{cue['index']:04d}.png"
+        w, h = render_text_row(
+            lines, bboxes, en_font, EN_OUTLINE_W, EN_FILL,
+            EN_SHADOW_DISTANCE, EN_SHADOW_BLUR, en_row_h,
+            False, out_dir / filename,
+        )
+        en_entries.append({
+            "index": cue["index"], "filename": filename,
+            "start": cue["start_s"], "end": cue["end_s"],
+            "width": w, "height": h,
+        })
+        done += 1
+        if done % 25 == 0 or done == total_units:
+            print(f"PROGRESS {done}/{total_units}", flush=True)
 
     # Log a sample for debugging
     if cues:
@@ -430,14 +506,18 @@ def main():
         )
 
     manifest = {
-        "cues": manifest_entries,
+        "zh_cues": zh_entries,
+        "en_cues": en_entries,
         "video_width": VIDEO_WIDTH,
         "video_height": 0,
     }
     with open(out_dir / "manifest.json", "w") as f:
         json.dump(manifest, f)
 
-    print(f"Rendered {len(cues)} bilingual cues to {out_dir}", file=sys.stderr)
+    print(
+        f"Rendered {len(zh_runs)} ZH runs + {len(cues)} EN cues to {out_dir}",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":

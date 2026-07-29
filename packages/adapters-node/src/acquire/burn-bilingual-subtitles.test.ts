@@ -159,7 +159,7 @@ describe("burnBilingualSubtitles", () => {
 
     expect(renderer).toContain("_BASE_ZH_FONT_SIZE = 30");
     expect(renderer).toContain("_BASE_EN_FONT_SIZE = 16");
-    expect(renderer).toContain("_BASE_ZH_OUTLINE_W = 8");
+    expect(renderer).toContain("_BASE_ZH_OUTLINE_W = 4");
     expect(renderer).toContain("_BASE_EN_OUTLINE_W = 0");
     expect(renderer).toContain("MAX_WIDTH_FRAC = 0.80");
     expect(renderer).toContain('"/Library/Fonts/LexendDeca.ttf"');

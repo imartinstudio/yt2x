@@ -19,9 +19,9 @@ from PIL import Image, ImageDraw, ImageFont
 # 720p reference values, scaled proportionally for other heights.
 _BASE_ZH_FONT_SIZE = 30
 _BASE_EN_FONT_SIZE = 16
-_BASE_ZH_OUTLINE_W = 8
+_BASE_ZH_OUTLINE_W = 4
 _BASE_EN_OUTLINE_W = 0
-_BASE_SHADOW_DISTANCE = 2
+_BASE_SHADOW_DISTANCE = 1
 _BASE_SHADOW_BLUR = 2
 
 ZH_FILL = (255, 255, 255, 255)

@@ -907,6 +907,29 @@ describe("compactDenseBlocks", () => {
     expect(result).toEqual([{ ...blocks[0], zhText: compact }]);
   });
 
+  it("rejects a compaction that drops a protected term the original text had, keeping the over-cps original instead", async () => {
+    // Regression: a real repair run compacted "先Grill with Docs，再原型设计。"
+    // down to fit the cps budget, but the rewrite dropped "Grill with Docs"
+    // entirely — trading a presentation fix for a content regression
+    // (glossary-violation). Content correctness must outrank cps.
+    const dense = "先Grill with Docs，然后再做原型设计，接着继续下一步。"; // has the term, over budget
+    const droppedTerm = "先做文档，然后原型设计，接着下一步。"; // shorter but the term is gone
+    const blocks = [
+      { start: "00:00:00,000", end: "00:00:02,000", zhText: dense, enText: "grill with docs, then prototype" },
+    ];
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({ text: droppedTerm }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await compactDenseBlocks(blocks, llm, "test-model");
+
+    expect(result).toEqual(blocks);
+  });
+
   it("keeps the original when the rewrite doesn't actually shorten it", async () => {
     const dense = "一二三四五六七八九十一二三四五六七八九十";
     const blocks = [

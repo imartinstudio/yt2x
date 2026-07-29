@@ -1065,6 +1065,14 @@ export const compactDenseBlocks = async <T extends MergeableBlock>(
       signal,
     );
     if (compact === null) continue;
+    // A compaction that drops a protected term the current text already has
+    // is worse than the cps violation it was trying to fix — content
+    // correctness outranks reading speed (matches the audit's own
+    // content-vs-presentation severity split). requestCpsCompactRewrite's
+    // own prompt asks it not to do this, but real runs occasionally do
+    // anyway; reject rather than accept a shorter but term-violating rewrite.
+    const requiredTerms = PROTECTED_TERMS.filter((term) => span.zhText.includes(term));
+    if (requiredTerms.some((term) => !compact.includes(term))) continue;
     const newCharacterCount = compact.replace(/\s/gu, "").length;
     if (newCharacterCount < characterCount) {
       for (const idx of span.indices) {

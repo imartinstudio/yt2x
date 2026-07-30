@@ -2,6 +2,7 @@ export const CORE_VERSION = "0.0.0";
 
 export * from "./domain/article/index.js";
 export * from "./domain/deconstruct/index.js";
+export * from "./domain/dub/index.js";
 export * from "./domain/notes/index.js";
 export * from "./domain/pipeline/index.js";
 export * from "./domain/publish/index.js";
@@ -26,6 +27,17 @@ export type {
   LlmErrorKind,
   LlmErrorContext,
 } from "./ports/llm.js";
+
+export { TtsError, isTtsError, clampRate } from "./ports/tts.js";
+export type {
+  TtsPort,
+  TtsRequest,
+  TtsResult,
+  TtsAudioFormat,
+  TtsRateRange,
+  TtsErrorKind,
+  TtsErrorContext,
+} from "./ports/tts.js";
 
 export {
   DEFAULT_X_SCOPES,

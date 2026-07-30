@@ -8,6 +8,7 @@ import { registerAuthCommand } from "./commands/auth.js";
 import { registerClipsCommand } from "./commands/clips.js";
 import { registerDashboardCommand } from "./commands/dashboard.js";
 import { registerDeconstructCommand } from "./commands/deconstruct.js";
+import { registerDubCommand } from "./commands/dub.js";
 import { registerInfoCommand } from "./commands/info.js";
 import { registerLlmCommand } from "./commands/llm.js";
 import { registerNotesCommand } from "./commands/notes.js";
@@ -40,6 +41,7 @@ registerAuthCommand(program);
 registerClipsCommand(program);
 registerDashboardCommand(program);
 registerDeconstructCommand(program);
+registerDubCommand(program);
 registerLlmCommand(program);
 registerWechatFormatCommand(program);
 

@@ -1103,6 +1103,75 @@ export const compactDenseBlocks = async <T extends MergeableBlock>(
   return result;
 };
 
+/**
+ * Fixes a "flash" finding (a reading span visible for under
+ * `MIN_SPLIT_DURATION_S`) by borrowing display time from its timeline
+ * neighbors — never touching text, translation, or cue count. Two-tier:
+ * first reclaim any dead gap between cues (free — costs nothing), then, if
+ * still short, borrow from whichever neighbor span has more slack, capped
+ * so the donor's own duration never itself drops below the threshold. A
+ * span this can't fully fix (both neighbors already tight, e.g. at the very
+ * start/end of the file) is left partially improved — the audit's own
+ * re-check is what tells the caller whether it's now clean.
+ *
+ * Span-aware for the same reason `compactDenseBlocks` is: a run of
+ * consecutive blocks sharing identical Chinese text is one continuous
+ * reading unit, so only its two outer edges (against a genuinely different
+ * neighbor) are adjustable — the internal cue boundaries within the span
+ * stay untouched.
+ */
+export const fixFlashCues = <T extends MergeableBlock>(blocks: readonly T[]): T[] => {
+  const spans = buildIdenticalTextSpans(blocks);
+  const times = spans.map((s) => ({
+    start: timestampToSeconds(s.start),
+    end: timestampToSeconds(s.end),
+  }));
+
+  for (let i = 0; i < spans.length; i++) {
+    let needed = MIN_SPLIT_DURATION_S - (times[i]!.end - times[i]!.start);
+    if (needed <= 0) continue;
+
+    const prevGap = i > 0 ? times[i]!.start - times[i - 1]!.end : 0;
+    const fromGapBefore = Math.min(Math.max(prevGap, 0), needed);
+    times[i]!.start -= fromGapBefore;
+    needed -= fromGapBefore;
+
+    if (needed > 0 && i < spans.length - 1) {
+      const nextGap = times[i + 1]!.start - times[i]!.end;
+      const fromGapAfter = Math.min(Math.max(nextGap, 0), needed);
+      times[i]!.end += fromGapAfter;
+      needed -= fromGapAfter;
+    }
+
+    while (needed > 1e-6) {
+      const prevSlack = i > 0 ? Math.max(0, times[i - 1]!.end - times[i - 1]!.start - MIN_SPLIT_DURATION_S) : 0;
+      const nextSlack =
+        i < spans.length - 1 ? Math.max(0, times[i + 1]!.end - times[i + 1]!.start - MIN_SPLIT_DURATION_S) : 0;
+      if (prevSlack <= 1e-6 && nextSlack <= 1e-6) break; // neither neighbor can lend more
+      if (prevSlack >= nextSlack) {
+        const take = Math.min(prevSlack, needed);
+        times[i - 1]!.end -= take;
+        times[i]!.start -= take;
+        needed -= take;
+      } else {
+        const take = Math.min(nextSlack, needed);
+        times[i + 1]!.start += take;
+        times[i]!.end += take;
+        needed -= take;
+      }
+    }
+  }
+
+  const result = blocks.map((b) => ({ ...b }));
+  spans.forEach((span, i) => {
+    const first = span.indices[0]!;
+    const last = span.indices[span.indices.length - 1]!;
+    result[first] = { ...result[first]!, start: secondsToTimestamp(times[i]!.start) };
+    result[last] = { ...result[last]!, end: secondsToTimestamp(times[i]!.end) };
+  });
+  return result;
+};
+
 const repairMissingTermsInBlocks = async <T extends MergeableBlock>(
   blocks: readonly T[],
   llm: LlmPort,
@@ -1175,12 +1244,22 @@ export const repairSubtitleArtifacts = async (input: {
 
   let blocks = await repairMissingTermsInBlocks(original, input.llm, input.model, input.signal);
   blocks = await compactDenseBlocks(blocks, input.llm, input.model, input.signal);
+  blocks = fixFlashCues(blocks);
 
-  const changed = blocks.some((b, i) => b.zhText !== original[i]!.zhText);
+  const changed = blocks.some(
+    (b, i) => b.zhText !== original[i]!.zhText || b.start !== original[i]!.start || b.end !== original[i]!.end,
+  );
   if (!changed) {
     return { enSrt: input.enSrt, zhSrt: input.zhSrt, bilingualSrt: input.bilingualSrt, changed: false };
   }
 
+  // fixFlashCues can move a cue's start/end, which the en/zh/bilingual
+  // artifacts share identically per index — all three must be regenerated
+  // from `blocks` together, not just the ones whose text happened to change,
+  // or the timing goes out of sync between files.
+  const enSrt = serializeSrtBlocks(
+    blocks.map((b, i) => ({ index: i + 1, start: b.start, end: b.end, text: [b.enText] })),
+  );
   const zhSrt = serializeSrtBlocks(
     blocks.map((b, i) => ({ index: i + 1, start: b.start, end: b.end, text: [b.zhText] })),
   );
@@ -1188,7 +1267,7 @@ export const repairSubtitleArtifacts = async (input: {
     blocks.map((b, i) => ({ index: i + 1, start: b.start, end: b.end, text: [b.zhText, b.enText] })),
   );
 
-  return { enSrt: input.enSrt, zhSrt, bilingualSrt, changed: true };
+  return { enSrt, zhSrt, bilingualSrt, changed: true };
 };
 
 /**

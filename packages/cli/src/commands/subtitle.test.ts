@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { executeSubtitleAudit } from "./subtitle.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { executeSubtitleAudit, executeSubtitleRepair } from "./subtitle.js";
 
 const sourceSrt = `1
 00:00:00,000 --> 00:00:02,000
@@ -145,5 +145,98 @@ describe("executeSubtitleAudit", () => {
 
     expect(exitCode).toBe(0);
     expect(report).toEqual({ verdict: "pass", issues: [] });
+  });
+});
+
+describe("executeSubtitleRepair", () => {
+  const repairVideoId = "testvideorp"; // sanitizeVideoId truncates to 11 chars — keep it exact
+  let originalApiKey: string | undefined;
+
+  beforeEach(() => {
+    originalApiKey = process.env.DEEPSEEK_API_KEY;
+    // Neither cue below has a protected term or excessive cps, so
+    // repairSubtitleArtifacts never actually calls the LLM — this key only
+    // needs to satisfy config validation, never a real network call.
+    process.env.DEEPSEEK_API_KEY = "test-key-not-real";
+  });
+  afterEach(() => {
+    if (originalApiKey === undefined) delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY = originalApiKey;
+  });
+
+  const prepareRepairFixture = async (): Promise<{
+    outDir: string;
+    articleOutDir: string;
+    reportPath: string;
+    enSrtPath: string;
+    zhSrtPath: string;
+    bilingualSrtPath: string;
+  }> => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-subtitle-repair-"));
+    const outDir = path.join(root, "downloads");
+    const articleOutDir = path.join(root, "articles");
+    const downloadDir = path.join(outDir, repairVideoId);
+    const articleVideoDir = path.join(articleOutDir, repairVideoId, "video");
+    await mkdir(downloadDir, { recursive: true });
+    await mkdir(articleVideoDir, { recursive: true });
+
+    // cue 2 is a 0.5s flash cue with a 0.5s dead gap before it — exactly
+    // enough for fixFlashCues to absorb without touching cue 1 at all.
+    const en = `1\n00:00:00,000 --> 00:00:03,000\nThis is a normal opening sentence.\n\n2\n00:00:03,500 --> 00:00:04,000\nShort.\n`;
+    const zh = `1\n00:00:00,000 --> 00:00:03,000\n这是一句正常的开场白。\n\n2\n00:00:03,500 --> 00:00:04,000\n短。\n`;
+    const bilingual = `1\n00:00:00,000 --> 00:00:03,000\n这是一句正常的开场白。\nThis is a normal opening sentence.\n\n2\n00:00:03,500 --> 00:00:04,000\n短。\nShort.\n`;
+
+    const enSrtPath = path.join(articleVideoDir, "full.en.srt");
+    const zhSrtPath = path.join(articleVideoDir, "full.zh.srt");
+    const bilingualSrtPath = path.join(articleVideoDir, "full.bilingual.srt");
+    await writeFile(path.join(downloadDir, "full.en.srt"), en);
+    await writeFile(enSrtPath, en);
+    await writeFile(zhSrtPath, zh);
+    await writeFile(bilingualSrtPath, bilingual);
+    await writeFile(
+      path.join(articleVideoDir, "full.bilingual.semantic.json"),
+      JSON.stringify({ sourceSha256: createHash("sha256").update(en).digest("hex") }),
+    );
+    return {
+      outDir,
+      articleOutDir,
+      reportPath: path.join(articleVideoDir, "full.bilingual.audit.json"),
+      enSrtPath,
+      zhSrtPath,
+      bilingualSrtPath,
+    };
+  };
+
+  it("fixes a flash cue's timing and keeps en/zh/bilingual consistent on disk", async () => {
+    const fixture = await prepareRepairFixture();
+
+    const exitCode = await executeSubtitleRepair(repairVideoId, {
+      outDir: fixture.outDir,
+      articleOutDir: fixture.articleOutDir,
+      measureLayout: async () => [],
+    });
+
+    expect(exitCode).toBe(0);
+    const en = await readFile(fixture.enSrtPath, "utf8");
+    const zh = await readFile(fixture.zhSrtPath, "utf8");
+    const bilingual = await readFile(fixture.bilingualSrtPath, "utf8");
+    // cue 2 absorbed the 0.5s dead gap before it (03,000 -> 03,500), and all
+    // three files moved together.
+    expect(en).toContain("00:00:03,000 --> 00:00:04,000");
+    expect(zh).toContain("00:00:03,000 --> 00:00:04,000");
+    expect(bilingual).toContain("00:00:03,000 --> 00:00:04,000");
+
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as {
+      verdict: string;
+      issues: Array<{ code: string }>;
+    };
+    expect(report.issues.some((i) => i.code === "flash")).toBe(false);
+    // Regression coverage: the "after" audit must compare against the
+    // freshly written full.en.srt, not the stale pre-repair copy that was
+    // read at the top of the function — otherwise a real timing fix that
+    // moved en/zh/bilingual together falsely reports as a mismatch between
+    // them, since only the in-memory `enSrt` variable would be behind.
+    expect(report.issues.some((i) => i.code === "bilingual-timing")).toBe(false);
+    expect(report.verdict).not.toBe("fail");
   });
 });

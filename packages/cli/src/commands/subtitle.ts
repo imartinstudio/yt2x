@@ -204,13 +204,18 @@ export const executeSubtitleRepair = async (
   });
 
   if (repaired.changed) {
+    // fixFlashCues (inside repairSubtitleArtifacts) can move a cue's
+    // start/end, which full.en.srt shares identically per index with the
+    // zh/bilingual files — it must be written back too, or its timing goes
+    // out of sync with the two files that just changed.
+    await atomicWriteFile(path.join(articleVideoDir, "full.en.srt"), repaired.enSrt);
     await atomicWriteFile(zhSrtPath, repaired.zhSrt);
     await atomicWriteFile(bilingualSrtPath, repaired.bilingualSrt);
   }
 
   const after = auditSubtitleArtifacts({
     sourceSrt,
-    enSrt,
+    enSrt: repaired.enSrt,
     zhSrt: repaired.zhSrt,
     bilingualSrt: repaired.bilingualSrt,
     manifest,

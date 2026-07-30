@@ -11,6 +11,7 @@ import {
   ensureProtectedTermsPreserved,
   findProtectedSpans,
   findWordTimingsForCue,
+  fixFlashCues,
   mergeBriefBlocks,
   mergeShortPieces,
   projectSemanticBilingualSubtitles,
@@ -962,6 +963,135 @@ describe("repairSubtitleArtifacts", () => {
       "Grill with Docs一起过一遍已经流行了，",
       "Grill with Docs一起过一遍已经流行了，",
     ]);
+  });
+
+  it("also rewrites full.en.srt when the only change is a flash-cue timing fix", async () => {
+    // A cue with no content issue at all — the sole finding is a flash
+    // (0.5s < 1s), fixable purely by absorbing the gap before it. The en/zh/
+    // bilingual outputs share cue timing, so all three must move together.
+    const enSrt = srt([
+      { start: "00:00:00,000", end: "00:00:03,000", text: "a long enough sentence to start." },
+      { start: "00:00:03,500", end: "00:00:04,000", text: "Short." },
+    ]);
+    const zhSrt = srt([
+      { start: "00:00:00,000", end: "00:00:03,000", text: "一句开场白。" },
+      { start: "00:00:03,500", end: "00:00:04,000", text: "短。" },
+    ]);
+    const bilingualSrt = srt([
+      { start: "00:00:00,000", end: "00:00:03,000", text: "一句开场白。\na long enough sentence to start." },
+      { start: "00:00:03,500", end: "00:00:04,000", text: "短。\nShort." },
+    ]);
+    const llm: LlmPort = { chat: vi.fn() };
+
+    const result = await repairSubtitleArtifacts({ enSrt, zhSrt, bilingualSrt, llm, model: "test-model" });
+
+    expect(result.changed).toBe(true);
+    expect(llm.chat).not.toHaveBeenCalled(); // pure timing fix, no LLM call needed
+    const enBlocks = parseSubtitleBlocks(result.enSrt);
+    expect(enBlocks[1]!.start).toBe("00:00:03,000"); // absorbed the 0.5s gap
+    expect(enBlocks[1]!.end).toBe("00:00:04,000");
+  });
+});
+
+describe("fixFlashCues", () => {
+  const block = (start: string, end: string, zhText: string, enText = "x") => ({ start, end, zhText, enText });
+
+  it("absorbs the dead gap before a flash cue, without touching its neighbor", () => {
+    const blocks = [
+      block("00:00:00,000", "00:00:02,000", "第一句。"),
+      block("00:00:02,500", "00:00:03,140", "那咱们开始吧。"), // 0.64s, needs +0.36s; gap before = 0.5s
+      block("00:00:03,320", "00:00:05,000", "第三句。"),
+    ];
+
+    const result = fixFlashCues(blocks);
+
+    expect(result[1]!.start).toBe("00:00:02,140"); // 0.36s absorbed from the gap
+    expect(result[1]!.end).toBe("00:00:03,140");
+    expect(result[0]).toEqual(blocks[0]); // untouched
+    expect(result[2]).toEqual(blocks[2]); // untouched
+  });
+
+  it("borrows from the neighbor with more slack when gaps alone aren't enough", () => {
+    const blocks = [
+      block("00:00:00,000", "00:00:03,500", "较长的一句，有富余。"), // 3.5s, slack 2.5s
+      block("00:00:03,500", "00:00:03,720", "解释一下："), // 0.22s, needs +0.78s, no gaps either side
+      block("00:00:03,720", "00:00:04,720", "较短的一句。"), // 1.0s exactly, zero slack
+    ];
+
+    const result = fixFlashCues(blocks);
+
+    const dur = (b: { start: string; end: string }) => {
+      const [sh, sm, srest] = b.start.split(":");
+      const [ss, sms] = srest!.split(",");
+      const [eh, em, erest] = b.end.split(":");
+      const [es, ems] = erest!.split(",");
+      const s = Number(sh) * 3600 + Number(sm) * 60 + Number(ss) + Number(sms) / 1000;
+      const e = Number(eh) * 3600 + Number(em) * 60 + Number(es) + Number(ems) / 1000;
+      return e - s;
+    };
+
+    expect(dur(result[1]!)).toBeCloseTo(1.0, 3);
+    // Borrowed only from the neighbor with slack (index 0); the zero-slack
+    // neighbor (index 2) is untouched, never pushed below the threshold.
+    expect(result[2]).toEqual(blocks[2]);
+    expect(dur(result[0]!)).toBeGreaterThanOrEqual(1.0);
+  });
+
+  it("never shrinks a donor below the minimum duration", () => {
+    const blocks = [
+      block("00:00:00,000", "00:00:01,500", "刚好富余0.5秒。"), // 1.5s, slack 0.5s
+      block("00:00:01,500", "00:00:01,700", "太短了。"), // 0.2s, needs +0.8s
+    ];
+
+    const result = fixFlashCues(blocks);
+
+    const durMs = (b: { start: string; end: string }) => {
+      const toMs = (t: string) => {
+        const [h, m, rest] = t.split(":");
+        const [s, ms] = rest!.split(",");
+        return ((Number(h) * 3600 + Number(m) * 60 + Number(s)) * 1000) + Number(ms);
+      };
+      return toMs(b.end) - toMs(b.start);
+    };
+    expect(durMs(result[0]!)).toBeGreaterThanOrEqual(1000); // donor never drops below 1s
+  });
+
+  it("never changes any text, only timing", () => {
+    const blocks = [
+      block("00:00:00,000", "00:00:02,000", "第一句。", "First."),
+      block("00:00:02,000", "00:00:02,400", "短。", "Short."),
+    ];
+
+    const result = fixFlashCues(blocks);
+
+    expect(result.map((b) => b.zhText)).toEqual(blocks.map((b) => b.zhText));
+    expect(result.map((b) => b.enText)).toEqual(blocks.map((b) => b.enText));
+  });
+
+  it("extends only the outer edges of an identical-text span, leaving internal cue boundaries alone", () => {
+    // Gap before (0.2s) alone isn't enough for the needed 0.5s, so both the
+    // before- and after-gaps get used — the clearest way to see both outer
+    // edges move while the shared internal boundary at 01,900 stays fixed.
+    const blocks = [
+      block("00:00:00,000", "00:00:01,300", "前一句。"),
+      block("00:00:01,500", "00:00:01,900", "重复的句子。"), // span start
+      block("00:00:01,900", "00:00:02,000", "重复的句子。"), // span end, combined 0.5s, needs +0.5s
+      block("00:00:02,300", "00:00:03,000", "后一句。"),
+    ];
+
+    const result = fixFlashCues(blocks);
+
+    // Internal boundary between the two identical-text cues is untouched.
+    expect(result[1]!.end).toBe("00:00:01,900");
+    expect(result[2]!.start).toBe("00:00:01,900");
+    // Only the span's outer edges moved.
+    expect(result[1]!.start).not.toBe(blocks[1]!.start);
+    expect(result[2]!.end).not.toBe(blocks[2]!.end);
+  });
+
+  it("leaves an already-long-enough cue untouched", () => {
+    const blocks = [block("00:00:00,000", "00:00:02,000", "足够长了。")];
+    expect(fixFlashCues(blocks)).toEqual(blocks);
   });
 });
 

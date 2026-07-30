@@ -17,6 +17,7 @@ import { translateSrt } from "./srt-translator.js";
 import {
   auditSubtitleArtifacts,
   isSubtitleAuditReadyForDelivery,
+  subtitleAuditAdvisoryIssues,
   type SubtitleAuditIssue,
   type SubtitleAuditResult,
 } from "./audit-subtitles.js";
@@ -653,6 +654,44 @@ const reportBurnProgress = (
   };
 };
 
+/** The name the acquire step writes and every manifest records. */
+const SOURCE_VIDEO_NAME = "full.mp4";
+
+/**
+ * Resolves the downloaded source video inside `<videoDir>/video`.
+ *
+ * `full.mp4` wins outright, because that is what acquire writes and what the
+ * manifests already claim (`source_video: "video/full.mp4"`). That directory
+ * is not exclusively ours, though — hand-cut test clips get parked there too,
+ * and the previous "first *.mp4 that isn't a burned output" scan picked
+ * `clip30.mp4` over `full.mp4` on nothing but alphabetical order: it burned a
+ * 30-second excerpt straight over a 13-minute delivery while the manifest
+ * still said full.mp4. Silent and destructive.
+ *
+ * The scan survives as a fallback so download trees whose source still carries
+ * its YouTube title keep working, but the result says whether it had to fall
+ * back, so callers can surface an unexpected pick instead of burning it.
+ */
+export const resolveSourceVideo = async (
+  videoDir: string,
+): Promise<{ name: string; preferred: boolean } | undefined> => {
+  const names = await readdir(path.join(videoDir, "video")).catch(() => [] as string[]);
+  if (names.includes(SOURCE_VIDEO_NAME)) return { name: SOURCE_VIDEO_NAME, preferred: true };
+  const fallback = names.find((name) => /\.mp4$/iu.test(name) && !/burned/iu.test(name));
+  return fallback === undefined ? undefined : { name: fallback, preferred: false };
+};
+
+/** Warns when the burn is about to use something other than `full.mp4`. */
+const warnOnUnpreferredSource = (
+  warnings: string[],
+  source: { name: string; preferred: boolean },
+): void => {
+  if (source.preferred) return;
+  warnings.push(
+    `burning "${source.name}" as the source video: no ${SOURCE_VIDEO_NAME} in the download tree`,
+  );
+};
+
 const SEMANTIC_VERSION = 1;
 const TRANSLATION_RULE_VERSION = "semantic-bilingual-v1";
 const LAYOUT_RULE_VERSION = "baocut-layout-v1";
@@ -693,6 +732,23 @@ const semanticDeliveryQuality = (
   readyForBurn: mode !== "off" && isSubtitleAuditReadyForDelivery(report, mode),
   issues: report.issues,
 });
+
+/**
+ * Reading-speed findings no longer block delivery (see
+ * ADVISORY_PRESENTATION_CODES), so they have to be *said out loud* instead —
+ * silently shipping disclosed debt is how it stops getting looked at. The
+ * findings also stay in the manifest's `quality.issues` for `subtitle audit`
+ * and `subtitle repair` to work from.
+ */
+const pushAdvisoryWarnings = (warnings: string[], report: SubtitleAuditResult): void => {
+  const advisory = subtitleAuditAdvisoryIssues(report);
+  if (advisory.length === 0) return;
+  warnings.push(
+    `${advisory.length} reading-speed finding(s) shipped as presentation debt ` +
+      `(run \`yt2x subtitle repair\` to attempt a fix): ` +
+      advisory.map((issue) => `${issue.code}@${issue.timestamp ?? "?"}`).join(", "),
+  );
+};
 
 const atomicWrite = async (filePath: string, content: string): Promise<void> => {
   await mkdir(path.dirname(filePath), { recursive: true });
@@ -764,6 +820,19 @@ const loadLocalWordTimings = async (srtPath: string): Promise<WordTiming[] | und
   }
 };
 
+/**
+ * Cache validity is *integrity*, not verdict: are the artifacts on disk really
+ * the ones this source SRT and this model produced under the current
+ * translation rules, and do they still hash to what the manifest recorded?
+ * The caller re-audits the reused artifacts and rewrites the verdict from that
+ * fresh report, so gating reuse on the *recorded* verdict only meant a
+ * manifest failed by an old rule could never be re-blessed — every retry threw
+ * away good artifacts to buy a different random translation. `--force` remains
+ * the way to deliberately ask for a fresh roll.
+ *
+ * The failure path writes a manifest with neither `files` nor `groups`, so the
+ * genuinely unusable case is still rejected below.
+ */
 const readValidArticleCache = async (opts: {
   articleVideoDir: string;
   sourceSha256: string;
@@ -774,9 +843,6 @@ const readValidArticleCache = async (opts: {
     const manifest = JSON.parse(raw) as ArticleBilingualManifest;
     if (
       manifest.kind !== "semantic-bilingual" ||
-      manifest.status !== "ready" ||
-      Object.values(manifest.stages).some((status) => status !== "done") ||
-      manifest.quality.readyForBurn !== true ||
       manifest.files === undefined ||
       manifest.groups === undefined ||
       manifest.sourceSha256 !== opts.sourceSha256 ||
@@ -814,9 +880,9 @@ const computeWordTimings = async (opts: {
   const pythonBin = await resolvePythonWithTorchaudio();
   if (pythonBin === undefined) return undefined;
 
-  const names = await readdir(path.join(opts.videoDir, "video")).catch(() => [] as string[]);
-  const mp4 = names.find((name) => /\.mp4$/iu.test(name) && !/burned/iu.test(name));
-  if (mp4 === undefined) return undefined;
+  const source = await resolveSourceVideo(opts.videoDir);
+  if (source === undefined) return undefined;
+  const mp4 = source.name;
 
   const words = parseSubtitleBlocks(opts.sourceSrt)
     .flatMap((cue) => cue.text.join(" ").split(/\s+/u))
@@ -896,9 +962,9 @@ export const transcribeLocal = async (opts: {
   if (pythonBin === undefined) return undefined;
 
   const videoSubdir = path.join(opts.videoDir, "video");
-  const names = await readdir(videoSubdir).catch(() => [] as string[]);
-  const mp4 = names.find((name) => /\.mp4$/iu.test(name) && !/burned/iu.test(name));
-  if (mp4 === undefined) return undefined;
+  const source = await resolveSourceVideo(opts.videoDir);
+  if (source === undefined) return undefined;
+  const mp4 = source.name;
 
   const srtPath = path.join(videoSubdir, `full.local.${opts.language}.srt`);
   const wordsPath = path.join(videoSubdir, `full.local.${opts.language}.words.json`);
@@ -989,6 +1055,7 @@ const runArticleBilingualPipeline = async (
       measurements,
     });
     const quality = semanticDeliveryQuality(audit, bilingualMode);
+    pushAdvisoryWarnings(warnings, audit);
     const resolvedFonts = measurements[0]?.resolvedFonts ?? cached.resolvedFonts;
     const refreshed = {
       ...cached,
@@ -1019,11 +1086,12 @@ const runArticleBilingualPipeline = async (
       throw new Error("semantic bilingual quality gate blocked delivery");
     }
     if (bilingualMode === "burned" || bilingualMode === "all") {
-      const names = await readdir(path.join(opts.videoDir, "video")).catch(() => [] as string[]);
-      const mp4 = names.find((name) => /\.mp4$/iu.test(name) && !/burned/iu.test(name));
-      if (mp4 === undefined) {
+      const source = await resolveSourceVideo(opts.videoDir);
+      if (source === undefined) {
         throw new Error("downloaded source video is required for bilingual subtitle burning");
       }
+      warnOnUnpreferredSource(warnings, source);
+      const mp4 = source.name;
       await burnBilingualSubtitles({
         srtPath: path.join(articleVideoDir, "full.bilingual.srt"),
         enSrtPath: path.join(articleVideoDir, "full.en.srt"),
@@ -1130,6 +1198,7 @@ const runArticleBilingualPipeline = async (
   });
   projection = { ...projection, enSrt, zhSrt, bilingualSrt };
   const quality = semanticDeliveryQuality(audit, bilingualMode);
+  pushAdvisoryWarnings(warnings, audit);
   const files = {
     en: { sha256: contentSha256(enSrt) },
     zh: { sha256: contentSha256(zhSrt) },
@@ -1193,11 +1262,12 @@ const runArticleBilingualPipeline = async (
   }
 
   if (bilingualMode === "burned" || bilingualMode === "all") {
-    const names = await readdir(path.join(opts.videoDir, "video")).catch(() => [] as string[]);
-    const mp4 = names.find((name) => /\.mp4$/iu.test(name) && !/burned/iu.test(name));
-    if (mp4 === undefined) {
+    const source = await resolveSourceVideo(opts.videoDir);
+    if (source === undefined) {
       throw new Error("downloaded source video is required for bilingual subtitle burning");
     }
+    warnOnUnpreferredSource(warnings, source);
+    const mp4 = source.name;
     await burnBilingualSubtitles({
       srtPath: path.join(articleVideoDir, "full.bilingual.srt"),
       enSrtPath: path.join(articleVideoDir, "full.en.srt"),
@@ -1558,8 +1628,9 @@ export const runSubtitlePipeline = async (
       // Burn bilingual subtitles
       if (bilingualMode === "burned" || bilingualMode === "all") {
         const bilingualSrtPath = path.join(videoDir, "video", "full.bilingual.srt");
-        const names = await readdir(path.join(videoDir, "video")).catch(() => [] as string[]);
-        const mp4File = names.find((n) => /\.mp4$/i.test(n) && !/\.(zh|bilingual)-burned\.mp4$/i.test(n));
+        const source = await resolveSourceVideo(videoDir);
+        if (source !== undefined) warnOnUnpreferredSource(warnings, source);
+        const mp4File = source?.name;
         if (mp4File !== undefined) {
           const videoPath = path.join(videoDir, "video", mp4File);
           const burnedSubdir =

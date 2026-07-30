@@ -121,10 +121,27 @@ export const executeSubtitleAudit = async (
     measurements,
   });
   await mkdir(articleVideoDir, { recursive: true });
-  await writeFile(
-    path.join(articleVideoDir, "full.bilingual.audit.json"),
-    `${JSON.stringify(result, null, 2)}\n`,
-    "utf8",
+  const reportPath = path.join(articleVideoDir, "full.bilingual.audit.json");
+  await writeFile(reportPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+  // Without this the command was completely silent — it only wrote the JSON,
+  // so the CLI gave no hint about which cue was flagged or why a `subtitle`
+  // run had been refusing to deliver. `repair` already reports this shape.
+  logger.info(
+    {
+      videoId,
+      verdict: result.verdict,
+      issueCount: result.issues.length,
+      byCode: summarizeIssues(result.issues),
+      blocksBurn: !isSubtitleAuditReadyForDelivery(result, "burned"),
+      issues: result.issues.map((issue) => ({
+        code: issue.code,
+        severity: issue.severity,
+        timestamp: issue.timestamp,
+        message: issue.message,
+      })),
+      reportPath,
+    },
+    "yt2x subtitle audit: done",
   );
   return flags.strict === true && result.verdict === "fail" ? 2 : 0;
 };
@@ -232,13 +249,12 @@ export const executeSubtitleRepair = async (
   if (repaired.changed) {
     // readValidArticleCache (the `subtitle` pipeline's own cache check)
     // trusts full.bilingual.semantic.json, not full.bilingual.audit.json —
-    // it requires status "ready", quality.readyForBurn true, and each
-    // file's sha256 to match. Repair changes the actual files but never
-    // touched this manifest, so a later `subtitle` run (even without
-    // --force) saw the ORIGINAL failed/stale record, judged the cache
-    // invalid, and silently re-translated the whole video from scratch —
-    // throwing away exactly the fix repair just made, and risking a brand
-    // new random failure from the always-non-deterministic retranslation.
+    // and it checks each file's recorded sha256 against the bytes on disk.
+    // Repair changes the actual files, so without refreshing those hashes a
+    // later `subtitle` run (even without --force) judged the cache invalid
+    // and silently re-translated the whole video from scratch — throwing
+    // away exactly the fix repair just made, and risking a brand new random
+    // failure from the always-non-deterministic retranslation.
     const readyForBurn = isSubtitleAuditReadyForDelivery(after, "burned");
     const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
     const updatedManifest = {

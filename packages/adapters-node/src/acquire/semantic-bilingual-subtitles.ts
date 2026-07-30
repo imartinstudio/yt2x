@@ -1005,21 +1005,24 @@ export const mergeBriefBlocks = <T extends MergeableBlock>(
  * over a rewrite that didn't actually help.
  */
 /**
- * Reading-speed compaction, deliberately separate from `requestCompactRewrite`.
- * That function's budget is `visualWidth` (a Latin letter costs half a CJK
- * cell) because it exists to fit a display line's physical width. cps is
- * measured in raw characters per second (matching the audit's own count —
- * see audit-subtitles.ts), so a line with English terms in it (e.g. "Grill
- * Me") has a visualWidth well under its true character count — reusing the
- * width-budget function here meant the model (and its own validation) saw
- * "already fits" and returned the original text unchanged, even though the
- * *character* count was still over the cps budget. This asks for a rewrite
- * bounded by raw character count instead.
+ * Reading-speed compaction, kept separate from `requestCompactRewrite` because
+ * the two answer different questions (does this fit one display line, vs. can
+ * a viewer read it in the time it is on screen) — but both budget in
+ * `visualWidth`, and that shared unit matters.
+ *
+ * This function once budgeted in raw characters to match the audit's own cps
+ * count. That made every cps finding on a term-carrying cue unsatisfiable: raw
+ * counting treats "Air Coding Cohort" as 15 Chinese characters, so it could
+ * eat a whole 2-second cue's budget on its own, while the only text the model
+ * is allowed to shorten is the Chinese around it — the term itself must stay
+ * verbatim (see the protected-term rejection in `compactDenseBlocks`). The
+ * audit now measures cps in visual width too, so a finding raised there is
+ * always reachable from here.
  */
 const requestCpsCompactRewrite = async (
   sourceText: string,
   currentTranslation: string,
-  targetCharacterCount: number,
+  targetWidth: number,
   llm: LlmPort,
   model: string,
   signal?: AbortSignal,
@@ -1032,19 +1035,20 @@ const requestCpsCompactRewrite = async (
           role: "system",
           content: [
             "This Simplified Chinese subtitle line reads faster than a viewer can",
-            `comfortably follow. Rewrite it to at most ${targetCharacterCount}`,
-            "characters total (count every character except spaces — this includes",
-            "punctuation and any kept-as-English term) so it reads at a normal pace.",
+            `comfortably follow. Rewrite it to a width of at most ${targetWidth},`,
+            "counting each Chinese character as 1 and each Latin letter or digit",
+            "as 0.5, so it reads at a normal pace.",
             "Preserve the full meaning — use shorter synonyms and drop redundant",
             "words, but do not drop information the source conveys.",
             "Keep any product names, people's names, and technical terms exactly",
-            "as they appear in the current translation.",
+            "as they appear in the current translation; shorten the Chinese around",
+            "them instead.",
             'Return JSON: {"text":"..."}',
           ].join("\n"),
         },
         {
           role: "user",
-          content: JSON.stringify({ source: sourceText, currentTranslation, targetCharacterCount }),
+          content: JSON.stringify({ source: sourceText, currentTranslation, targetWidth }),
         },
       ],
       temperature: 0.1,
@@ -1077,15 +1081,15 @@ export const compactDenseBlocks = async <T extends MergeableBlock>(
   for (const span of buildIdenticalTextSpans(result)) {
     const duration = timestampToSeconds(span.end) - timestampToSeconds(span.start);
     if (!Number.isFinite(duration) || duration <= 0) continue;
-    const characterCount = span.zhText.replace(/\s/gu, "").length;
-    if (characterCount / duration <= MAX_CPS_BEFORE_MERGE) continue;
+    const currentWidth = visualWidth(span.zhText);
+    if (currentWidth / duration <= MAX_CPS_BEFORE_MERGE) continue;
 
-    const targetChars = Math.max(1, Math.floor(duration * MAX_CPS_BEFORE_MERGE));
+    const targetWidth = Math.max(1, Math.floor(duration * MAX_CPS_BEFORE_MERGE));
     const sourceText = span.indices.map((idx) => result[idx]!.enText).join(" ");
     const compact = await requestCpsCompactRewrite(
       sourceText,
       span.zhText,
-      targetChars,
+      targetWidth,
       llm,
       model,
       signal,
@@ -1099,8 +1103,7 @@ export const compactDenseBlocks = async <T extends MergeableBlock>(
     // anyway; reject rather than accept a shorter but term-violating rewrite.
     const requiredTerms = PROTECTED_TERMS.filter((term) => span.zhText.includes(term));
     if (requiredTerms.some((term) => !compact.includes(term))) continue;
-    const newCharacterCount = compact.replace(/\s/gu, "").length;
-    if (newCharacterCount < characterCount) {
+    if (visualWidth(compact) < currentWidth) {
       for (const idx of span.indices) {
         result[idx] = { ...result[idx]!, zhText: compact };
       }

@@ -1116,6 +1116,33 @@ describe("compactDenseBlocks", () => {
     expect(result).toEqual([{ ...blocks[0], zhText: compact }]);
   });
 
+  it("leaves a block alone when its visual width reads comfortably, even if its raw character count does not", async () => {
+    // The audit measures reading speed in visual width (a Latin letter is
+    // half a CJK cell), so a block padded with a kept-as-English term is
+    // within budget and must not be sent for a rewrite. Budgeting this in
+    // raw characters instead asked the model to shorten a line the audit
+    // never flags — and since the term can't be dropped, that request had no
+    // satisfiable answer.
+    const blocks = [{
+      start: "00:00:00,000",
+      end: "00:00:02,374",
+      zhText: "那你定会爱上我的Air Coding Cohort",
+      enText: "You will love my Air Coding Cohort",
+    }];
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({ text: "短" }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await compactDenseBlocks(blocks, llm, "test-model");
+
+    expect(llm.chat).not.toHaveBeenCalled();
+    expect(result).toEqual(blocks);
+  });
+
   it("rejects a compaction that drops a protected term the original text had, keeping the over-cps original instead", async () => {
     // Regression: a real repair run compacted "先Grill with Docs，再原型设计。"
     // down to fit the cps budget, but the rewrite dropped "Grill with Docs"

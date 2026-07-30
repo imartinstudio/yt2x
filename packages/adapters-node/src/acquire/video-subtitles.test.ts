@@ -24,6 +24,7 @@ import {
   detectSubtitleLanguage,
   parseSubtitleBlocks,
   prepareSourceSubtitle,
+  resolveSourceVideo,
   runSubtitlePipeline,
   transcribeLocal,
 } from "./video-subtitles.js";
@@ -474,6 +475,36 @@ Second sentence.
     await runSubtitlePipeline(pipelineOptions);
     // Second run hits cache → no new LLM calls. Total stays at 3.
     expect(llm.chat).toHaveBeenCalledTimes(3);
+
+    // A manifest carrying a stale quality verdict — one an older, since-fixed
+    // audit rule wrote — must still be reusable: cache validity is about
+    // whether these artifacts really came from this source with this model
+    // (shas, rule version), not about the verdict, which the cached path
+    // re-derives from a fresh audit two steps later anyway. Requiring
+    // status "ready" here meant a manifest failed by a rule that no longer
+    // exists could never be re-blessed, and every retry paid for a full
+    // re-translation whose only new information was a different random roll.
+    const manifestPath = path.join(articleVideoDir, "full.bilingual.semantic.json");
+    const stale = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    await writeFile(manifestPath, JSON.stringify({
+      ...stale,
+      status: "failed",
+      stages: { translation: "done", alignment: "done", segmentation: "done", layout: "failed" },
+      quality: { readyForBurn: false, issues: [{ code: "cps", severity: "presentation", message: "fast" }] },
+    }, null, 2));
+
+    await runSubtitlePipeline(pipelineOptions);
+    expect(llm.chat).toHaveBeenCalledTimes(3);
+    const rebLessed = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      status: string;
+      stages: { layout: string };
+      quality: { readyForBurn: boolean };
+    };
+    expect(rebLessed).toMatchObject({
+      status: "ready",
+      stages: { layout: "done" },
+      quality: { readyForBurn: true },
+    });
   });
 
   it("never probes for torchaudio when enableForcedAlignment is not set", async () => {
@@ -987,6 +1018,140 @@ Second sentence.
     });
     await expect(readFile(path.join(articleVideoDir, "full.bilingual.srt"), "utf8"))
       .resolves.toContain("无法安全拆分的长句因为只有一个源字幕");
+  });
+
+  it("delivers reading-speed debt as a warning instead of a failed manifest", async () => {
+    // Regression: three cps findings out of 205 reading units marked the whole
+    // delivery "failed", which threw at the quality gate AND made
+    // readValidArticleCache distrust its own manifest — so every retry paid
+    // for a full re-translation and failed again the same way. Reading speed
+    // is disclosed debt now: the manifest stays ready, the finding stays
+    // recorded, and the run says so out loud.
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-cps-debt-"));
+    const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-cps-debt-article-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(
+      path.join(root, "source.en.srt"),
+      "1\n00:00:00,000 --> 00:00:02,000\nOne sentence\n",
+      "utf8",
+    );
+
+    const options = {
+      videoDir: root,
+      subtitle: { mode: "srt" as const, sourceLang: "en", targetLang: "zh-CN", source: "auto" as const },
+      subtitleBilingual: "srt" as const,
+      llm: {
+        chat: async (request: ChatRequest) => {
+          const userContent = request.messages[1]!.content as string;
+          if (request.jsonMode === true && userContent.startsWith("[")) {
+            const inputCues = JSON.parse(userContent) as string[];
+            return {
+              content: JSON.stringify({ cues: inputCues.map((t) => `${t}.`) }),
+              model: "test",
+              finishReason: "stop",
+            };
+          }
+          // 20 CJK cells over 2s = 10 per second, past the cps ceiling of 9.
+          return { content: "一二三四五六七八九十一二三四五六七八九十", model: "test", finishReason: "stop" };
+        },
+      },
+      llmModel: "test",
+      burnedVideoOutDir: articleRoot,
+      runner: {
+        run: async (spec) => {
+          if (spec.args?.includes("--measure")) {
+            const outputIndex = spec.args.indexOf("--output");
+            const srtPath = spec.args.find((a) => a.endsWith(".srt")) ?? "";
+            const srtContent = await readFile(srtPath, "utf8").catch(() => "");
+            const blockCount = srtContent.split("\n\n").filter((b) => b.trim().length > 0).length || 1;
+            await writeFile(spec.args[outputIndex + 1]!, JSON.stringify(
+              Array.from({ length: blockCount }, (_, i) => ({
+                cueIndex: i + 1,
+                zhWidth: 200,
+                fitWidth: 1024,
+                lineCount: 1,
+                severity: "fit" as const,
+                resolvedFonts: { zh: "PingFang SC", en: "Lexend Deca" },
+              })),
+            ));
+          }
+          return {
+            exitCode: 0, signal: null, stdout: "", stderr: "",
+            stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+            command: spec.command, args: spec.args ?? [],
+          };
+        },
+      },
+    };
+    const result = await runSubtitlePipeline(options);
+
+    expect(result.warnings).toContainEqual(expect.stringContaining("reading-speed finding"));
+    const manifest = JSON.parse(
+      await readFile(
+        path.join(articleRoot, path.basename(root), "video", "full.bilingual.semantic.json"),
+        "utf8",
+      ),
+    ) as {
+      status: string;
+      stages: { layout: string };
+      quality: { readyForBurn: boolean; issues: { code: string }[] };
+    };
+    expect(manifest).toMatchObject({
+      status: "ready",
+      stages: { layout: "done" },
+      quality: { readyForBurn: true },
+    });
+    expect(manifest.quality.issues).toContainEqual(expect.objectContaining({ code: "cps" }));
+
+    // The same debt in burned mode must get past the quality gate too. With no
+    // downloaded MP4 the run still fails — but on the missing video, which is
+    // *after* the gate. Before the fix this threw "quality gate blocked
+    // delivery" and never reached the burn step at all.
+    await expect(runSubtitlePipeline({ ...options, subtitleBilingual: "burned" }))
+      .rejects.toThrow(/source video is required/iu);
+  });
+
+  it("resolves full.mp4 as the source video even when a shorter clip sorts before it", async () => {
+    // Regression: the selector took the first *.mp4 that wasn't a burned
+    // output, so a hand-cut `clip30.mp4` sitting next to `full.mp4` won on
+    // plain alphabetical order — burning a 30-second excerpt and writing it
+    // over the 13-minute delivery, while the manifest still claimed
+    // `source_video: "video/full.mp4"`. Silent, and destructive.
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-source-pick-"));
+    const videoSubdir = path.join(root, "video");
+    await mkdir(videoSubdir, { recursive: true });
+    await writeFile(path.join(videoSubdir, "clip30.mp4"), "clip");
+    await writeFile(path.join(videoSubdir, "full.mp4"), "full");
+    await writeFile(path.join(videoSubdir, "full.bilingual-burned.mp4"), "burned");
+
+    await expect(resolveSourceVideo(root)).resolves.toEqual({
+      name: "full.mp4",
+      preferred: true,
+    });
+  });
+
+  it("falls back to the only usable mp4 when full.mp4 is absent, flagging it as unpreferred", async () => {
+    // Older download trees kept the source under its YouTube title, so the
+    // scan has to keep working — but the caller must be able to say so rather
+    // than burn an unexpected file silently.
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-source-fallback-"));
+    const videoSubdir = path.join(root, "video");
+    await mkdir(videoSubdir, { recursive: true });
+    await writeFile(path.join(videoSubdir, "Some Video Title.mp4"), "full");
+    await writeFile(path.join(videoSubdir, "full.zh-burned.mp4"), "burned");
+
+    await expect(resolveSourceVideo(root)).resolves.toEqual({
+      name: "Some Video Title.mp4",
+      preferred: false,
+    });
+  });
+
+  it("resolves nothing when the video directory holds no usable source", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-source-none-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    await writeFile(path.join(root, "video", "full.bilingual-burned.mp4"), "burned");
+
+    await expect(resolveSourceVideo(root)).resolves.toBeUndefined();
   });
 
   it("uses the article Chinese SRT for a direct burned-subtitle run", async () => {

@@ -2,10 +2,21 @@ import { createHash } from "node:crypto";
 import {
   PROTECTED_GLOSSARY_TERMS,
   PROTECTED_NAMES,
+  visualWidth,
 } from "./semantic-bilingual-subtitles.js";
 
 export const SUBTITLE_AUDIT_THRESHOLDS = {
   maxLines: 2,
+  /**
+   * Reading speed ceiling in *visual width* per second, not raw characters:
+   * one CJK glyph is a full cell, a Latin letter or digit half a cell (see
+   * `visualWidth`). Measuring raw characters counted every letter of a
+   * deliberately-untranslated term ("Air Coding Cohort" — 15 characters,
+   * 7.5 cells) as if it were 15 Chinese characters, so the cues carrying the
+   * glossary terms the pipeline is *required* to preserve were exactly the
+   * ones scored as too fast. Sharing units with the layout budget also means
+   * `compactDenseBlocks` can actually satisfy a finding raised here.
+   */
   maxCps: 9,
   minCueDurationSeconds: 1,
   minSplitDurationSeconds: 1,
@@ -157,13 +168,43 @@ const resultFromIssues = (issues: SubtitleAuditIssue[]): SubtitleAuditResult => 
   issues,
 });
 
+/**
+ * Presentation findings that describe *reading speed*, not a broken frame.
+ * A cps/flash cue renders correctly and says exactly what the source says —
+ * it is simply brisk, and the fix is a judgement call about wording a human
+ * makes better than a retry loop does. Everything else under "presentation"
+ * (hard-layout, unsafe-layout, line-count) means the text physically does not
+ * fit the frame it is about to be burned into, which still blocks a burn.
+ *
+ * Treating these two tiers alike is what made the pipeline fail every run:
+ * three cps findings out of 205 reading units marked the whole delivery
+ * failed, and because `readValidArticleCache` only trusts a manifest whose
+ * status is "ready", each retry threw away the cache and re-translated the
+ * entire video — paying full LLM cost to reroll a non-deterministic result
+ * that had no reachable passing state.
+ */
+const ADVISORY_PRESENTATION_CODES: ReadonlySet<SubtitleAuditIssueCode> = new Set([
+  "cps",
+  "flash",
+]);
+
 export const isSubtitleAuditReadyForDelivery = (
   report: SubtitleAuditResult,
   mode: SubtitleAuditDeliveryMode,
 ): boolean =>
   !report.issues.some((issue) =>
     issue.severity === "content" ||
-    ((mode === "burned" || mode === "all") && issue.severity === "presentation")
+    ((mode === "burned" || mode === "all") &&
+      issue.severity === "presentation" &&
+      !ADVISORY_PRESENTATION_CODES.has(issue.code))
+  );
+
+/** The findings a report carries as disclosed debt rather than as a blocker. */
+export const subtitleAuditAdvisoryIssues = (
+  report: SubtitleAuditResult,
+): SubtitleAuditIssue[] =>
+  report.issues.filter((issue) =>
+    issue.severity === "presentation" && ADVISORY_PRESENTATION_CODES.has(issue.code)
   );
 
 export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAuditResult => {
@@ -380,8 +421,7 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
   for (const span of groupConsecutiveIdenticalText(zhCues)) {
     const duration = span.endSeconds - span.startSeconds;
     if (!Number.isFinite(duration) || duration <= 0) continue;
-    const characterCount = Array.from(span.text.replace(/\s/gu, "")).length;
-    const cps = characterCount / duration;
+    const cps = visualWidth(span.text) / duration;
     if (cps > SUBTITLE_AUDIT_THRESHOLDS.maxCps) {
       issues.push({
         code: "cps",
@@ -389,7 +429,7 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
         cueIndex: span.firstIndex,
         timestamp: span.startRaw,
         text: span.text,
-        message: `Chinese cue ${span.firstIndex} reads at ${cps.toFixed(2)} characters per second`,
+        message: `Chinese cue ${span.firstIndex} reads at ${cps.toFixed(2)} CJK cells per second`,
       });
     }
     if (duration < SUBTITLE_AUDIT_THRESHOLDS.minCueDurationSeconds) {

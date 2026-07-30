@@ -235,6 +235,40 @@ describe("auditSubtitleArtifacts", () => {
     }));
   });
 
+  it("does not report cps for a cue whose length comes from a deliberately kept English term", () => {
+    // Regression: cps counted every Latin letter as one full CJK cell, so a
+    // cue carrying a protected glossary term ("Air Coding Cohort" — 15 raw
+    // characters, 7.5 CJK cells) scored 9.69 "cps" and blocked delivery,
+    // even though a viewer reads it comfortably. The pipeline is *required*
+    // to keep such terms untranslated, and `compactDenseBlocks` is required
+    // not to drop them — so this finding was unfixable by design and the
+    // quality gate deadlocked. Reading speed must be measured in the same
+    // visual-width units the rest of the pipeline budgets against.
+    const termSource = srt([{
+      start: "00:00:00,000",
+      end: "00:00:02,374",
+      lines: ["You will love my Air Coding Cohort"],
+    }]);
+    const result = auditSubtitleArtifacts({
+      sourceSrt: termSource,
+      enSrt: termSource,
+      zhSrt: srt([{
+        start: "00:00:00,000",
+        end: "00:00:02,374",
+        lines: ["那你定会爱上我的Air Coding Cohort"],
+      }]),
+      bilingualSrt: srt([{
+        start: "00:00:00,000",
+        end: "00:00:02,374",
+        lines: ["那你定会爱上我的Air Coding Cohort", "You will love my Air Coding Cohort"],
+      }]),
+      manifest: { sourceSha256: createHash("sha256").update(termSource).digest("hex") },
+    });
+
+    expect(result.issues).not.toContainEqual(expect.objectContaining({ code: "cps" }));
+    expect(result.verdict).toBe("pass");
+  });
+
   it("reports flash when a delivered cue is shorter than one second", () => {
     const shortEn = srt([
       { end: "00:00:00,800", lines: ["Hello world."] },
@@ -331,22 +365,44 @@ describe("auditSubtitleArtifacts", () => {
 });
 
 describe("isSubtitleAuditReadyForDelivery", () => {
-  it("blocks content in every mode and presentation only for burned delivery", () => {
+  it("blocks content in every mode", () => {
     const contentReport = {
       verdict: "fail" as const,
       issues: [{ code: "empty-text" as const, severity: "content" as const, message: "empty" }],
-    };
-    const presentationReport = {
-      verdict: "warn" as const,
-      issues: [{ code: "flash" as const, severity: "presentation" as const, message: "fast" }],
     };
 
     for (const mode of ["srt", "ass", "burned", "all"] as const) {
       expect(isSubtitleAuditReadyForDelivery(contentReport, mode)).toBe(false);
     }
-    expect(isSubtitleAuditReadyForDelivery(presentationReport, "srt")).toBe(true);
-    expect(isSubtitleAuditReadyForDelivery(presentationReport, "ass")).toBe(true);
-    expect(isSubtitleAuditReadyForDelivery(presentationReport, "burned")).toBe(false);
-    expect(isSubtitleAuditReadyForDelivery(presentationReport, "all")).toBe(false);
+  });
+
+  it("blocks layout presentation findings only for burned delivery", () => {
+    for (const code of ["hard-layout", "unsafe-layout", "line-count"] as const) {
+      const report = {
+        verdict: "warn" as const,
+        issues: [{ code, severity: "presentation" as const, message: "does not fit" }],
+      };
+      expect(isSubtitleAuditReadyForDelivery(report, "srt")).toBe(true);
+      expect(isSubtitleAuditReadyForDelivery(report, "ass")).toBe(true);
+      expect(isSubtitleAuditReadyForDelivery(report, "burned")).toBe(false);
+      expect(isSubtitleAuditReadyForDelivery(report, "all")).toBe(false);
+    }
+  });
+
+  it("never blocks reading-speed debt, which describes correct frames that merely read fast", () => {
+    // cps/flash say nothing is *wrong* with the rendered frame — the burned
+    // video is faithful, just brisk. Blocking on them made a single
+    // sub-1%-of-cues nit a hard pipeline failure that also marked the
+    // manifest failed, invalidating the cache and forcing a full,
+    // non-deterministic re-translation on every retry.
+    for (const code of ["cps", "flash"] as const) {
+      const report = {
+        verdict: "warn" as const,
+        issues: [{ code, severity: "presentation" as const, message: "fast" }],
+      };
+      for (const mode of ["srt", "ass", "burned", "all"] as const) {
+        expect(isSubtitleAuditReadyForDelivery(report, mode)).toBe(true);
+      }
+    }
   });
 });

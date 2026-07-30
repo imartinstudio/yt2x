@@ -121,7 +121,7 @@ describe("executeNativeArticle", () => {
       showProgress: false,
     });
 
-    expect(code).toBe(1);
+    expect(code).toBe(0);
     expect(generateXArticleContentMock).not.toHaveBeenCalled();
   });
 
@@ -183,7 +183,7 @@ describe("executeNativeArticle", () => {
       showProgress: false,
     });
 
-    expect(code).toBe(1);
+    expect(code).toBe(0);
     expect(generateXThreadContentMock).not.toHaveBeenCalled();
   });
 
@@ -206,7 +206,7 @@ describe("executeNativeArticle", () => {
       showProgress: false,
     });
 
-    expect(code).toBe(1);
+    expect(code).toBe(0);
     expect(generatePlatformArticleContentMock).not.toHaveBeenCalled();
   });
 });

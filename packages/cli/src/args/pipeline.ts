@@ -13,7 +13,7 @@ export const SearchSortSchema = z.enum(["views"]);
 export const SubtitleZhModeSchema = z.enum(["off", "srt", "burned", "both"]);
 export const SubtitleBilingualModeSchema = z.enum(["off", "srt", "ass", "burned", "all"]);
 export const SubtitleBurnStyleSchema = z.enum(["zh-default", "bilingual-explainer"]);
-export const SubtitleSourceSchema = z.enum(["auto", "youtube", "transcribe", "file"]);
+export const SubtitleSourceSchema = z.enum(["auto", "youtube", "transcribe", "local", "file"]);
 
 export const VideoSourcesFieldsSchema = z
   .object({

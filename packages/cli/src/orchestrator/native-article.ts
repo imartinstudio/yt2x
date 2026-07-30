@@ -180,7 +180,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
   }
   const targets = batch.targets;
   const progress = flags.showProgress === false ? undefined : createCommandProgress("article", targets.length);
-  let exitCode = 1;
+  let exitCode = 0;
 
   logger.info(
     {

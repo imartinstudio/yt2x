@@ -106,6 +106,9 @@ export const createOpenAICompatibleAdapter = (config: OpenAICompatibleConfig): L
       };
       if (req.temperature !== undefined) body.temperature = req.temperature;
       if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
+      if (config.provider === "deepseek") {
+        body.thinking = { type: req.reasoningMode === "enabled" ? "enabled" : "disabled" };
+      }
       if (req.jsonMode === true) body.response_format = { type: "json_object" };
 
       const opts: Parameters<typeof postJson>[0] = {

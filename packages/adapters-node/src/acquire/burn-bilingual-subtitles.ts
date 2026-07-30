@@ -56,7 +56,8 @@ type CueManifestEntry = {
 };
 
 type RenderManifest = {
-  cues: CueManifestEntry[];
+  zh_cues: CueManifestEntry[];
+  en_cues: CueManifestEntry[];
   video_width: number;
   video_height: number;
 };
@@ -81,6 +82,15 @@ const OVERLAY_FPS = 4;
 /** Watermark placement (top-left), matching generate-overlay-frames.py. */
 const WATERMARK_X = 24;
 const WATERMARK_Y = 16;
+
+/**
+ * Vertical gap (720p reference px, scaled with video height) between the ZH
+ * row and the EN row beneath it. The ZH row's offset from the bottom is
+ * fixed (bottomMargin + enMaxH + this gap) rather than derived from
+ * whichever EN frame happens to be active, so ZH never shifts vertically
+ * just because the EN cue underneath changed.
+ */
+const ZH_EN_ROW_GAP_BASE = 4;
 
 /**
  * PIL bilingual cue rendering is CPU-heavy at 1080p (≈1s/cue on recent Macs).
@@ -247,40 +257,50 @@ export const burnBilingualSubtitles = async (
     throw new Error(`bilingual subtitle PNG rendering failed: ${excerpt}`);
   }
 
-  // 3. Read manifest
+  // 3. Read manifest — ZH and EN are independent layers. A ZH run reuses ONE
+  // rendered image across every original cue it covers, so the frame
+  // sequence below never re-selects (or resizes) the ZH image just because
+  // the EN cue underneath moved to its next fragment — that's what stops the
+  // "same Chinese text flickers when the English switches" defect.
   const manifestRaw = await readFile(path.join(renderDir, "manifest.json"), "utf8");
   const manifest = JSON.parse(manifestRaw) as RenderManifest;
-  const { cues, video_width: vw } = manifest;
+  const { zh_cues: zhCues, en_cues: enCues, video_width: vw } = manifest;
 
-  if (cues.length === 0) {
+  if (zhCues.length === 0 || enCues.length === 0) {
     await rm(renderDir, { recursive: true, force: true });
     throw new Error("bilingual SRT file contains no subtitle cues");
   }
 
   // 4. Compute dimensions & duration
-  const maxH = Math.max(...cues.map((c) => c.height), 40);
-  const lastEnd = cues[cues.length - 1]!.end;
+  const zhMaxH = Math.max(...zhCues.map((c) => c.height), 40);
+  const enMaxH = Math.max(...enCues.map((c) => c.height), 20);
+  const lastEnd = Math.max(zhCues[zhCues.length - 1]!.end, enCues[enCues.length - 1]!.end);
   const videoDuration = await probeVideoDuration(opts.videoPath, opts.runner, lastEnd);
   const totalSec = Math.ceil(Math.max(lastEnd + 5, videoDuration + 2));
 
-  // 5. Create blank subtitle strip for gaps between cues
-  const blankPath = path.join(renderDir, "blank.png");
+  // 5. Create blank subtitle strips for gaps between cues, one per layer
+  const zhBlankPath = path.join(renderDir, "zh_blank.png");
+  const enBlankPath = path.join(renderDir, "en_blank.png");
   try {
     const blankResult = await opts.runner.run({
       command: pythonBin,
       args: [
         "-c",
-        `from PIL import Image\nImage.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")`,
+        [
+          `from PIL import Image`,
+          `Image.new("RGBA", (${vw}, ${zhMaxH}), (0, 0, 0, 0)).save("${zhBlankPath}")`,
+          `Image.new("RGBA", (${vw}, ${enMaxH}), (0, 0, 0, 0)).save("${enBlankPath}")`,
+        ].join("\n"),
       ],
       timeoutMs: 10_000,
     });
     if (blankResult.exitCode !== 0) {
       await rm(renderDir, { recursive: true, force: true }).catch(() => {});
-      throw new Error("failed to create blank PNG for bilingual burn");
+      throw new Error("failed to create blank PNGs for bilingual burn");
     }
   } catch (err: unknown) {
     await rm(renderDir, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`failed to create blank PNG for bilingual burn: ${formatProcessFailure(err)}`);
+    throw new Error(`failed to create blank PNGs for bilingual burn: ${formatProcessFailure(err)}`);
   }
 
   // 6. Optional static watermark PNG (composited by ffmpeg, not pre-baked frames)
@@ -310,61 +330,94 @@ export const burnBilingualSubtitles = async (
     }
   }
 
-  // 7. Build low-FPS subtitle strip sequence via file copies (same strategy as zh burn)
-  const framesDir = path.join(renderDir, "frames");
-  await mkdir(framesDir, { recursive: true });
+  // 7. Build low-FPS subtitle strip sequences via file copies, one per layer.
+  // Each layer only looks up ITS OWN cue list, so the ZH sequence keeps
+  // pointing at the exact same source file for the full span of a run —
+  // there is no frame at which it changes just because the EN layer did.
+  const zhFramesDir = path.join(renderDir, "zh_frames");
+  const enFramesDir = path.join(renderDir, "en_frames");
+  await mkdir(zhFramesDir, { recursive: true });
+  await mkdir(enFramesDir, { recursive: true });
 
   const totalFrames = totalSec * OVERLAY_FPS;
   const frameInterval = 1 / OVERLAY_FPS;
+  const totalFrameCopies = totalFrames * 2;
+  let frameCopiesDone = 0;
 
-  for (let i = 0; i < totalFrames; i++) {
-    const t = i * frameInterval;
-    const active = cues.find((c) => c.start <= t && c.end > t);
-    const src = active ? path.join(renderDir, active.filename) : blankPath;
-    const dst = path.join(framesDir, `frame_${String(i).padStart(5, "0")}.png`);
-    await copyFile(src, dst);
-    if ((i + 1) % FRAME_PROGRESS_INTERVAL === 0 || i + 1 === totalFrames) {
-      opts.onProgress?.({ phase: "frames", done: i + 1, total: totalFrames });
-    }
-  }
-
-  // Verify every cue has frame coverage
-  for (const cue of cues) {
-    const firstFrame = Math.floor(cue.start * OVERLAY_FPS);
-    const lastFrame = Math.ceil(cue.end * OVERLAY_FPS) - 1;
-    let hasFrame = false;
-    for (let f = firstFrame; f <= lastFrame && f < totalFrames; f++) {
-      const t = f * frameInterval;
-      if (cue.start <= t && cue.end > t) {
-        hasFrame = true;
-        break;
+  const buildLayerFrames = async (
+    layerCues: readonly CueManifestEntry[],
+    blankPath: string,
+    framesDir: string,
+  ): Promise<void> => {
+    for (let i = 0; i < totalFrames; i++) {
+      const t = i * frameInterval;
+      const active = layerCues.find((c) => c.start <= t && c.end > t);
+      const src = active ? path.join(renderDir, active.filename) : blankPath;
+      const dst = path.join(framesDir, `frame_${String(i).padStart(5, "0")}.png`);
+      await copyFile(src, dst);
+      frameCopiesDone += 1;
+      if (frameCopiesDone % FRAME_PROGRESS_INTERVAL === 0 || frameCopiesDone === totalFrameCopies) {
+        opts.onProgress?.({ phase: "frames", done: frameCopiesDone, total: totalFrameCopies });
       }
     }
-    if (!hasFrame && cue.end - cue.start >= frameInterval / 2) {
-      await rm(renderDir, { recursive: true, force: true }).catch(() => {});
-      throw new Error(
-        `cue #${cue.index} (${cue.start.toFixed(2)}s–${cue.end.toFixed(2)}s) too short for ${OVERLAY_FPS}fps overlay`,
-      );
-    }
-  }
+  };
+  await buildLayerFrames(zhCues, zhBlankPath, zhFramesDir);
+  await buildLayerFrames(enCues, enBlankPath, enFramesDir);
 
-  // 8. ffmpeg overlay: subtitle strip at bottom + optional static watermark top-left
-  const bottomMargin = Math.round(36 * (videoHeight / 720));
-  const filterComplex = watermarkPath !== null
-    ? [
-        `[0:v][1:v]overlay=(W-w)/2:H-h-${bottomMargin}[sub]`,
-        `[sub][2:v]overlay=${WATERMARK_X}:${WATERMARK_Y}[overlaid]`,
-        `[overlaid]format=yuv420p[vfinal]`,
-      ].join(";")
-    : [
-        `[0:v][1:v]overlay=(W-w)/2:H-h-${bottomMargin}[overlaid]`,
-        `[overlaid]format=yuv420p[vfinal]`,
-      ].join(";");
+  // Verify every cue (both layers) has frame coverage
+  const verifyLayerCoverage = async (layerCues: readonly CueManifestEntry[]): Promise<void> => {
+    for (const cue of layerCues) {
+      const firstFrame = Math.floor(cue.start * OVERLAY_FPS);
+      const lastFrame = Math.ceil(cue.end * OVERLAY_FPS) - 1;
+      let hasFrame = false;
+      for (let f = firstFrame; f <= lastFrame && f < totalFrames; f++) {
+        const t = f * frameInterval;
+        if (cue.start <= t && cue.end > t) {
+          hasFrame = true;
+          break;
+        }
+      }
+      if (!hasFrame && cue.end - cue.start >= frameInterval / 2) {
+        await rm(renderDir, { recursive: true, force: true }).catch(() => {});
+        throw new Error(
+          `cue #${cue.index} (${cue.start.toFixed(2)}s–${cue.end.toFixed(2)}s) too short for ${OVERLAY_FPS}fps overlay`,
+        );
+      }
+    }
+  };
+  await verifyLayerCoverage(zhCues);
+  await verifyLayerCoverage(enCues);
+
+  // 8. ffmpeg overlay: EN strip at the very bottom, ZH strip stacked directly
+  // above it at a FIXED offset (not derived from the EN layer's current
+  // frame size) so the Chinese row's vertical position never depends on
+  // which English cue happens to be showing underneath it. Plus an optional
+  // static watermark top-left.
+  // Both layers are full-video-width canvases with the text already centered
+  // inside them (see render_text_row), so overlay x is a constant 0 — ffmpeg
+  // never re-derives a centering offset from a per-frame image width.
+  const scale = videoHeight / 720;
+  const bottomMargin = Math.round(36 * scale);
+  const rowGap = Math.round(ZH_EN_ROW_GAP_BASE * scale);
+  const zhBottomOffset = bottomMargin + enMaxH + rowGap;
+  const filterSteps = [
+    `[0:v][1:v]overlay=0:H-h-${zhBottomOffset}[withzh]`,
+    `[withzh][2:v]overlay=0:H-h-${bottomMargin}[withen]`,
+  ];
+  if (watermarkPath !== null) {
+    filterSteps.push(`[withen][3:v]overlay=${WATERMARK_X}:${WATERMARK_Y}[overlaid]`);
+    filterSteps.push(`[overlaid]format=yuv420p[vfinal]`);
+  } else {
+    filterSteps.push(`[withen]format=yuv420p[vfinal]`);
+  }
+  const filterComplex = filterSteps.join(";");
 
   const ffmpegArgs: string[] = [
     "-i", opts.videoPath,
     "-framerate", String(OVERLAY_FPS),
-    "-i", path.join(framesDir, "frame_%05d.png"),
+    "-i", path.join(zhFramesDir, "frame_%05d.png"),
+    "-framerate", String(OVERLAY_FPS),
+    "-i", path.join(enFramesDir, "frame_%05d.png"),
   ];
   if (watermarkPath !== null) {
     // Loop a single-frame watermark for the full video duration.

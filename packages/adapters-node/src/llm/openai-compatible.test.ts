@@ -188,6 +188,25 @@ describe("openai-compatible adapter", () => {
     expect(resp.content).toBe('{"ok":true}');
   });
 
+  it("maps disabled reasoning mode to DeepSeek thinking mode", async () => {
+    const fetcher = makeFetcher((_url, init) => {
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.thinking).toEqual({ type: "disabled" });
+      return okResponse({ model: "deepseek-v4-pro" });
+    });
+    const adapter = createOpenAICompatibleAdapter({
+      provider: "deepseek",
+      apiKey: "ds-test",
+      baseUrl: "https://api.deepseek.com/v1",
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    await adapter.chat({
+      model: "deepseek-v4-pro",
+      messages: [{ role: "user", content: "return json" }],
+      reasoningMode: "disabled",
+    });
+  });
+
   it("never sends apiKey in URL", async () => {
     const fetcher = makeFetcher((url, _init) => {
       expect(url).not.toMatch(/sk-test/);

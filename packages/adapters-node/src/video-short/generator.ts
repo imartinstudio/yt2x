@@ -69,6 +69,8 @@ const chatVideoShort = async (
     ],
     temperature,
     maxTokens,
+    reasoningMode: "disabled",
+    jsonMode: true,
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
   return resp;
@@ -86,7 +88,7 @@ export const generateXVideoShortContent = async (
   );
 
   const t0 = Date.now();
-  const maxTokens = input.maxTokens ?? 768;
+  const maxTokens = input.maxTokens ?? 2048;
   const temperature = input.temperature ?? 0.6;
 
   let resp = await chatVideoShort(input, userPrompt, temperature, maxTokens);
@@ -104,6 +106,8 @@ export const generateXVideoShortContent = async (
       ],
       temperature: 0.2,
       maxTokens,
+      reasoningMode: "disabled",
+      jsonMode: true,
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
     resp = repairResp;

@@ -24,7 +24,7 @@ export const registerAcquireCommand = (program: Command): void => {
     .option("--subtitle-zh <mode>", "Prepare Chinese subtitle assets: off|srt|burned|both", "off")
     .option("--subtitle-source-lang <lang>", "Subtitle source language", "en")
     .option("--subtitle-target-lang <lang>", "Subtitle target language", "zh-CN")
-    .option("--subtitle-source <mode>", "Subtitle source: auto|youtube|transcribe|file", "auto")
+    .option("--subtitle-source <mode>", "Subtitle source: auto|youtube|transcribe|local|file", "auto")
     .option("--subtitle-file <path>", "Existing SRT/VTT subtitle file when --subtitle-source file is used")
     .option("--subtitle-bilingual <mode>", "Bilingual subtitle mode: off|srt|ass|burned|all", "off")
     .option("--subtitle-burn-style <style>", "Subtitle burn style: zh-default|bilingual-explainer", "zh-default")

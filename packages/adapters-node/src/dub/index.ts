@@ -11,15 +11,25 @@ export {
   DUB_LINES_DIR,
   DUB_SCRIPT_FILE,
   DUB_TIMING_FILE,
+  DUB_PLAN_FILE,
+  DUB_PLACEMENT_FILE,
+  DUB_DEMUCS_DIR,
   dubDirFor,
+  dubDemucsDirFor,
+  dubbedVideoPathFor,
+  dubReverseSrtPathFor,
   dubLineAudioName,
   parseDubCues,
   readDubCues,
   readDubScript,
+  readDubTimingReport,
   resolveZhSubtitlePath,
+  resolveDubSourceVideo,
   writeDubLineAudio,
   writeDubScript,
   writeDubTimingReport,
+  writeDubPlan,
+  writeDubPlacement,
   type WrittenDubLineAudio,
 } from "./file-store.js";
 export {
@@ -35,3 +45,30 @@ export {
   type SynthesizeDubLinesInput,
   type SynthesizeDubLinesResult,
 } from "./synthesize.js";
+export {
+  DemucsError,
+  isDemucsError,
+  probeDemucs,
+  separateDemucs,
+  DEMUCS_NO_VOCALS_FILE,
+  DEMUCS_VOCALS_FILE,
+  DEFAULT_DEMUCS_MODEL,
+  type ProbeDemucsInput,
+  type SeparateDemucsInput,
+  type SeparateDemucsResult,
+} from "./demucs.js";
+export {
+  applyDubNegotiation,
+  type ApplyDubNegotiationInput,
+  type ApplyDubNegotiationResult,
+} from "./negotiate.js";
+export {
+  DUBBED_VIDEO_NAME,
+  DUB_REVERSE_SRT_NAME,
+  remixDubbedVideo,
+  buildVoiceTrack,
+  mixVoiceAndBgm,
+  muxDubbedVideo,
+  type RemixDubbedVideoInput,
+  type RemixDubbedVideoResult,
+} from "./remix.js";

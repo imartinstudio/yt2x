@@ -5,15 +5,13 @@
 
 ## 当前状态
 
-- 分支 `feature/dub-script-and-tts-port`（自 `f5ed0c2` 切出）
-- PR1 全部文件已实现并接线，`pnpm test` / `typecheck` / `lint` 三项均通过，
-  dub 相关 103 个测试全绿，`core/src/domain/dub` 与 `adapters-node/src/dub` 行覆盖 100%
-- **改动尚未 commit**
-
-验收中发现并已修复：`segment.ts` 的 `SENTENCE_FINAL` 原先只认直角/半角右引号，
-`他说“好。”` 这类弯引号收尾会漏判断句。字符类已补 `”’`，并加了回归测试。
-
-无已知遗留缺陷。
+- 分支 `feature/dub-script-and-tts-port`
+- **PR1 已 commit**（`dffcba5`）：配音稿 + TtsPort + edge-tts
+- **PR2 已实现、未 commit**：Demucs + 时长协商 + 反向 SRT + 混音重烧 → `full.zh-dubbed.mp4`
+- 验证：`pnpm test packages/core/src/domain/dub packages/adapters-node/src/dub`（133）/
+  `typecheck` / `lint` 均通过
+- 本机未装 demucs 时，完整成片路径会在探测阶段硬失败；`--script-only` /
+  `--timing-only` 仍可在无 demucs 环境下取数
 
 ## 目标
 
@@ -95,7 +93,37 @@ ElevenLabs 适配器。PR1 的时长报告只记录不阻断。
 
 ### PR2：Demucs + 时长协商 + 反向 SRT + 混音重烧
 
-出 `full.zh-dubbed.mp4`。Demucs 探测前置于任何 TTS 调用。
+出 `full.zh-dubbed.mp4`。Demucs 探测前置于任何 TTS / LLM 计费调用。
+
+新增 / 扩展：
+
+```text
+packages/core/src/domain/dub/negotiate.ts       时长协商规划（纯函数）
+packages/core/src/domain/dub/reverse-srt.ts     反向 SRT
+packages/core/src/domain/dub/shorten-prompts.ts LLM 改短 prompt
+packages/adapters-node/src/dub/demucs-separate.py
+packages/adapters-node/src/dub/demucs.ts        探测 + 分离
+packages/adapters-node/src/dub/negotiate.ts     执行协商（调速 / 改短 / 顺延）
+packages/adapters-node/src/dub/remix.ts         人声轨 + BGM 混音 + 冻结末帧 + 可选重烧
+packages/cli/src/orchestrator/native-dub.ts     全链路编排
+```
+
+产物追加：
+
+```text
+files/articles/<videoId>/dub/
+  dub-plan.json          协商计划
+  dub-placement.json     最终落点
+  demucs/no_vocals.wav   BGM/音效
+  voice.wav / mixed.m4a  中间音轨
+files/articles/<videoId>/video/
+  full.zh-dub.srt        反向字幕
+  full.zh-dubbed.mp4     成片
+```
+
+协商顺序：keep → speed（≤1.15× ∩ 引擎 rateRange）→ LLM 改短 → 顺延；
+漂移在原片自然停顿处吸收，片尾残留用冻结末帧延长。原片已有中文硬字幕时只配音不烧字幕。
+门禁阈值仍只记录不阻断（PR3）。
 
 ### PR3：ElevenLabs 适配器 + 门禁阈值 + pipeline `--dub`
 

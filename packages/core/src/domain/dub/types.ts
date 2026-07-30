@@ -85,3 +85,81 @@ export type DubTimingReport = {
   totalDriftMs: number;
   lines: readonly DubLineTiming[];
 };
+
+/**
+ * 时长协商对单行采取的动作。
+ *
+ * 顺序固定：keep → speed → shorten → delay。前一步能压进目标区间就停，
+ * 不会为了"更紧凑"去无谓加速或改短。
+ */
+export type DubNegotiateAction = "keep" | "speed" | "shorten" | "delay";
+
+/** 规划阶段对单行的决策（尚未真正重新合成）。 */
+export type DubNegotiateLinePlan = {
+  index: number;
+  action: DubNegotiateAction;
+  /** 请求的语速倍率。keep/delay 为 1；speed 为协商值；shorten 先按 1 合成再视结果。 */
+  rate: number;
+  /** 原字幕区间起点。 */
+  originalStartMs: number;
+  originalEndMs: number;
+  targetDurationMs: number;
+  /** 倍率 1.0 下的实测时长（来自 PR1 报告）。 */
+  naturalMs: number;
+  /** 规划时预计的放置起点（已计入此前累积漂移）。 */
+  plannedStartMs: number;
+  /** 规划时预计的放置终点。shorten 在真正改短前只能按目标时长估。 */
+  plannedEndMs: number;
+  /** 送进 TTS 的文本（shorten 阶段会被改写覆盖）。 */
+  text: string;
+  /**
+   * shorten 时的字符上限。按 naturalMs/target 比例从原文长度推，
+   * 让 LLM 有一个可操作的数字而不是"尽量短"。
+   */
+  shortenMaxChars?: number;
+};
+
+export type DubNegotiatePlan = {
+  version: 1;
+  videoId: string;
+  lines: readonly DubNegotiateLinePlan[];
+  /** 片尾仍未吸收完的累积漂移，混音时用冻结末帧延长视频。 */
+  extendMs: number;
+  /** 规划阶段预计的总漂移（与 extendMs 相同；执行 shorten 后可能变化）。 */
+  plannedDriftMs: number;
+  speedCount: number;
+  shortenCount: number;
+  delayCount: number;
+  keepCount: number;
+};
+
+/**
+ * 协商执行后的最终落点。反向 SRT 和混音都只读这份，不再回看原字幕时间戳。
+ */
+export type DubPlacedLine = {
+  index: number;
+  action: DubNegotiateAction;
+  rate: number;
+  text: string;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  /** 相对 dub 目录的音频路径。 */
+  audioFile: string;
+};
+
+export type DubPlacementReport = {
+  version: 1;
+  videoId: string;
+  engine: string;
+  voice: string;
+  lines: readonly DubPlacedLine[];
+  /** 实际需要冻结末帧延长的毫秒数。 */
+  extendMs: number;
+  /** 最终音频轨总时长（最后一句 endMs）。 */
+  audioEndMs: number;
+  speedCount: number;
+  shortenCount: number;
+  delayCount: number;
+  keepCount: number;
+};

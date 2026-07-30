@@ -1,7 +1,14 @@
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseSrtTimestampToMs, type DubCue, type DubScript, type DubTimingReport } from "@yt2x/core";
-import { parseSubtitleBlocks } from "../acquire/video-subtitles.js";
+import {
+  parseSrtTimestampToMs,
+  type DubCue,
+  type DubNegotiatePlan,
+  type DubPlacementReport,
+  type DubScript,
+  type DubTimingReport,
+} from "@yt2x/core";
+import { parseSubtitleBlocks, resolveSourceVideo } from "../acquire/video-subtitles.js";
 
 /**
  * 配音产物布局（沿用 files/articles/<videoId>/ 约定）：
@@ -9,16 +16,34 @@ import { parseSubtitleBlocks } from "../acquire/video-subtitles.js";
  *   files/articles/<videoId>/dub/
  *     dub-script.json      配音稿
  *     dub-timing.json      倍率 1.0 的实测时长报告
+ *     dub-plan.json        时长协商计划
+ *     dub-placement.json   最终落点（反向 SRT / 混音的输入）
  *     lines/0001.mp3 ...   逐句音频
+ *     demucs/no_vocals.wav
+ *     voice.wav / mixed.m4a
+ *   files/articles/<videoId>/video/
+ *     full.zh-dub.srt
+ *     full.zh-dubbed.mp4
  */
 
 export const DUB_DIR_NAME = "dub";
 export const DUB_SCRIPT_FILE = "dub-script.json";
 export const DUB_TIMING_FILE = "dub-timing.json";
+export const DUB_PLAN_FILE = "dub-plan.json";
+export const DUB_PLACEMENT_FILE = "dub-placement.json";
 export const DUB_LINES_DIR = "lines";
+export const DUB_DEMUCS_DIR = "demucs";
 
 export const dubDirFor = (articleRoot: string, videoId: string): string =>
   path.join(articleRoot, videoId, DUB_DIR_NAME);
+
+export const dubDemucsDirFor = (dubDir: string): string => path.join(dubDir, DUB_DEMUCS_DIR);
+
+export const dubbedVideoPathFor = (articleRoot: string, videoId: string): string =>
+  path.join(articleRoot, videoId, "video", "full.zh-dubbed.mp4");
+
+export const dubReverseSrtPathFor = (articleRoot: string, videoId: string): string =>
+  path.join(articleRoot, videoId, "video", "full.zh-dub.srt");
 
 const exists = async (candidate: string): Promise<boolean> =>
   access(candidate)
@@ -115,3 +140,51 @@ export const writeDubLineAudio = async (
 
 export const readDubScript = async (dubDir: string): Promise<DubScript> =>
   JSON.parse(await readFile(path.join(dubDir, DUB_SCRIPT_FILE), "utf8")) as DubScript;
+
+export const readDubTimingReport = async (dubDir: string): Promise<DubTimingReport> =>
+  JSON.parse(await readFile(path.join(dubDir, DUB_TIMING_FILE), "utf8")) as DubTimingReport;
+
+export const writeDubPlan = async (dubDir: string, plan: DubNegotiatePlan): Promise<string> => {
+  const filePath = path.join(dubDir, DUB_PLAN_FILE);
+  await atomicWrite(filePath, `${JSON.stringify(plan, null, 2)}\n`);
+  return filePath;
+};
+
+export const writeDubPlacement = async (
+  dubDir: string,
+  report: DubPlacementReport,
+): Promise<string> => {
+  const filePath = path.join(dubDir, DUB_PLACEMENT_FILE);
+  await atomicWrite(filePath, `${JSON.stringify(report, null, 2)}\n`);
+  return filePath;
+};
+
+/**
+ * 解析源视频路径：优先 article 目录下的 video/full.mp4，其次下载目录。
+ * 与 subtitle 烧录同一套 resolveSourceVideo 规则。
+ */
+export const resolveDubSourceVideo = async (input: {
+  articleRoot: string;
+  outRoot: string;
+  videoId: string;
+}): Promise<{ videoPath: string; videoDir: string; preferred: boolean }> => {
+  const candidates = [
+    path.join(input.articleRoot, input.videoId),
+    path.join(input.outRoot, input.videoId),
+  ];
+  const looked: string[] = [];
+  for (const videoDir of candidates) {
+    looked.push(path.join(videoDir, "video"));
+    const source = await resolveSourceVideo(videoDir);
+    if (source !== undefined) {
+      return {
+        videoPath: path.join(videoDir, "video", source.name),
+        videoDir,
+        preferred: source.preferred,
+      };
+    }
+  }
+  throw new Error(
+    `No source video found for "${input.videoId}". Looked under: ${looked.join(", ")}. Run \`yt2x acquire\` first.`,
+  );
+};

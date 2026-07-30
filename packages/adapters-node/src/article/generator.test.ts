@@ -137,6 +137,19 @@ describe("generateXArticleContent", () => {
     expect(r.content).toBe("# **Notes**\n\nbody\n\n#AI #Codex #工作流");
   });
 
+  it("normalizes command-style topic hashtags into X-compatible tags", async () => {
+    const llm = makeLlm(() => ({
+      content: "# T\n\nbody\n\n#/wayfinder #/research #to-spec #to-tickets",
+      model: "m",
+      finishReason: "stop",
+    }));
+
+    const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
+
+    expect(llm.chat).toHaveBeenCalledTimes(1);
+    expect(r.content).toBe("# **Notes**\n\nbody\n\n#Wayfinder #Research #ToSpec #ToTickets");
+  });
+
   it("repairs screenshot refs placed between list items", async () => {
     const llm = makeLlm((req) => {
       if (req.messages.length === 2) {

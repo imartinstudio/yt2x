@@ -163,20 +163,51 @@ describe("burnBilingualSubtitles", () => {
       "utf8",
     );
 
+    // Style is mostly held in BaoCut's own units — shadow distance/blur as
+    // its 0-1 fractions (per row, since English's shadow has to work harder
+    // with no outline to lean on) and the shadow angle in degrees. Outline
+    // width is the deliberate exception: BaoCut's 8%-of-font-size fraction
+    // scaled to 2-4px across our resolutions and read as too heavy, so it's
+    // a fixed hairline pixel count instead of a resolution-scaled fraction.
     expect(renderer).toContain("_BASE_ZH_FONT_SIZE = 30");
     expect(renderer).toContain("_BASE_EN_FONT_SIZE = 16");
-    expect(renderer).toContain("_BASE_ZH_OUTLINE_W = 2");
-    expect(renderer).toContain("_BASE_EN_OUTLINE_W = 0");
-    // English has no outline, so its shadow must stay tight against the
-    // glyphs rather than trailing behind them.
-    expect(renderer).toContain("_BASE_EN_SHADOW_DISTANCE = 1");
-    expect(renderer).toContain("_BASE_EN_SHADOW_BLUR = 0");
+    expect(renderer).toContain("ZH_OUTLINE_PX = 1");
+    expect(renderer).toContain("EN_OUTLINE_PX = 0");
+    expect(renderer).toContain("ZH_SHADOW_DISTANCE_FRAC = 0.08");
+    expect(renderer).toContain("ZH_SHADOW_BLUR_FRAC = 0.10");
+    expect(renderer).toContain("EN_SHADOW_DISTANCE_FRAC = 0.08");
+    expect(renderer).toContain("EN_SHADOW_BLUR_FRAC = 0.10");
+    expect(renderer).toContain("SHADOW_ANGLE_DEG = 45");
     expect(renderer).toContain("MAX_WIDTH_FRAC = 0.80");
-    expect(renderer).toContain('"/Library/Fonts/LexendDeca.ttf"');
+
+    // Lexend Deca is the requested face for both rows but has no CJK glyphs,
+    // so it can only head a fallback chain — hence a Latin/CJK FontSet pair
+    // and per-run face switching, not one font per row.
+    expect(renderer).toContain("LexendDeca.ttf");
     expect(renderer).toContain('"PingFang SC"');
     expect(renderer).toContain('"Hiragino Sans GB"');
     expect(renderer).toContain('"STHeiti"');
-    expect(renderer).toContain("SHADOW_COLOR = (64, 64, 64, 255)");
+    expect(renderer).toContain("class FontSet:");
+    expect(renderer).toContain("def font_runs(");
+    expect(renderer).toContain("def draw_mixed_line(");
+    expect(renderer).toContain('anchor="ls"');
+
+    // The shadow is a real Gaussian blur on its own layer, not a stamped
+    // offset trail, and its silhouette is drawn entirely in the shadow colour
+    // (drawing the outline pass in opaque black made the "shadow" an opaque
+    // slab as thick as the outline no matter what alpha it was given).
+    expect(renderer).toContain("SHADOW_RGB = (64, 64, 64)");
+    expect(renderer).toContain("ImageFilter.GaussianBlur");
+    expect(renderer).toContain("outline_color=shadow.color");
+
+    // Opacity is per row: the Chinese outline carries legibility so its
+    // shadow is only a depth hint, while English has no outline.
+    expect(renderer).toContain("ZH_SHADOW_OPACITY = 0.28");
+    expect(renderer).toContain("EN_SHADOW_OPACITY = 0.42");
+
+    // CJK/Latin word spacing, so embedded product names don't run into the
+    // surrounding Chinese.
+    expect(renderer).toContain("def space_cjk_latin(");
 
     // ZH and EN render as independent layers of FIXED-SIZE, full-width
     // canvases with the text pre-centered. Constant frame dimensions are what

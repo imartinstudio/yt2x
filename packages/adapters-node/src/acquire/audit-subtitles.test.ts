@@ -203,6 +203,50 @@ describe("auditSubtitleArtifacts", () => {
     expect(result.verdict).toBe("warn");
   });
 
+  it("reports width-budget from text width alone, with or without measurements", () => {
+    // The run that shipped a 44-cell Chinese line across five cues measured
+    // clean — one cps finding, no hard-layout, no line-count — because the
+    // line did fit the frame. It was simply far too much text for one
+    // caption, and no check looked at width in the writer's own units.
+    const wideZh = srt([
+      { start: "00:00:00,000", end: "00:00:02,000", lines: ["你好，世界。"] },
+      { start: "00:00:02,000", end: "00:00:04,000", lines: [`安全交付 Codex${"测".repeat(25)}`] },
+    ]);
+
+    for (const measurements of [
+      undefined,
+      [{ cueIndex: 1, severity: "fit" as const, lineCount: 1 },
+        { cueIndex: 2, severity: "fit" as const, lineCount: 1 }],
+    ]) {
+      const result = auditSubtitleArtifacts(validInput(
+        measurements === undefined ? { zhSrt: wideZh } : { zhSrt: wideZh, measurements },
+      ));
+
+      expect(result.issues).toContainEqual(expect.objectContaining({
+        code: "width-budget",
+        severity: "presentation",
+        cueIndex: 2,
+      }));
+      // The cue that fits the budget stays clean.
+      expect(result.issues.filter((issue) => issue.code === "width-budget")).toHaveLength(1);
+    }
+  });
+
+  it("never blocks a burn on width-budget, which the font measurement may well say fits", () => {
+    const report = {
+      verdict: "warn" as const,
+      issues: [{
+        code: "width-budget" as const,
+        severity: "presentation" as const,
+        message: "over budget",
+      }],
+    };
+
+    for (const mode of ["srt", "ass", "burned", "all"] as const) {
+      expect(isSubtitleAuditReadyForDelivery(report, mode)).toBe(true);
+    }
+  });
+
   it("reports line-count when rendering needs more than two lines", () => {
     const result = auditSubtitleArtifacts(validInput({
       measurements: [{ cueIndex: 2, severity: "aim", lineCount: 3 }],

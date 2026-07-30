@@ -137,6 +137,13 @@ export const ControlOptionsSchema = z.object({
   errorStrategy: ErrorStrategySchema.default("stop"),
   /** 覆盖已有 structured-notes.md 等产物（native notes 阶段） */
   force: z.boolean().default(false),
+  /**
+   * 跑配音阶段：产出 full.zh-dubbed.mp4。
+   * 开启时 subtitle 降为只翻译（srt），跳过 zh 烧录；成片由 dub 反向 SRT 负责。
+   */
+  dub: z.boolean().default(false),
+  /** 配音引擎；pipeline --dub 默认 elevenlabs（成片），可改 edge-tts。 */
+  dubEngine: z.enum(["edge-tts", "elevenlabs"]).default("elevenlabs"),
 });
 export type ControlOptions = z.infer<typeof ControlOptionsSchema>;
 

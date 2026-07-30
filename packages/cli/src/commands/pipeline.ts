@@ -53,6 +53,15 @@ export const registerPipelineCommand = (program: Command): void => {
     .option("--continue-from", "Resume from last failed step")
     .option("--error-strategy <mode>", "On stage failure: stop|skip", "stop")
     .option("--force", "Overwrite existing structured-notes.md in native notes stage")
+    .option(
+      "--dub",
+      "After article, run Chinese dubbing into full.zh-dubbed.mp4 (forces subtitle translate-only; skips zh burn)",
+      false,
+    )
+    .option(
+      "--dub-engine <id>",
+      "With --dub: TTS engine edge-tts|elevenlabs (default elevenlabs for pipeline deliverables)",
+    )
     .option("--publish-dry-run", "Preview publish output without posting to X")
     .option("--deconstruct <n>", "After article generation, auto-deconstruct into top N clips with posts (e.g. 5)")
     .option("--llm-provider <id>", "LLM provider: openai|anthropic|deepseek|moonshot", defaultCliLlmProvider())

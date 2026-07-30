@@ -22,12 +22,21 @@ vi.mock("./native-publish.js", () => ({
   executeNativePublish: executeNativePublishMock,
 }));
 
-vi.mock("./native-stage-common.js", () => ({
-  resolveNativeLlm: () => ({
-    ok: true,
-    adapter: { chat: async () => ({ content: "", model: "test", finishReason: "stop" }) },
-    model: "test",
-  }),
+vi.mock("./native-stage-common.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...(actual as object),
+    resolveNativeLlm: () => ({
+      ok: true,
+      adapter: { chat: async () => ({ content: "", model: "test", finishReason: "stop" }) },
+      model: "test",
+    }),
+  };
+});
+
+const executeNativeDubMock = vi.hoisted(() => vi.fn(async () => 0));
+vi.mock("./native-dub.js", () => ({
+  executeNativeDub: executeNativeDubMock,
 }));
 
 const executeNativeAcquireMock = vi.hoisted(() => vi.fn(async (opts: { outDir: string }) => {
@@ -252,5 +261,55 @@ describe("runNativePipeline", () => {
       targets: "article",
       platformTargets: "xiaohongshu,wechat",
     });
+  });
+
+  it("runs dub after article and skips deferred zh burn when --dub is set", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-"));
+    const vid = "dubVid1";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+
+    burnZhSubtitlesForVideoMock.mockClear();
+    executeNativeDubMock.mockClear();
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "elevenlabs" },
+      stages: { acquire: "skip", notes: "skip", article: "skip", publish: "skip" },
+      acquire: { subtitleZh: "burned" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(burnZhSubtitlesForVideoMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).toHaveBeenCalledOnce();
+    expect(executeNativeDubMock.mock.calls[0]![0]).toMatchObject({
+      videoId: vid,
+      dubEngine: "elevenlabs",
+    });
+  });
+
+  it("forces bilingual burn off during acquire when --dub is set", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-bilingual-"));
+    executeNativeAcquireMock.mockClear();
+    executeNativeDubMock.mockClear();
+    burnZhSubtitlesForVideoMock.mockClear();
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true },
+      stages: { acquire: "auto", notes: "skip", article: "skip", publish: "skip" },
+      acquire: { subtitleZh: "burned", subtitleBilingual: "burned" },
+      sources: { urls: ["https://www.youtube.com/watch?v=abc123def45"] },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(executeNativeAcquireMock).toHaveBeenCalled();
+    const acquireOpts = executeNativeAcquireMock.mock.calls[0]![0] as {
+      acquire: { subtitleZh?: string; subtitleBilingual?: string };
+    };
+    expect(acquireOpts.acquire.subtitleZh).toBe("srt");
+    expect(acquireOpts.acquire.subtitleBilingual).toBe("off");
+    expect(burnZhSubtitlesForVideoMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).toHaveBeenCalled();
   });
 });

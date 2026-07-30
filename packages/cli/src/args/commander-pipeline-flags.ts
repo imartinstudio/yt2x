@@ -41,6 +41,8 @@ export type CommanderPipelineFlags = {
   continueFrom?: boolean;
   errorStrategy?: string;
   force?: boolean;
+  dub?: boolean;
+  dubEngine?: string;
   publishDryRun?: boolean;
   thread?: boolean;
   publishMaxChars?: string;
@@ -123,6 +125,8 @@ export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): Pipe
       continueFlag: flags.continueFrom ?? false,
       errorStrategy: flags.errorStrategy ?? "stop",
       force: flags.force ?? false,
+      dub: flags.dub ?? false,
+      ...(flags.dubEngine !== undefined ? { dubEngine: flags.dubEngine } : {}),
     },
     llm: {
       provider,

@@ -97,6 +97,24 @@ describe("parseCommanderPipelineFlags", () => {
     expect(args.acquire.downloadVideo).toBe(false);
   });
 
+  it("maps --dub and defaults dubEngine to elevenlabs", () => {
+    const args = parseCommanderPipelineFlags({
+      urls: ["https://example.com/video"],
+      dub: true,
+    });
+    expect(args.control.dub).toBe(true);
+    expect(args.control.dubEngine).toBe("elevenlabs");
+  });
+
+  it("maps --dub-engine edge-tts", () => {
+    const args = parseCommanderPipelineFlags({
+      urls: ["https://example.com/video"],
+      dub: true,
+      dubEngine: "edge-tts",
+    });
+    expect(args.control.dubEngine).toBe("edge-tts");
+  });
+
   it("rejects video-only on pipeline args", () => {
     expect(() =>
       parseCommanderPipelineFlags({

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  HARD_CJK,
   PROTECTED_GLOSSARY_TERMS,
   PROTECTED_NAMES,
   visualWidth,
@@ -7,6 +8,15 @@ import {
 
 export const SUBTITLE_AUDIT_THRESHOLDS = {
   maxLines: 2,
+  /**
+   * The projection's own hard ceiling, re-checked here on the delivered text.
+   * `hard-layout` was previously reachable only through `measurements`, which
+   * come from the burn stage's real font metrics — so nothing checked width
+   * at the SRT stage, and an over-width line could ship unreported. Sharing
+   * the constant keeps the audit from disagreeing with the writer about what
+   * "too wide" means.
+   */
+  maxCueWidth: HARD_CJK,
   /**
    * Reading speed ceiling in *visual width* per second, not raw characters:
    * one CJK glyph is a full cell, a Latin letter or digit half a cell (see
@@ -31,6 +41,7 @@ export type SubtitleAuditIssueCode =
   | "bilingual-timing"
   | "glossary-violation"
   | "hard-layout"
+  | "width-budget"
   | "line-count"
   | "cps"
   | "flash"
@@ -182,10 +193,19 @@ const resultFromIssues = (issues: SubtitleAuditIssue[]): SubtitleAuditResult => 
  * status is "ready", each retry threw away the cache and re-translated the
  * entire video — paying full LLM cost to reroll a non-deterministic result
  * that had no reachable passing state.
+ *
+ * `width-budget` is advisory for the same reason. It reports that the writer
+ * overshot its own splitting ceiling, which the deterministic re-split in
+ * `requestContentAlignedSplit` should now prevent — but the authority on
+ * whether a frame is actually broken is the font measurement behind
+ * `hard-layout`. Blocking a burn the measurement says renders fine would
+ * recreate exactly the unreachable-passing-state failure described above,
+ * and every artifact produced before the re-split existed would fail it.
  */
 const ADVISORY_PRESENTATION_CODES: ReadonlySet<SubtitleAuditIssueCode> = new Set([
   "cps",
   "flash",
+  "width-budget",
 ]);
 
 export const isSubtitleAuditReadyForDelivery = (
@@ -362,6 +382,28 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
           message: `protected term "${term}" is missing from the aligned Chinese cue`,
         });
       }
+    }
+  }
+  // Width check against the projection's own budget, independent of layout
+  // measurement. `hard-layout` answers "does this physically fit the frame",
+  // measured in real font metrics; this answers "did the writer honor the
+  // ceiling it splits against", measured in the same `visualWidth` cells the
+  // writer budgets in. They are different questions, and the measured one
+  // does not subsume this: the run that shipped a 44-cell Chinese line across
+  // five cues measured clean — one cps finding, no hard-layout, no line-count
+  // — because the line still fit the frame. It was simply far too much text
+  // for one caption, and nothing reported it.
+  for (const cue of zhCues) {
+    const width = visualWidth(cue.lines.join(" "));
+    if (width > SUBTITLE_AUDIT_THRESHOLDS.maxCueWidth) {
+      issues.push({
+        code: "width-budget",
+        severity: "presentation",
+        cueIndex: cue.index,
+        timestamp: cue.startRaw,
+        text: cue.lines.join(" "),
+        message: `cue ${cue.index} is ${width} cells wide, over the ${SUBTITLE_AUDIT_THRESHOLDS.maxCueWidth}-cell budget`,
+      });
     }
   }
   for (const measurement of input.measurements ?? []) {

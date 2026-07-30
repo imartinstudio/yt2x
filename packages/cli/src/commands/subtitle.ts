@@ -157,7 +157,8 @@ export type SubtitleRepairFlags = NativeLlmCliFlags & {
 /**
  * Targeted repair over an already-generated bilingual subtitle: audits the
  * current artifact, applies ONE bounded repair pass (protected-term
- * restoration, then cps compaction — see repairSubtitleArtifacts), re-audits
+ * restoration, over-width re-split, then cps compaction — see
+ * repairSubtitleArtifacts), re-audits
  * once, and reports exactly which findings that resolved vs which are still
  * there. Never re-translates and never loops — a finding neither pass can
  * fix is left for a human, same as BaoCut's "one repair, one re-audit, then
@@ -399,8 +400,8 @@ export const registerSubtitleCommand = (program: Command): void => {
       .command("repair <videoId>")
       .description(
         "Targeted repair of already-generated bilingual subtitle artifacts: audits, applies one bounded " +
-          "fix pass (protected-term restoration + cps compaction), re-audits, and reports what's still failing. " +
-          "Does not re-translate or loop.",
+          "fix pass (protected-term restoration, over-width re-split, cps compaction), re-audits, and " +
+          "reports what's still failing. Does not re-translate or loop.",
       )
       .option("--out-dir <path>", "Downloaded source root", DEFAULT_OUT_DIR)
       .option("--article-out-dir <path>", "Article artifact root", "files/articles")

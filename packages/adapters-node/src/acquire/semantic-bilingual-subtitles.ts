@@ -383,7 +383,7 @@ const splitCuesAtCommas = (
 // the blocking hard ceiling — a delivered piece must never exceed it.
 const FIT_CJK = 16;
 const TARGET_CJK = 14;
-const HARD_CJK = 20;
+export const HARD_CJK = 20;
 
 // BaoCut treats one second of source speech on each side as the floor for a
 // "natural" split; below that a cut produces an unreadable flash.
@@ -990,6 +990,57 @@ export const mergeBriefBlocks = <T extends MergeableBlock>(
 };
 
 /**
+ * The width counterpart to `mergeBriefBlocks`, and the invariant backstop for
+ * the whole projection: no delivered block may exceed `hardLimit`.
+ *
+ * Span-based for the same reason its siblings are — a run of consecutive
+ * blocks sharing identical Chinese text is one display unit, and the over-width
+ * text has to be redistributed across the run's own cues rather than patched
+ * in one of them. Deterministic and LLM-free, which is what lets `repair` fix
+ * an already-delivered artifact without paying to re-translate it.
+ *
+ * This exists because a content-aligned split that came back as ONE piece
+ * covering a whole sentence produced exactly this shape: five cues all showing
+ * the same 44-cell line. `requestContentAlignedSplit` now re-splits such a
+ * piece at the source, where it still knows each piece's own cue range; this
+ * pass is the file-wide net for anything that reaches the end over budget
+ * anyway, including artifacts written before that fix existed.
+ *
+ * A run with fewer cues than the split needs is left intact — there is no
+ * display slot to put the extra piece in, and dropping content to satisfy a
+ * width budget would be strictly worse. The audit's `width-budget` finding
+ * discloses whatever survives.
+ */
+export const splitWideBlocks = <T extends MergeableBlock>(
+  blocks: readonly T[],
+  hardLimit: number,
+): T[] => {
+  const result = blocks.map((b) => ({ ...b }));
+
+  for (const span of buildIdenticalTextSpans(result)) {
+    const width = visualWidth(span.zhText);
+    if (width <= hardLimit) continue;
+
+    const parts = enforceHardCeiling(
+      splitLongZh(span.zhText, Math.ceil(width / TARGET_CJK)),
+      hardLimit,
+    );
+    if (parts.length < 2 || span.indices.length < parts.length) continue;
+
+    const counts = allocateCuesByWeight(parts.map((part) => visualWidth(part)), span.indices.length);
+    let cursor = 0;
+    for (let p = 0; p < parts.length; p++) {
+      for (let c = 0; c < counts[p]!; c++) {
+        const index = span.indices[cursor]!;
+        result[index] = { ...result[index]!, zhText: parts[p]! };
+        cursor++;
+      }
+    }
+  }
+  return result;
+};
+
+/**
  * Runs after `mergeBriefBlocks`, for whatever still reads too fast once
  * merging alone can't help (merging is capped by `hardLimit`, so two already
  * over-dense neighbors can max out the display width without ever reaching a
@@ -1252,6 +1303,10 @@ export const repairSubtitleArtifacts = async (input: {
   }));
 
   let blocks = await repairMissingTermsInBlocks(original, input.llm, input.model, input.signal);
+  // Before the reading-speed pass: splitting a wide run shortens each cue's
+  // text without changing the run's total duration, so cps is measured on
+  // what will actually be displayed. Deterministic, so it costs no tokens.
+  blocks = splitWideBlocks(blocks, HARD_CJK);
   blocks = await compactDenseBlocks(blocks, input.llm, input.model, input.signal);
   blocks = fixFlashCues(blocks);
 
@@ -1386,11 +1441,24 @@ export const requestContentAlignedSplit = async (
     // Width-compaction pass: a piece that must keep a term with its cue can
     // legitimately come back over budget (e.g. two protected terms sharing
     // one clause). Ask for a compact rewrite of just that piece, grounded in
-    // its own cue range's source text. If compaction itself fails or still
-    // doesn't fit, keep the original wording rather than discarding an
-    // otherwise-correct alignment — the audit layer's presentation checks
-    // (hard-layout/cps/line-count) exist precisely to surface this as
-    // presentation debt instead of it silently vanishing either way.
+    // its own cue range's source text.
+    //
+    // If compaction fails or still doesn't fit, split the piece
+    // deterministically across the cues it already owns rather than keeping
+    // the over-width wording. Nothing downstream would have fixed it: the
+    // merge passes only ever combine (and are themselves capped by
+    // `hardLimit`), `compactDenseBlocks` only looks at reading speed — a wide
+    // line spread over a long span reads slowly and is skipped — and the
+    // audit's measurement-based `hard-layout` check has no measurements at
+    // the SRT stage. A real DeepSeek run returned ONE piece covering a whole
+    // five-cue sentence, and all five cues shipped the same 44-cell line
+    // enumerating nine code smells, which compaction cannot shorten.
+    //
+    // The re-split costs content alignment WITHIN this one piece (sub-pieces
+    // are spread by weight, so a term can drift off its own cue again), which
+    // is why it is a fallback and not the primary path. It only ever applies
+    // to a piece that was already unusable, where every cue in the span was
+    // showing the same over-width text and alignment was moot anyway.
     const pieces: ContentAlignedPiece[] = [];
     let cueCursor = 0;
     for (const raw of rawPieces) {
@@ -1412,10 +1480,33 @@ export const requestContentAlignedSplit = async (
         model,
         signal,
       );
-      pieces.push({
-        throughCue: raw.throughCue,
-        zhText: compact !== null && compact.length === 1 ? compact[0]! : raw.zhText,
-      });
+      const rewritten = compact !== null && compact.length === 1 ? compact[0]! : raw.zhText;
+      if (visualWidth(rewritten) <= hardLimit) {
+        pieces.push({ throughCue: raw.throughCue, zhText: rewritten });
+        cueCursor = raw.throughCue;
+        continue;
+      }
+
+      const span = raw.throughCue - cueCursor;
+      const subParts = enforceHardCeiling(
+        splitLongZh(rewritten, Math.ceil(visualWidth(rewritten) / TARGET_CJK)),
+        hardLimit,
+      );
+      if (subParts.length > 1 && span >= subParts.length) {
+        // `allocateCuesByWeight` sums to exactly `span`, so the last
+        // sub-piece still lands on `raw.throughCue` and coverage is intact.
+        const counts = allocateCuesByWeight(subParts.map((part) => visualWidth(part)), span);
+        let through = cueCursor;
+        for (let p = 0; p < subParts.length; p++) {
+          through += counts[p]!;
+          pieces.push({ throughCue: through, zhText: subParts[p]! });
+        }
+      } else {
+        // Genuinely nowhere to go: a single unbreakable token, or fewer cues
+        // in this piece's span than the split needs. Keep the content and let
+        // the audit's width check report it as presentation debt.
+        pieces.push({ throughCue: raw.throughCue, zhText: rewritten });
+      }
       cueCursor = raw.throughCue;
     }
 
@@ -1656,9 +1747,14 @@ export const projectSemanticBilingualSubtitles = async (
   // cue, or sits right at a sentence boundary.
   const mergedBlocks = mergeBriefBlocks(validBlocks, HARD_CJK);
 
+  // File-wide width backstop: nothing may leave this function over the hard
+  // ceiling it splits against. Runs before the reading-speed pass so cps is
+  // measured on the text that will actually be displayed.
+  const fittedBlocks = splitWideBlocks(mergedBlocks, HARD_CJK);
+
   // Whatever still reads too fast after merging (merging alone is capped by
   // the width budget) gets one targeted compact rewrite.
-  const finalBlocks = await compactDenseBlocks(mergedBlocks, opts.llm, opts.model, opts.signal);
+  const finalBlocks = await compactDenseBlocks(fittedBlocks, opts.llm, opts.model, opts.signal);
 
   // Build per-cue bilingual SRT from valid blocks.
   const bilingualSrt = serializeSrtBlocks(

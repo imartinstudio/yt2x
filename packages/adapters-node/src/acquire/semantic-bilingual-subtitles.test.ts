@@ -19,6 +19,7 @@ import {
   requestCompactRewrite,
   requestContentAlignedSplit,
   splitLongZh,
+  splitWideBlocks,
   visualWidth,
   type SubtitleLayoutMeasurement,
   type WordTiming,
@@ -1508,7 +1509,7 @@ describe("requestContentAlignedSplit", () => {
     ]);
   });
 
-  it("keeps the original over-width piece when compaction itself fails, instead of discarding the alignment", async () => {
+  it("keeps the original over-width piece when compaction fails and its span is a single cue", async () => {
     const overWidth = "测".repeat(25);
     const llm: LlmPort = {
       chat: vi.fn(async (request: ChatRequest) => {
@@ -1535,15 +1536,62 @@ describe("requestContentAlignedSplit", () => {
       "test-model",
     );
 
-    // Compaction failed, but the content-correct alignment is still returned
-    // (over budget) rather than being thrown away — the audit layer's
-    // presentation checks (hard-layout/cps) are what should catch this next,
-    // not a silent fall back to the weight-based split that could misplace
-    // content again.
+    // Compaction failed and the piece covers exactly one cue, so there is no
+    // second display slot to re-split it into (see the multi-cue case above).
+    // The content-correct alignment is still returned over budget rather than
+    // thrown away — falling back to the weight-based split could misplace
+    // content again, and the audit's width check reports what did ship.
     expect(result).toEqual([
       { throughCue: 1, zhText: "第一段" },
       { throughCue: 2, zhText: overWidth },
     ]);
+  });
+
+  it("re-splits an over-width piece across its own cues when compaction fails", async () => {
+    // The real failure this covers: DeepSeek returned ONE piece covering all
+    // of a sentence's cues, so every cue in the span showed the same 44-cell
+    // Chinese line. Compaction can't help an enumeration like this (there is
+    // no shorter way to say nine code smells), and keeping the original meant
+    // an unreadable block shipped — the SRT stage has no layout measurements,
+    // so the audit's hard-layout check never saw it either.
+    const enumeration = "比如神秘命名、重复代码、依恋情结、数据泥团、基本类型偏执、发散式变化、夸夸其谈通用性、消息链。";
+    const fiveCues = [
+      { start: "00:00:00,000", end: "00:00:01,000", text: ["what I want to do is invoke the"] },
+      { start: "00:00:01,000", end: "00:00:02,000", text: ["idea of a mysterious name or duplicated"] },
+      { start: "00:00:02,000", end: "00:00:03,000", text: ["code or feature envy, data clumps,"] },
+      { start: "00:00:03,000", end: "00:00:04,000", text: ["primitive obsession, divergent change,"] },
+      { start: "00:00:04,000", end: "00:00:05,000", text: ["speculative generality, message chains."] },
+    ];
+    const llm: LlmPort = {
+      chat: vi.fn(async (request: ChatRequest) => {
+        const userContent = request.messages[1]!.content as string;
+        if (userContent.includes("pieceCount")) {
+          // Compaction can't shrink an enumeration of protected concepts.
+          return { content: JSON.stringify({ pieces: [] }), model: "test", finishReason: "stop" };
+        }
+        return {
+          content: JSON.stringify({ pieces: [{ throughCue: 5, text: enumeration }] }),
+          model: "test",
+          finishReason: "stop",
+        };
+      }),
+    };
+
+    const result = await requestContentAlignedSplit(fiveCues, enumeration, 20, llm, "test-model");
+
+    expect(result).not.toBeNull();
+    // Every piece now fits the display budget...
+    for (const piece of result!) {
+      expect(visualWidth(piece.zhText)).toBeLessThanOrEqual(20);
+    }
+    // ...the pieces still cover every cue in order, with no gaps...
+    expect(result!.length).toBeGreaterThan(1);
+    expect(result![result!.length - 1]!.throughCue).toBe(5);
+    expect(result!.map((p) => p.throughCue)).toEqual(
+      [...result!.map((p) => p.throughCue)].sort((a, b) => a - b),
+    );
+    // ...and no content was dropped or invented along the way.
+    expect(result!.map((p) => p.zhText).join("")).toBe(enumeration);
   });
 
   it("still rejects a response with broken cue coverage even though width is no longer checked upfront", async () => {
@@ -1558,6 +1606,53 @@ describe("requestContentAlignedSplit", () => {
 
     const result = await requestContentAlignedSplit(cues, "第一段第二段", 20, llm, "test-model");
     expect(result).toBeNull();
+  });
+});
+
+describe("splitWideBlocks", () => {
+  const block = (start: string, end: string, zhText: string, enText: string) =>
+    ({ start, end, zhText, enText });
+
+  it("re-splits a run of identical over-width text across the cues it already occupies", () => {
+    // The shipped shape: one 44-cell line repeated over five cues.
+    const enumeration = "比如神秘命名、重复代码、依恋情结、数据泥团、基本类型偏执、发散式变化、夸夸其谈通用性、消息链。";
+    const blocks = [
+      block("00:00:00,000", "00:00:01,000", enumeration, "first"),
+      block("00:00:01,000", "00:00:02,000", enumeration, "second"),
+      block("00:00:02,000", "00:00:03,000", enumeration, "third"),
+      block("00:00:03,000", "00:00:04,000", enumeration, "fourth"),
+      block("00:00:04,000", "00:00:05,000", enumeration, "fifth"),
+    ];
+
+    const result = splitWideBlocks(blocks, 20);
+
+    for (const b of result) expect(visualWidth(b.zhText)).toBeLessThanOrEqual(20);
+    // Timing and English are untouched; only the Chinese is redistributed.
+    expect(result.map((b) => [b.start, b.end, b.enText])).toEqual(
+      blocks.map((b) => [b.start, b.end, b.enText]),
+    );
+    // No content dropped or invented: consecutive distinct pieces, in order,
+    // concatenate back to the original line.
+    const distinct = result.map((b) => b.zhText).filter((t, i, all) => i === 0 || all[i - 1] !== t);
+    expect(distinct.join("")).toBe(enumeration);
+    expect(distinct.length).toBeGreaterThan(1);
+  });
+
+  it("leaves a run alone when it already fits", () => {
+    const blocks = [
+      block("00:00:00,000", "00:00:01,000", "短句一。", "first"),
+      block("00:00:01,000", "00:00:02,000", "短句二。", "second"),
+    ];
+
+    expect(splitWideBlocks(blocks, 20)).toEqual(blocks);
+  });
+
+  it("keeps an over-width run intact when it has fewer cues than the split needs", () => {
+    // One cue, nowhere to put a second piece — content wins over budget.
+    const wide = "测".repeat(44);
+    const blocks = [block("00:00:00,000", "00:00:02,000", wide, "only")];
+
+    expect(splitWideBlocks(blocks, 20)).toEqual(blocks);
   });
 });
 

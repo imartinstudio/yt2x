@@ -7,12 +7,25 @@ export {
   type EdgeTtsAdapterOptions,
 } from "./edge-tts.js";
 export {
+  ELEVENLABS_ENGINE_ID,
+  ELEVENLABS_RATE_RANGE,
+  DEFAULT_ELEVENLABS_MODEL,
+  DEFAULT_ELEVENLABS_BASE_URL,
+  ELEVENLABS_API_KEY_ENV,
+  ELEVENLABS_VOICE_ENV,
+  createElevenLabsAdapter,
+  readElevenLabsApiKeyFromEnv,
+  readElevenLabsVoiceFromEnv,
+  type ElevenLabsAdapterOptions,
+} from "./elevenlabs.js";
+export {
   DUB_DIR_NAME,
   DUB_LINES_DIR,
   DUB_SCRIPT_FILE,
   DUB_TIMING_FILE,
   DUB_PLAN_FILE,
   DUB_PLACEMENT_FILE,
+  DUB_REPORT_FILE,
   DUB_DEMUCS_DIR,
   dubDirFor,
   dubDemucsDirFor,
@@ -30,6 +43,7 @@ export {
   writeDubTimingReport,
   writeDubPlan,
   writeDubPlacement,
+  writeDubGateReport,
   type WrittenDubLineAudio,
 } from "./file-store.js";
 export {

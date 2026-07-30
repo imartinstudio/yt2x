@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   parseSrtTimestampToMs,
   type DubCue,
+  type DubGateReport,
   type DubNegotiatePlan,
   type DubPlacementReport,
   type DubScript,
@@ -18,6 +19,7 @@ import { parseSubtitleBlocks, resolveSourceVideo } from "../acquire/video-subtit
  *     dub-timing.json      倍率 1.0 的实测时长报告
  *     dub-plan.json        时长协商计划
  *     dub-placement.json   最终落点（反向 SRT / 混音的输入）
+ *     dub-report.json      门禁报告（PR3）
  *     lines/0001.mp3 ...   逐句音频
  *     demucs/no_vocals.wav
  *     voice.wav / mixed.m4a
@@ -31,6 +33,7 @@ export const DUB_SCRIPT_FILE = "dub-script.json";
 export const DUB_TIMING_FILE = "dub-timing.json";
 export const DUB_PLAN_FILE = "dub-plan.json";
 export const DUB_PLACEMENT_FILE = "dub-placement.json";
+export const DUB_REPORT_FILE = "dub-report.json";
 export const DUB_LINES_DIR = "lines";
 export const DUB_DEMUCS_DIR = "demucs";
 
@@ -155,6 +158,15 @@ export const writeDubPlacement = async (
   report: DubPlacementReport,
 ): Promise<string> => {
   const filePath = path.join(dubDir, DUB_PLACEMENT_FILE);
+  await atomicWrite(filePath, `${JSON.stringify(report, null, 2)}\n`);
+  return filePath;
+};
+
+export const writeDubGateReport = async (
+  dubDir: string,
+  report: DubGateReport,
+): Promise<string> => {
+  const filePath = path.join(dubDir, DUB_REPORT_FILE);
   await atomicWrite(filePath, `${JSON.stringify(report, null, 2)}\n`);
   return filePath;
 };

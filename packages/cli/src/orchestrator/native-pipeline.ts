@@ -16,6 +16,7 @@ import {
 } from "@yt2x/adapters-node";
 import type { PipelineArgs } from "../args/pipeline.js";
 import { executeNativeArticle } from "./native-article.js";
+import { executeNativeDub } from "./native-dub.js";
 import { executeNativeNotes } from "./native-notes.js";
 import { executeNativePublish } from "./native-publish.js";
 import { runDeconstructCommand } from "../commands/deconstruct.js";
@@ -324,11 +325,23 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
 
   // 如果用户要求烧录字幕，推迟到 article 阶段之后执行。
   // acquire 阶段只需生成 full.zh.srt，不需要烧录（无论 acquire 是否 skip）。
+  // --dub 时成片由配音反向 SRT 负责，zh burn 整段跳过，subtitle 强制只翻译。
+  const dubRequested = args.control.dub === true;
   const bilingualBurnRequested =
     args.acquire.subtitleBilingual === "burned" || args.acquire.subtitleBilingual === "all";
   const deferredBurn =
+    !dubRequested &&
     (args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both") &&
     !bilingualBurnRequested;
+
+  // --dub 需要 full.zh.srt：若用户没开 subtitle，或只开了 burn，降为 srt。
+  const effectiveSubtitleZh = dubRequested
+    ? args.acquire.subtitleZh === "off"
+      ? ("srt" as const)
+      : args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both"
+        ? ("srt" as const)
+        : args.acquire.subtitleZh
+    : args.acquire.subtitleZh;
 
   try {
     if (args.control.continueFlag) {
@@ -343,8 +356,12 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
     } else if (args.stages.acquire !== "skip") {
       logger.info({ outRoot, acquire: args.stages.acquire }, "yt2x pipeline: native acquire");
 
-      // acquire 阶段只需生成 full.zh.srt，烧录推迟到 article 之后。
-      const acquireSubtitleMode = deferredBurn ? ("srt" as const) : args.acquire.subtitleZh;
+      // acquire 阶段只需生成 full.zh.srt；烧录推迟到 article 之后（--dub 时永不烧 zh）。
+      const acquireSubtitleMode = deferredBurn
+        ? ("srt" as const)
+        : dubRequested
+          ? effectiveSubtitleZh
+          : args.acquire.subtitleZh;
       const acquireArgs = {
         ...args,
         acquire: { ...args.acquire, subtitleZh: acquireSubtitleMode },
@@ -357,9 +374,10 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       });
 
       const needsTranslation =
-        args.acquire.subtitleZh === "srt" ||
-        args.acquire.subtitleZh === "burned" ||
-        args.acquire.subtitleZh === "both";
+        acquireSubtitleMode === "srt" ||
+        acquireSubtitleMode === "burned" ||
+        acquireSubtitleMode === "both" ||
+        dubRequested;
       let llmResult: ReturnType<typeof resolveNativeLlm> | undefined;
       if (needsTranslation) {
         llmResult = resolveNativeLlm({
@@ -498,6 +516,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
     }
 
     // subtitle burn stage (deferred from acquire — after article, before publish)
+    // --dub 时跳过：成片由 dub 的 reverse SRT + remix 产出 full.zh-dubbed.mp4
     if (deferredBurn) {
       for (const id of videoIds) {
         progress.setActive(`subtitle-burn · ${id}`);
@@ -513,7 +532,37 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
       }
     }
 
-    // deconstruct stage: after article + subtitle burn, before publish
+    // dub stage: after article (+ optional burn), before deconstruct/publish
+    if (dubRequested) {
+      logger.info(
+        { videos: videoIds.length, engine: args.control.dubEngine },
+        "yt2x pipeline: dub stage",
+      );
+      for (const id of videoIds) {
+        progress.setActive(`dub · ${id}`);
+        const t0 = performance.now();
+        const code = await executeNativeDub({
+          videoId: id,
+          outDir: outRoot,
+          articleOutDir: articleOutRoot,
+          dubEngine: args.control.dubEngine,
+          force: args.control.force,
+          llmProvider: args.llm.provider,
+          ...(args.llm.model !== undefined ? { llmModel: args.llm.model } : {}),
+          ...(args.llm.baseUrl !== undefined ? { llmBaseUrl: args.llm.baseUrl } : {}),
+        });
+        progress.record(stageTimingKey("dub", id), Math.round(performance.now() - t0));
+        if (code !== 0) {
+          pipelineExit = mergePipelineExitCode(pipelineExit, code);
+          if (args.control.errorStrategy === "stop") {
+            finalExitCode = code;
+            return finalExitCode;
+          }
+        }
+      }
+    }
+
+    // deconstruct stage: after article + subtitle burn / dub, before publish
     if (args.deconstruct !== undefined) {
       logger.info(
         { videos: videoIds.length, selectTop: args.deconstruct },

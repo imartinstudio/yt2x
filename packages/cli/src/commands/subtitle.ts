@@ -7,6 +7,7 @@ import {
   measureBilingualSubtitleLayout,
   repairSubtitleArtifacts,
   sanitizeVideoId,
+  transcribeLocal,
   type SubtitleAuditIssue,
   type SubtitleAuditMeasurement,
 } from "@yt2x/adapters-node";
@@ -26,6 +27,7 @@ export type SubtitleAuditFlags = {
   outDir?: string;
   articleOutDir?: string;
   strict?: boolean;
+  sourceChannel?: string;
   measureLayout?: (input: {
     bilingualSrt: string;
     videoWidth: number;
@@ -39,6 +41,28 @@ const firstExistingPath = async (paths: readonly string[]): Promise<string> => {
   }
   return paths[0]!;
 };
+
+/**
+ * audit/repair read the on-disk source SRT to check content fidelity, but
+ * don't otherwise know which of the two coexisting source channels
+ * generated the artifact under inspection — that choice lives only in the
+ * original `subtitle` invocation's --subtitle-source flag. Auditing the
+ * wrong channel's file produces bogus source-sha/coverage-loss findings, so
+ * callers must pass --source-channel matching what they generated with.
+ * (Deliberately a different flag name than the parent `subtitle` command's
+ * own --subtitle-source: Commander silently drops a subcommand option that
+ * shares its parent's long flag name, defaulting to the parent's value.)
+ */
+const sourceSrtCandidates = (downloadDir: string, source: string | undefined): string[] =>
+  source === "local"
+    ? [
+        path.join(downloadDir, "full.local.en.srt"),
+        path.join(downloadDir, "video", "full.local.en.srt"),
+      ]
+    : [
+        path.join(downloadDir, "full.en.srt"),
+        path.join(downloadDir, "video", "full.en.srt"),
+      ];
 
 const atomicWriteFile = async (filePath: string, content: string): Promise<void> => {
   const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
@@ -61,10 +85,7 @@ export const executeSubtitleAudit = async (
   const articleRoot = path.resolve(flags.articleOutDir ?? "files/articles");
   const downloadDir = path.join(outRoot, videoId);
   const articleVideoDir = path.join(articleRoot, videoId, "video");
-  const sourcePath = await firstExistingPath([
-    path.join(downloadDir, "full.en.srt"),
-    path.join(downloadDir, "video", "full.en.srt"),
-  ]);
+  const sourcePath = await firstExistingPath(sourceSrtCandidates(downloadDir, flags.sourceChannel));
   const [sourceSrt, enSrt, zhSrt, bilingualSrt, manifestRaw] = await Promise.all([
     readFile(sourcePath, "utf8"),
     readFile(path.join(articleVideoDir, "full.en.srt"), "utf8"),
@@ -110,6 +131,7 @@ export type SubtitleRepairFlags = NativeLlmCliFlags & {
   outDir?: string;
   articleOutDir?: string;
   strict?: boolean;
+  sourceChannel?: string;
   measureLayout?: SubtitleAuditFlags["measureLayout"];
 };
 
@@ -131,10 +153,7 @@ export const executeSubtitleRepair = async (
   const articleRoot = path.resolve(flags.articleOutDir ?? "files/articles");
   const downloadDir = path.join(outRoot, videoId);
   const articleVideoDir = path.join(articleRoot, videoId, "video");
-  const sourcePath = await firstExistingPath([
-    path.join(downloadDir, "full.en.srt"),
-    path.join(downloadDir, "video", "full.en.srt"),
-  ]);
+  const sourcePath = await firstExistingPath(sourceSrtCandidates(downloadDir, flags.sourceChannel));
   const zhSrtPath = path.join(articleVideoDir, "full.zh.srt");
   const bilingualSrtPath = path.join(articleVideoDir, "full.bilingual.srt");
   const [sourceSrt, enSrt, zhSrtBefore, bilingualSrtBefore, manifestRaw] = await Promise.all([
@@ -225,6 +244,50 @@ export const executeSubtitleRepair = async (
   return flags.strict === true && after.verdict === "fail" ? 2 : 0;
 };
 
+export type SubtitleTranscribeLocalFlags = {
+  outDir?: string;
+  sourceLang?: string;
+  model?: string;
+};
+
+/**
+ * Local transcription channel: runs faster-whisper on the already-downloaded
+ * video and writes "full.local.<lang>.srt" + "full.local.<lang>.words.json"
+ * next to the existing YouTube-caption "full.<lang>.srt" — a coexisting,
+ * independent source, never overwriting it. Select it for burn/translate
+ * with `--subtitle-source local`.
+ */
+export const executeSubtitleTranscribeLocal = async (
+  rawVideoId: string,
+  flags: SubtitleTranscribeLocalFlags,
+): Promise<number> => {
+  const videoId = sanitizeVideoId(rawVideoId);
+  const outRoot = path.resolve(flags.outDir ?? DEFAULT_OUT_DIR);
+  const videoDir = path.join(outRoot, videoId);
+  const language = flags.sourceLang ?? "en";
+
+  const result = await transcribeLocal({
+    videoDir,
+    language,
+    runner: defaultProcessRunner,
+    ...(flags.model !== undefined ? { model: flags.model } : {}),
+  });
+
+  if (result === undefined) {
+    logger.error(
+      { videoId },
+      "yt2x subtitle transcribe-local: unavailable (faster-whisper not installed, or no downloaded video found)",
+    );
+    return 1;
+  }
+
+  logger.info(
+    { videoId, srtPath: result.srtPath, wordsPath: result.wordsPath, cueCount: result.cueCount },
+    "yt2x subtitle transcribe-local: done",
+  );
+  return 0;
+};
+
 export const registerSubtitleCommand = (program: Command): void => {
   const cmd = program
     .command("subtitle")
@@ -238,7 +301,7 @@ export const registerSubtitleCommand = (program: Command): void => {
       .option("--subtitle-zh <mode>", "Subtitle mode: off|srt|burned|both", "srt")
       .option("--subtitle-source-lang <lang>", "Subtitle source language", "en")
       .option("--subtitle-target-lang <lang>", "Subtitle target language", "zh-CN")
-      .option("--subtitle-source <mode>", "Subtitle source: auto|youtube|transcribe|file", "auto")
+      .option("--subtitle-source <mode>", "Subtitle source: auto|youtube|transcribe|local|file", "auto")
       .option("--subtitle-file <path>", "Existing SRT/VTT subtitle file when --subtitle-source file")
       .option("--subtitle-bilingual <mode>", "Bilingual subtitle mode: off|srt|ass|burned|all", "off")
       .option("--subtitle-burn-style <style>", "Subtitle burn style: zh-default|bilingual-explainer", "zh-default")
@@ -265,6 +328,11 @@ export const registerSubtitleCommand = (program: Command): void => {
     .option("--out-dir <path>", "Downloaded source root", DEFAULT_OUT_DIR)
     .option("--article-out-dir <path>", "Article artifact root", "files/articles")
     .option("--strict", "Exit 2 when the audit verdict is fail", false)
+    .option(
+      "--source-channel <mode>",
+      "Which source channel generated this artifact (must match the original `subtitle --subtitle-source` run): auto|local",
+      "auto",
+    )
     .action(async (videoId: string, flags: SubtitleAuditFlags) => {
       process.exitCode = await executeSubtitleAudit(videoId, flags);
     });
@@ -279,8 +347,27 @@ export const registerSubtitleCommand = (program: Command): void => {
       )
       .option("--out-dir <path>", "Downloaded source root", DEFAULT_OUT_DIR)
       .option("--article-out-dir <path>", "Article artifact root", "files/articles")
-      .option("--strict", "Exit 2 when the post-repair audit verdict is fail", false),
+      .option("--strict", "Exit 2 when the post-repair audit verdict is fail", false)
+      .option(
+        "--source-channel <mode>",
+        "Which source channel generated this artifact (must match the original `subtitle --subtitle-source` run): auto|local",
+        "auto",
+      ),
   ).action(async (videoId: string, flags: SubtitleRepairFlags) => {
     process.exitCode = await executeSubtitleRepair(videoId, flags);
   });
+
+  cmd
+    .command("transcribe-local <videoId>")
+    .description(
+      "Local transcription channel (faster-whisper): writes full.local.<lang>.srt + " +
+        ".words.json next to the existing YouTube-caption source, without touching it. " +
+        "Select it for translate/burn with --subtitle-source local.",
+    )
+    .option("--out-dir <path>", "Downloaded source root", DEFAULT_OUT_DIR)
+    .option("--source-lang <lang>", "Source language", "en")
+    .option("--model <size>", "faster-whisper model size (default: small)")
+    .action(async (videoId: string, flags: SubtitleTranscribeLocalFlags) => {
+      process.exitCode = await executeSubtitleTranscribeLocal(videoId, flags);
+    });
 };

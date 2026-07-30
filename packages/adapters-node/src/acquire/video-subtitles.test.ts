@@ -15,6 +15,7 @@ vi.mock("./burn-zh-subtitles-for-video.js", () => ({
 vi.mock("./resolve-python.js", () => ({
   resolvePythonWithPillow: vi.fn().mockResolvedValue("python3"),
   resolvePythonWithTorchaudio: vi.fn().mockResolvedValue(undefined),
+  resolvePythonWithFasterWhisper: vi.fn().mockResolvedValue(undefined),
 }));
 
 import {
@@ -24,9 +25,10 @@ import {
   parseSubtitleBlocks,
   prepareSourceSubtitle,
   runSubtitlePipeline,
+  transcribeLocal,
 } from "./video-subtitles.js";
 import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
-import { resolvePythonWithTorchaudio } from "./resolve-python.js";
+import { resolvePythonWithFasterWhisper, resolvePythonWithTorchaudio } from "./resolve-python.js";
 
 /** Shared runner helper: satisfies burn-bilingual-subtitles.ts's --measure calls with a trivial "fit" verdict. */
 const writeMeasureOutputIfRequested = async (spec: {
@@ -604,6 +606,255 @@ Second sentence.
     expect(commandsRun).toContain("ffmpeg");
     expect(commandsRun).toContain("python3");
     expect(result.manifest.bilingual_subtitle).toBe("video/full.bilingual.srt");
+  });
+
+  describe("transcribeLocal", () => {
+    it("returns undefined when faster-whisper isn't found, without touching disk", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-local-missing-"));
+      await mkdir(path.join(root, "video"), { recursive: true });
+      await writeFile(path.join(root, "video", "full.mp4"), "fake video bytes");
+      vi.mocked(resolvePythonWithFasterWhisper).mockResolvedValueOnce(undefined);
+
+      const result = await transcribeLocal({
+        videoDir: root,
+        language: "en",
+        runner: { run: async () => { throw new Error("must not be called"); } },
+      });
+
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined when no downloaded video is found", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-local-novideo-"));
+      await mkdir(path.join(root, "video"), { recursive: true });
+      vi.mocked(resolvePythonWithFasterWhisper).mockResolvedValueOnce("python3");
+
+      const result = await transcribeLocal({
+        videoDir: root,
+        language: "en",
+        runner: { run: async () => { throw new Error("must not be called"); } },
+      });
+
+      expect(result).toBeUndefined();
+    });
+
+    it("writes full.local.<lang>.srt and .words.json next to (not over) the existing source", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-local-ok-"));
+      await mkdir(path.join(root, "video"), { recursive: true });
+      await writeFile(path.join(root, "video", "full.mp4"), "fake video bytes");
+      await writeFile(
+        path.join(root, "video", "full.en.srt"),
+        "1\n00:00:00,000 --> 00:00:02,000\nExisting YouTube caption.\n",
+      );
+      vi.mocked(resolvePythonWithFasterWhisper).mockResolvedValueOnce("python3");
+
+      const commandsRun: string[] = [];
+      const result = await transcribeLocal({
+        videoDir: root,
+        language: "en",
+        runner: {
+          run: async (spec) => {
+            commandsRun.push(spec.command);
+            if (spec.args?.some((a) => a.endsWith("transcribe-local.py"))) {
+              const srtOut = spec.args[spec.args.indexOf("--srt-output") + 1]!;
+              const wordsOut = spec.args[spec.args.indexOf("--words-output") + 1]!;
+              await writeFile(
+                srtOut,
+                "1\n00:00:00,000 --> 00:00:03,000\nNaturally segmented sentence.\n",
+              );
+              await writeFile(
+                wordsOut,
+                JSON.stringify([{ word: "Naturally", start: 0, end: 0.5 }]),
+              );
+            }
+            return {
+              exitCode: 0, signal: null, stdout: "", stderr: "",
+              stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+              command: spec.command, args: spec.args ?? [],
+            };
+          },
+        },
+      });
+
+      expect(commandsRun).toContain("ffmpeg");
+      expect(commandsRun).toContain("python3");
+      expect(result?.cueCount).toBe(1);
+      expect(result?.srtPath).toBe(path.join(root, "video", "full.local.en.srt"));
+      // The pre-existing YouTube-caption source is untouched.
+      await expect(readFile(path.join(root, "video", "full.en.srt"), "utf8")).resolves.toContain(
+        "Existing YouTube caption.",
+      );
+      await expect(readFile(result!.srtPath, "utf8")).resolves.toContain(
+        "Naturally segmented sentence.",
+      );
+    });
+
+    it("throws when the transcription script exits non-zero", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-local-fail-"));
+      await mkdir(path.join(root, "video"), { recursive: true });
+      await writeFile(path.join(root, "video", "full.mp4"), "fake video bytes");
+      vi.mocked(resolvePythonWithFasterWhisper).mockResolvedValueOnce("python3");
+
+      await expect(
+        transcribeLocal({
+          videoDir: root,
+          language: "en",
+          runner: {
+            run: async (spec) => ({
+              exitCode: spec.command === "python3" ? 1 : 0,
+              signal: null, stdout: "", stderr: "model failed to load",
+              stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+              command: spec.command, args: spec.args ?? [],
+            }),
+          },
+        }),
+      ).rejects.toThrow(/local transcription failed/);
+    });
+  });
+
+  describe("--subtitle-source local", () => {
+    it("reads full.local.<lang>.srt and never falls back to the YouTube-caption source", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-source-local-"));
+      const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-source-local-article-"));
+      await mkdir(path.join(root, "video"), { recursive: true });
+      await writeFile(
+        path.join(root, "video", "full.en.srt"),
+        "1\n00:00:00,000 --> 00:00:02,000\nYouTube caption text.\n",
+      );
+      await writeFile(
+        path.join(root, "video", "full.local.en.srt"),
+        "1\n00:00:00,000 --> 00:00:02,000\nLocal transcription text.\n",
+      );
+
+      let seenSourceText = "";
+      const result = await runSubtitlePipeline({
+        videoDir: root,
+        subtitle: { mode: "srt", sourceLang: "en", targetLang: "zh-CN", source: "local" },
+        subtitleBilingual: "srt",
+        llm: {
+          chat: async (request: ChatRequest) => {
+            if (request.jsonMode === true) {
+              const userContent = request.messages[1]!.content as string;
+              seenSourceText += userContent;
+              return { content: JSON.stringify({ cues: [] }), model: "test", finishReason: "stop" };
+            }
+            return { content: "翻译。", model: "test", finishReason: "stop" };
+          },
+        },
+        llmModel: "test",
+        burnedVideoOutDir: articleRoot,
+        runner: {
+          run: async (spec) => {
+            await writeMeasureOutputIfRequested(spec);
+            return {
+              exitCode: 0, signal: null, stdout: "", stderr: "",
+              stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+              command: spec.command, args: spec.args ?? [],
+            };
+          },
+        },
+      });
+
+      expect(seenSourceText).toContain("Local");
+      expect(seenSourceText).not.toContain("YouTube");
+      expect(result.manifest.bilingual_subtitle).toBe("video/full.bilingual.srt");
+    });
+
+    it("loads word timings from the local .words.json sidecar instead of probing torchaudio", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-source-local-words-"));
+      const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-source-local-words-article-"));
+      await mkdir(path.join(root, "video"), { recursive: true });
+      await writeFile(
+        path.join(root, "video", "full.local.en.srt"),
+        "1\n00:00:00,000 --> 00:00:03,000\nOne sentence here.\n",
+      );
+      await writeFile(
+        path.join(root, "video", "full.local.en.words.json"),
+        JSON.stringify([
+          { word: "One", start: 0.0, end: 0.5 },
+          { word: "sentence", start: 0.5, end: 1.2 },
+          { word: "here.", start: 1.2, end: 1.8 },
+        ]),
+      );
+      vi.mocked(resolvePythonWithTorchaudio).mockClear();
+
+      const result = await runSubtitlePipeline({
+        videoDir: root,
+        subtitle: { mode: "srt", sourceLang: "en", targetLang: "zh-CN", source: "local" },
+        subtitleBilingual: "srt",
+        llm: {
+          chat: async (request: ChatRequest) =>
+            request.jsonMode === true
+              ? { content: JSON.stringify({ cues: [] }), model: "test", finishReason: "stop" }
+              : { content: "翻译。", model: "test", finishReason: "stop" },
+        },
+        llmModel: "test",
+        burnedVideoOutDir: articleRoot,
+        runner: {
+          run: async (spec) => {
+            await writeMeasureOutputIfRequested(spec);
+            return {
+              exitCode: 0, signal: null, stdout: "", stderr: "",
+              stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+              command: spec.command, args: spec.args ?? [],
+            };
+          },
+        },
+      });
+
+      expect(resolvePythonWithTorchaudio).not.toHaveBeenCalled();
+      expect(result.manifest.bilingual_subtitle).toBe("video/full.bilingual.srt");
+    });
+
+    it("does not pick up a coexisting full.local.<lang>.srt when source is auto", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-source-auto-ignores-local-"));
+      const articleRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-source-auto-ignores-local-article-"));
+      await mkdir(path.join(root, "video"), { recursive: true });
+      await writeFile(
+        path.join(root, "video", "full.en.srt"),
+        "1\n00:00:00,000 --> 00:00:02,000\nYouTube caption text.\n",
+      );
+      await writeFile(
+        path.join(root, "video", "full.local.en.srt"),
+        "1\n00:00:00,000 --> 00:00:02,000\nLocal transcription text.\n",
+      );
+
+      // What matters here is which file `findReadOnlyBilingualSource` picks —
+      // decided in Phase 0, before the (unrelated) quality gate runs — so a
+      // gate-blocked delivery for this minimal fixture doesn't invalidate
+      // the assertion below; only a wrong-source read would.
+      let seenSourceText = "";
+      await runSubtitlePipeline({
+        videoDir: root,
+        subtitle: { mode: "srt", sourceLang: "en", targetLang: "zh-CN", source: "auto" },
+        subtitleBilingual: "srt",
+        llm: {
+          chat: async (request: ChatRequest) => {
+            if (request.jsonMode === true) {
+              const userContent = request.messages[1]!.content as string;
+              seenSourceText += userContent;
+              return { content: JSON.stringify({ cues: [] }), model: "test", finishReason: "stop" };
+            }
+            return { content: "翻译。", model: "test", finishReason: "stop" };
+          },
+        },
+        llmModel: "test",
+        burnedVideoOutDir: articleRoot,
+        runner: {
+          run: async (spec) => {
+            await writeMeasureOutputIfRequested(spec);
+            return {
+              exitCode: 0, signal: null, stdout: "", stderr: "",
+              stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+              command: spec.command, args: spec.args ?? [],
+            };
+          },
+        },
+      }).catch(() => {});
+
+      expect(seenSourceText).toContain("YouTube");
+      expect(seenSourceText).not.toContain("Local");
+    });
   });
 
   it("records a failed semantic manifest when the repunct LLM response is invalid JSON", async () => {

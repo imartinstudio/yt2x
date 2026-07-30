@@ -135,3 +135,51 @@ export const resetResolvedTorchaudioPythonCache = (): void => {
   cachedTorchaudioPython = undefined;
   resolveTorchaudioPromise = undefined;
 };
+
+/**
+ * faster-whisper (local transcription channel) is likewise an optional,
+ * heavy dependency — absence must degrade gracefully, never fail the run.
+ */
+export const hasFasterWhisper = async (bin: string): Promise<boolean> => {
+  try {
+    const { stdout } = await execFileAsync(
+      bin,
+      ["-c", "import faster_whisper; print('ok')"],
+      { timeout: 10_000, env: process.env },
+    );
+    return stdout.includes("ok");
+  } catch {
+    return false;
+  }
+};
+
+let cachedFasterWhisperPython: string | undefined;
+let resolveFasterWhisperPromise: Promise<string | undefined> | undefined;
+
+export const resolvePythonWithFasterWhisper = async (): Promise<string | undefined> => {
+  if (cachedFasterWhisperPython !== undefined) return cachedFasterWhisperPython;
+  if (resolveFasterWhisperPromise !== undefined) return resolveFasterWhisperPromise;
+
+  resolveFasterWhisperPromise = (async () => {
+    for (const bin of CANDIDATES) {
+      if (!(await isExecutable(bin))) continue;
+      if (await hasFasterWhisper(bin)) {
+        cachedFasterWhisperPython = bin;
+        return bin;
+      }
+    }
+    return undefined;
+  })();
+
+  try {
+    return await resolveFasterWhisperPromise;
+  } finally {
+    resolveFasterWhisperPromise = undefined;
+  }
+};
+
+/** Test helper: clear the cache between cases. */
+export const resetResolvedFasterWhisperPythonCache = (): void => {
+  cachedFasterWhisperPython = undefined;
+  resolveFasterWhisperPromise = undefined;
+};

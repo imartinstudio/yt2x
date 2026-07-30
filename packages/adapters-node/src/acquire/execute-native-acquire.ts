@@ -41,7 +41,7 @@ export type NativeAcquireOptions = {
     subtitleZh?: "off" | "srt" | "burned" | "both";
     subtitleSourceLang?: string;
     subtitleTargetLang?: string;
-    subtitleSource?: "auto" | "youtube" | "transcribe" | "file";
+    subtitleSource?: "auto" | "youtube" | "transcribe" | "local" | "file";
     subtitleFile?: string;
     subtitleBilingual?: "off" | "srt" | "ass" | "burned" | "all";
     subtitleBurnStyle?: "zh-default" | "bilingual-explainer";

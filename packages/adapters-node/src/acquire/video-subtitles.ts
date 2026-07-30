@@ -12,7 +12,7 @@ import {
 } from "./burn-bilingual-subtitles.js";
 import type { BurnProgressCallback } from "./burn-subtitles.js";
 import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
-import { resolvePythonWithTorchaudio } from "./resolve-python.js";
+import { resolvePythonWithFasterWhisper, resolvePythonWithTorchaudio } from "./resolve-python.js";
 import { translateSrt } from "./srt-translator.js";
 import {
   auditSubtitleArtifacts,
@@ -33,7 +33,12 @@ const FORCED_ALIGN_SCRIPT = path.resolve(
   "..", "..", "src", "acquire", "forced-align.py",
 );
 
-export type SubtitleSourceMode = "auto" | "youtube" | "transcribe" | "file";
+const TRANSCRIBE_LOCAL_SCRIPT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..", "..", "src", "acquire", "transcribe-local.py",
+);
+
+export type SubtitleSourceMode = "auto" | "youtube" | "transcribe" | "local" | "file";
 
 /** 本地语音识别扩展点。首版通过外部命令配置（如 YT2X_TRANSCRIBE_COMMAND）。 */
 export type TranscriptionRunner = {
@@ -587,7 +592,7 @@ export type VideoSubtitleOptions = {
   mode: "off" | "srt" | "burned" | "both";
   sourceLang: string;
   targetLang: string;
-  source: "auto" | "youtube" | "transcribe" | "file";
+  source: "auto" | "youtube" | "transcribe" | "local" | "file";
   file?: string;
 };
 
@@ -714,8 +719,14 @@ const findReadOnlyBilingualSource = async (
     const names = await readdir(directory).catch(() => [] as string[]);
     const match = names.find((name) => {
       const lower = name.toLowerCase();
-      return (lower.endsWith(".srt") || lower.endsWith(".vtt")) &&
+      const isSubtitle = (lower.endsWith(".srt") || lower.endsWith(".vtt")) &&
         lower.includes(`.${subtitle.sourceLang.toLowerCase()}.`);
+      if (!isSubtitle) return false;
+      // "local" (faster-whisper) and the default YouTube-caption source are
+      // independent, coexisting channels — never silently fall back between
+      // them, or a stale/missing local transcript would burn YouTube-derived
+      // subtitles while the user believes they selected local.
+      return subtitle.source === "local" ? lower.includes(".local.") : !lower.includes(".local.");
     });
     if (match !== undefined) {
       const sourcePath = path.join(directory, match);
@@ -727,6 +738,30 @@ const findReadOnlyBilingualSource = async (
     }
   }
   return undefined;
+};
+
+/**
+ * The local channel's word timings live in a sibling "*.words.json" file
+ * next to the SRT (written by transcribe-local.py). Best-effort: a missing
+ * or unreadable sidecar degrades to the proportional-length timing guess,
+ * same as any other absent wordTimings source.
+ */
+const loadLocalWordTimings = async (srtPath: string): Promise<WordTiming[] | undefined> => {
+  const wordsPath = srtPath.replace(/\.srt$/iu, ".words.json");
+  try {
+    const raw = await readFile(wordsPath, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed.filter(
+      (e): e is WordTiming =>
+        typeof e === "object" && e !== null &&
+        typeof (e as WordTiming).word === "string" &&
+        typeof (e as WordTiming).start === "number" &&
+        typeof (e as WordTiming).end === "number",
+    );
+  } catch {
+    return undefined;
+  }
 };
 
 const readValidArticleCache = async (opts: {
@@ -832,6 +867,81 @@ const computeWordTimings = async (opts: {
   }
 };
 
+export type LocalTranscriptionResult = {
+  srtPath: string;
+  wordsPath: string;
+  cueCount: number;
+};
+
+/**
+ * Local transcription channel (see transcribe-local.py): an independent
+ * alternative to the YouTube-caption source, not a replacement for it. Writes
+ * "full.local.<lang>.srt" / "full.local.<lang>.words.json" next to the
+ * existing "full.<lang>.srt" without touching it — both sources coexist on
+ * disk, selected at burn time via `--subtitle-source local`.
+ *
+ * Unlike computeWordTimings (a silent best-effort optimization inside the
+ * main pipeline), this is an explicit, user-invoked step: callers should
+ * surface both the "not available" (undefined) and thrown-error cases,
+ * rather than swallowing them.
+ */
+export const transcribeLocal = async (opts: {
+  videoDir: string;
+  language: string;
+  runner: ProcessRunner;
+  model?: string;
+  signal?: AbortSignal;
+}): Promise<LocalTranscriptionResult | undefined> => {
+  const pythonBin = await resolvePythonWithFasterWhisper();
+  if (pythonBin === undefined) return undefined;
+
+  const videoSubdir = path.join(opts.videoDir, "video");
+  const names = await readdir(videoSubdir).catch(() => [] as string[]);
+  const mp4 = names.find((name) => /\.mp4$/iu.test(name) && !/burned/iu.test(name));
+  if (mp4 === undefined) return undefined;
+
+  const srtPath = path.join(videoSubdir, `full.local.${opts.language}.srt`);
+  const wordsPath = path.join(videoSubdir, `full.local.${opts.language}.words.json`);
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-transcribe-local-"));
+  try {
+    const wavPath = path.join(tempDir, "audio.wav");
+    await opts.runner.run({
+      command: "ffmpeg",
+      args: [
+        "-y", "-i", path.join(videoSubdir, mp4),
+        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+        wavPath,
+      ],
+      timeoutMs: 120_000,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+
+    const result = await opts.runner.run({
+      command: pythonBin,
+      args: [
+        TRANSCRIBE_LOCAL_SCRIPT,
+        "--audio", wavPath,
+        "--language", opts.language,
+        ...(opts.model !== undefined ? ["--model", opts.model] : []),
+        "--srt-output", srtPath,
+        "--words-output", wordsPath,
+      ],
+      timeoutMs: 1_800_000,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`local transcription failed: ${result.stderr || `exit ${result.exitCode}`}`);
+    }
+
+    const srtContent = await readFile(srtPath, "utf8");
+    const cueCount = parseSubtitleBlocks(srtContent).length;
+    return { srtPath, wordsPath, cueCount };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+};
+
 const runArticleBilingualPipeline = async (
   opts: RunSubtitlePipelineOptions,
 ): Promise<RunSubtitlePipelineResult | undefined> => {
@@ -931,7 +1041,11 @@ const runArticleBilingualPipeline = async (
         source_video: "video/full.mp4",
         source_language: opts.subtitle.sourceLang,
         target_language: opts.subtitle.targetLang,
-        source_method: opts.subtitle.source === "file" ? "file" : "youtube_subtitles",
+        source_method: opts.subtitle.source === "file"
+          ? "file"
+          : opts.subtitle.source === "local"
+            ? "local_transcription"
+            : "youtube_subtitles",
         bilingual_subtitle: "video/full.bilingual.srt",
         warnings,
       },
@@ -939,14 +1053,19 @@ const runArticleBilingualPipeline = async (
     };
   }
 
-  const wordTimings = opts.enableForcedAlignment === true
-    ? await computeWordTimings({
-        videoDir: opts.videoDir,
-        sourceSrt: source.content,
-        runner: opts.runner,
-        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-      })
-    : undefined;
+  // The local channel already carries word-level timing from the ASR pass
+  // itself (see transcribe-local.py) — reuse it directly instead of paying
+  // for a second, separate forced-alignment pass over the same audio.
+  const wordTimings = opts.subtitle.source === "local"
+    ? await loadLocalWordTimings(source.path)
+    : opts.enableForcedAlignment === true
+      ? await computeWordTimings({
+          videoDir: opts.videoDir,
+          sourceSrt: source.content,
+          runner: opts.runner,
+          ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+        })
+      : undefined;
 
   let projection: SemanticBilingualProjection;
   try {

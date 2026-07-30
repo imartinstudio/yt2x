@@ -24,6 +24,7 @@ export {
   runSubtitlePipeline,
   prepareSourceSubtitle,
   detectSubtitleLanguage,
+  transcribeLocal,
   type RunSubtitlePipelineOptions,
   type RunSubtitlePipelineResult,
   type VideoSubtitleOptions,
@@ -31,6 +32,7 @@ export {
   type SubtitleSourceMode,
   type SubtitleSourceMethod,
   type TranscriptionRunner,
+  type LocalTranscriptionResult,
 } from "./video-subtitles.js";
 export { translateSrt, type SrtTranslatorOptions } from "./srt-translator.js";
 export {

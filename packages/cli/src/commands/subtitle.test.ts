@@ -115,4 +115,35 @@ describe("executeSubtitleAudit", () => {
       ]),
     );
   });
+
+  it("reads the local-channel source SRT (not full.en.srt) when --source-channel local is passed", async () => {
+    const fixture = await prepareArtifacts();
+    const downloadDir = path.join(fixture.outDir, testVideoId);
+    // A stale/mismatched full.en.srt is left in place on purpose: if audit
+    // ever fell back to reading it instead of the local-channel source, the
+    // sourceSha256 check (computed against the local source at generation
+    // time) would fail — regression coverage for the Commander parent/child
+    // flag-name collision that silently dropped this flag entirely.
+    await writeFile(path.join(downloadDir, "full.en.srt"), "1\n00:00:00,000 --> 00:00:01,000\nWrong source.\n");
+    await writeFile(path.join(downloadDir, "full.local.en.srt"), sourceSrt);
+    const manifestPath = path.join(
+      fixture.articleOutDir,
+      testVideoId,
+      "video",
+      "full.bilingual.semantic.json",
+    );
+    await writeFile(
+      manifestPath,
+      JSON.stringify({ sourceSha256: createHash("sha256").update(sourceSrt).digest("hex") }),
+    );
+
+    const exitCode = await executeSubtitleAudit(testVideoId, { ...fixture, sourceChannel: "local" });
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")) as {
+      verdict: string;
+      issues: unknown[];
+    };
+
+    expect(exitCode).toBe(0);
+    expect(report).toEqual({ verdict: "pass", issues: [] });
+  });
 });

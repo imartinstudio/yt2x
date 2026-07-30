@@ -44,6 +44,7 @@ export {
   writeDubPlan,
   writeDubPlacement,
   writeDubGateReport,
+  DubTimingReportSchema,
   type WrittenDubLineAudio,
 } from "./file-store.js";
 export {
@@ -83,6 +84,10 @@ export {
   buildVoiceTrack,
   mixVoiceAndBgm,
   muxDubbedVideo,
+  computeDubbedOutputDurationMs,
+  mixVoiceAndBgmFilterComplex,
+  buildMuxDubbedVideoArgs,
   type RemixDubbedVideoInput,
   type RemixDubbedVideoResult,
 } from "./remix.js";
+

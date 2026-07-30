@@ -191,4 +191,27 @@ describe("evaluateDubGate", () => {
     expect(report.issues.some((i) => i.code === "high-median-ratio")).toBe(true);
     expect(report.issues.some((i) => i.code === "high-overflow-fraction")).toBe(true);
   });
+
+  it("does not emit NaN overflowFraction when timing.lineCount is 0", () => {
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing({ lineCount: 0, overflowCount: 0, lines: [], medianRatio: 0 }),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "有字",
+            startMs: 0,
+            endMs: 900,
+            durationMs: 900,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      }),
+    });
+    expect(Number.isFinite(report.metrics.overflowFraction)).toBe(true);
+    expect(report.metrics.overflowFraction).toBe(0);
+  });
 });

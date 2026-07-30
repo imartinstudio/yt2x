@@ -325,16 +325,18 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
 
   // 如果用户要求烧录字幕，推迟到 article 阶段之后执行。
   // acquire 阶段只需生成 full.zh.srt，不需要烧录（无论 acquire 是否 skip）。
-  // --dub 时成片由配音反向 SRT 负责，zh burn 整段跳过，subtitle 强制只翻译。
+  // --dub 时成片由配音反向 SRT 负责：zh 与 bilingual 烧录整段跳过（决策 #8：只出 full.zh-dubbed.mp4）。
   const dubRequested = args.control.dub === true;
   const bilingualBurnRequested =
-    args.acquire.subtitleBilingual === "burned" || args.acquire.subtitleBilingual === "all";
+    !dubRequested &&
+    (args.acquire.subtitleBilingual === "burned" || args.acquire.subtitleBilingual === "all");
   const deferredBurn =
     !dubRequested &&
     (args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both") &&
     !bilingualBurnRequested;
 
   // --dub 需要 full.zh.srt：若用户没开 subtitle，或只开了 burn，降为 srt。
+  // bilingual 同步压成 off，避免 acquire 内仍烧出第二个成片。
   const effectiveSubtitleZh = dubRequested
     ? args.acquire.subtitleZh === "off"
       ? ("srt" as const)
@@ -342,6 +344,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         ? ("srt" as const)
         : args.acquire.subtitleZh
     : args.acquire.subtitleZh;
+  const effectiveSubtitleBilingual = dubRequested ? ("off" as const) : args.acquire.subtitleBilingual;
 
   try {
     if (args.control.continueFlag) {
@@ -364,7 +367,11 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
           : args.acquire.subtitleZh;
       const acquireArgs = {
         ...args,
-        acquire: { ...args.acquire, subtitleZh: acquireSubtitleMode },
+        acquire: {
+          ...args.acquire,
+          subtitleZh: acquireSubtitleMode,
+          ...(dubRequested ? { subtitleBilingual: effectiveSubtitleBilingual } : {}),
+        },
       };
 
       const base = nativeAcquireOptionsFromPipelineArgs(acquireArgs, {

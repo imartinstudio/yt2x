@@ -21,7 +21,8 @@
     "node": ">=22"
   },
   "files": [
-    "dist"
+    "dist",
+    "src/**/*.py"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

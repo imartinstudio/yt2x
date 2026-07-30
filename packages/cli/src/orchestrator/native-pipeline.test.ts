@@ -287,4 +287,29 @@ describe("runNativePipeline", () => {
       dubEngine: "elevenlabs",
     });
   });
+
+  it("forces bilingual burn off during acquire when --dub is set", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-bilingual-"));
+    executeNativeAcquireMock.mockClear();
+    executeNativeDubMock.mockClear();
+    burnZhSubtitlesForVideoMock.mockClear();
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true },
+      stages: { acquire: "auto", notes: "skip", article: "skip", publish: "skip" },
+      acquire: { subtitleZh: "burned", subtitleBilingual: "burned" },
+      sources: { urls: ["https://www.youtube.com/watch?v=abc123def45"] },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(executeNativeAcquireMock).toHaveBeenCalled();
+    const acquireOpts = executeNativeAcquireMock.mock.calls[0]![0] as {
+      acquire: { subtitleZh?: string; subtitleBilingual?: string };
+    };
+    expect(acquireOpts.acquire.subtitleZh).toBe("srt");
+    expect(acquireOpts.acquire.subtitleBilingual).toBe("off");
+    expect(burnZhSubtitlesForVideoMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).toHaveBeenCalled();
+  });
 });

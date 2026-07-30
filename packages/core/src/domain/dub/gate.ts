@@ -110,9 +110,10 @@ export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
   };
   const issues: DubGateIssue[] = [];
 
-  const lineCount = Math.max(input.timing.lineCount, input.placement.lines.length);
+  const timingLineCount = input.timing.lineCount;
+  const lineCount = Math.max(timingLineCount, input.placement.lines.length);
   const overflowFraction =
-    lineCount > 0 ? input.timing.overflowCount / input.timing.lineCount : 0;
+    timingLineCount > 0 ? input.timing.overflowCount / timingLineCount : 0;
   const delayFraction = lineCount > 0 ? input.placement.delayCount / lineCount : 0;
 
   let emptyAudioCount = 0;

@@ -11,6 +11,7 @@ import {
   parseDubCues,
   readDubCues,
   readDubScript,
+  readDubTimingReport,
   resolveZhSubtitlePath,
   writeDubLineAudio,
   writeDubScript,
@@ -169,6 +170,17 @@ describe("writers", () => {
     expect(written).toBe(path.join(dubDir, DUB_TIMING_FILE));
     const parsed = JSON.parse(await readFile(written, "utf8")) as DubTimingReport;
     expect(parsed).toEqual(report);
+  });
+
+  it("rejects a corrupt timing report so callers can treat it as a cache miss", async () => {
+    const dubDir = path.join(await tmpRoot(), "dub");
+    await mkdir(dubDir, { recursive: true });
+    await writeFile(
+      path.join(dubDir, DUB_TIMING_FILE),
+      JSON.stringify({ version: 1, videoId: "x", lines: [] }),
+      "utf8",
+    );
+    await expect(readDubTimingReport(dubDir)).rejects.toThrow(/Invalid dub-timing\.json/);
   });
 
   it("overwrites an existing artifact atomically", async () => {

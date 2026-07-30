@@ -11,15 +11,88 @@ import { probeAudioDurationMs } from "./synthesize.js";
  * 混音 + 可选字幕重烧 → full.zh-dubbed.mp4。
  *
  * 1. 按落点把逐句 mp3 拼成完整人声轨（句间补静音）
- * 2. 与 Demucs no_vocals 混合
- * 3. 若有片尾漂移，冻结末帧延长画面
+ * 2. 与 Demucs no_vocals 混合；音轨长度对齐「原片 + 冻结延长」，不是止于最后一句人声
+ * 3. 画面 tpad 冻结末帧补到同一长度（决策 #11）
  * 4. 换成混合音轨；若原片无中文硬字幕，再烧反向 SRT
+ *
+ * 注意：绝不用 `-shortest` 收尾——它会把刚 tpad 出的冻结帧按短音频砍掉，
+ * 使决策 #11 变成死代码。改用显式 `-t` 锁定成片时长。
  */
 
 export const DUBBED_VIDEO_NAME = "full.zh-dubbed.mp4";
 export const DUB_REVERSE_SRT_NAME = "full.zh-dub.srt";
 
 const FFMPEG_TIMEOUT_MS = 60 * 60 * 1000;
+
+/** 成片时长：覆盖完整原片（含片尾 BGM），并容纳协商残留漂移。 */
+export const computeDubbedOutputDurationMs = (input: {
+  voiceEndMs: number;
+  videoDurationMs: number;
+  extendMs: number;
+}): number => {
+  const extend = Math.max(0, input.extendMs);
+  return Math.max(input.voiceEndMs, input.videoDurationMs + extend);
+};
+
+/** 人声与 BGM 都 apad 到成片时长，避免 amix duration=first 被人声截断。 */
+export const mixVoiceAndBgmFilterComplex = (durationSec: number): string => {
+  const whole = durationSec.toFixed(3);
+  return [
+    `[0:a]aformat=sample_rates=44100:channel_layouts=mono,volume=1.0,apad=whole_dur=${whole}[voice]`,
+    `[1:a]aformat=sample_rates=44100:channel_layouts=mono,volume=0.7,apad=whole_dur=${whole}[bgm]`,
+    `[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix]`,
+  ].join(";");
+};
+
+export const buildMuxDubbedVideoArgs = (input: {
+  videoPath: string;
+  audioPath: string;
+  outputPath: string;
+  /** 画面需要冻结的毫秒数（outputMs - videoDurationMs）。 */
+  videoPadMs: number;
+  /** 成片总时长；与音轨对齐，用 -t 锁定，不用 -shortest。 */
+  outputDurationMs: number;
+}): string[] => {
+  const outputSec = (input.outputDurationMs / 1000).toFixed(3);
+  const args = ["-y", "-i", input.videoPath, "-i", input.audioPath];
+  if (input.videoPadMs > 0) {
+    const padSec = (input.videoPadMs / 1000).toFixed(3);
+    args.push(
+      "-filter_complex",
+      `[0:v]tpad=stop_mode=clone:stop_duration=${padSec}[v]`,
+      "-map",
+      "[v]",
+      "-map",
+      "1:a:0",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "18",
+      "-c:a",
+      "copy",
+      "-t",
+      outputSec,
+      input.outputPath,
+    );
+  } else {
+    args.push(
+      "-map",
+      "0:v:0",
+      "-map",
+      "1:a:0",
+      "-c:v",
+      "copy",
+      "-c:a",
+      "copy",
+      "-t",
+      outputSec,
+      input.outputPath,
+    );
+  }
+  return args;
+};
 
 export type RemixDubbedVideoInput = {
   videoPath: string;
@@ -150,7 +223,7 @@ export const buildVoiceTrack = async (input: {
   return cursor;
 };
 
-/** 人声 + BGM 混合为单一音轨。 */
+/** 人声 + BGM 混合为单一音轨；`durationMs` 必须是成片目标时长（含原片尾 + 冻结）。 */
 export const mixVoiceAndBgm = async (input: {
   voicePath: string;
   noVocalsPath: string;
@@ -161,7 +234,6 @@ export const mixVoiceAndBgm = async (input: {
   signal?: AbortSignal;
 }): Promise<void> => {
   const durationSec = (input.durationMs / 1000).toFixed(3);
-  // apad 保证 BGM 覆盖到人声结束；amix duration=first 以人声长度为准
   await runFfmpeg(input.runner, input.ffmpegPath, [
     "-y",
     "-i",
@@ -169,11 +241,7 @@ export const mixVoiceAndBgm = async (input: {
     "-i",
     input.noVocalsPath,
     "-filter_complex",
-    [
-      `[0:a]aformat=sample_rates=44100:channel_layouts=mono,volume=1.0[voice]`,
-      `[1:a]aformat=sample_rates=44100:channel_layouts=mono,volume=0.7,apad=whole_dur=${durationSec}[bgm]`,
-      `[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix]`,
-    ].join(";"),
+    mixVoiceAndBgmFilterComplex(Number.parseFloat(durationSec)),
     "-map",
     "[mix]",
     "-t",
@@ -187,53 +255,31 @@ export const mixVoiceAndBgm = async (input: {
 };
 
 /**
- * 把混合音轨接到画面上；extendMs > 0 时用 tpad 冻结末帧。
+ * 把混合音轨接到画面上；`videoPadMs > 0` 时用 tpad 冻结末帧。
+ * 成片时长由 `-t outputDurationMs` 锁定，故意不用 `-shortest`。
  */
 export const muxDubbedVideo = async (input: {
   videoPath: string;
   audioPath: string;
   outputPath: string;
-  extendMs: number;
+  videoPadMs: number;
+  outputDurationMs: number;
   runner: ProcessRunner;
   ffmpegPath: string;
   signal?: AbortSignal;
 }): Promise<void> => {
-  const args = ["-y", "-i", input.videoPath, "-i", input.audioPath];
-  if (input.extendMs > 0) {
-    const extendSec = (input.extendMs / 1000).toFixed(3);
-    args.push(
-      "-filter_complex",
-      `[0:v]tpad=stop_mode=clone:stop_duration=${extendSec}[v]`,
-      "-map",
-      "[v]",
-      "-map",
-      "1:a:0",
-      "-c:v",
-      "libx264",
-      "-preset",
-      "veryfast",
-      "-crf",
-      "18",
-      "-c:a",
-      "copy",
-      "-shortest",
-      input.outputPath,
-    );
-  } else {
-    args.push(
-      "-map",
-      "0:v:0",
-      "-map",
-      "1:a:0",
-      "-c:v",
-      "copy",
-      "-c:a",
-      "copy",
-      "-shortest",
-      input.outputPath,
-    );
-  }
-  await runFfmpeg(input.runner, input.ffmpegPath, args, input.signal);
+  await runFfmpeg(
+    input.runner,
+    input.ffmpegPath,
+    buildMuxDubbedVideoArgs({
+      videoPath: input.videoPath,
+      audioPath: input.audioPath,
+      outputPath: input.outputPath,
+      videoPadMs: input.videoPadMs,
+      outputDurationMs: input.outputDurationMs,
+    }),
+    input.signal,
+  );
 };
 
 export const remixDubbedVideo = async (
@@ -267,16 +313,28 @@ export const remixDubbedVideo = async (
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
 
-    const targetDurationMs = Math.max(
-      voiceEndMs,
-      input.placedLines.length > 0 ? input.placedLines[input.placedLines.length - 1]!.endMs : 0,
-    ) + Math.max(0, input.extendMs);
+    const videoDurationMs = await probeAudioDurationMs({
+      filePath: input.videoPath,
+      runner,
+      ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    });
+
+    const outputDurationMs = computeDubbedOutputDurationMs({
+      voiceEndMs: Math.max(
+        voiceEndMs,
+        input.placedLines.length > 0 ? input.placedLines[input.placedLines.length - 1]!.endMs : 0,
+      ),
+      videoDurationMs,
+      extendMs: Math.max(0, input.extendMs),
+    });
+    const videoPadMs = Math.max(0, outputDurationMs - videoDurationMs);
 
     await mixVoiceAndBgm({
       voicePath: voiceTrackPath,
       noVocalsPath: input.noVocalsPath,
       outputPath: mixedAudioPath,
-      durationMs: targetDurationMs,
+      durationMs: outputDurationMs,
       runner,
       ffmpegPath,
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
@@ -286,7 +344,8 @@ export const remixDubbedVideo = async (
       videoPath: input.videoPath,
       audioPath: mixedAudioPath,
       outputPath: muxedPath,
-      extendMs: Math.max(0, input.extendMs),
+      videoPadMs,
+      outputDurationMs,
       runner,
       ffmpegPath,
       ...(input.signal !== undefined ? { signal: input.signal } : {}),

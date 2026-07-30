@@ -1,5 +1,6 @@
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 import {
   parseSrtTimestampToMs,
   type DubCue,
@@ -144,8 +145,38 @@ export const writeDubLineAudio = async (
 export const readDubScript = async (dubDir: string): Promise<DubScript> =>
   JSON.parse(await readFile(path.join(dubDir, DUB_SCRIPT_FILE), "utf8")) as DubScript;
 
-export const readDubTimingReport = async (dubDir: string): Promise<DubTimingReport> =>
-  JSON.parse(await readFile(path.join(dubDir, DUB_TIMING_FILE), "utf8")) as DubTimingReport;
+/** 磁盘上的 timing 报告必须通过 runtime 校验——字段缺失不能带着 undefined 进协商。 */
+const DubLineTimingSchema = z.object({
+  index: z.number().int(),
+  targetDurationMs: z.number().nonnegative(),
+  synthesizedMs: z.number().positive(),
+  ratio: z.number().nonnegative(),
+  charCount: z.number().int().nonnegative(),
+  audioFile: z.string().min(1),
+});
+
+export const DubTimingReportSchema = z.object({
+  version: z.literal(1),
+  videoId: z.string().min(1),
+  engine: z.string().min(1),
+  voice: z.string().min(1),
+  lineCount: z.number().int().nonnegative(),
+  medianRatio: z.number(),
+  overflowCount: z.number().int().nonnegative(),
+  totalDriftMs: z.number(),
+  lines: z.array(DubLineTimingSchema).min(1),
+});
+
+export const readDubTimingReport = async (dubDir: string): Promise<DubTimingReport> => {
+  const raw: unknown = JSON.parse(await readFile(path.join(dubDir, DUB_TIMING_FILE), "utf8"));
+  const parsed = DubTimingReportSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid ${DUB_TIMING_FILE} in ${dubDir}: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+    );
+  }
+  return parsed.data;
+};
 
 export const writeDubPlan = async (dubDir: string, plan: DubNegotiatePlan): Promise<string> => {
   const filePath = path.join(dubDir, DUB_PLAN_FILE);

@@ -226,9 +226,12 @@ const insertCommas = async (
 };
 
 // Words that make a natural clause boundary when a run-on segment must be
-// bisected without any punctuation to guide the cut.
+// bisected without any punctuation to guide the cut. The trailing \b is
+// required — without it "so" prefix-matches "sometimes"/"software", "or"
+// matches "organize", "with" matches "without", etc., misidentifying an
+// unrelated word as a clause-starter and cutting the sentence apart there.
 const CLAUSE_BOUNDARY_WORDS =
-  /^(and|but|or|so|because|when|where|which|that|if|for|with|about|like|just|also|however|then|now)/i;
+  /^(and|but|or|so|because|when|where|which|that|if|for|with|about|like|just|also|however|then|now)\b/i;
 
 const findClauseSplitIndex = (words: string[]): number => {
   const mid = Math.floor(words.length / 2);

@@ -68,9 +68,32 @@ const restoreFaithfulChineseTitle = (
 };
 
 const ARTICLE_TOPIC_TAG_RE = /#[\p{L}\p{N}_]+/gu;
+const COMMAND_STYLE_TOPIC_TAG_LINE_RE = /^(?:#[/\-\p{L}\p{N}_]+)(?:\s+#[/\-\p{L}\p{N}_]+){2,4}$/u;
+const normalizeCommandStyleTopicTag = (tag: string): string => {
+  const segments = tag.slice(1).split(/[/-]+/u).filter((segment) => segment.length > 0);
+  if (segments.length === 0) return tag;
+  return `#${segments.map((segment) =>
+    /^[A-Za-z0-9_]+$/u.test(segment)
+      ? `${segment[0]!.toUpperCase()}${segment.slice(1)}`
+      : segment,
+  ).join("")}`;
+};
+
+/** X 标签不能包含命令前缀或连字符，将原始命令名规范化为可发布标签。 */
+const normalizeCommandStyleTopicHashtags = (content: string): string => {
+  const lines = content.split(/\r?\n/);
+  const lastIndex = lines.findLastIndex((line) => line.trim().length > 0);
+  if (lastIndex < 0) return content;
+  const lastLine = lines[lastIndex]!.trim();
+  if (!lastLine.includes("/") && !lastLine.includes("-")) return content;
+  if (!COMMAND_STYLE_TOPIC_TAG_LINE_RE.test(lastLine)) return content;
+  lines[lastIndex] = lastLine.split(/\s+/u).map(normalizeCommandStyleTopicTag).join(" ");
+  return lines.join("\n");
+};
 const ARTICLE_TOPIC_TAG_REPAIR_PROMPT = `你刚才输出的 X 长文缺少合规的文末话题标签。
 请返回修正后的完整 Markdown，保持正文事实、结构和图片引用不变。
 最后一个非空行必须只包含 3-5 个从文章主题提取的 X 话题标签，格式如 \`#话题一 #话题二 #TopicThree\`。
+命令名必须转成可发布标签：\`/wayfinder\` 写成 \`#Wayfinder\`，\`/to-spec\` 写成 \`#ToSpec\`；标签中不能保留 \`/\` 或 \`-\`。
 标签行之后不要追加来源说明、链接、解释或固定尾注。`;
 const ARTICLE_LIST_IMAGE_ERROR =
   "Article image references must be standalone blocks outside ordered or unordered lists.";
@@ -225,7 +248,9 @@ export const generateXArticleContent = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
 
-  let content = stripTrailingSourceAttribution(stripCodeFenceWrapper(resp.content.trim()));
+  let content = normalizeCommandStyleTopicHashtags(
+    stripTrailingSourceAttribution(stripCodeFenceWrapper(resp.content.trim())),
+  );
   try {
     validateArticleTopicHashtags(content);
   } catch {
@@ -240,7 +265,9 @@ export const generateXArticleContent = async (
       maxTokens: input.maxTokens ?? 16384,
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
-    content = stripTrailingSourceAttribution(stripCodeFenceWrapper(resp.content.trim()));
+    content = normalizeCommandStyleTopicHashtags(
+      stripTrailingSourceAttribution(stripCodeFenceWrapper(resp.content.trim())),
+    );
     validateArticleTopicHashtags(content);
   }
 

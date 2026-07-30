@@ -266,17 +266,34 @@ const splitCuesAtCommas = (
       continue;
     }
 
-    // Merge short fragments (<4 words) with neighbors, but only if the
-    // result stays ≤8 words (comparable to BaoCut's clause budget).
+    // Merge short fragments (<4 words) with neighbors. Uncapped — a short
+    // fragment left standing alone (a single-word flash cue) is worse than a
+    // merged fragment that needs rebalancing, and the ">8 words" mechanical
+    // fallback below re-splits any oversized result at a natural clause
+    // boundary (comparable to BaoCut's clause budget).
     const merged: string[] = [];
     for (const part of parts) {
       const wordCount = part.trim().split(/\s+/u).length;
-      const leftWords = merged.length > 0 ? merged[merged.length - 1]!.split(/\s+/u).length : 0;
-      if (merged.length > 0 && wordCount < 4 && leftWords + wordCount <= 8) {
+      if (merged.length > 0 && wordCount < 4) {
         merged[merged.length - 1] = merged[merged.length - 1]! + " " + part.trim();
       } else {
         merged.push(part.trim());
       }
+    }
+    // The backward pass above can never reach a short fragment that has no
+    // predecessor to absorb it — most commonly the FIRST fragment of a cue
+    // (e.g. a leading "Now," / "you," clause), which would otherwise survive
+    // as an isolated single-word flash cue. Sweep forward once more and glue
+    // any fragment still under the word threshold onto its right neighbor,
+    // uncapped — the ">8 words" mechanical fallback right below rebalances
+    // any resulting oversized fragment at a natural clause boundary, which
+    // beats leaving a single word standing alone either way.
+    for (let i = 0; i < merged.length - 1; i++) {
+      const wordCount = merged[i]!.split(/\s+/u).length;
+      if (wordCount >= 4) continue;
+      merged[i + 1] = `${merged[i]} ${merged[i + 1]}`;
+      merged.splice(i, 1);
+      i--;
     }
 
     // Mechanical fallback: split any segment >8 words at phrase boundaries.

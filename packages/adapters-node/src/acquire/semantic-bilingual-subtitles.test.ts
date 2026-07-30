@@ -461,6 +461,44 @@ one two three four five six seven eight nine ten eleven twelve.
     expect(enTexts[1]).toBe("seven eight nine ten eleven twelve.");
   });
 
+  it("merges a leading one-word comma fragment forward instead of leaving it as an isolated flash cue", async () => {
+    // A comma right after the first word (e.g. "You,") has no predecessor to
+    // absorb it under backward-only merging, and would otherwise survive as
+    // its own single-word cue. It should instead merge into its right
+    // neighbor, matching how a trailing short fragment already merges left.
+    const sourceSrt = `1
+00:00:00,000 --> 00:00:04,000
+You using the grill me skill need to be good at planning.
+`;
+    const llm: LlmPort = {
+      chat: vi.fn(async (request: ChatRequest) => {
+        if (request.jsonMode === true) {
+          // Comma after "You" (seam id 0) and after "skill" (seam id 5).
+          return {
+            content: JSON.stringify({
+              cues: [{ idx: 0, cuts: [{ id: "0", mark: "," }, { id: "5", mark: "," }] }],
+            }),
+            model: "test",
+            finishReason: "stop",
+          };
+        }
+        return { content: "翻译。", model: "test", finishReason: "stop" };
+      }),
+    };
+
+    const result = await projectSemanticBilingualSubtitles({
+      sourceSrt,
+      llm,
+      model: "test-model",
+      measureLayout: fitMeasurement,
+    });
+
+    const enTexts = parseSubtitleBlocks(result.enSrt).map((b) => b.text.join(""));
+    expect(enTexts).not.toContain("You,");
+    expect(enTexts[0]).toBe("You, using the grill me skill,");
+    expect(enTexts[1]).toBe("need to be good at planning.");
+  });
+
   it("uses real word timing for the comma-split boundary instead of the proportional-length guess, when available", async () => {
     // 20s cue, 10 words. Word durations are deliberately uneven (front-loaded)
     // so the proportional-by-character-length guess (~10s, since both comma

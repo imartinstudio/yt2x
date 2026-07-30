@@ -1,10 +1,64 @@
 import { describe, expect, it } from "vitest";
 import type { ProcessResult, ProcessRunner, ProcessSpec } from "../process/index.js";
 import {
+  assertConcatEntriesHomogeneous,
+  assertFfmpegStderrClean,
+  assertRenderedDurationMs,
   buildMuxDubbedVideoArgs,
   computeDubbedOutputDurationMs,
+  DUB_RENDER_DURATION_TOLERANCE_MS,
   mixVoiceAndBgmFilterComplex,
 } from "./remix.js";
+
+describe("assertConcatEntriesHomogeneous", () => {
+  it("allows an all-wav concat list (scheme C)", () => {
+    expect(() =>
+      assertConcatEntriesHomogeneous(["/tmp/s0.wav", "/tmp/l1.wav", "/tmp/s1.wav"]),
+    ).not.toThrow();
+  });
+
+  it("rejects mixed mp3 + wav (the silent-drop bug)", () => {
+    expect(() =>
+      assertConcatEntriesHomogeneous(["/tmp/s0.wav", "/tmp/lines/0001.mp3", "/tmp/s1.wav"]),
+    ).toThrow(/must share one extension/i);
+  });
+});
+
+describe("assertRenderedDurationMs", () => {
+  it("passes within the 50ms tolerance used by the voice-track feedback loop", () => {
+    expect(() =>
+      assertRenderedDurationMs({
+        actualMs: 93_824,
+        expectedMs: 93_824 - (DUB_RENDER_DURATION_TOLERANCE_MS - 1),
+        label: "voice.wav",
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails when silence was dropped (exact dubSmoke90 gap)", () => {
+    expect(() =>
+      assertRenderedDurationMs({
+        actualMs: 86_160,
+        expectedMs: 93_824,
+        label: "voice.wav",
+      }),
+    ).toThrow(/VOICE TRACK LENGTH MISMATCH|duration mismatch/i);
+  });
+});
+
+describe("assertFfmpegStderrClean", () => {
+  it("throws when concat demuxer swallowed bad packets with exit 0", () => {
+    expect(() =>
+      assertFfmpegStderrClean(
+        "[aist#0:0/mp3] Error submitting packet to decoder: Invalid data found when processing input",
+      ),
+    ).toThrow(/Error submitting packet to decoder/i);
+  });
+
+  it("allows clean stderr", () => {
+    expect(() => assertFfmpegStderrClean("frame=  10 fps=0.0")).not.toThrow();
+  });
+});
 
 describe("computeDubbedOutputDurationMs", () => {
   it("keeps the full source video when speech ends early (BGM/credits must survive)", () => {
@@ -87,10 +141,11 @@ describe("mixVoiceAndBgm ffmpeg args", () => {
     const runner: ProcessRunner = {
       run: async (spec): Promise<ProcessResult> => {
         specs.push(spec);
+        const isFfprobe = (spec.command === "ffprobe" || spec.command.endsWith("ffprobe"));
         return {
           exitCode: 0,
           signal: null,
-          stdout: "",
+          stdout: isFfprobe ? "125.000" : "",
           stderr: "",
           stdoutTruncated: false,
           stderrTruncated: false,
@@ -111,8 +166,9 @@ describe("mixVoiceAndBgm ffmpeg args", () => {
       ffmpegPath: "ffmpeg",
     });
 
-    expect(specs).toHaveLength(1);
-    const args = specs[0]!.args ?? [];
+    const ffmpegSpecs = specs.filter((s) => s.command === "ffmpeg");
+    expect(ffmpegSpecs).toHaveLength(1);
+    const args = ffmpegSpecs[0]!.args ?? [];
     expect(args[args.indexOf("-t") + 1]).toBe("125.000");
     const filter = args[args.indexOf("-filter_complex") + 1]!;
     expect(filter).toContain("apad=whole_dur=125.000");

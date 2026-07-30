@@ -80,6 +80,7 @@ export {
 export {
   DUBBED_VIDEO_NAME,
   DUB_REVERSE_SRT_NAME,
+  DUB_RENDER_DURATION_TOLERANCE_MS,
   remixDubbedVideo,
   buildVoiceTrack,
   mixVoiceAndBgm,
@@ -87,6 +88,9 @@ export {
   computeDubbedOutputDurationMs,
   mixVoiceAndBgmFilterComplex,
   buildMuxDubbedVideoArgs,
+  assertConcatEntriesHomogeneous,
+  assertRenderedDurationMs,
+  assertFfmpegStderrClean,
   type RemixDubbedVideoInput,
   type RemixDubbedVideoResult,
 } from "./remix.js";

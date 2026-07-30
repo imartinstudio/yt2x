@@ -22,7 +22,60 @@ import { probeAudioDurationMs } from "./synthesize.js";
 export const DUBBED_VIDEO_NAME = "full.zh-dubbed.mp4";
 export const DUB_REVERSE_SRT_NAME = "full.zh-dub.srt";
 
+/** 与交接反馈回路一致：实测时长与计划差超过此值即判失败。 */
+export const DUB_RENDER_DURATION_TOLERANCE_MS = 50;
+
+/** 人声轨统一用这个编码；行音频先转成它再 concat，避免 mp3+wav 异构被 demuxer 静默丢段。 */
+const VOICE_WAV_CODEC = "pcm_s16le";
+const VOICE_WAV_RATE = "44100";
+const VOICE_WAV_CHANNELS = "1";
+
 const FFMPEG_TIMEOUT_MS = 60 * 60 * 1000;
+
+/** concat demuxer 列表里所有文件必须同扩展名，否则后段可能被整段丢弃且 exit 0。 */
+export const assertConcatEntriesHomogeneous = (filePaths: readonly string[]): void => {
+  if (filePaths.length === 0) return;
+  const exts = filePaths.map((p) => path.extname(p).toLowerCase());
+  const first = exts[0]!;
+  const mismatched = [...new Set(exts.filter((e) => e !== first))];
+  if (mismatched.length > 0) {
+    throw new Error(
+      `concat entries must share one extension (got ${first} plus ${mismatched.join(", ")}); ` +
+        "decode every input to the same container before concat",
+    );
+  }
+};
+
+/** 渲染结果护栏：计划时长与实测差过大就硬失败（mixed.m4a 被 apad 补满时看不出问题）。 */
+export const assertRenderedDurationMs = (input: {
+  actualMs: number;
+  expectedMs: number;
+  label: string;
+  toleranceMs?: number;
+}): void => {
+  const tolerance = input.toleranceMs ?? DUB_RENDER_DURATION_TOLERANCE_MS;
+  const diff = input.actualMs - input.expectedMs;
+  if (Math.abs(diff) > tolerance) {
+    throw new Error(
+      `VOICE TRACK LENGTH MISMATCH: ${input.label} duration mismatch ` +
+        `(expected=${input.expectedMs} actual=${input.actualMs} diff=${diff}, ` +
+        `tolerance=${tolerance}ms)`,
+    );
+  }
+};
+
+/**
+ * exit 0 不等于渲染正确：concat 异构输入时 demuxer 会丢掉坏包并继续。
+ * 命中这类 stderr 一律当失败，逼上层修编码一致性。
+ */
+export const assertFfmpegStderrClean = (stderr: string): void => {
+  if (/Error submitting packet to decoder/i.test(stderr)) {
+    throw new Error(
+      `ffmpeg reported decoder errors despite exit 0 (likely mixed-codec concat): ` +
+        `${stderr.match(/.*Error submitting packet to decoder.*/i)?.[0] ?? stderr.slice(-300)}`,
+    );
+  }
+};
 
 /** 成片时长：覆盖完整原片（含片尾 BGM），并容纳协商残留漂移。 */
 export const computeDubbedOutputDurationMs = (input: {
@@ -143,11 +196,14 @@ const runFfmpeg = async (
   if (result.exitCode !== 0) {
     throw new Error(`ffmpeg failed (exit ${result.exitCode}): ${result.stderr.slice(-500)}`);
   }
+  assertFfmpegStderrClean(result.stderr);
 };
 
 /**
  * 用 concat demuxer 拼人声轨：前导静音 + 句 + 句间静音 + …
- * 总时长至少覆盖到最后一句 endMs。
+ *
+ * 方案 C：行音频先解码成与静音相同的 WAV（pcm_s16le / 44100 / mono），再拼接。
+ * 直接拼 MP3+WAV 时 demuxer 会按首段当 MP3 解后续 WAV，静音整段丢弃且 exit 0。
  */
 export const buildVoiceTrack = async (input: {
   placedLines: readonly DubPlacedLine[];
@@ -156,6 +212,7 @@ export const buildVoiceTrack = async (input: {
   runner: ProcessRunner;
   ffmpegPath: string;
   workDir: string;
+  ffprobePath?: string;
   signal?: AbortSignal;
 }): Promise<number> => {
   if (input.placedLines.length === 0) {
@@ -164,11 +221,20 @@ export const buildVoiceTrack = async (input: {
 
   const listPath = path.join(input.workDir, "voice-concat.txt");
   const silenceDir = path.join(input.workDir, "silence");
+  const decodedDir = path.join(input.workDir, "decoded-lines");
   await mkdir(silenceDir, { recursive: true });
+  await mkdir(decodedDir, { recursive: true });
 
   const entries: string[] = [];
+  const entryPaths: string[] = [];
   let cursor = 0;
   let silenceSeq = 0;
+  let lineSeq = 0;
+
+  const pushEntry = (filePath: string): void => {
+    entryPaths.push(filePath);
+    entries.push(`file '${filePath.replace(/'/g, "'\\''")}'`);
+  };
 
   const pushSilence = async (durationMs: number): Promise<void> => {
     if (durationMs <= 0) return;
@@ -180,14 +246,14 @@ export const buildVoiceTrack = async (input: {
       "-f",
       "lavfi",
       "-i",
-      `anullsrc=r=44100:cl=mono`,
+      `anullsrc=r=${VOICE_WAV_RATE}:cl=mono`,
       "-t",
       sec,
       "-c:a",
-      "pcm_s16le",
+      VOICE_WAV_CODEC,
       silencePath,
     ], input.signal);
-    entries.push(`file '${silencePath.replace(/'/g, "'\\''")}'`);
+    pushEntry(silencePath);
     cursor += durationMs;
   };
 
@@ -198,10 +264,25 @@ export const buildVoiceTrack = async (input: {
       // 重叠：仍拼接，听感上会叠字，但比丢句强；上层 reverse-srt 已尽量推开
     }
     const audioPath = path.resolve(input.dubDir, line.audioFile);
-    entries.push(`file '${audioPath.replace(/'/g, "'\\''")}'`);
+    lineSeq += 1;
+    const decodedPath = path.join(decodedDir, `${String(lineSeq).padStart(4, "0")}.wav`);
+    await runFfmpeg(input.runner, input.ffmpegPath, [
+      "-y",
+      "-i",
+      audioPath,
+      "-c:a",
+      VOICE_WAV_CODEC,
+      "-ar",
+      VOICE_WAV_RATE,
+      "-ac",
+      VOICE_WAV_CHANNELS,
+      decodedPath,
+    ], input.signal);
+    pushEntry(decodedPath);
     cursor = Math.max(cursor, Math.round(line.startMs)) + Math.round(line.durationMs);
   }
 
+  assertConcatEntriesHomogeneous(entryPaths);
   await writeFile(listPath, `${entries.join("\n")}\n`, "utf8");
   await runFfmpeg(input.runner, input.ffmpegPath, [
     "-y",
@@ -212,13 +293,25 @@ export const buildVoiceTrack = async (input: {
     "-i",
     listPath,
     "-c:a",
-    "pcm_s16le",
+    VOICE_WAV_CODEC,
     "-ar",
-    "44100",
+    VOICE_WAV_RATE,
     "-ac",
-    "1",
+    VOICE_WAV_CHANNELS,
     input.outputPath,
   ], input.signal);
+
+  const actualMs = await probeAudioDurationMs({
+    filePath: input.outputPath,
+    runner: input.runner,
+    ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  assertRenderedDurationMs({
+    actualMs,
+    expectedMs: cursor,
+    label: `voice track ${input.outputPath}`,
+  });
 
   return cursor;
 };
@@ -231,6 +324,7 @@ export const mixVoiceAndBgm = async (input: {
   durationMs: number;
   runner: ProcessRunner;
   ffmpegPath: string;
+  ffprobePath?: string;
   signal?: AbortSignal;
 }): Promise<void> => {
   const durationSec = (input.durationMs / 1000).toFixed(3);
@@ -252,6 +346,18 @@ export const mixVoiceAndBgm = async (input: {
     "192k",
     input.outputPath,
   ], input.signal);
+
+  const actualMs = await probeAudioDurationMs({
+    filePath: input.outputPath,
+    runner: input.runner,
+    ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  assertRenderedDurationMs({
+    actualMs,
+    expectedMs: input.durationMs,
+    label: `mixed audio ${input.outputPath}`,
+  });
 };
 
 /**
@@ -266,6 +372,7 @@ export const muxDubbedVideo = async (input: {
   outputDurationMs: number;
   runner: ProcessRunner;
   ffmpegPath: string;
+  ffprobePath?: string;
   signal?: AbortSignal;
 }): Promise<void> => {
   await runFfmpeg(
@@ -280,6 +387,18 @@ export const muxDubbedVideo = async (input: {
     }),
     input.signal,
   );
+
+  const actualMs = await probeAudioDurationMs({
+    filePath: input.outputPath,
+    runner: input.runner,
+    ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  assertRenderedDurationMs({
+    actualMs,
+    expectedMs: input.outputDurationMs,
+    label: `muxed video ${input.outputPath}`,
+  });
 };
 
 export const remixDubbedVideo = async (
@@ -310,6 +429,7 @@ export const remixDubbedVideo = async (
       runner,
       ffmpegPath,
       workDir,
+      ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
 
@@ -337,6 +457,7 @@ export const remixDubbedVideo = async (
       durationMs: outputDurationMs,
       runner,
       ffmpegPath,
+      ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
 
@@ -348,6 +469,7 @@ export const remixDubbedVideo = async (
       outputDurationMs,
       runner,
       ffmpegPath,
+      ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
 

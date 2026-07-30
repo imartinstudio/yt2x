@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   auditSubtitleArtifacts,
   DEFAULT_OUT_DIR,
   defaultProcessRunner,
+  isSubtitleAuditReadyForDelivery,
   measureBilingualSubtitleLayout,
   repairSubtitleArtifacts,
   sanitizeVideoId,
@@ -167,6 +169,11 @@ export const executeSubtitleRepair = async (
     sourceSha256?: string;
     videoWidth?: number;
     videoHeight?: number;
+    status?: string;
+    stages?: Record<string, string>;
+    quality?: { readyForBurn: boolean; issues: unknown };
+    files?: Record<string, { sha256: string }>;
+    [key: string]: unknown;
   };
   const videoWidth = manifest.videoWidth ?? 1280;
   const videoHeight = manifest.videoHeight ?? 720;
@@ -221,6 +228,35 @@ export const executeSubtitleRepair = async (
     manifest,
     measurements: await measureLayout({ bilingualSrt: repaired.bilingualSrt, videoWidth, videoHeight }),
   });
+
+  if (repaired.changed) {
+    // readValidArticleCache (the `subtitle` pipeline's own cache check)
+    // trusts full.bilingual.semantic.json, not full.bilingual.audit.json —
+    // it requires status "ready", quality.readyForBurn true, and each
+    // file's sha256 to match. Repair changes the actual files but never
+    // touched this manifest, so a later `subtitle` run (even without
+    // --force) saw the ORIGINAL failed/stale record, judged the cache
+    // invalid, and silently re-translated the whole video from scratch —
+    // throwing away exactly the fix repair just made, and risking a brand
+    // new random failure from the always-non-deterministic retranslation.
+    const readyForBurn = isSubtitleAuditReadyForDelivery(after, "burned");
+    const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
+    const updatedManifest = {
+      ...manifest,
+      status: readyForBurn ? "ready" : "failed",
+      stages: { ...manifest.stages, layout: readyForBurn ? "done" : "failed" },
+      quality: { readyForBurn, issues: after.issues },
+      files: {
+        en: { sha256: sha256(repaired.enSrt) },
+        zh: { sha256: sha256(repaired.zhSrt) },
+        bilingual: { sha256: sha256(repaired.bilingualSrt) },
+      },
+    };
+    await atomicWriteFile(
+      path.join(articleVideoDir, "full.bilingual.semantic.json"),
+      `${JSON.stringify(updatedManifest, null, 2)}\n`,
+    );
+  }
 
   await mkdir(articleVideoDir, { recursive: true });
   await writeFile(

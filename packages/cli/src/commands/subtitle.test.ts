@@ -168,6 +168,7 @@ describe("executeSubtitleRepair", () => {
     outDir: string;
     articleOutDir: string;
     reportPath: string;
+    manifestPath: string;
     enSrtPath: string;
     zhSrtPath: string;
     bilingualSrtPath: string;
@@ -193,14 +194,30 @@ describe("executeSubtitleRepair", () => {
     await writeFile(enSrtPath, en);
     await writeFile(zhSrtPath, zh);
     await writeFile(bilingualSrtPath, bilingual);
+    const manifestPath = path.join(articleVideoDir, "full.bilingual.semantic.json");
     await writeFile(
-      path.join(articleVideoDir, "full.bilingual.semantic.json"),
-      JSON.stringify({ sourceSha256: createHash("sha256").update(en).digest("hex") }),
+      manifestPath,
+      JSON.stringify({
+        sourceSha256: createHash("sha256").update(en).digest("hex"),
+        // Mirrors what a failed generation run actually leaves behind: this
+        // is exactly the record that made the `subtitle` pipeline's own
+        // cache check reject the repaired artifact and silently
+        // re-translate from scratch on the next run, even without --force.
+        status: "failed",
+        stages: { translation: "done", alignment: "done", segmentation: "done", layout: "failed" },
+        quality: { readyForBurn: false, issues: [{ code: "flash" }] },
+        files: {
+          en: { sha256: createHash("sha256").update(en).digest("hex") },
+          zh: { sha256: createHash("sha256").update(zh).digest("hex") },
+          bilingual: { sha256: createHash("sha256").update(bilingual).digest("hex") },
+        },
+      }),
     );
     return {
       outDir,
       articleOutDir,
       reportPath: path.join(articleVideoDir, "full.bilingual.audit.json"),
+      manifestPath,
       enSrtPath,
       zhSrtPath,
       bilingualSrtPath,
@@ -238,5 +255,36 @@ describe("executeSubtitleRepair", () => {
     // them, since only the in-memory `enSrt` variable would be behind.
     expect(report.issues.some((i) => i.code === "bilingual-timing")).toBe(false);
     expect(report.verdict).not.toBe("fail");
+  });
+
+  it("refreshes full.bilingual.semantic.json so a later run's cache check accepts the repaired artifact", async () => {
+    const fixture = await prepareRepairFixture();
+
+    await executeSubtitleRepair(repairVideoId, {
+      outDir: fixture.outDir,
+      articleOutDir: fixture.articleOutDir,
+      measureLayout: async () => [],
+    });
+
+    const manifest = JSON.parse(await readFile(fixture.manifestPath, "utf8")) as {
+      status: string;
+      stages: Record<string, string>;
+      quality: { readyForBurn: boolean };
+      files: Record<string, { sha256: string }>;
+    };
+    // Regression coverage: before this fix, repair patched the SRT files
+    // but never touched this manifest — a subsequent `subtitle` run's own
+    // cache check (readValidArticleCache) kept reading the ORIGINAL failed
+    // record, judged the repaired artifact invalid, and silently
+    // re-translated the whole video from scratch even without --force.
+    expect(manifest.status).toBe("ready");
+    expect(manifest.stages.layout).toBe("done");
+    expect(manifest.quality.readyForBurn).toBe(true);
+    const en = await readFile(fixture.enSrtPath, "utf8");
+    const zh = await readFile(fixture.zhSrtPath, "utf8");
+    const bilingual = await readFile(fixture.bilingualSrtPath, "utf8");
+    expect(manifest.files.en!.sha256).toBe(createHash("sha256").update(en).digest("hex"));
+    expect(manifest.files.zh!.sha256).toBe(createHash("sha256").update(zh).digest("hex"));
+    expect(manifest.files.bilingual!.sha256).toBe(createHash("sha256").update(bilingual).digest("hex"));
   });
 });

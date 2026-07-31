@@ -169,12 +169,9 @@
   advisory 阈值，抓不住"内容被过度砍削但文本非空"的退化。实例见某次真实成片：第 3 行译文
   只填到 22.56s 而源语音讲到 25.4s，中间 2.84 秒画面无字幕、无人声但说话人还在讲，该行占用比
   0.423 高于 0.3，advisory 都不报
-- **烧录后校验在新链路上失败（`insufficient subtitle signal`），推迟到 PR4。** 根因已核实：
-  `verifyBurnedSubtitles`（`packages/adapters-node/src/acquire/burn-subtitles.ts:338-352`）的采样点
-  `firstCueStart + duration*0.85` 落在两条 cue 的空隙里（真实素材上算出 23.63s，卡在 cue3
-  22.472s 与 cue4 25.400s 之间）；空隙的成因是译文比时长预算短约 1/3
-  （medianRatio≈0.675），把显示单元之间撑出了肉眼可见的间隔。PR4 的「配音退出烧录、双语按
-  T′ 重计时」会从结构上消灭这类空隙，届时无需单独修这条校验。
 - ~~既有 latent bug：`burn-subtitles.ts:349` 采样点落在 cue 空隙时回退用原始时刻抽帧，必然
-  判 FAIL~~ **已解决**：改为吸附到最近 cue 的中点再抽帧（不再回退到 `cp.timestamp`）。这个
+  判 FAIL~~ **已解决**：`verifyBurnedSubtitles`（`packages/adapters-node/src/acquire/burn-subtitles.ts:358-370`）
+  改为吸附到最近 cue 的中点再抽帧（不再回退到 `cp.timestamp`）。真实素材上 85% 采样点曾落在
+  两条 cue 的空隙里（cue3 22.472s 与 cue4 25.400s 之间），空隙成因是译文比时长预算短约 1/3
+  （medianRatio≈0.675）；吸附到最近 cue 后 `verifyBurnedSubtitles` 现在 `passed: true`。这个
   bug 不限于配音链路，纯双语字幕路径同样受益。

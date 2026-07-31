@@ -339,9 +339,10 @@ End subtitle
           return makeResult(0, spec);
         }
         if (spec.command === "python3") {
-          // Always report a visible subtitle: a raw-timestamp fallback landing in the gap
-          // would still FAIL here (nothing about the mock forces a pass), so a passing
-          // result confirms the sample point was snapped onto a cue that actually has text.
+          // Unconditional PASS regardless of args — this mock proves nothing about frame
+          // content. What this test actually verifies is the timestamp assertions below:
+          // every sampled -ss value must land inside a cue's range, not at a raw (unsnapped)
+          // checkpoint that falls in the gap between cues.
           return makeResult(0, spec, "PASS score=85");
         }
         return makeResult(1, spec);
@@ -362,6 +363,57 @@ End subtitle
       const insideCue2 = ts >= 27 && ts <= 29;
       expect(insideCue1 || insideCue2).toBe(true);
     }
+  });
+
+  it("snaps the end checkpoint forward to the trailing cue instead of backsliding to a nearer-by-distance earlier cue", async () => {
+    // cue1 (0-25) and cue2 (30-32): the 85% end checkpoint at 27.2s is 2.2s from cue1's end
+    // and 2.8s from cue2's start — nearer by raw distance to cue1. A pure nearest-by-gap pick
+    // would snap backward to cue1, so the trailing cue2 would never be sampled by any
+    // checkpoint. The start (3.2s) and middle (16s) checkpoints land directly inside cue1 and
+    // need no snapping, so cue2 can only ever be reached by the end checkpoint snapping
+    // forward.
+    const srtPath = await seedSrt(`1
+00:00:00,000 --> 00:00:25,000
+Start and middle subtitle
+
+2
+00:00:30,000 --> 00:00:32,000
+Trailing subtitle
+`);
+
+    const checkTimestamps: number[] = [];
+    const runner: ProcessRunner = {
+      run: async (spec: ProcessSpec): Promise<ProcessResult> => {
+        if (spec.command === "ffmpeg") {
+          const args = spec.args ?? [];
+          const ssIdx = args.indexOf("-ss");
+          if (ssIdx >= 0 && ssIdx + 1 < args.length) {
+            const val = parseFloat(args[ssIdx + 1]!);
+            if (!isNaN(val)) checkTimestamps.push(val);
+          }
+          for (let i = args.length - 1; i >= 0; i--) {
+            if (args[i]?.endsWith(".png")) {
+              const dir = path.dirname(args[i]!);
+              await mkdir(dir, { recursive: true });
+              await writeFile(args[i]!, "");
+              break;
+            }
+          }
+          return makeResult(0, spec);
+        }
+        if (spec.command === "python3") {
+          return makeResult(0, spec, "PASS score=85");
+        }
+        return makeResult(1, spec);
+      },
+    };
+
+    const result = await verifyBurnedSubtitles("/tmp/fake.mp4", "/tmp/fake-orig.mp4", srtPath, runner);
+
+    expect(result.passed).toBe(true);
+    // At least one sampled -ss must fall inside the trailing cue (30-32) — proving the end
+    // checkpoint snapped forward rather than back onto the nearer-by-distance cue1.
+    expect(checkTimestamps.some((ts) => ts >= 30 && ts <= 32)).toBe(true);
   });
 });
 

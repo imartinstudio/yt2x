@@ -14,6 +14,14 @@ export type SegmentUtterancesOptions = {
   maxDurationMs?: number;
   /** 词数上限，同上，用于停顿也均匀时的兜底。 */
   maxWords?: number;
+  /**
+   * 话语单元的最短时长；短于它的单元并入相邻单元。不设则不合并。
+   *
+   * 存在的理由是中文 TTS 有固定开销：实测「时长 ≈ 1873ms + 114.5ms × 字数」，
+   * 所以可用时长低于约 1.9 秒的单元，译文再短也塞不进去（真实素材里占 14%）。
+   * 与其把这些必然溢出的单元交给时长协商，不如在切分阶段就并掉。
+   */
+  minDurationMs?: number;
 };
 
 const DEFAULTS = {
@@ -30,6 +38,53 @@ const widestPauseIndex = (words: readonly TimedWord[]): number | undefined => {
   }
   // 间隔全为 0 时没有可用的语音线索，交给调用方走词数兜底
   return best !== undefined && best.gap > 0 ? best.index : undefined;
+};
+
+/**
+ * 把短于下限的单元并进相邻单元。
+ *
+ * 选边的依据是**间隔更小的那一侧**——间隔小说明说话人没有换气，本来就是连着说的，
+ * 并过去最贴近原本的语流。合并后超出时长上限则不并：让一个单元过长，比让它必然溢出
+ * 更糟，那种情况留给时长协商处理。
+ */
+const mergeShortUtterances = (
+  groups: TimedWord[][],
+  minDurationMs: number,
+  maxDurationMs: number,
+): TimedWord[][] => {
+  if (minDurationMs <= 0) return groups;
+
+  const out = groups.map((g) => [...g]);
+  const durationOf = (g: readonly TimedWord[]): number =>
+    g[g.length - 1]!.endMs - g[0]!.startMs;
+  const spanOf = (a: readonly TimedWord[], b: readonly TimedWord[]): number =>
+    b[b.length - 1]!.endMs - a[0]!.startMs;
+
+  for (let i = 0; i < out.length; i++) {
+    if (out.length === 1) break;
+    if (durationOf(out[i]!) >= minDurationMs) continue;
+
+    const prev = i > 0 ? out[i - 1] : undefined;
+    const next = i + 1 < out.length ? out[i + 1] : undefined;
+    const gapPrev =
+      prev !== undefined ? out[i]![0]!.startMs - prev[prev.length - 1]!.endMs : Infinity;
+    const gapNext =
+      next !== undefined ? next[0]!.startMs - out[i]![out[i]!.length - 1]!.endMs : Infinity;
+
+    const canPrev = prev !== undefined && spanOf(prev, out[i]!) <= maxDurationMs;
+    const canNext = next !== undefined && spanOf(out[i]!, next) <= maxDurationMs;
+
+    if (canPrev && (!canNext || gapPrev <= gapNext)) {
+      prev!.push(...out[i]!);
+      out.splice(i, 1);
+      i -= 1;
+    } else if (canNext) {
+      next!.unshift(...out[i]!);
+      out.splice(i, 1);
+      i -= 1;
+    }
+  }
+  return out;
 };
 
 const buildUtterance = (words: readonly TimedWord[], index: number): Utterance => ({
@@ -64,12 +119,12 @@ export const segmentUtterances = (
   const usable = words.filter((w) => w.word.trim().length > 0);
   if (usable.length === 0) return [];
 
-  const out: Utterance[] = [];
+  const groups: TimedWord[][] = [];
   let current: TimedWord[] = [];
 
   const flush = (): void => {
     if (current.length === 0) return;
-    out.push(buildUtterance(current, out.length + 1));
+    groups.push(current);
     current = [];
   };
 
@@ -99,5 +154,10 @@ export const segmentUtterances = (
   }
   flush();
 
-  return out;
+  const merged =
+    options.minDurationMs !== undefined
+      ? mergeShortUtterances(groups, options.minDurationMs, maxDurationMs)
+      : groups;
+
+  return merged.map((g, i) => buildUtterance(g, i + 1));
 };

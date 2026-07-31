@@ -55,6 +55,12 @@ export {
   type GenerateDubScriptResult,
 } from "./script.js";
 export {
+  translateUtterances,
+  type DubTranslatedLine,
+  type TranslateUtterancesInput,
+  type TranslateUtterancesResult,
+} from "./translate.js";
+export {
   SYNTHESIS_RATE,
   probeAudioDurationMs,
   requireTtsSpeechTiming,

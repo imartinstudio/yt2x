@@ -6,6 +6,33 @@
  * 中间所有计算都是数值——时长协商要做加减和比值，字符串时间戳在这里只会招错。
  */
 
+/**
+ * ASR 输出的单个词及其时间。
+ *
+ * 注意 `word` 会带着 ASR 识别出的标点（"Agents." / "However,"）——话语切分正是
+ * 依赖这一点，而不是依赖词间停顿：实测 faster-whisper 的词级时间戳是连续的，
+ * 90% 的词间间隔为 0，最大也只有 720ms，其中并不携带换气信息。
+ */
+export type TimedWord = {
+  word: string;
+  startMs: number;
+  endMs: number;
+};
+
+/**
+ * 话语单元：TTS 的合成单位，一个完整的自然句。
+ *
+ * 与字幕行（显示单元）是两级关系——显示单元是话语单元的细分。这样「字幕要短」
+ * 与「分句要自然」不再互相牺牲，见 docs/DUB-TASK.md。
+ */
+export type Utterance = {
+  index: number;
+  startMs: number;
+  endMs: number;
+  text: string;
+  wordCount: number;
+};
+
 /** 从 full.zh.srt 解析出来的单条中文字幕。 */
 export type DubCue = {
   index: number;

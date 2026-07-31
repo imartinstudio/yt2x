@@ -98,6 +98,54 @@ describe("mergeCuesIntoSegments", () => {
     expect(segments[1]).toMatchObject({ index: 2, startMs: 1_000, endMs: 2_000, cueIndices: [2] });
   });
 
+  it("collapses adjacent duplicate cues but keeps their combined time span", () => {
+    // 真实产物形态：语义双语投影按宽度切英文时把整句中文复制进了每一片，
+    // 于是 full.zh.srt 出现零间隔的紧邻重复。配音会把同一句念两遍。
+    const segments = mergeCuesIntoSegments([
+      cue(1, 0, 1_800, "朋友们，好久没发视频了，"),
+      cue(2, 1_800, 2_762, "朋友们，好久没发视频了，"),
+      cue(3, 2_762, 4_500, "因为我一直在忙技能仓库的更新。"),
+      cue(4, 4_500, 6_880, "因为我一直在忙技能仓库的更新。"),
+    ]);
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.text).toBe("朋友们，好久没发视频了，因为我一直在忙技能仓库的更新。");
+    // 时间区间必须覆盖全部四条，否则 targetDurationMs 会缩水
+    expect(segments[0]).toMatchObject({ startMs: 0, endMs: 6_880, cueIndices: [1, 2, 3, 4] });
+  });
+
+  it("collapses a run of three or more identical cues", () => {
+    const segments = mergeCuesIntoSegments([
+      cue(1, 0, 1_000, "现有技能有不少新改动。"),
+      cue(2, 1_000, 2_000, "现有技能有不少新改动。"),
+      cue(3, 2_000, 3_000, "现有技能有不少新改动。"),
+    ]);
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.text).toBe("现有技能有不少新改动。");
+    expect(segments[0]).toMatchObject({ startMs: 0, endMs: 3_000 });
+  });
+
+  it("keeps a genuine re-utterance that is separated by a speaking pause", () => {
+    // 真人强调式重复必然带换气间隔，不能被去重逻辑吃掉
+    const segments = mergeCuesIntoSegments(
+      [
+        cue(1, 0, 1_000, "别这么做"),
+        cue(2, 3_000, 4_000, "别这么做"),
+      ],
+      { maxGapMs: 700 },
+    );
+    expect(segments.map((s) => s.text)).toEqual(["别这么做", "别这么做"]);
+  });
+
+  it("does not collapse a repeat that is separated by different text", () => {
+    const segments = mergeCuesIntoSegments([
+      cue(1, 0, 1_000, "先看这个"),
+      cue(2, 1_000, 2_000, "然后是这个"),
+      cue(3, 2_000, 3_000, "先看这个"),
+    ]);
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.text).toBe("先看这个然后是这个先看这个");
+  });
+
   it("breaks after a closing quote, curly or straight", () => {
     // 中文 LLM 译文里弯引号是常态，只认直引号会让整句漏判、继续往后合并
     const segments = mergeCuesIntoSegments([

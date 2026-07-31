@@ -12,15 +12,17 @@ import type {
  * 混合策略，按句独立决策，顺序固定：
  *   1. keep  — 自然语速装得进目标区间
  *   2. speed — 所需倍率落在引擎 rateRange ∩ 偏好区间内
- *   3. shorten — 需要 LLM 改短（本函数只标记，改写在 adapter 层）
- *   4. delay — 以上都不行，接受溢出并累积漂移
+ *   3. delay — 以上都不行，接受溢出并累积漂移
+ *
+ * 原第三档「shorten」（LLM 事后改短）已删除：冗余现在由长度受限翻译在生成配音稿
+ * 阶段挤掉，合成完再回头砍字是顺序错误，见 docs/DUB-TASK.md。
  *
  * 句间硬约束：相邻落点间隔 ≥ minInterSentencePauseMs。
  * 停顿优先于压缩；插入停顿带来的漂移由片尾 extendMs 吸收，但 extendMs 有封顶。
- * 触顶后才允许回到压缩（从目标槽内借时间），且优先压缩而不是砍停顿。
+ * 触顶后才允许回到压缩（从目标槽内借时间压缩语速），且优先压缩而不是砍停顿。
  */
 
-/** 锁定决策里的偏好加速上限：超过就改短，避免听感崩坏。 */
+/** 锁定决策里的偏好加速上限：超过就退到 delay，避免听感崩坏。 */
 export const PREFERRED_RATE_MAX = 1.15;
 /** 偏好减速下限；实际配音几乎只加速，保留对称是为了 rate 计算的边界完整。 */
 export const PREFERRED_RATE_MIN = 0.95;
@@ -114,18 +116,6 @@ export const effectiveRateMin = (
   preferredMin: number = PREFERRED_RATE_MIN,
 ): number => Math.max(rateRange.min, preferredMin);
 
-/**
- * shorten 的字符上限：按时长比缩放，再留 5% 余量。
- * 下限 4——再短 LLM 也写不出还能保留信息点的句子，不如直接 delay。
- */
-export const shortenCharBudget = (text: string, naturalMs: number, targetDurationMs: number): number => {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return 0;
-  if (naturalMs <= 0 || targetDurationMs <= 0) return Math.max(4, trimmed.length);
-  const ratio = (targetDurationMs / naturalMs) * 0.95;
-  return Math.max(4, Math.floor(trimmed.length * ratio));
-};
-
 export const resolveMaxExtendMs = (input: {
   maxExtendMs?: number;
   maxExtendFraction?: number;
@@ -184,23 +174,6 @@ const decideLine = (input: {
     };
   }
 
-  if (shortenCharBudget(line.text, line.naturalMs, fitTargetMs) < line.text.trim().length) {
-    const maxChars = shortenCharBudget(line.text, line.naturalMs, fitTargetMs);
-    return {
-      index: line.index,
-      action: "shorten",
-      rate: 1,
-      originalStartMs: line.startMs,
-      originalEndMs: line.endMs,
-      targetDurationMs: line.targetDurationMs,
-      naturalMs: line.naturalMs,
-      plannedStartMs,
-      plannedEndMs: plannedStartMs + fitTargetMs,
-      text: line.text,
-      shortenMaxChars: maxChars,
-    };
-  }
-
   return {
     index: line.index,
     action: "delay",
@@ -231,7 +204,6 @@ const planOnce = (input: {
   let drift = 0;
   let keepCount = 0;
   let speedCount = 0;
-  let shortenCount = 0;
   let delayCount = 0;
 
   for (let i = 0; i < input.lines.length; i += 1) {
@@ -257,7 +229,6 @@ const planOnce = (input: {
     lines.push(plan);
     if (plan.action === "keep") keepCount += 1;
     else if (plan.action === "speed") speedCount += 1;
-    else if (plan.action === "shorten") shortenCount += 1;
     else delayCount += 1;
 
     const plannedDuration = plan.plannedEndMs - plan.plannedStartMs;
@@ -278,13 +249,12 @@ const planOnce = (input: {
   }
 
   return {
-    version: 1,
+    version: 2,
     videoId: input.videoId,
     lines,
     extendMs: Math.round(drift),
     plannedDriftMs: Math.round(drift),
     speedCount,
-    shortenCount,
     delayCount,
     keepCount,
   };

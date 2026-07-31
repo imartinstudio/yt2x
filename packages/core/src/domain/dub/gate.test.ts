@@ -41,7 +41,6 @@ const placement = (overrides?: Partial<DubPlacementReport>): DubPlacementReport 
   audioEndMs: 2000,
   keepCount: 2,
   speedCount: 0,
-  shortenCount: 0,
   delayCount: 0,
   lines: [
     {
@@ -71,7 +70,7 @@ const placement = (overrides?: Partial<DubPlacementReport>): DubPlacementReport 
 const script = (): DubScript => ({
   version: 1,
   videoId: "vid",
-  sourceSubtitle: "video/full.zh.srt",
+  sourceWords: "video/full.local.en.words.json",
   rewriteModel: "m",
   lines: [
     {
@@ -143,7 +142,7 @@ describe("evaluateDubGate", () => {
     expect(report.issues.some((i) => i.code === "empty-audio")).toBe(true);
   });
 
-  it("hard-blocks on severe info loss after shorten", () => {
+  it("hard-blocks on severe info loss", () => {
     const report = evaluateDubGate({
       videoId: "vid",
       timing: timing(),
@@ -151,7 +150,7 @@ describe("evaluateDubGate", () => {
         lines: [
           {
             index: 1,
-            action: "shorten",
+            action: "delay",
             rate: 1,
             text: "短",
             startMs: 0,

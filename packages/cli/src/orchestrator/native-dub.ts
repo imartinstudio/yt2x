@@ -13,20 +13,19 @@ import {
   dubbedVideoPathFor,
   dubReverseSrtPathFor,
   extractDubSourceWindow,
-  filterDubCuesByTimeRange,
   generateDubScript,
   guardDubSourceAgainstHardSubtitles,
   isDemucsError,
   isDubHardSubtitleError,
   probeDemucs,
-  readDubCues,
+  readDubWords,
   readDubScript,
   readDubTimingReport,
   readElevenLabsApiKeyFromEnv,
   readElevenLabsVoiceFromEnv,
   remixDubbedVideo,
   resolveDubSourceVideo,
-  resolveZhSubtitlePath,
+  resolveDubWordsPath,
   sanitizeVideoId,
   separateDemucs,
   synthesizeDubLines,
@@ -40,12 +39,13 @@ import {
 import {
   buildNegotiateInputs,
   evaluateDubGate,
+  filterUtterancesByTimeRange,
   formatReverseSrt,
   isTtsError,
-  mergeCuesIntoSegments,
   planDubNegotiation,
   resolveMaxExtendMs,
-  type MergeCuesOptions,
+  segmentUtterances,
+  type SegmentUtterancesOptions,
   type TtsPort,
 } from "@yt2x/core";
 import { logger } from "../logger.js";
@@ -80,8 +80,6 @@ export type DubFlags = NativeLlmCliFlags & {
   ffmpegPath?: string;
   demucsModel?: string;
   pythonPath?: string;
-  maxGapMs?: string;
-  maxChars?: string;
   maxDurationMs?: string;
   scriptOnly?: boolean;
   timingOnly?: boolean;
@@ -136,13 +134,9 @@ const parsePositiveInt = (raw: string | undefined): number | undefined => {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 };
 
-const mergeOptionsFrom = (flags: DubFlags): MergeCuesOptions => {
-  const options: MergeCuesOptions = {};
-  const maxGapMs = parsePositiveInt(flags.maxGapMs);
-  const maxChars = parsePositiveInt(flags.maxChars);
+const segmentOptionsFrom = (flags: DubFlags): SegmentUtterancesOptions => {
+  const options: SegmentUtterancesOptions = {};
   const maxDurationMs = parsePositiveInt(flags.maxDurationMs);
-  if (maxGapMs !== undefined) options.maxGapMs = maxGapMs;
-  if (maxChars !== undefined) options.maxChars = maxChars;
   if (maxDurationMs !== undefined) options.maxDurationMs = maxDurationMs;
   return options;
 };
@@ -209,7 +203,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     printCliErrorBlock({
       command: "dub",
       reason: "Missing target. Dub requires --video-id <id>.",
-      hints: ["Run `yt2x subtitle` first so full.zh.srt exists."],
+      hints: ["Run `yt2x subtitle transcribe-local <videoId>` first so full.local.en.words.json exists."],
       retryCommand: "pnpm yt2x dub --video-id <videoId>",
     });
     return EXIT_INPUT_MISSING;
@@ -347,22 +341,22 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     return llm.exitCode;
   }
 
-  let srtPath: string;
+  let wordsPath: string;
   try {
-    srtPath = await resolveZhSubtitlePath({ articleRoot, outRoot, videoId });
+    wordsPath = await resolveDubWordsPath({ outRoot, videoId });
   } catch (err: unknown) {
     printCliErrorBlock({
       command: "dub",
       subject: videoId,
       reason: err instanceof Error ? err.message : String(err),
-      hints: ["Run `yt2x subtitle --video-id <videoId>` to produce full.zh.srt."],
+      hints: ["Run `yt2x subtitle transcribe-local <videoId>` to produce full.local.en.words.json."],
       retryCommand: `pnpm yt2x dub --video-id ${videoId}`,
     });
     return EXIT_INPUT_MISSING;
   }
 
   if (needsVideo) {
-    // Demucs 探测前置于后续计费调用（改短 LLM / 调速 TTS）和分离本身
+    // Demucs 探测前置于后续计费调用（翻译 LLM / 调速 TTS）和分离本身
     try {
       pythonPath = await probeDemucs({
         ...(flags.pythonPath !== undefined ? { pythonPath: flags.pythonPath } : {}),
@@ -397,20 +391,23 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       );
     }
     if (script === undefined) {
-      const cues = filterDubCuesByTimeRange(await readDubCues(srtPath), timeRange);
-      const segments = mergeCuesIntoSegments(cues, mergeOptionsFrom(flags));
-      if (segments.length === 0) {
+      const words = await readDubWords(wordsPath);
+      const utterances = filterUtterancesByTimeRange(
+        segmentUtterances(words, segmentOptionsFrom(flags)),
+        timeRange,
+      );
+      if (utterances.length === 0) {
         printCliErrorBlock({
           command: "dub",
           subject: videoId,
           reason: hasTimeRange
-            ? `No usable subtitle cues in ${srtPath} for time range ` +
+            ? `No usable speech in ${wordsPath} for time range ` +
               `[${timeRange.startMs ?? 0}, ${timeRange.endMs ?? "end"}).`
-            : `No usable subtitle cues in ${srtPath}.`,
+            : `No usable speech in ${wordsPath}.`,
           hints: hasTimeRange
-            ? ["Widen --start-ms/--end-ms, or check that full.zh.srt covers that window."]
-            : ["The Chinese subtitle file is empty — re-run the subtitle stage."],
-          retryCommand: `pnpm yt2x subtitle --video-id ${videoId}`,
+            ? ["Widen --start-ms/--end-ms, or check that the local transcript covers that window."]
+            : ["The local transcript is empty — re-run `yt2x subtitle transcribe-local`."],
+          retryCommand: `pnpm yt2x subtitle transcribe-local ${videoId}`,
         });
         return EXIT_INPUT_MISSING;
       }
@@ -418,23 +415,23 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       logger.info(
         {
           videoId,
-          srtPath,
-          cues: cues.length,
-          segments: segments.length,
+          wordsPath,
+          words: words.length,
+          utterances: utterances.length,
           model: llm.model,
           ...(hasTimeRange
             ? { startMs: timeRange.startMs ?? 0, endMs: timeRange.endMs }
             : {}),
         },
-        "yt2x dub: rewriting the dubbing script…",
+        "yt2x dub: translating the dubbing script…",
       );
 
       const generated = await generateDubScript({
         llm: llm.adapter,
         model: llm.model,
         videoId,
-        sourceSubtitle: path.relative(path.dirname(dubDir), srtPath),
-        segments,
+        sourceWords: path.relative(path.dirname(dubDir), wordsPath),
+        utterances,
       });
       for (const warning of generated.warnings) logger.warn({ videoId }, `dub script: ${warning}`);
       script = generated.script;
@@ -445,8 +442,8 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         {
           videoId,
           scriptPath,
-          rewrittenCount: generated.rewrittenCount,
-          fallbackCount: generated.fallbackCount,
+          translatedCount: generated.translatedCount,
+          droppedCount: generated.droppedCount,
         },
         "dub script written",
       );
@@ -571,7 +568,6 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         planPath,
         keep: plan.keepCount,
         speed: plan.speedCount,
-        shorten: plan.shortenCount,
         delay: plan.delayCount,
         extendMs: plan.extendMs,
       },
@@ -585,8 +581,6 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       voice,
       dubDir: synthDir,
       existingAudioByIndex: existingAudio,
-      llm: llm.adapter,
-      model: llm.model,
       ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
       ...(flags.ffmpegPath !== undefined ? { ffmpegPath: flags.ffmpegPath } : {}),
       onLineDone: (done, total) => {
@@ -603,7 +597,6 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         placementPath,
         extendMs: placement.extendMs,
         audioEndMs: placement.audioEndMs,
-        shorten: placement.shortenCount,
         delay: placement.delayCount,
       },
       "yt2x dub: placement ready",

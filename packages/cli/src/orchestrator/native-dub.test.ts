@@ -54,7 +54,7 @@ beforeEach(() => {
 });
 
 describe("executeNativeDub hard-subtitle guard", () => {
-  it("refuses before Demucs, LLM rewrite, or TTS when the source has Chinese hard subs", async () => {
+  it("refuses before Demucs, LLM translation, or TTS when the source has Chinese hard subs", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-guard-"));
     const outRoot = path.join(root, "downloads");
     const articleRoot = path.join(root, "articles");
@@ -62,10 +62,6 @@ describe("executeNativeDub hard-subtitle guard", () => {
     await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
     await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
     await writeFile(path.join(outRoot, videoId, "video", "full.mp4"), "original");
-    await writeFile(
-      path.join(articleRoot, videoId, "video", "full.zh.srt"),
-      "1\n00:00:01,000 --> 00:00:02,000\n你好\n",
-    );
 
     const code = await executeNativeDub({
       videoId,
@@ -84,7 +80,7 @@ describe("executeNativeDub hard-subtitle guard", () => {
 });
 
 describe("executeNativeDub time range", () => {
-  it("rewrites only cues inside --start-ms/--end-ms and ignores a full-run script cache", async () => {
+  it("translates only utterances inside --start-ms/--end-ms and ignores a full-run script cache", async () => {
     guardMock.mockResolvedValue({
       hasBurnedSubtitles: false,
       hasChineseBurnedSubtitles: false,
@@ -94,7 +90,7 @@ describe("executeNativeDub time range", () => {
       script: {
         version: 1,
         videoId: "abc12345678",
-        sourceSubtitle: "video/full.zh.srt",
+        sourceWords: "video/full.local.en.words.json",
         rewriteModel: "test-model",
         lines: [
           {
@@ -103,14 +99,14 @@ describe("executeNativeDub time range", () => {
             endMs: 2_000,
             targetDurationMs: 1_000,
             text: "窗内句",
-            sourceText: "窗内句",
+            sourceText: "Inside the window.",
             cueIndices: [1],
           },
         ],
       },
       warnings: [],
-      rewrittenCount: 1,
-      fallbackCount: 0,
+      translatedCount: 1,
+      droppedCount: 0,
     });
 
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-range-"));
@@ -121,18 +117,19 @@ describe("executeNativeDub time range", () => {
     await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
     await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
     await mkdir(dubDir, { recursive: true });
+    // 词级时间戳：一句落在窗内（1.0-2.0s），一句远在窗外（180s）——两句都以句末
+    // 标点收尾，segmentUtterances 会切成两个独立话语单元，交给时间窗过滤。
     await writeFile(
-      path.join(articleRoot, videoId, "video", "full.zh.srt"),
-      [
-        "1",
-        "00:00:01,000 --> 00:00:02,000",
-        "窗内句",
-        "",
-        "2",
-        "00:03:00,000 --> 00:03:02,000",
-        "窗外句不应进入配音稿",
-        "",
-      ].join("\n"),
+      path.join(outRoot, videoId, "video", "full.local.en.words.json"),
+      JSON.stringify([
+        { word: "Inside", start: 1.0, end: 1.3 },
+        { word: "the", start: 1.3, end: 1.5 },
+        { word: "window.", start: 1.5, end: 2.0 },
+        { word: "Outside", start: 180.0, end: 180.3 },
+        { word: "the", start: 180.3, end: 180.5 },
+        { word: "window.", start: 180.5, end: 182.0 },
+      ]),
+      "utf8",
     );
     // Full-run cache that would silently skip filtering if reused.
     await writeFile(
@@ -140,7 +137,7 @@ describe("executeNativeDub time range", () => {
       JSON.stringify({
         version: 1,
         videoId,
-        sourceSubtitle: "video/full.zh.srt",
+        sourceWords: "video/full.local.en.words.json",
         rewriteModel: "cached",
         lines: [
           {
@@ -149,7 +146,7 @@ describe("executeNativeDub time range", () => {
             endMs: 2_000,
             targetDurationMs: 1_000,
             text: "窗内句",
-            sourceText: "窗内句",
+            sourceText: "Inside the window.",
             cueIndices: [1],
           },
           {
@@ -158,7 +155,7 @@ describe("executeNativeDub time range", () => {
             endMs: 182_000,
             targetDurationMs: 2_000,
             text: "窗外句不应进入配音稿",
-            sourceText: "窗外句不应进入配音稿",
+            sourceText: "Outside the window.",
             cueIndices: [2],
           },
         ],
@@ -177,13 +174,13 @@ describe("executeNativeDub time range", () => {
 
     expect(code).toBe(0);
     expect(generateDubScriptMock).toHaveBeenCalledOnce();
-    const segments = generateDubScriptMock.mock.calls[0]![0].segments as Array<{
+    const utterances = generateDubScriptMock.mock.calls[0]![0].utterances as Array<{
       text: string;
       endMs: number;
     }>;
-    expect(segments).toHaveLength(1);
-    expect(segments[0]?.text).toBe("窗内句");
-    expect(segments.every((segment) => segment.endMs <= 5_000)).toBe(true);
+    expect(utterances).toHaveLength(1);
+    expect(utterances[0]?.text).toBe("Inside the window.");
+    expect(utterances.every((u) => u.endMs <= 5_000)).toBe(true);
     expect(synthesizeDubLinesMock).not.toHaveBeenCalled();
   });
 });

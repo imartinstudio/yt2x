@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { DubNegotiatePlan, LlmPort, TtsPort, TtsResult } from "@yt2x/core";
+import type { DubNegotiatePlan, TtsPort, TtsResult } from "@yt2x/core";
 import type { ProcessResult, ProcessRunner, ProcessSpec } from "../process/index.js";
 import { applyDubNegotiation } from "./negotiate.js";
 
@@ -57,13 +57,12 @@ const probeRunner = (durationSec: string): ProcessRunner => ({
 });
 
 const planFixture = (overrides?: Partial<DubNegotiatePlan["lines"][number]>): DubNegotiatePlan => ({
-  version: 1,
+  version: 2,
   videoId: "vid",
   extendMs: 0,
   plannedDriftMs: 0,
   keepCount: 1,
   speedCount: 0,
-  shortenCount: 0,
   delayCount: 0,
   lines: [
     {
@@ -117,33 +116,5 @@ describe("applyDubNegotiation", () => {
     expect(report.lines[0]!.audioFile).toBe("lines/0001.mp3");
     const bytes = await readFile(path.join(dubDir, "lines", "0001.mp3"));
     expect(bytes.byteLength).toBeGreaterThan(0);
-  });
-
-  it("shortens via LLM then synthesizes", async () => {
-    const dubDir = await makeTmp();
-    const llm: LlmPort = {
-      chat: async () => ({
-        content: JSON.stringify([{ index: 1, text: "短句" }]),
-        model: "m",
-        finishReason: "stop",
-      }),
-    };
-    const { report } = await applyDubNegotiation({
-      plan: planFixture({
-        action: "shorten",
-        naturalMs: 1500,
-        shortenMaxChars: 4,
-        text: "这是一句很长的需要被改短的句子",
-      }),
-      tts: fakeTts({ "1": 800 }),
-      voice: "v",
-      dubDir,
-      existingAudioByIndex: new Map(),
-      llm,
-      model: "m",
-      runner: probeRunner("0.8"),
-    });
-    expect(report.shortenCount).toBe(1);
-    expect(report.lines[0]!.text).toBe("短句");
   });
 });

@@ -8,41 +8,40 @@ import {
   DUB_TIMING_FILE,
   dubDirFor,
   dubLineAudioName,
-  parseDubCues,
-  readDubCues,
+  parseDubWords,
+  readDubWords,
   readDubScript,
   readDubTimingReport,
   resolveDubSourceVideo,
-  resolveZhSubtitlePath,
+  resolveDubWordsPath,
   writeDubLineAudio,
   writeDubScript,
   writeDubTimingReport,
-  filterDubCuesByTimeRange,
 } from "./file-store.js";
 
 const tmpRoot = (): Promise<string> => mkdtemp(path.join(os.tmpdir(), "yt2x-dub-store-"));
 
-const seedSrt = async (root: string, videoId: string, content: string): Promise<string> => {
+const seedWords = async (root: string, videoId: string, content: string): Promise<string> => {
   const dir = path.join(root, videoId, "video");
   await mkdir(dir, { recursive: true });
-  const filePath = path.join(dir, "full.zh.srt");
+  const filePath = path.join(dir, "full.local.en.words.json");
   await writeFile(filePath, content, "utf8");
   return filePath;
 };
 
-const SRT = `1
-00:00:01,000 --> 00:00:03,500
-我们先看一下
-
-2
-00:00:03,500 --> 00:00:06,000
-这个工具怎么用
-`;
+const WORDS = JSON.stringify([
+  { word: "We", start: 1.0, end: 1.2 },
+  { word: "look", start: 1.2, end: 1.5 },
+  { word: "first.", start: 1.5, end: 3.5 },
+  { word: "How", start: 3.5, end: 3.8 },
+  { word: "it", start: 3.8, end: 4.0 },
+  { word: "works.", start: 4.0, end: 6.0 },
+]);
 
 const script: DubScript = {
   version: 1,
   videoId: "<videoId>",
-  sourceSubtitle: "video/full.zh.srt",
+  sourceWords: "video/full.local.en.words.json",
   rewriteModel: "test-model",
   lines: [
     {
@@ -51,7 +50,7 @@ const script: DubScript = {
       endMs: 3_500,
       targetDurationMs: 2_500,
       text: "我们先看一下",
-      sourceText: "我们先看一下",
+      sourceText: "we look first",
       cueIndices: [1],
     },
   ],
@@ -95,34 +94,35 @@ describe("dubLineAudioName", () => {
   });
 });
 
-describe("resolveZhSubtitlePath", () => {
-  it("prefers the article directory", async () => {
+describe("resolveDubWordsPath", () => {
+  it("resolves the local transcript under the downloads root", async () => {
     const root = await tmpRoot();
-    const articleRoot = path.join(root, "articles");
     const outRoot = path.join(root, "downloads");
-    const expected = await seedSrt(articleRoot, "<videoId>", SRT);
-    await seedSrt(outRoot, "<videoId>", SRT);
+    const expected = await seedWords(outRoot, "<videoId>", WORDS);
 
-    expect(await resolveZhSubtitlePath({ articleRoot, outRoot, videoId: "<videoId>" })).toBe(expected);
+    expect(await resolveDubWordsPath({ outRoot, videoId: "<videoId>" })).toBe(expected);
   });
 
-  it("falls back to the download directory", async () => {
+  it("respects a non-default source language", async () => {
     const root = await tmpRoot();
-    const articleRoot = path.join(root, "articles");
     const outRoot = path.join(root, "downloads");
-    const expected = await seedSrt(outRoot, "<videoId>", SRT);
+    const dir = path.join(outRoot, "<videoId>", "video");
+    await mkdir(dir, { recursive: true });
+    const filePath = path.join(dir, "full.local.ja.words.json");
+    await writeFile(filePath, WORDS, "utf8");
 
-    expect(await resolveZhSubtitlePath({ articleRoot, outRoot, videoId: "<videoId>" })).toBe(expected);
+    expect(
+      await resolveDubWordsPath({ outRoot, videoId: "<videoId>", language: "ja" }),
+    ).toBe(filePath);
   });
 
-  it("names both candidates when nothing is found", async () => {
+  it("names the missing candidate when nothing is found", async () => {
     const root = await tmpRoot();
-    const articleRoot = path.join(root, "articles");
     const outRoot = path.join(root, "downloads");
 
     await expect(
-      resolveZhSubtitlePath({ articleRoot, outRoot, videoId: "<videoId>" }),
-    ).rejects.toThrow(/articles.*downloads/su);
+      resolveDubWordsPath({ outRoot, videoId: "<videoId>" }),
+    ).rejects.toThrow(/full\.local\.en\.words\.json/u);
   });
 });
 
@@ -164,52 +164,30 @@ describe("resolveDubSourceVideo", () => {
   });
 });
 
-describe("filterDubCuesByTimeRange", () => {
-  const cues = parseDubCues(SRT);
-
-  it("keeps all cues when no range is set", () => {
-    expect(filterDubCuesByTimeRange(cues, {})).toEqual(cues);
-  });
-
-  it("keeps only overlapping cues and shifts them to the window origin", () => {
-    expect(filterDubCuesByTimeRange(cues, { startMs: 2_000, endMs: 5_000 })).toEqual([
-      { index: 1, startMs: 0, endMs: 1_500, text: "我们先看一下" },
-      { index: 2, startMs: 1_500, endMs: 3_000, text: "这个工具怎么用" },
+describe("parseDubWords", () => {
+  it("converts start/end seconds to millisecond integers once, at the boundary", () => {
+    expect(parseDubWords(WORDS)).toEqual([
+      { word: "We", startMs: 1_000, endMs: 1_200 },
+      { word: "look", startMs: 1_200, endMs: 1_500 },
+      { word: "first.", startMs: 1_500, endMs: 3_500 },
+      { word: "How", startMs: 3_500, endMs: 3_800 },
+      { word: "it", startMs: 3_800, endMs: 4_000 },
+      { word: "works.", startMs: 4_000, endMs: 6_000 },
     ]);
-  });
-
-  it("rejects an inverted range", () => {
-    expect(() => filterDubCuesByTimeRange(cues, { startMs: 5_000, endMs: 1_000 })).toThrow(
-      /endMs.*startMs/iu,
-    );
-  });
-});
-
-describe("parseDubCues", () => {
-  it("converts timestamps to milliseconds once, at the boundary", () => {
-    expect(parseDubCues(SRT)).toEqual([
-      { index: 1, startMs: 1_000, endMs: 3_500, text: "我们先看一下" },
-      { index: 2, startMs: 3_500, endMs: 6_000, text: "这个工具怎么用" },
-    ]);
-  });
-
-  it("joins multi-line cues with a space", () => {
-    const cues = parseDubCues(`1
-00:00:01,000 --> 00:00:03,000
-第一行
-第二行
-`);
-    expect(cues[0]?.text).toBe("第一行 第二行");
   });
 
   it("returns an empty array for empty input", () => {
-    expect(parseDubCues("")).toEqual([]);
+    expect(parseDubWords("[]")).toEqual([]);
+  });
+
+  it("rejects malformed entries instead of silently dropping fields", () => {
+    expect(() => parseDubWords(JSON.stringify([{ word: "x" }]))).toThrow();
   });
 
   it("reads from disk", async () => {
     const root = await tmpRoot();
-    const srtPath = await seedSrt(root, "<videoId>", SRT);
-    expect(await readDubCues(srtPath)).toHaveLength(2);
+    const wordsPath = await seedWords(root, "<videoId>", WORDS);
+    expect(await readDubWords(wordsPath)).toHaveLength(6);
   });
 });
 

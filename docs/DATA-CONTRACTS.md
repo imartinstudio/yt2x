@@ -184,3 +184,19 @@ scene_manifest.json → available_visuals → LLM visual_plan → 图片渲染 �
 ## 7. 子进程结果 JSON
 
 采集阶段会写入 `prepare-result.json`，记录本次 `prepareYoutubeVideo` 的输入 URL、输出目录、是否成功、告警和各子步骤耗时。发布 dry-run / review 写入 `publish-preview.json`，真实发布写入 `publish-result.json`。新增阶段产物时，应同步更新本文件和对应测试。
+
+## 8. 配音（dub）产物
+
+`yt2x dub` 只消费本地转录通道的词级时间戳 `<outDir>/<videoId>/video/full.local.<lang>.words.json`（`transcribe-local.py` 产出，默认 `lang=en`）——不读取任何中文字幕文件。产物写在 `<articleRoot>/<videoId>/dub/`：
+
+| 文件                 | 说明                                        |
+| -------------------- | ------------------------------------------- |
+| `dub-script.json`    | 配音稿：话语单元 + 长度受限翻译后的中文文本 |
+| `dub-timing.json`    | 倍率 1.0 的实测时长报告                     |
+| `dub-plan.json`      | 时长协商计划                                |
+| `dub-placement.json` | 最终落点（反向 SRT / 混音的输入）           |
+| `dub-report.json`    | 质量门禁报告                                |
+
+`dub-plan.json` 的 `version` 为 **2**：时长协商的第三档「事后 LLM 改短」（旧版 1 的 `shorten` 动作与 `shortenCount` 字段）已删除，冗余改在生成配音稿阶段由长度受限翻译挤掉，见 `docs/DUB-TASK.md`。旧版 1 的 `dub-plan.json` 不再兼容读取；它是中间产物，重跑 `yt2x dub` 即可重新生成。`dub-placement.json` 同步移除了 `shortenCount` 字段，但 `version` 保持 1。
+
+`--start-ms` / `--end-ms` 时间窗按话语单元过滤（`filterUtterancesByTimeRange`），不再按字幕 cue 过滤；窗口内产物写在 `dub/work/`，不复用或覆盖全片缓存。

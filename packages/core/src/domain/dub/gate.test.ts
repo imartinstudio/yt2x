@@ -142,7 +142,9 @@ describe("evaluateDubGate", () => {
     expect(report.issues.some((i) => i.code === "empty-audio")).toBe(true);
   });
 
-  it("hard-blocks on severe info loss", () => {
+  it("flags severe under-use of the time budget as advisory, without blocking", () => {
+    // targetDurationMs=8720 → budget ≈ 59 chars (真实素材 UzMNBN6xLLA 的量级)；
+    // 译文只有 1 字，占用比 ≈ 0.02，远低于 0.3 的 advisory 阈值。
     const report = evaluateDubGate({
       videoId: "vid",
       timing: timing(),
@@ -166,17 +168,64 @@ describe("evaluateDubGate", () => {
           {
             index: 1,
             startMs: 0,
-            endMs: 1000,
-            targetDurationMs: 1000,
+            endMs: 8720,
+            targetDurationMs: 8720,
             text: "短",
-            sourceText: "这是一句很长很长很长很长的中文配音原文",
+            sourceText:
+              "This utterance had plenty to say but the translation came back suspiciously short for its budget.",
             cueIndices: [1],
           },
         ],
       },
     });
-    expect(report.blocked).toBe(true);
-    expect(report.issues.some((i) => i.code === "info-loss")).toBe(true);
+    // 信息损失指标不再拦成片（跨语言下"源/译码点比"语义已失效，改为占用时长预算的
+    // advisory 提示，见 docs/DUB-TASK.md 的 info-loss 处置）。
+    expect(report.blocked).toBe(false);
+    expect(report.passed).toBe(true);
+    const issue = report.issues.find((i) => i.code === "info-loss");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("advisory");
+    expect(report.metrics.infoLossCount).toBe(1);
+  });
+
+  it("does not flag translations that use most of their time budget", () => {
+    // targetDurationMs=8340 → budget ≈ 56 chars；32 字译文占用比 ≈ 0.57，
+    // 与真实素材（0.42–1.08）同量级，不应触发 advisory。
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "但有时我听到用户反馈，说这个功能问了两百个问题，我有点尴尬",
+            startMs: 0,
+            endMs: 8000,
+            durationMs: 8000,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      }),
+      script: {
+        ...script(),
+        lines: [
+          {
+            index: 1,
+            startMs: 0,
+            endMs: 8340,
+            targetDurationMs: 8340,
+            text: "但有时我听到用户反馈，说这个功能问了两百个问题，我有点尴尬",
+            sourceText:
+              "However, I sometimes hear from people using them like, this issue just asks me 200 questions and I kind of wince a little bit.",
+            cueIndices: [1],
+          },
+        ],
+      },
+    });
+    expect(report.blocked).toBe(false);
+    expect(report.issues.some((i) => i.code === "info-loss")).toBe(false);
   });
 
   it("records advisory issues without blocking", () => {

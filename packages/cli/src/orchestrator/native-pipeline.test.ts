@@ -486,4 +486,34 @@ describe("runNativePipeline", () => {
     expect(executeNativeArticleMock).not.toHaveBeenCalled();
     expect(executeNativeDubMock).not.toHaveBeenCalled();
   });
+
+  it("exits 0 without running the demucs/TTS preflight when every target video is already dubbed", async () => {
+    // Regression: a machine with no demucs install (or no ElevenLabs credentials) that just
+    // wants to re-run `pipeline --dub` for a video whose full.zh-dubbed.mp4 already exists
+    // must still exit 0 — the preflight has nothing real to check in that case.
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-already-dubbed-"));
+    const vid = "dubVid7";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    const dubbedVideoPath = path.join("/tmp/yt2x-monorepo", "files", "articles", vid, "video", "full.zh-dubbed.mp4");
+    await mkdir(path.dirname(dubbedVideoPath), { recursive: true });
+    await writeFile(dubbedVideoPath, "already dubbed");
+    probeDemucsMock.mockImplementation(async () => {
+      throw Object.assign(new Error("demucs not found"), { name: "DemucsError" });
+    });
+    vi.stubEnv("ELEVENLABS_API_KEY", "");
+    vi.stubEnv("XI_API_KEY", "");
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "elevenlabs" },
+      stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(probeDemucsMock).not.toHaveBeenCalled();
+    expect(transcribeLocalMock).not.toHaveBeenCalled();
+    expect(executeNativeNotesMock).toHaveBeenCalled();
+    expect(executeNativeArticleMock).toHaveBeenCalled();
+  });
 });

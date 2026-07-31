@@ -88,7 +88,7 @@ describe("executeNativeDub time range", () => {
     });
     generateDubScriptMock.mockResolvedValue({
       script: {
-        version: 1,
+        version: 2,
         videoId: "abc12345678",
         sourceWords: "video/full.local.en.words.json",
         rewriteModel: "test-model",
@@ -103,6 +103,7 @@ describe("executeNativeDub time range", () => {
             cueIndices: [1],
           },
         ],
+        droppedCount: 0,
       },
       warnings: [],
       translatedCount: 1,
@@ -135,10 +136,11 @@ describe("executeNativeDub time range", () => {
     await writeFile(
       path.join(dubDir, "dub-script.json"),
       JSON.stringify({
-        version: 1,
+        version: 2,
         videoId,
         sourceWords: "video/full.local.en.words.json",
         rewriteModel: "cached",
+        droppedCount: 0,
         lines: [
           {
             index: 1,
@@ -182,5 +184,89 @@ describe("executeNativeDub time range", () => {
     expect(utterances[0]?.text).toBe("Inside the window.");
     expect(utterances.every((u) => u.endMs <= 5_000)).toBe(true);
     expect(synthesizeDubLinesMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stale version-1 (pre-PR3) dub-script.json full-run cache instead of reusing it", async () => {
+    guardMock.mockResolvedValue({
+      hasBurnedSubtitles: false,
+      hasChineseBurnedSubtitles: false,
+      shouldSkipBurn: false,
+    });
+    generateDubScriptMock.mockResolvedValue({
+      script: {
+        version: 2,
+        videoId: "abc12345678",
+        sourceWords: "video/full.local.en.words.json",
+        rewriteModel: "fresh-model",
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "重新生成的句子",
+            sourceText: "Inside the window.",
+            cueIndices: [1],
+          },
+        ],
+        droppedCount: 0,
+      },
+      warnings: [],
+      translatedCount: 1,
+      droppedCount: 0,
+    });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-stale-cache-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "abc12345678";
+    const dubDir = path.join(articleRoot, videoId, "dub");
+    await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
+    await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
+    await mkdir(dubDir, { recursive: true });
+    await writeFile(
+      path.join(outRoot, videoId, "video", "full.local.en.words.json"),
+      JSON.stringify([
+        { word: "Inside", start: 1.0, end: 1.3 },
+        { word: "the", start: 1.3, end: 1.5 },
+        { word: "window.", start: 1.5, end: 2.0 },
+      ]),
+      "utf8",
+    );
+    // Pre-PR3 shape: sourceSubtitle instead of sourceWords, no droppedCount, version 1 —
+    // must never be read back as-is (readDubScript rejects it; native-dub falls through
+    // to regeneration rather than silently reusing the old Chinese-subtitle-era script).
+    await writeFile(
+      path.join(dubDir, "dub-script.json"),
+      JSON.stringify({
+        version: 1,
+        videoId,
+        sourceSubtitle: "video/full.zh.srt",
+        rewriteModel: "stale-cached",
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "旧链路缓存的句子",
+            sourceText: "旧链路缓存的中文原文",
+            cueIndices: [1],
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      scriptOnly: true,
+    });
+
+    expect(code).toBe(0);
+    // 缓存版本不兼容必须被拒绝并重新生成，而不是静默复用旧链路的中文改写稿。
+    expect(generateDubScriptMock).toHaveBeenCalledOnce();
   });
 });

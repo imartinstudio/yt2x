@@ -29,6 +29,7 @@ export type DubGateIssueCode =
   | "high-extend-ms"
   | "high-delay-fraction"
   | "info-loss"
+  | "dropped-utterances"
   | "zero-inter-sentence-pause"
   | "low-inter-sentence-pause";
 
@@ -61,6 +62,13 @@ export type DubGateThresholds = {
    * 显著低于预算（数据见默认值注释），拦死会挡住正常产出，只标注供复核。
    */
   advisoryTextBudgetRetainFraction: number;
+  /**
+   * `script.droppedCount`（翻译失败、未进入配音稿的话语单元数）硬上限；默认 0，
+   * 即一句都不允许静默丢弃。丢弃的话语单元在成片里只有 BGM、没有配音也没有字幕，
+   * 且不会被 lineCount 之类的统计口径体现——必须显式拦住，而不是让门禁在完全不知情
+   * 的情况下 passed（见 docs/DUB-TASK.md 对应验收记录）。
+   */
+  maxDroppedCount: number;
   /** 低于此间隔（毫秒）计为 low-gap；默认等于最小句间停顿。 */
   minInterSentencePauseMs: number;
   /** 句间间隔 < 1ms 的边界占比硬上限；0 表示不允许零间隔。 */
@@ -92,6 +100,7 @@ export const DEFAULT_DUB_GATE_THRESHOLDS: DubGateThresholds = {
   maxExtendMs: DEFAULT_MAX_EXTEND_MS,
   maxDelayFraction: 0.35,
   advisoryTextBudgetRetainFraction: 0.3,
+  maxDroppedCount: 0,
   minInterSentencePauseMs: DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
   maxZeroGapFraction: 0,
   maxLowGapFraction: 0,
@@ -118,6 +127,7 @@ export type DubGateReport = {
     emptyAudioCount: number;
     emptyTextCount: number;
     infoLossCount: number;
+    droppedCount: number;
     boundaryCount: number;
     zeroGapCount: number;
     zeroGapFraction: number;
@@ -203,6 +213,17 @@ export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
         });
       }
     }
+  }
+
+  const droppedCount = input.script?.droppedCount ?? 0;
+  if (droppedCount > thresholds.maxDroppedCount) {
+    issues.push({
+      code: "dropped-utterances",
+      severity: "hard",
+      message: `${droppedCount} utterance(s) had no usable translation and were silently dropped from the dubbing script (exceeds hard max ${thresholds.maxDroppedCount})`,
+      value: droppedCount,
+      threshold: thresholds.maxDroppedCount,
+    });
   }
 
   const gaps = interSentenceGapsMs(input.placement.lines);
@@ -295,6 +316,7 @@ export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
       emptyAudioCount,
       emptyTextCount,
       infoLossCount,
+      droppedCount,
       boundaryCount,
       zeroGapCount,
       zeroGapFraction,

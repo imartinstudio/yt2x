@@ -151,8 +151,50 @@ export const writeDubLineAudio = async (
   return { absolutePath, relativePath };
 };
 
-export const readDubScript = async (dubDir: string): Promise<DubScript> =>
-  JSON.parse(await readFile(path.join(dubDir, DUB_SCRIPT_FILE), "utf8")) as DubScript;
+const DubScriptLineSchema = z.object({
+  index: z.number().int(),
+  startMs: z.number().nonnegative(),
+  endMs: z.number().nonnegative(),
+  targetDurationMs: z.number().nonnegative(),
+  text: z.string(),
+  sourceText: z.string(),
+  cueIndices: z.array(z.number().int()),
+});
+
+/**
+ * version 必须锁死在 2：PR3 切换到本地转录通道后 schema 实质变了（sourceWords 取代
+ * sourceSubtitle、sourceText 从中文变英文、cueIndices 语义从字幕条变话语单元、新增
+ * droppedCount），旧版 1 的落盘文件语义完全不同。读回不校验会让旧缓存被静默复用——
+ * 门禁会用错误基准判定信息损失，而 gate 恰好因为 sourceText 又变回中文而"通过"，
+ * 问题被完全掩盖（见 docs/DUB-TASK.md 对应验收记录）。
+ */
+export const DubScriptSchema = z.object({
+  version: z.literal(2),
+  videoId: z.string().min(1),
+  sourceWords: z.string().min(1),
+  rewriteModel: z.string().min(1),
+  lines: z.array(DubScriptLineSchema),
+  droppedCount: z.number().int().nonnegative(),
+});
+
+/**
+ * 校验失败（含旧版本号）时直接拒绝复用缓存并抛错，而不是把裸 JSON 当 DubScript
+ * 塞回去——调用方（native-dub.ts）捕获后应当把它当缓存未命中处理，重新生成。
+ */
+export const readDubScript = async (dubDir: string): Promise<DubScript> => {
+  const filePath = path.join(dubDir, DUB_SCRIPT_FILE);
+  const raw: unknown = JSON.parse(await readFile(filePath, "utf8"));
+  const parsed = DubScriptSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid or incompatible ${DUB_SCRIPT_FILE} in ${dubDir} (expected schema version 2): ` +
+        `${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}. ` +
+        "This is likely a pre-PR3 cache from the old Chinese-subtitle dubbing path — delete the " +
+        "file or re-run with --force to regenerate it.",
+    );
+  }
+  return parsed.data;
+};
 
 /** 磁盘上的 timing 报告必须通过 runtime 校验——字段缺失不能带着 undefined 进协商。 */
 const DubLineTimingSchema = z.object({

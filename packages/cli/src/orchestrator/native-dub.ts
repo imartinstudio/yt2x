@@ -382,7 +382,18 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     // 时间窗冒烟不得复用/覆盖全片缓存，否则 --start-ms/--end-ms 会被静默忽略。
     const reuseFullRunArtifacts = flags.force !== true && !hasTimeRange;
     let script = reuseFullRunArtifacts
-      ? await readDubScript(dubDir).catch(() => undefined)
+      ? await readDubScript(dubDir).catch((err: unknown) => {
+          // 缺文件是正常的首次运行；版本不匹配/校验失败则是需要说明的缓存拒绝，
+          // 两者都落到"没有可复用缓存"，但后者应该被看见，不能悄悄发生。
+          const message = err instanceof Error ? err.message : String(err);
+          if (!message.includes("ENOENT")) {
+            logger.warn(
+              { videoId, err: message },
+              "dub: ignoring cached dub-script.json — regenerating",
+            );
+          }
+          return undefined;
+        })
       : undefined;
     if (hasTimeRange && flags.force !== true) {
       logger.info(

@@ -52,13 +52,25 @@ export type DubScriptLine = {
 };
 
 export type DubScript = {
-  version: 1;
+  /**
+   * 2：PR3 切换输入通道后 schema 实质变了——sourceWords 取代 sourceSubtitle，
+   * sourceText 从中文变英文，cueIndices 语义从"字幕条"变"话语单元"，外加新增
+   * droppedCount。version 仍为 1 的旧文件语义完全不同，不能被当作可复用缓存
+   * 静默读入（见 file-store.ts 的 DubScriptSchema）。
+   */
+  version: 2;
   videoId: string;
   /** 生成配音稿所依据的词级时间戳文件相对路径，如 "video/full.local.en.words.json"。 */
   sourceWords: string;
   /** 翻译用的 LLM 模型 ID，供复现。 */
   rewriteModel: string;
   lines: readonly DubScriptLine[];
+  /**
+   * 翻译失败、未能进入 lines 的话语单元数。落盘而不只留在日志里，是因为门禁
+   * （evaluateDubGate）要用它拦住"静默丢句"——丢弃的那几句在成片里只有 BGM
+   * 没有配音也没有字幕，仅凭 lines 本身看不出曾经丢过东西。
+   */
+  droppedCount: number;
 };
 
 /**

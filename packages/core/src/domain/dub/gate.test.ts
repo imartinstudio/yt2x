@@ -67,11 +67,12 @@ const placement = (overrides?: Partial<DubPlacementReport>): DubPlacementReport 
   ...overrides,
 });
 
-const script = (): DubScript => ({
-  version: 1,
+const script = (overrides?: Partial<DubScript>): DubScript => ({
+  version: 2,
   videoId: "vid",
   sourceWords: "video/full.local.en.words.json",
   rewriteModel: "m",
+  droppedCount: 0,
   lines: [
     {
       index: 1,
@@ -92,6 +93,7 @@ const script = (): DubScript => ({
       cueIndices: [2],
     },
   ],
+  ...overrides,
 });
 
 describe("evaluateDubGate", () => {
@@ -140,6 +142,32 @@ describe("evaluateDubGate", () => {
     });
     expect(report.blocked).toBe(true);
     expect(report.issues.some((i) => i.code === "empty-audio")).toBe(true);
+  });
+
+  it("hard-blocks when the script silently dropped untranslated utterances", () => {
+    // 20 句丢 6 句这类场景：droppedCount 不体现在 lineCount / placement 里，
+    // 门禁必须单独读 script.droppedCount 才能发现。
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement(),
+      script: script({ droppedCount: 6 }),
+    });
+    expect(report.blocked).toBe(true);
+    expect(report.metrics.droppedCount).toBe(6);
+    const issue = report.issues.find((i) => i.code === "dropped-utterances");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("hard");
+  });
+
+  it("does not flag dropped-utterances when no script is provided", () => {
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement(),
+    });
+    expect(report.metrics.droppedCount).toBe(0);
+    expect(report.issues.some((i) => i.code === "dropped-utterances")).toBe(false);
   });
 
   it("flags severe under-use of the time budget as advisory, without blocking", () => {

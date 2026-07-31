@@ -58,10 +58,11 @@ describe("generateDubScript", () => {
     expect(result.translatedCount).toBe(2);
     expect(result.droppedCount).toBe(0);
     expect(result.script).toMatchObject({
-      version: 1,
+      version: 2,
       videoId: "<videoId>",
       sourceWords: "video/full.local.en.words.json",
       rewriteModel: "test-model",
+      droppedCount: 0,
     });
     expect(result.script.lines[0]).toEqual({
       index: 1,
@@ -100,6 +101,8 @@ describe("generateDubScript", () => {
     expect(result.script.lines).toHaveLength(1);
     expect(result.script.lines[0]?.text).toBe("第一句");
     expect(result.droppedCount).toBe(1);
+    // 落盘的 script.droppedCount 必须和结果一致：门禁只读 script，不读 result。
+    expect(result.script.droppedCount).toBe(1);
     expect(result.translatedCount).toBe(1);
     expect(
       result.warnings.some((w) => w.includes("1/2 utterances have no usable translation")),

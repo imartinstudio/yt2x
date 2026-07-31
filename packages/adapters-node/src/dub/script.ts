@@ -91,11 +91,12 @@ export const generateDubScript = async (
 
   return {
     script: {
-      version: 1,
+      version: 2,
       videoId: input.videoId,
       sourceWords: input.sourceWords,
       rewriteModel: input.model,
       lines,
+      droppedCount,
     },
     warnings,
     translatedCount: lines.length,

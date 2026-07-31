@@ -199,4 +199,8 @@ scene_manifest.json → available_visuals → LLM visual_plan → 图片渲染 �
 
 `dub-plan.json` 的 `version` 为 **2**：时长协商的第三档「事后 LLM 改短」（旧版 1 的 `shorten` 动作与 `shortenCount` 字段）已删除，冗余改在生成配音稿阶段由长度受限翻译挤掉，见 `docs/DUB-TASK.md`。旧版 1 的 `dub-plan.json` 不再兼容读取；它是中间产物，重跑 `yt2x dub` 即可重新生成。`dub-placement.json` 同步移除了 `shortenCount` 字段，但 `version` 保持 1。
 
+`dub-script.json` 的 `version` 为 **2**：切到本地转录通道后 schema 实质变了——`sourceWords`（词级时间戳文件相对路径）取代了旧版 1 的 `sourceSubtitle`（中文字幕文件路径），`sourceText` 从中文原文变成英文原文，`cueIndices` 的语义从「字幕条 index」变成「话语单元 index」，并新增 `droppedCount`（翻译失败、未进入 `lines` 的话语单元数——门禁据此拦截静默丢句，见下）。`readDubScript`（`packages/adapters-node/src/dub/file-store.ts`）用 zod 校验 `version` 与整体形状，版本不匹配或字段缺失时直接拒绝、不返回裸 JSON；`yt2x dub` 全片模式下读到这类拒绝会当作缓存未命中，记一条 warning 后重新生成，不会静默复用旧链路产物。
+
+`dub-report.json`（门禁）中的 `info-loss` 是 advisory（不阻断）：把某行译文的字符数与该行**时长预算**（`dubTranslateCharBudget(targetDurationMs)`）相比，标注明显低于预算、疑似过度精简的行，供人工复核；不再拿英文 `sourceText` 与译文的码点数直接相除——跨语言下那个比例天生偏低，会对忠实翻译系统性误判。`droppedCount`（见上）在门禁里是独立的 hard 指标：只要 `dub-script.json` 里 `droppedCount > 0` 即阻断，因为被丢弃的话语单元在成片里只有 BGM、没有配音也没有字幕，必须显式暴露而不是被 `lineCount` 悄悄吸收。
+
 `--start-ms` / `--end-ms` 时间窗按话语单元过滤（`filterUtterancesByTimeRange`），不再按字幕 cue 过滤；窗口内产物写在 `dub/work/`，不复用或覆盖全片缓存。

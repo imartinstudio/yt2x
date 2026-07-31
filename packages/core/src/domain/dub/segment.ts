@@ -53,6 +53,50 @@ const joinText = (left: string, right: string): string => {
   return needsSpace ? `${left} ${right}` : left + right;
 };
 
+/** 去重后的 cue：文本只保留一份，时间区间和来源 index 都是合并后的。 */
+type CollapsedCue = {
+  startMs: number;
+  endMs: number;
+  text: string;
+  cueIndices: number[];
+};
+
+/**
+ * 折叠紧邻的重复 cue。
+ *
+ * 语义双语投影按宽度切分英文时，会把整句中文复制进切出的每一片，于是
+ * `full.zh.srt` 里连续多条 cue 文本完全相同（实测真实视频 35%-53% 的 cue 命中）。
+ * 双语显示下这几乎看不出来——中文停着不动、英文在往下走，像正常排版——但配音
+ * 是逐句合成的，会把同一句念两遍。
+ *
+ * 两个必须守住的点：
+ *
+ * 1. **时间区间要并进来**，不能只丢掉重复 cue。那段时长本就属于这句话，丢了会让
+ *    `targetDurationMs` 缩水，后续时长协商反而更难压进去。
+ * 2. **只折叠 gap <= maxGapMs 的**。真人把同一句连说两遍必然带换气间隔，间隔超阈值
+ *    的重复是真实语料，必须原样保留。
+ *
+ * 独立于合并循环，是因为句末标点会让 `mergeCuesIntoSegments` 在每条 cue 后立即收句——
+ * 而以句号结尾的重复恰恰最常见，塞在循环里的去重会整段漏掉这一类。
+ */
+const collapseAdjacentDuplicates = (
+  cues: readonly DubCue[],
+  maxGapMs: number,
+): CollapsedCue[] => {
+  const out: CollapsedCue[] = [];
+  for (const cue of cues) {
+    const text = cue.text.trim();
+    const prev = out[out.length - 1];
+    if (prev !== undefined && prev.text === text && cue.startMs - prev.endMs <= maxGapMs) {
+      prev.endMs = cue.endMs;
+      prev.cueIndices.push(cue.index);
+      continue;
+    }
+    out.push({ startMs: cue.startMs, endMs: cue.endMs, text, cueIndices: [cue.index] });
+  }
+  return out;
+};
+
 export type MergeCuesOptions = {
   /**
    * 单句最长时长。超过就断，避免一个长段落被合成一整块——那会让某一句的
@@ -94,6 +138,8 @@ export const mergeCuesIntoSegments = (
   const usable = cues.filter((c) => c.text.trim().length > 0);
   if (usable.length === 0) return [];
 
+  const collapsed = collapseAdjacentDuplicates(usable, maxGapMs);
+
   const segments: DubSegment[] = [];
   let current: { startMs: number; endMs: number; cueIndices: number[]; text: string } | undefined;
 
@@ -109,10 +155,15 @@ export const mergeCuesIntoSegments = (
     current = undefined;
   };
 
-  for (const cue of usable) {
-    const text = cue.text.trim();
+  for (const cue of collapsed) {
+    const text = cue.text;
     if (current === undefined) {
-      current = { startMs: cue.startMs, endMs: cue.endMs, cueIndices: [cue.index], text };
+      current = {
+        startMs: cue.startMs,
+        endMs: cue.endMs,
+        cueIndices: [...cue.cueIndices],
+        text,
+      };
     } else {
       const gap = cue.startMs - current.endMs;
       const merged = joinText(current.text, text);
@@ -120,10 +171,15 @@ export const mergeCuesIntoSegments = (
         cue.endMs - current.startMs > maxDurationMs || merged.length > maxChars;
       if (gap > maxGapMs || wouldOverflow) {
         flush();
-        current = { startMs: cue.startMs, endMs: cue.endMs, cueIndices: [cue.index], text };
+        current = {
+          startMs: cue.startMs,
+          endMs: cue.endMs,
+          cueIndices: [...cue.cueIndices],
+          text,
+        };
       } else {
         current.endMs = cue.endMs;
-        current.cueIndices.push(cue.index);
+        current.cueIndices.push(...cue.cueIndices);
         current.text = merged;
       }
     }

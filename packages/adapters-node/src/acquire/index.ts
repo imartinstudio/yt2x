@@ -25,6 +25,8 @@ export {
   prepareSourceSubtitle,
   detectSubtitleLanguage,
   transcribeLocal,
+  resolveSourceVideo,
+  resolveBurnSourceVideo,
   type RunSubtitlePipelineOptions,
   type RunSubtitlePipelineResult,
   type VideoSubtitleOptions,

@@ -36,6 +36,11 @@ export const registerDubCommand = (program: Command): void => {
       .option("--timing-only", "Stop after natural-rate synthesis and dub-timing.json")
       .option("--skip-burn", "Replace audio only; do not burn the reverse SRT")
       .option("--skip-gate", "Write dub-report.json but do not block on hard gate failures")
+      .option(
+        "--start-ms <ms>",
+        "Only dub cues overlapping [start, end); extracts a temp window (never writes into downloads)",
+      )
+      .option("--end-ms <ms>", "Exclusive end of the dub time window in source timeline ms")
       .option("--force", "Re-run even when dubbed video / intermediate artifacts already exist"),
   ).action(async (flags: DubFlags) => {
     process.exitCode = await executeNativeDub(flags);

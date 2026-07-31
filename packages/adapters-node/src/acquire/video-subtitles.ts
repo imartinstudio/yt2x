@@ -681,6 +681,33 @@ export const resolveSourceVideo = async (
   return fallback === undefined ? undefined : { name: fallback, preferred: false };
 };
 
+/**
+ * Burn/subtitle 取材：只读 downloads（outRoot），永不退回 articles 加工产物。
+ * `articleRoot` 故意留在签名里以便回归测试证明它不是候选。
+ */
+export const resolveBurnSourceVideo = async (input: {
+  outRoot: string;
+  articleRoot: string;
+  videoId: string;
+}): Promise<{ videoPath: string; videoDir: string; preferred: boolean }> => {
+  void input.articleRoot;
+  const videoDir = path.join(input.outRoot, input.videoId);
+  const looked = [path.join(videoDir, "video")];
+  const source = await resolveSourceVideo(videoDir);
+  if (source !== undefined) {
+    return {
+      videoPath: path.join(videoDir, "video", source.name),
+      videoDir,
+      preferred: source.preferred,
+    };
+  }
+  throw new Error(
+    `No source video found for "${input.videoId}". Looked under: ${looked.join(", ")}. ` +
+      `Subtitle burn requires the original under downloads (not processed copies under articles). ` +
+      `Run \`yt2x acquire\` first.`,
+  );
+};
+
 /** Warns when the burn is about to use something other than `full.mp4`. */
 const warnOnUnpreferredSource = (
   warnings: string[],

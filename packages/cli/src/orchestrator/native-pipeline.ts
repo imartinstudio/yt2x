@@ -12,6 +12,7 @@ import {
   listBatchVideosFromOutRoot,
   readProcessStatusMerged,
   readYoutubePageUrl,
+  resolveBurnSourceVideo,
   type ProcessRunner,
 } from "@yt2x/adapters-node";
 import type { PipelineArgs } from "../args/pipeline.js";
@@ -92,8 +93,17 @@ const burnSubtitlesForVideo = async (
 ): Promise<void> => {
   const articleSrtPath = path.join(articleOutRoot, videoId, "video", "full.zh.srt");
   const hasArticleSrt = await access(articleSrtPath).then(() => true).catch(() => false);
+  const source = await resolveBurnSourceVideo({
+    outRoot,
+    articleRoot: articleOutRoot,
+    videoId,
+  });
+  logger.info(
+    { videoId, videoPath: source.videoPath, preferred: source.preferred },
+    "subtitle burn: using source video from downloads",
+  );
   const result = await burnZhSubtitlesForVideo({
-    videoDir: path.join(outRoot, videoId),
+    videoDir: source.videoDir,
     ...(hasArticleSrt ? { srtPath: articleSrtPath } : {}),
     burnedVideoOutDir: articleOutRoot,
     runner: defaultProcessRunner,

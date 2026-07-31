@@ -7,6 +7,7 @@
 - **Node.js**：≥ 22（见根目录 `package.json` 的 `engines`）
 - **包管理**：`pnpm` 9.x（`packageManager` 字段）
 - **采集阶段（`yt2x acquire` / `yt2x pipeline` 默认）**：系统需安装 **`yt-dlp`**、**`ffmpeg`**（Node 采集实现，见 `@yt2x/adapters-node` `src/acquire/`），并按需配置浏览器 cookies 等（见 `yt2x acquire --help`）
+- **硬字幕检测 / 烧录辅助（Python）**：需要 Python 3 + **Pillow**（`detect-burned-subs.py` 与烧录测量脚本）。安装：`python3 -m pip install -r requirements.txt`。demucs / faster-whisper 等为可选重型依赖，不在该文件中。
 
 ## 安装
 

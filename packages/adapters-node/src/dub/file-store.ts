@@ -92,6 +92,54 @@ export const parseDubCues = (srt: string): DubCue[] => {
 export const readDubCues = async (srtPath: string): Promise<DubCue[]> =>
   parseDubCues(await readFile(srtPath, "utf8"));
 
+export type DubCueTimeRange = {
+  /** Inclusive lower bound in source timeline ms. */
+  startMs?: number;
+  /** Exclusive upper bound in source timeline ms. */
+  endMs?: number;
+};
+
+/**
+ * 按源片时间窗筛选字幕，并把时间轴平移到窗口起点（0）。
+ * 用于短样本冒烟：不裁文件进 downloads，只限定处理范围。
+ */
+export const filterDubCuesByTimeRange = (
+  cues: readonly DubCue[],
+  range: DubCueTimeRange,
+): DubCue[] => {
+  const windowStart = range.startMs ?? 0;
+  const windowEnd = range.endMs;
+  if (
+    (range.startMs === undefined || range.startMs <= 0) &&
+    range.endMs === undefined
+  ) {
+    return [...cues];
+  }
+  if (windowEnd !== undefined && windowEnd <= windowStart) {
+    throw new Error(
+      `Invalid dub time range: endMs (${windowEnd}) must be greater than startMs (${windowStart}).`,
+    );
+  }
+
+  const filtered = cues.filter((cue) => {
+    if (cue.endMs <= windowStart) return false;
+    if (windowEnd !== undefined && cue.startMs >= windowEnd) return false;
+    return true;
+  });
+
+  return filtered.map((cue, index) => {
+    const startMs = Math.max(cue.startMs, windowStart) - windowStart;
+    const endMs =
+      (windowEnd !== undefined ? Math.min(cue.endMs, windowEnd) : cue.endMs) - windowStart;
+    return {
+      index: index + 1,
+      startMs,
+      endMs: Math.max(endMs, startMs + 1),
+      text: cue.text,
+    };
+  });
+};
+
 /** 临时文件 + rename。中途崩溃不会留下半截 JSON 让下一次运行读到坏数据。 */
 const atomicWrite = async (filePath: string, content: string | Uint8Array): Promise<void> => {
   await mkdir(path.dirname(filePath), { recursive: true });
@@ -203,31 +251,29 @@ export const writeDubGateReport = async (
 };
 
 /**
- * 解析源视频路径：优先 article 目录下的 video/full.mp4，其次下载目录。
- * 与 subtitle 烧录同一套 resolveSourceVideo 规则。
+ * 解析源视频路径：只从下载目录取原始素材。
+ * 内容目录（articles）是产物写入目标，不得作为素材来源；缺失时明确报错。
+ * `articleRoot` 保留在签名中供调用方传入，但故意不参与候选，避免退回加工产物。
  */
 export const resolveDubSourceVideo = async (input: {
   articleRoot: string;
   outRoot: string;
   videoId: string;
 }): Promise<{ videoPath: string; videoDir: string; preferred: boolean }> => {
-  const candidates = [
-    path.join(input.articleRoot, input.videoId),
-    path.join(input.outRoot, input.videoId),
-  ];
-  const looked: string[] = [];
-  for (const videoDir of candidates) {
-    looked.push(path.join(videoDir, "video"));
-    const source = await resolveSourceVideo(videoDir);
-    if (source !== undefined) {
-      return {
-        videoPath: path.join(videoDir, "video", source.name),
-        videoDir,
-        preferred: source.preferred,
-      };
-    }
+  void input.articleRoot;
+  const videoDir = path.join(input.outRoot, input.videoId);
+  const looked = [path.join(videoDir, "video")];
+  const source = await resolveSourceVideo(videoDir);
+  if (source !== undefined) {
+    return {
+      videoPath: path.join(videoDir, "video", source.name),
+      videoDir,
+      preferred: source.preferred,
+    };
   }
   throw new Error(
-    `No source video found for "${input.videoId}". Looked under: ${looked.join(", ")}. Run \`yt2x acquire\` first.`,
+    `No source video found for "${input.videoId}". Looked under: ${looked.join(", ")}. ` +
+      `Dubbing requires the original under downloads (not processed copies under articles). ` +
+      `Run \`yt2x acquire\` first.`,
   );
 };

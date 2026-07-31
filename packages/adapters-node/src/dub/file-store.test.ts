@@ -12,10 +12,12 @@ import {
   readDubCues,
   readDubScript,
   readDubTimingReport,
+  resolveDubSourceVideo,
   resolveZhSubtitlePath,
   writeDubLineAudio,
   writeDubScript,
   writeDubTimingReport,
+  filterDubCuesByTimeRange,
 } from "./file-store.js";
 
 const tmpRoot = (): Promise<string> => mkdtemp(path.join(os.tmpdir(), "yt2x-dub-store-"));
@@ -121,6 +123,65 @@ describe("resolveZhSubtitlePath", () => {
     await expect(
       resolveZhSubtitlePath({ articleRoot, outRoot, videoId: "<videoId>" }),
     ).rejects.toThrow(/articles.*downloads/su);
+  });
+});
+
+const seedSourceMp4 = async (root: string, videoId: string, marker: string): Promise<string> => {
+  const dir = path.join(root, videoId, "video");
+  await mkdir(dir, { recursive: true });
+  const filePath = path.join(dir, "full.mp4");
+  await writeFile(filePath, marker, "utf8");
+  return filePath;
+};
+
+describe("resolveDubSourceVideo", () => {
+  it("selects the downloads original when both directories have a source video", async () => {
+    const root = await tmpRoot();
+    const articleRoot = path.join(root, "articles");
+    const outRoot = path.join(root, "downloads");
+    await seedSourceMp4(articleRoot, "<videoId>", "article-processed");
+    const downloadsPath = await seedSourceMp4(outRoot, "<videoId>", "downloads-original");
+
+    const resolved = await resolveDubSourceVideo({
+      articleRoot,
+      outRoot,
+      videoId: "<videoId>",
+    });
+
+    expect(resolved.videoPath).toBe(downloadsPath);
+    expect(await readFile(resolved.videoPath, "utf8")).toBe("downloads-original");
+  });
+
+  it("errors when the original is missing instead of silently using the article copy", async () => {
+    const root = await tmpRoot();
+    const articleRoot = path.join(root, "articles");
+    const outRoot = path.join(root, "downloads");
+    await seedSourceMp4(articleRoot, "<videoId>", "article-processed");
+
+    await expect(
+      resolveDubSourceVideo({ articleRoot, outRoot, videoId: "<videoId>" }),
+    ).rejects.toThrow(/No source video found.*downloads/isu);
+  });
+});
+
+describe("filterDubCuesByTimeRange", () => {
+  const cues = parseDubCues(SRT);
+
+  it("keeps all cues when no range is set", () => {
+    expect(filterDubCuesByTimeRange(cues, {})).toEqual(cues);
+  });
+
+  it("keeps only overlapping cues and shifts them to the window origin", () => {
+    expect(filterDubCuesByTimeRange(cues, { startMs: 2_000, endMs: 5_000 })).toEqual([
+      { index: 1, startMs: 0, endMs: 1_500, text: "我们先看一下" },
+      { index: 2, startMs: 1_500, endMs: 3_000, text: "这个工具怎么用" },
+    ]);
+  });
+
+  it("rejects an inverted range", () => {
+    expect(() => filterDubCuesByTimeRange(cues, { startMs: 5_000, endMs: 1_000 })).toThrow(
+      /endMs.*startMs/iu,
+    );
   });
 });
 

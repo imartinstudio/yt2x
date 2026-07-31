@@ -48,6 +48,7 @@ export const executeNativeSubtitle = async (flags: SubtitleFlags): Promise<numbe
   const videoId = sanitizeVideoId(flags.videoId);
 
   const outRoot = flags.outDir !== undefined ? path.resolve(flags.outDir) : path.resolve(DEFAULT_OUT_DIR);
+  // Burn/subtitle 素材只认 downloads；articles 仅作产物写入目标。见 resolveBurnSourceVideo。
   const videoDir = path.join(outRoot, videoId);
 
   const subtitle: VideoSubtitleOptions = {

@@ -307,6 +307,19 @@ const verifyFramePair = async (
   }
 };
 
+/** Distance in seconds from `timestamp` to a cue's covered range (0 if inside it). */
+const cueGap = (cue: { start: number; end: number }, timestamp: number): number =>
+  timestamp < cue.start ? cue.start - timestamp : timestamp > cue.end ? timestamp - cue.end : 0;
+
+/** Find the cue whose range is closest to `timestamp` when no cue covers it directly. */
+const nearestCueByGap = (
+  cues: readonly { start: number; end: number }[],
+  timestamp: number,
+): { start: number; end: number } =>
+  cues.reduce((closest, cue) =>
+    cueGap(cue, timestamp) < cueGap(closest, timestamp) ? cue : closest,
+  );
+
 /**
  * After burning subtitles, extract frames at start (10%), middle (50%),
  * and end (90%) of the subtitle time range. Compare each burned frame
@@ -345,8 +358,14 @@ export const verifyBurnedSubtitles = async (
 
   const checks: VerificationResult["checks"] = [];
   for (const cp of checkPoints) {
-    const nearestCue = cues.find((c) => c.start <= cp.timestamp && c.end >= cp.timestamp);
-    const actualTs = nearestCue ? (nearestCue.start + nearestCue.end) / 2 : cp.timestamp;
+    // A sample timestamp that lands in the gap between two cues means the screen genuinely
+    // has no subtitle at that instant — probing with the raw timestamp would always FAIL.
+    // Snap to the nearest cue's midpoint instead, so we verify the subtitle that's actually
+    // closest to the intended sample point rather than an empty frame.
+    const nearestCue =
+      cues.find((c) => c.start <= cp.timestamp && c.end >= cp.timestamp) ??
+      nearestCueByGap(cues, cp.timestamp);
+    const actualTs = (nearestCue.start + nearestCue.end) / 2;
 
     const result = await verifyFramePair(burnedPath, originalPath, actualTs, runner, signal);
     checks.push({ position: cp.position, timestamp: actualTs, ...result });

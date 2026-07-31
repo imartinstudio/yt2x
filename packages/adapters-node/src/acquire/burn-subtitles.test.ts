@@ -305,6 +305,64 @@ End subtitle
     expect(uniqueTs[2]!).toBeGreaterThan(33);
     expect(uniqueTs[2]!).toBeLessThan(40);
   });
+
+  it("snaps a sample point that falls in a gap between cues to the nearest cue's midpoint, instead of failing", async () => {
+    // Two cues with a wide gap between them: sample points at 10/50/85% of the overall
+    // range mostly land in that gap, where no cue covers the timestamp directly.
+    const srtPath = await seedSrt(`1
+00:00:01,000 --> 00:00:03,000
+Start subtitle
+
+2
+00:00:27,000 --> 00:00:29,000
+End subtitle
+`);
+
+    const checkTimestamps: number[] = [];
+    const runner: ProcessRunner = {
+      run: async (spec: ProcessSpec): Promise<ProcessResult> => {
+        if (spec.command === "ffmpeg") {
+          const args = spec.args ?? [];
+          const ssIdx = args.indexOf("-ss");
+          if (ssIdx >= 0 && ssIdx + 1 < args.length) {
+            const val = parseFloat(args[ssIdx + 1]!);
+            if (!isNaN(val)) checkTimestamps.push(val);
+          }
+          for (let i = args.length - 1; i >= 0; i--) {
+            if (args[i]?.endsWith(".png")) {
+              const dir = path.dirname(args[i]!);
+              await mkdir(dir, { recursive: true });
+              await writeFile(args[i]!, "");
+              break;
+            }
+          }
+          return makeResult(0, spec);
+        }
+        if (spec.command === "python3") {
+          // Always report a visible subtitle: a raw-timestamp fallback landing in the gap
+          // would still FAIL here (nothing about the mock forces a pass), so a passing
+          // result confirms the sample point was snapped onto a cue that actually has text.
+          return makeResult(0, spec, "PASS score=85");
+        }
+        return makeResult(1, spec);
+      },
+    };
+
+    const result = await verifyBurnedSubtitles("/tmp/fake.mp4", "/tmp/fake-orig.mp4", srtPath, runner);
+
+    expect(result.passed).toBe(true);
+    // Raw checkpoints (duration=28, firstCueStart=1) would be 3.8 / 15 / 24.8 — none of
+    // those land inside either cue, so none should ever be used as the sample timestamp.
+    for (const raw of [3.8, 15, 24.8]) {
+      expect(checkTimestamps.some((ts) => Math.abs(ts - raw) < 0.05)).toBe(false);
+    }
+    // Every sampled timestamp must fall inside one of the two cues' ranges.
+    for (const ts of checkTimestamps) {
+      const insideCue1 = ts >= 1 && ts <= 3;
+      const insideCue2 = ts >= 27 && ts <= 29;
+      expect(insideCue1 || insideCue2).toBe(true);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

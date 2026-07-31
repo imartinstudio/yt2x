@@ -10,6 +10,7 @@ import {
   executeNativeAcquire,
   extractVideoId,
   listBatchVideosFromOutRoot,
+  probeDemucs,
   readProcessStatusMerged,
   readYoutubePageUrl,
   resolveBurnSourceVideo,
@@ -19,7 +20,7 @@ import {
 } from "@yt2x/adapters-node";
 import type { PipelineArgs } from "../args/pipeline.js";
 import { executeNativeArticle } from "./native-article.js";
-import { executeNativeDub } from "./native-dub.js";
+import { executeNativeDub, resolveDubEngine, resolveDubTts } from "./native-dub.js";
 import { executeNativeNotes } from "./native-notes.js";
 import { executeNativePublish } from "./native-publish.js";
 import { runDeconstructCommand } from "../commands/deconstruct.js";
@@ -462,9 +463,49 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
     }
 
     // 配音只存在于本地转录通道（docs/dub-context-glossary）：--dub 时确保每个视频都有本地
-    // 词级时间戳，缺失就地转写。放在 notes/article 之前 fail fast——不然要等 dub 阶段
-    // 读 words.json 失败时，notes + article 的 LLM 费用已经花完了。
+    // 词级时间戳，缺失就地转写；同时前置 Demucs 探测与 TTS 凭据校验。三者都放在
+    // notes/article 之前 fail fast——不然要等 dub 阶段才报错时，notes + article 的整片
+    // LLM 翻译费用已经花完了（demucs 缺失、ElevenLabs 凭据缺失，此前都只在 dub 阶段内部
+    // 才被发现）。
     if (dubRequested) {
+      let dubEngine;
+      try {
+        dubEngine = resolveDubEngine(args.control.dubEngine);
+      } catch (err: unknown) {
+        logger.error(
+          { err: err instanceof Error ? err.message : String(err) },
+          "yt2x pipeline --dub: invalid --dub-engine",
+        );
+        finalExitCode = NATIVE_EXIT.CONFIG_MISSING;
+        return finalExitCode;
+      }
+
+      const resolvedTts = resolveDubTts({ dubEngine: args.control.dubEngine }, dubEngine);
+      if (!resolvedTts.ok) {
+        logger.error(
+          { reason: resolvedTts.reason },
+          "yt2x pipeline --dub: TTS credentials unavailable — checked before notes/article " +
+            "so a missing ElevenLabs key doesn't waste an already-paid-for translation pass",
+        );
+        finalExitCode = resolvedTts.exitCode;
+        return finalExitCode;
+      }
+
+      try {
+        await probeDemucs({
+          ...(args.control.pythonPath !== undefined ? { pythonPath: args.control.pythonPath } : {}),
+        });
+      } catch (err: unknown) {
+        logger.error(
+          { err: err instanceof Error ? err.message : String(err) },
+          "yt2x pipeline --dub: demucs unavailable — install demucs, or pass --python-path " +
+            "to a Python that has it (e.g. `--python-path .venv-demucs/bin/python3`); checked " +
+            "before notes/article to avoid wasted LLM cost",
+        );
+        finalExitCode = NATIVE_EXIT.CONFIG_MISSING;
+        return finalExitCode;
+      }
+
       for (const id of videoIds) {
         const alreadyTranscribed = await resolveDubWordsPath({ outRoot, videoId: id })
           .then(() => true)
@@ -606,6 +647,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
           llmProvider: args.llm.provider,
           ...(args.llm.model !== undefined ? { llmModel: args.llm.model } : {}),
           ...(args.llm.baseUrl !== undefined ? { llmBaseUrl: args.llm.baseUrl } : {}),
+          ...(args.control.pythonPath !== undefined ? { pythonPath: args.control.pythonPath } : {}),
         });
         progress.record(stageTimingKey("dub", id), Math.round(performance.now() - t0));
         if (code !== 0) {

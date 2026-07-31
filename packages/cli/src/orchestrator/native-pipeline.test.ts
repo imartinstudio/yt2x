@@ -35,9 +35,13 @@ vi.mock("./native-stage-common.js", async (importOriginal) => {
 });
 
 const executeNativeDubMock = vi.hoisted(() => vi.fn(async () => 0));
-vi.mock("./native-dub.js", () => ({
-  executeNativeDub: executeNativeDubMock,
-}));
+vi.mock("./native-dub.js", async (importOriginal) => {
+  const actual = await importOriginal<object>();
+  return {
+    ...actual,
+    executeNativeDub: executeNativeDubMock,
+  };
+});
 
 const executeNativeAcquireMock = vi.hoisted(() => vi.fn(async (opts: { outDir: string }) => {
   const videoId = "abc123def45";
@@ -49,6 +53,9 @@ const burnZhSubtitlesForVideoMock = vi.hoisted(() => vi.fn(async () => ({ burned
 const transcribeLocalMock = vi.hoisted(() =>
   vi.fn(async () => ({ srtPath: "video/full.local.en.srt", wordsPath: "video/full.local.en.words.json", cueCount: 1 })),
 );
+// pipeline --dub 的前置块会先探测 demucs 才跑转写/notes/article；默认让它成功，
+// 单独的 fail-fast 测试再覆盖成拒绝。
+const probeDemucsMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/python3"));
 
 vi.mock("@yt2x/adapters-node", async (importOriginal) => {
   const actual = await importOriginal();
@@ -57,6 +64,7 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
     executeNativeAcquire: executeNativeAcquireMock,
     burnZhSubtitlesForVideo: burnZhSubtitlesForVideoMock,
     transcribeLocal: transcribeLocalMock,
+    probeDemucs: probeDemucsMock,
   };
 });
 
@@ -88,6 +96,10 @@ beforeEach(() => {
     wordsPath: "video/full.local.en.words.json",
     cueCount: 1,
   }));
+  probeDemucsMock.mockClear();
+  probeDemucsMock.mockImplementation(async () => "/usr/bin/python3");
+  vi.stubEnv("ELEVENLABS_API_KEY", "test-elevenlabs-key");
+  vi.stubEnv("ELEVENLABS_VOICE_ID", "test-voice-id");
 });
 
 describe("mergePipelineExitCode", () => {
@@ -405,6 +417,50 @@ describe("runNativePipeline", () => {
 
     const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
     expect(code).toBe(2); // NATIVE_EXIT.CONFIG_MISSING
+    expect(executeNativeNotesMock).not.toHaveBeenCalled();
+    expect(executeNativeArticleMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).not.toHaveBeenCalled();
+  });
+
+  it("fails fast before notes/article/transcription when demucs is unavailable", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-demucs-unavailable-"));
+    const vid = "dubVid5";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    probeDemucsMock.mockImplementation(async () => {
+      throw Object.assign(new Error("demucs not found"), { name: "DemucsError" });
+    });
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(2); // NATIVE_EXIT.CONFIG_MISSING
+    expect(transcribeLocalMock).not.toHaveBeenCalled();
+    expect(executeNativeNotesMock).not.toHaveBeenCalled();
+    expect(executeNativeArticleMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).not.toHaveBeenCalled();
+  });
+
+  it("fails fast before notes/article/transcription when ElevenLabs credentials are missing", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-tts-missing-"));
+    const vid = "dubVid6";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    vi.stubEnv("ELEVENLABS_API_KEY", "");
+    vi.stubEnv("XI_API_KEY", "");
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "elevenlabs" },
+      stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(2); // NATIVE_EXIT.CONFIG_MISSING
+    expect(probeDemucsMock).not.toHaveBeenCalled();
+    expect(transcribeLocalMock).not.toHaveBeenCalled();
     expect(executeNativeNotesMock).not.toHaveBeenCalled();
     expect(executeNativeArticleMock).not.toHaveBeenCalled();
     expect(executeNativeDubMock).not.toHaveBeenCalled();

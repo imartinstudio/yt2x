@@ -148,18 +148,28 @@ const fileExists = async (candidate: string): Promise<boolean> =>
     .then(() => true)
     .catch(() => false);
 
-const resolveDubEngine = (raw: string | undefined): DubEngineId => {
+/**
+ * 导出给 native-pipeline.ts 复用：`pipeline --dub` 需要在 notes/article 之前就校验
+ * TTS 凭据是否可用（见下方 resolveDubTts 的导出注释），而引擎解析是凭据校验的前置步骤。
+ */
+export const resolveDubEngine = (raw: string | undefined): DubEngineId => {
   const value = (raw ?? "edge-tts").trim().toLowerCase();
   if (value === "edge-tts" || value === "edge") return "edge-tts";
   if (value === "elevenlabs" || value === "eleven") return "elevenlabs";
   throw new Error(`Unknown --dub-engine "${raw}". Use edge-tts or elevenlabs.`);
 };
 
-type ResolvedTts =
+export type ResolvedTts =
   | { ok: true; tts: TtsPort; voice: string; engine: DubEngineId }
   | { ok: false; exitCode: number; reason: string };
 
-const resolveDubTts = (flags: DubFlags, engine: DubEngineId): ResolvedTts => {
+/**
+ * 导出给 native-pipeline.ts 复用：`pipeline --dub` 默认引擎是 elevenlabs，而这里的凭据
+ * 校验此前只在 executeNativeDub 内部、script 生成**之后**才跑——pipeline 场景下等于
+ * notes+article 的整片 LLM 翻译已经付过费才报 CONFIG_MISSING。构造适配器本身不产生
+ * 网络请求，只在这里读环境变量/flags，可以安全地在 notes/article 之前调用一次。
+ */
+export const resolveDubTts = (flags: DubFlags, engine: DubEngineId): ResolvedTts => {
   if (engine === "edge-tts") {
     return {
       ok: true,

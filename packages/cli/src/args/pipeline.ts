@@ -146,6 +146,11 @@ export const ControlOptionsSchema = z.object({
   dub: z.boolean().default(false),
   /** 配音引擎；pipeline --dub 默认 elevenlabs（成片），可改 edge-tts。 */
   dubEngine: z.enum(["edge-tts", "elevenlabs"]).default("elevenlabs"),
+  /**
+   * 配音 Demucs 探测/分离用的 Python 解释器；`dub` 单命令已支持同名 flag，pipeline 此前
+   * 一直没有透传，本机 demucs 只装在虚拟环境时 `pipeline --dub` 永远探测不到。
+   */
+  pythonPath: z.string().optional(),
 });
 export type ControlOptions = z.infer<typeof ControlOptionsSchema>;
 

@@ -70,5 +70,5 @@ packages/cli/.../native-pipeline.ts             --dub → subtitle 只翻译；a
 
 ## 待定（可后续调）
 
-- 门禁硬阈值在裁掉 TTS 首尾静音（issue #108）后按新口径重标：`advisoryMedianRatio=1.15`、`advisoryOverflowFraction=0.35`
+- 门禁硬阈值在裁掉 TTS 前置静音（issue #108 / PR #112）后按新口径重标：`advisoryMedianRatio=1.15`、`advisoryOverflowFraction=0.35`；只裁前置、保留句尾
 - edge-tts / ElevenLabs 默认音色试听后再定

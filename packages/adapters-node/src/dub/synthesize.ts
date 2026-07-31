@@ -4,11 +4,13 @@ import { defaultProcessRunner, type ProcessRunner } from "../process/index.js";
 import { writeDubLineAudio } from "./file-store.js";
 
 /**
- * 逐句合成 + 裁首尾静音 + ffprobe 实测 + 汇总时长报告。
+ * 逐句合成 + 裁前置静音 + ffprobe 实测 + 汇总时长报告。
  *
  * PR1 的全部意义就是这份报告：PR3 的门禁阈值必须从真实分布里定，拍脑袋的阈值会全错。
  * edge-tts / ElevenLabs 文件头常带 ~200ms 前置静音；若不裁掉，字幕会早于人声，
- * 且协商会按虚高时长做不必要的加速/改短（issue #108）。
+ * 且协商会按虚高时长做不必要的加速/改短（issue #108 / PR #112）。
+ *
+ * 只裁前置、保留句尾：句尾静音是自然停顿/轻声尾音，与引擎 padding 同能量口径无法区分。
  */
 
 /**
@@ -20,13 +22,15 @@ import { writeDubLineAudio } from "./file-store.js";
 export const SYNTHESIS_RATE = 1;
 
 /**
- * 只剥首尾静音，不动句中停顿（语气的一部分）。
- * 用 areverse 双边剥头，避免 `stop_periods=1` 把句中气口当成片尾静音直接砍掉
- *（issue #108 实测：同阈值下 stop_periods 会把 ~6s 句子裁成 ~0.4s）。
- * 检测口径仍与实测一致：-45dB / 50ms。
+ * 只剥文件头的引擎 padding，不动句中气口与句尾停顿。
+ * 检测口径与 issue #108 实测一致：-45dB / 50ms。
+ * 不用 areverse/stop_periods：句尾轻声会被同一阈值误判成静音削掉（PR #112 听感验收）。
  */
-export const TTS_EDGE_SILENCE_TRIM_FILTER =
-  "silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse";
+export const TTS_LEADING_SILENCE_TRIM_FILTER =
+  "silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB";
+
+/** @deprecated 使用 {@link TTS_LEADING_SILENCE_TRIM_FILTER}；保留别名以免外部引用断裂。 */
+export const TTS_EDGE_SILENCE_TRIM_FILTER = TTS_LEADING_SILENCE_TRIM_FILTER;
 
 const FFPROBE_TIMEOUT_MS = 15_000;
 const FFMPEG_TRIM_TIMEOUT_MS = 120_000;
@@ -70,8 +74,8 @@ export const median = (values: readonly number[]): number => {
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 };
 
-/** 就地裁掉音频文件首尾静音；句中静音保留。 */
-export const trimLeadingTrailingSilence = async (input: {
+/** 就地裁掉音频文件前置静音；句中与句尾保留。 */
+export const trimLeadingSilence = async (input: {
   filePath: string;
   runner?: ProcessRunner;
   ffmpegPath?: string;
@@ -88,7 +92,7 @@ export const trimLeadingTrailingSilence = async (input: {
         "-i",
         input.filePath,
         "-af",
-        TTS_EDGE_SILENCE_TRIM_FILTER,
+        TTS_LEADING_SILENCE_TRIM_FILTER,
         "-c:a",
         "libmp3lame",
         "-q:a",
@@ -109,6 +113,9 @@ export const trimLeadingTrailingSilence = async (input: {
     throw err;
   }
 };
+
+/** @deprecated 使用 {@link trimLeadingSilence}。 */
+export const trimLeadingTrailingSilence = trimLeadingSilence;
 
 export type SynthesizeDubLineInput = {
   tts: TtsPort;
@@ -133,7 +140,7 @@ export type SynthesizeDubLineResult = {
 };
 
 /**
- * 共享「合成单行」缝：TTS → 落盘 → 裁首尾静音 → 实测裁剪后时长。
+ * 共享「合成单行」缝：TTS → 落盘 → 裁前置静音 → 实测裁剪后时长。
  * 初次合成与协商重合成都必须走这里，避免第三个引擎静默带回前置静音。
  */
 export const synthesizeDubLine = async (
@@ -147,7 +154,7 @@ export const synthesizeDubLine = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
   const written = await writeDubLineAudio(input.dubDir, input.index, result.audio, result.format);
-  await trimLeadingTrailingSilence({
+  await trimLeadingSilence({
     filePath: written.absolutePath,
     ...(input.runner !== undefined ? { runner: input.runner } : {}),
     ...(input.ffmpegPath !== undefined ? { ffmpegPath: input.ffmpegPath } : {}),

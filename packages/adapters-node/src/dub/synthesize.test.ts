@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { DubScript, DubScriptLine, TtsPort, TtsRequest } from "@yt2x/core";
 import {
   SYNTHESIS_RATE,
-  TTS_EDGE_SILENCE_TRIM_FILTER,
+  TTS_LEADING_SILENCE_TRIM_FILTER,
   median,
   probeAudioDurationMs,
   synthesizeDubLine,
@@ -104,7 +104,7 @@ const probeRunner = (durations: readonly string[]): { runner: ProcessRunner; spe
 const tmpDubDir = (): Promise<string> => mkdtemp(path.join(os.tmpdir(), "yt2x-dub-"));
 
 describe("synthesizeDubLine", () => {
-  it("trims edge silence before probing and returns the post-trim duration", async () => {
+  it("trims leading silence before probing and returns the post-trim duration", async () => {
     const dubDir = await tmpDubDir();
     const { tts } = stubTts();
     // 若未裁剪就测时长，用例会误用「虚高」值；这里只提供裁剪后的秒数
@@ -126,11 +126,10 @@ describe("synthesizeDubLine", () => {
     const ffmpegSpecs = specs.filter((s) => !isFfprobeSpec(s));
     expect(ffmpegSpecs.length).toBeGreaterThanOrEqual(1);
     const af = ffmpegSpecs[0]!.args?.[ffmpegSpecs[0]!.args.indexOf("-af") + 1];
-    expect(af).toBe(TTS_EDGE_SILENCE_TRIM_FILTER);
+    expect(af).toBe(TTS_LEADING_SILENCE_TRIM_FILTER);
     expect(af).toContain("start_periods=1");
-    expect(af).toContain("areverse");
-    expect(af).not.toContain("stop_periods=-1");
-    expect(af).not.toMatch(/stop_periods=1(?!\d)/);
+    expect(af).not.toContain("areverse");
+    expect(af).not.toContain("stop_periods");
   });
 });
 

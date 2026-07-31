@@ -3,7 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DubScript, DubScriptLine, TtsPort, TtsRequest } from "@yt2x/core";
-import { SYNTHESIS_RATE, median, probeAudioDurationMs, synthesizeDubLines } from "./synthesize.js";
+import {
+  SPEECH_END_TOLERANCE_MS,
+  SYNTHESIS_RATE,
+  assertSpeechEndWithinFile,
+  median,
+  probeAudioDurationMs,
+  synthesizeDubLines,
+} from "./synthesize.js";
 import type { ProcessResult, ProcessRunner, ProcessSpec } from "../process/index.js";
 
 const okResult = (spec: ProcessSpec, stdout: string): ProcessResult => ({
@@ -140,6 +147,46 @@ describe("probeAudioDurationMs", () => {
   it("throws on a zero duration", async () => {
     const { runner } = probeRunner(["0.000000"]);
     await expect(probeAudioDurationMs({ filePath: "/tmp/a.mp3", runner })).rejects.toThrow();
+  });
+});
+
+describe("assertSpeechEndWithinFile", () => {
+  it("passes when the engine cue end matches the probed duration exactly", () => {
+    expect(() =>
+      assertSpeechEndWithinFile({ lineIndex: 1, speechEndMs: 5_736, fileDurationMs: 5_736 }),
+    ).not.toThrow();
+  });
+
+  it("passes on a 1ms independent-rounding mismatch (the real edge-tts case)", () => {
+    expect(() =>
+      assertSpeechEndWithinFile({ lineIndex: 1, speechEndMs: 5_737, fileDurationMs: 5_736 }),
+    ).not.toThrow();
+  });
+
+  it(`passes at the tolerance boundary (${SPEECH_END_TOLERANCE_MS}ms over)`, () => {
+    expect(() =>
+      assertSpeechEndWithinFile({
+        lineIndex: 1,
+        speechEndMs: 5_736 + SPEECH_END_TOLERANCE_MS,
+        fileDurationMs: 5_736,
+      }),
+    ).not.toThrow();
+  });
+
+  it("still throws just past the tolerance boundary", () => {
+    expect(() =>
+      assertSpeechEndWithinFile({
+        lineIndex: 1,
+        speechEndMs: 5_736 + SPEECH_END_TOLERANCE_MS + 1,
+        fileDurationMs: 5_736,
+      }),
+    ).toThrow(/exceeds audio file duration/iu);
+  });
+
+  it("throws on a large genuine mismatch, not just tolerance-sized ones", () => {
+    expect(() =>
+      assertSpeechEndWithinFile({ lineIndex: 1, speechEndMs: 3_000, fileDurationMs: 2_000 }),
+    ).toThrow(/exceeds audio file duration/iu);
   });
 });
 
@@ -323,6 +370,38 @@ describe("synthesizeDubLines", () => {
         runner,
       }),
     ).rejects.toThrow(/exceeds audio file duration/iu);
+  });
+
+  it("tolerates a 1ms independent-rounding mismatch between cue end and probed duration", async () => {
+    const dubDir = await tmpDubDir();
+    const tts: TtsPort = {
+      id: "stub-tts",
+      rateRange: { min: 0.5, max: 2 },
+      synthesize: async (req) => ({
+        audio: new Uint8Array([1]),
+        format: "mp3",
+        voice: req.voice,
+        rate: 1,
+        speechTiming: {
+          speechStartMs: 0,
+          speechEndMs: 2_001,
+          speechDurationMs: 2_001,
+        },
+      }),
+    };
+    // ffprobe reports 2.000s while the engine's own subtitle cue says 2001ms —
+    // exactly the kind of 1ms independent-rounding drift seen on real edge-tts output.
+    const { runner } = probeRunner(["2.0"]);
+
+    await expect(
+      synthesizeDubLines({
+        tts,
+        script: scriptOf([line(1, 2_000, "1ms 边界")]),
+        voice: "v",
+        dubDir,
+        runner,
+      }),
+    ).resolves.toBeDefined();
   });
 
   it("records ratio 0 rather than Infinity for a zero-length target", async () => {

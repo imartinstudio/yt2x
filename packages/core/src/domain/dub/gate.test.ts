@@ -256,6 +256,50 @@ describe("evaluateDubGate", () => {
     expect(report.issues.some((i) => i.code === "info-loss")).toBe(false);
   });
 
+  it("skips info-loss evaluation entirely when the time budget itself is unusable, instead of scoring against a clamped budget of 1", () => {
+    // dubTranslateCharBudget clamps its return value to >=1 even when the raw available
+    // duration is below the fixed TTS overhead (1873ms) — a structurally unusable budget.
+    // Before the fix, the guard compared against that clamped value (always >0) and never
+    // skipped, so an empty translation on one of these short lines picked up a spurious
+    // "info-loss" advisory on top of the (correct) hard empty-text issue. The budget being
+    // unusable means there's nothing meaningful to score, so no info-loss issue should fire.
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "",
+            startMs: 0,
+            endMs: 1000,
+            durationMs: 1000,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      }),
+      script: {
+        ...script(),
+        lines: [
+          {
+            index: 1,
+            startMs: 0,
+            endMs: 1000,
+            targetDurationMs: 1000,
+            text: "",
+            sourceText: "Um.",
+            cueIndices: [1],
+          },
+        ],
+      },
+    });
+    expect(report.issues.some((i) => i.code === "empty-text")).toBe(true);
+    expect(report.issues.some((i) => i.code === "info-loss")).toBe(false);
+    expect(report.metrics.infoLossCount).toBe(0);
+  });
+
   it("records advisory issues without blocking", () => {
     const report = evaluateDubGate({
       videoId: "vid",

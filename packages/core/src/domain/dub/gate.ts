@@ -198,9 +198,13 @@ export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
     for (const scriptLine of input.script.lines) {
       const placed = byIndex.get(scriptLine.index);
       if (placed === undefined) continue;
+      // dubTranslateCharBudget clamps its result to >=1 (see translate-prompts.ts), so
+      // checking the clamped value here would never skip anything — about 1/5 of real
+      // utterances have targetDurationMs below the fixed overhead (budget genuinely
+      // unusable) and this guard must catch those against the *raw* duration instead.
+      if (scriptLine.targetDurationMs <= DEFAULT_SPEECH_RATE.fixedOverheadMs) continue;
       const budgetChars = dubTranslateCharBudget(scriptLine.targetDurationMs, DEFAULT_SPEECH_RATE);
       const finalLen = charLen(placed.text);
-      if (budgetChars <= 0) continue;
       const retain = finalLen / budgetChars;
       if (retain < thresholds.advisoryTextBudgetRetainFraction) {
         infoLossCount += 1;

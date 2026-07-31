@@ -203,9 +203,10 @@ export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
       const placed = byIndex.get(scriptLine.index);
       if (placed === undefined) continue;
       // dubTranslateCharBudget clamps its result to >=1 (see translate-prompts.ts), so
-      // checking the clamped value here would never skip anything — about 1/5 of real
-      // utterances have targetDurationMs below the fixed overhead (budget genuinely
-      // unusable) and this guard must catch those against the *raw* duration instead.
+      // checking the clamped value here would never skip anything — measured on a real
+      // 149-utterance video, 13.4% of utterances have targetDurationMs at or below the
+      // fixed overhead (budget genuinely unusable) and this guard must catch those
+      // against the *raw* duration instead.
       if (scriptLine.targetDurationMs <= DEFAULT_SPEECH_RATE.fixedOverheadMs) continue;
       const budgetChars = dubTranslateCharBudget(scriptLine.targetDurationMs, DEFAULT_SPEECH_RATE);
       const finalLen = charLen(placed.text);

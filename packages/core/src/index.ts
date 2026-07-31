@@ -33,6 +33,8 @@ export type {
   TtsPort,
   TtsRequest,
   TtsResult,
+  TtsSpeechCue,
+  TtsSpeechTiming,
   TtsAudioFormat,
   TtsRateRange,
   TtsErrorKind,

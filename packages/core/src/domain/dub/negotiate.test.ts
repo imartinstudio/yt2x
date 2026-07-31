@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PREFERRED_RATE_MAX,
+  DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
   buildNegotiateInputs,
   effectiveRateMax,
   planDubNegotiation,
@@ -166,14 +167,15 @@ describe("planDubNegotiation", () => {
   });
 
   it("carries unabsorbed drift to extendMs at the end", () => {
-    // 溢出 400ms，gap 只有 100ms（可吸收 20ms）→ 残留 380
+    // 溢出 400ms，gap 只有 100ms（可吸收 20ms）→ 残留 380；再加最小句间停顿抬到 1550
     const plan = planDubNegotiation({
       videoId: "vid",
       rateRange,
       lines: [line(1, 0, 1000, 1400, "短"), line(2, 1100, 2100, 900, "短二")],
     });
     expect(plan.lines[0]!.action).toBe("delay");
-    expect(plan.lines[1]!.plannedStartMs).toBe(1100 + 380);
+    expect(plan.lines[0]!.plannedEndMs).toBe(1400);
+    expect(plan.lines[1]!.plannedStartMs).toBe(1400 + DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS);
     expect(plan.extendMs).toBeGreaterThan(0);
   });
 
@@ -187,5 +189,56 @@ describe("planDubNegotiation", () => {
     });
     expect(plan.speedCount).toBe(0);
     expect(plan.shortenCount).toBe(1);
+  });
+
+  it("enforces a minimum pause between abutting sentences", () => {
+    // 两句原片贴着（gap=0），自然语速都装得下；不得仍以 0ms 间隔落点
+    const plan = planDubNegotiation({
+      videoId: "vid",
+      rateRange,
+      minInterSentencePauseMs: 150,
+      maxExtendMs: 10_000,
+      lines: [line(1, 0, 1000, 900, "第一句"), line(2, 1000, 2000, 900, "第二句")],
+    });
+    expect(plan.lines[0]!.plannedEndMs).toBe(900);
+    expect(plan.lines[1]!.plannedStartMs).toBe(900 + 150);
+    expect(plan.lines[1]!.plannedStartMs - plan.lines[0]!.plannedEndMs).toBe(150);
+  });
+
+  it("prefers pause over further compression while under the extendMs cap", () => {
+    // 句1 溢出走 delay；补 150ms 停顿推高漂移，但未触顶 → 不为此再加速
+    const plan = planDubNegotiation({
+      videoId: "vid",
+      rateRange,
+      minInterSentencePauseMs: 150,
+      maxExtendMs: 5_000,
+      lines: [line(1, 0, 1000, 1200, "短"), line(2, 1000, 2000, 900, "短二")],
+    });
+    expect(plan.lines[0]!.action).toBe("delay");
+    expect(plan.lines[1]!.plannedStartMs).toBeGreaterThanOrEqual(
+      plan.lines[0]!.plannedEndMs + 150,
+    );
+    expect(plan.extendMs).toBeLessThanOrEqual(5_000);
+    expect(plan.speedCount).toBe(0);
+  });
+
+  it("compresses instead of cutting the pause once extendMs would exceed the cap", () => {
+    // 贴句 + 偏长：停顿会把 extend 顶破；触顶后应从槽内借时间压缩，停顿仍保留
+    const lines = Array.from({ length: 8 }, (_, i) =>
+      line(i + 1, i * 1000, i * 1000 + 1000, 1100, `这是第${i + 1}句偏长需要压缩的配音内容`),
+    );
+    const plan = planDubNegotiation({
+      videoId: "vid",
+      rateRange,
+      minInterSentencePauseMs: 150,
+      maxExtendMs: 400,
+      lines,
+    });
+    for (let i = 0; i < plan.lines.length - 1; i += 1) {
+      const gap = plan.lines[i + 1]!.plannedStartMs - plan.lines[i]!.plannedEndMs;
+      expect(gap).toBeGreaterThanOrEqual(150);
+    }
+    expect(plan.speedCount + plan.shortenCount).toBeGreaterThan(0);
+    expect(plan.extendMs).toBeLessThanOrEqual(400);
   });
 });

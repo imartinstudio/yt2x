@@ -1,17 +1,19 @@
 /**
  * 配音门禁（纯函数）。
  *
- * 阈值取自 PR1/PR2 的设计约束与协商偏好区间，在没有大规模真实分布之前先给
- * 一组**可复现的临时硬阈值**——宁可偏松挡住明显翻车，也不拿拍脑袋的严阈值
- * 卡死调试。跑过一批真实片子后只改 `DEFAULT_DUB_GATE_THRESHOLDS` 即可。
- *
- * 分层：
- *  - hard：阻断成片（空音频、极端漂移、大比例 delay）
+ * 阈值必须用真实素材从零标定（见 issue #113）：旧 smoke 样本已删除且曾被
+ * 污染，不能在旧数上微调。分层：
+ *  - hard：阻断成片（空音频、极端漂移、大比例 delay、句间零/低间隔）
  *  - advisory：写进 report，不阻断（偏高的 medianRatio 等）
  */
 
+import {
+  DEFAULT_MAX_EXTEND_MS,
+  DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
+} from "./negotiate.js";
 import type {
   DubPlacementReport,
+  DubPlacedLine,
   DubScript,
   DubTimingReport,
 } from "./types.js";
@@ -25,7 +27,9 @@ export type DubGateIssueCode =
   | "high-overflow-fraction"
   | "high-extend-ms"
   | "high-delay-fraction"
-  | "info-loss";
+  | "info-loss"
+  | "zero-inter-sentence-pause"
+  | "low-inter-sentence-pause";
 
 export type DubGateIssue = {
   code: DubGateIssueCode;
@@ -41,7 +45,7 @@ export type DubGateThresholds = {
   advisoryMedianRatio: number;
   /** 自然语速 overflow 行占比的 advisory 上限。 */
   advisoryOverflowFraction: number;
-  /** 片尾冻结时长硬上限（毫秒）。 */
+  /** 片尾冻结时长硬上限（毫秒）；与协商层 DEFAULT_MAX_EXTEND_MS 对齐。 */
   maxExtendMs: number;
   /** delay 行占比硬上限。 */
   maxDelayFraction: number;
@@ -50,22 +54,37 @@ export type DubGateThresholds = {
    * 过低视为信息损失嫌疑——朗读化/改短不该砍掉大半内容。
    */
   minTextRetainFraction: number;
+  /** 低于此间隔（毫秒）计为 low-gap；默认等于最小句间停顿。 */
+  minInterSentencePauseMs: number;
+  /** 句间间隔 < 1ms 的边界占比硬上限；0 表示不允许零间隔。 */
+  maxZeroGapFraction: number;
+  /** 句间间隔 < minInterSentencePauseMs 的边界占比硬上限。 */
+  maxLowGapFraction: number;
 };
 
 /**
- * 临时硬阈值（PR3）。
+ * 从零标定的默认阈值（#113，素材 A8mokin_YOs 30s 窗实测）。
  *
- * - extend ≤ 60s：超过一分钟的末帧冻结听感已经崩了
- * - delay ≤ 25%：超过四分之一句靠顺延，对齐策略基本失效
- * - medianRatio / overflow 先只警告：edge-tts 调试期分布偏高很常见
- * - 文本保留 ≥ 45%：改短预算通常在 50–70%，再低多半是 LLM 胡砍
+ * 观测（2026-07-31，edge-tts，窗 0–30s）：
+ *   minGap=150、zeroGap=0、extendMs≈1.4s、delayFraction≈0.29、
+ *   overflowFraction≈0.71（中文自然语速偏长，先 advisory）、
+ *   改短偶发压到 ~44% 源长 → 仍用 45% 硬拦信息损失。
+ *
+ * - extend ≤ 8s：与协商层封顶一致
+ * - delay ≤ 35%：覆盖真实窗上缩短失败后的顺延占比，仍拦住大面积放弃对齐
+ * - 零间隔 / 低于最小停顿：不允许
+ * - medianRatio / overflow：advisory
+ * - 文本保留 ≥ 45%
  */
 export const DEFAULT_DUB_GATE_THRESHOLDS: DubGateThresholds = {
   advisoryMedianRatio: 1.35,
-  advisoryOverflowFraction: 0.5,
-  maxExtendMs: 60_000,
-  maxDelayFraction: 0.25,
+  advisoryOverflowFraction: 0.75,
+  maxExtendMs: DEFAULT_MAX_EXTEND_MS,
+  maxDelayFraction: 0.35,
   minTextRetainFraction: 0.45,
+  minInterSentencePauseMs: DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
+  maxZeroGapFraction: 0,
+  maxLowGapFraction: 0,
 };
 
 export type DubGateReport = {
@@ -89,6 +108,12 @@ export type DubGateReport = {
     emptyAudioCount: number;
     emptyTextCount: number;
     infoLossCount: number;
+    boundaryCount: number;
+    zeroGapCount: number;
+    zeroGapFraction: number;
+    lowGapCount: number;
+    lowGapFraction: number;
+    minObservedGapMs: number | null;
   };
   issues: readonly DubGateIssue[];
 };
@@ -102,6 +127,15 @@ export type EvaluateDubGateInput = {
 };
 
 const charLen = (text: string): number => [...text.trim()].length;
+
+/** 相邻落点间隔（下一句 start − 上一句 end）。 */
+export const interSentenceGapsMs = (lines: readonly DubPlacedLine[]): number[] => {
+  const gaps: number[] = [];
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    gaps.push(lines[i + 1]!.startMs - lines[i]!.endMs);
+  }
+  return gaps;
+};
 
 export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
   const thresholds: DubGateThresholds = {
@@ -159,6 +193,34 @@ export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
         });
       }
     }
+  }
+
+  const gaps = interSentenceGapsMs(input.placement.lines);
+  const boundaryCount = gaps.length;
+  const zeroGapCount = gaps.filter((g) => g < 1).length;
+  const lowGapCount = gaps.filter((g) => g < thresholds.minInterSentencePauseMs).length;
+  const zeroGapFraction = boundaryCount > 0 ? zeroGapCount / boundaryCount : 0;
+  const lowGapFraction = boundaryCount > 0 ? lowGapCount / boundaryCount : 0;
+  const minObservedGapMs = gaps.length > 0 ? Math.min(...gaps) : null;
+
+  if (zeroGapFraction > thresholds.maxZeroGapFraction) {
+    issues.push({
+      code: "zero-inter-sentence-pause",
+      severity: "hard",
+      message: `zero inter-sentence gaps ${zeroGapCount}/${boundaryCount} (fraction ${zeroGapFraction.toFixed(2)}) exceed hard max ${thresholds.maxZeroGapFraction}`,
+      value: zeroGapFraction,
+      threshold: thresholds.maxZeroGapFraction,
+    });
+  }
+
+  if (lowGapFraction > thresholds.maxLowGapFraction) {
+    issues.push({
+      code: "low-inter-sentence-pause",
+      severity: "hard",
+      message: `low inter-sentence gaps (<${thresholds.minInterSentencePauseMs}ms) ${lowGapCount}/${boundaryCount} (fraction ${lowGapFraction.toFixed(2)}) exceed hard max ${thresholds.maxLowGapFraction}`,
+      value: lowGapFraction,
+      threshold: thresholds.maxLowGapFraction,
+    });
   }
 
   if (input.timing.medianRatio > thresholds.advisoryMedianRatio) {
@@ -223,6 +285,12 @@ export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
       emptyAudioCount,
       emptyTextCount,
       infoLossCount,
+      boundaryCount,
+      zeroGapCount,
+      zeroGapFraction,
+      lowGapCount,
+      lowGapFraction,
+      minObservedGapMs,
     },
     issues,
   };

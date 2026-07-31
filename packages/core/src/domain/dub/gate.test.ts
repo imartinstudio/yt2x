@@ -59,8 +59,8 @@ const placement = (overrides?: Partial<DubPlacementReport>): DubPlacementReport 
       action: "keep",
       rate: 1,
       text: "第二句话",
-      startMs: 1000,
-      endMs: 1950,
+      startMs: 1_050,
+      endMs: 2_000,
       durationMs: 950,
       audioFile: "lines/0002.mp3",
     },
@@ -213,5 +213,75 @@ describe("evaluateDubGate", () => {
     });
     expect(Number.isFinite(report.metrics.overflowFraction)).toBe(true);
     expect(report.metrics.overflowFraction).toBe(0);
+  });
+
+  it("hard-blocks on zero inter-sentence gaps", () => {
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "第一句",
+            startMs: 0,
+            endMs: 1000,
+            durationMs: 1000,
+            audioFile: "lines/0001.mp3",
+          },
+          {
+            index: 2,
+            action: "keep",
+            rate: 1,
+            text: "第二句",
+            startMs: 1000,
+            endMs: 2000,
+            durationMs: 1000,
+            audioFile: "lines/0002.mp3",
+          },
+        ],
+      }),
+    });
+    expect(report.blocked).toBe(true);
+    expect(report.metrics.zeroGapCount).toBe(1);
+    expect(report.metrics.minObservedGapMs).toBe(0);
+    expect(report.issues.some((i) => i.code === "zero-inter-sentence-pause")).toBe(true);
+  });
+
+  it("hard-blocks on gaps below the minimum pause", () => {
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "第一句",
+            startMs: 0,
+            endMs: 900,
+            durationMs: 900,
+            audioFile: "lines/0001.mp3",
+          },
+          {
+            index: 2,
+            action: "keep",
+            rate: 1,
+            text: "第二句",
+            startMs: 950,
+            endMs: 1900,
+            durationMs: 950,
+            audioFile: "lines/0002.mp3",
+          },
+        ],
+      }),
+    });
+    expect(report.blocked).toBe(true);
+    expect(report.metrics.lowGapCount).toBe(1);
+    expect(report.metrics.minObservedGapMs).toBe(50);
+    expect(report.issues.some((i) => i.code === "low-inter-sentence-pause")).toBe(true);
   });
 });

@@ -25,14 +25,39 @@ export type TtsRequest = {
   signal?: AbortSignal;
 };
 
+/**
+ * 引擎给出的语音起止（相对本段音频文件起点）。
+ *
+ * 用于扣掉引擎前置 padding、得到自然语速时长。缺省时调用方必须显式降级
+ * （报错或可见警告），禁止静默退回波形/整文件时长猜测。
+ */
+export type TtsSpeechCue = {
+  startMs: number;
+  endMs: number;
+  text?: string;
+};
+
+export type TtsSpeechTiming = {
+  /** 第一条 cue 起点 ≈ 引擎前置 padding。 */
+  speechStartMs: number;
+  /** 最后一条 cue 终点。 */
+  speechEndMs: number;
+  /** speechEndMs - speechStartMs，不含前置 padding。 */
+  speechDurationMs: number;
+  cues?: readonly TtsSpeechCue[];
+};
+
 export type TtsResult = {
   audio: Uint8Array;
   format: TtsAudioFormat;
   /**
-   * 引擎自报的时长（毫秒）。多数引擎不返回，此时为 undefined，调用方必须用
-   * ffprobe 实测——时长协商依赖真实值，绝不能用字符数估算。
+   * 引擎自报的时长（毫秒）。多数引擎不返回，此时为 undefined。
+   * 自然语速时长优先取 `speechTiming.speechDurationMs`；整文件 ffprobe
+   * 只做交叉校验（语音终点不得超过文件时长）。
    */
   durationMs?: number;
+  /** 词/短语级时间戳；edge-tts 等引擎有则必填，缺则调用方显式失败。 */
+  speechTiming?: TtsSpeechTiming;
   voice: string;
   /** 适配器实际使用的倍率（可能因 rateRange 裁剪而不等于请求值）。 */
   rate: number;

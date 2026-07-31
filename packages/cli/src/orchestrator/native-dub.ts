@@ -30,6 +30,7 @@ import {
   sanitizeVideoId,
   separateDemucs,
   synthesizeDubLines,
+  probeAudioDurationMs,
   writeDubGateReport,
   writeDubPlacement,
   writeDubPlan,
@@ -43,6 +44,7 @@ import {
   isTtsError,
   mergeCuesIntoSegments,
   planDubNegotiation,
+  resolveMaxExtendMs,
   type MergeCuesOptions,
   type TtsPort,
 } from "@yt2x/core";
@@ -487,6 +489,10 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     }
     const { tts, voice } = resolvedTts;
 
+    // 时间窗产物（脚本/timing/逐句音频）落在 dub/work，避免污染正片缓存；
+    // 协商/混音必须读同一目录，否则 keep 行会指到不存在的 dub/lines。
+    const synthDir = hasTimeRange ? path.join(dubDir, "work") : dubDir;
+
     // ── 3. 自然语速合成 + 时长报告（可复用；换引擎必须重跑） ──
     let timing = reuseFullRunArtifacts
       ? await readDubTimingReport(dubDir).catch(() => undefined)
@@ -507,8 +513,9 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         tts,
         script,
         voice,
-        dubDir: hasTimeRange ? path.join(dubDir, "work") : dubDir,
+        dubDir: synthDir,
         ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
+        ...(flags.ffmpegPath !== undefined ? { ffmpegPath: flags.ffmpegPath } : {}),
         onLineDone: (done, total) => {
           if (done % 20 === 0 || done === total) {
             logger.info({ videoId, done, total }, "yt2x dub: synthesis progress");
@@ -517,8 +524,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       });
       for (const warning of synthWarnings) logger.warn({ videoId }, `dub synthesis: ${warning}`);
       timing = report;
-      const timingDir = hasTimeRange ? path.join(dubDir, "work") : dubDir;
-      const reportPath = await writeDubTimingReport(timingDir, timing);
+      const reportPath = await writeDubTimingReport(synthDir, timing);
       logger.info(
         {
           videoId,
@@ -538,12 +544,27 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
 
     // ── 4. 时长协商 ──
     const negotiateInputs = buildNegotiateInputs(script.lines, timing.lines);
+    let videoDurationMs: number | undefined =
+      timeRange.endMs !== undefined
+        ? Math.max(1, timeRange.endMs - (timeRange.startMs ?? 0))
+        : undefined;
+    if (videoDurationMs === undefined && sourceVideo !== undefined) {
+      videoDurationMs = await probeAudioDurationMs({
+        filePath: sourceVideo.videoPath,
+        ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
+      });
+    }
+    const maxExtendMs = resolveMaxExtendMs({
+      ...(videoDurationMs !== undefined ? { videoDurationMs } : {}),
+    });
     const plan = planDubNegotiation({
       videoId,
       lines: negotiateInputs,
       rateRange: tts.rateRange,
+      maxExtendMs,
+      ...(videoDurationMs !== undefined ? { videoDurationMs } : {}),
     });
-    const planPath = await writeDubPlan(dubDir, plan);
+    const planPath = await writeDubPlan(hasTimeRange ? synthDir : dubDir, plan);
     logger.info(
       {
         videoId,
@@ -562,11 +583,12 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       plan,
       tts,
       voice,
-      dubDir,
+      dubDir: synthDir,
       existingAudioByIndex: existingAudio,
       llm: llm.adapter,
       model: llm.model,
       ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
+      ...(flags.ffmpegPath !== undefined ? { ffmpegPath: flags.ffmpegPath } : {}),
       onLineDone: (done, total) => {
         if (done % 20 === 0 || done === total) {
           logger.info({ videoId, done, total }, "yt2x dub: negotiation apply progress");
@@ -574,7 +596,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       },
     });
     for (const warning of applyWarnings) logger.warn({ videoId }, `dub negotiate: ${warning}`);
-    const placementPath = await writeDubPlacement(dubDir, placement);
+    const placementPath = await writeDubPlacement(hasTimeRange ? synthDir : dubDir, placement);
     logger.info(
       {
         videoId,
@@ -593,8 +615,9 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       timing,
       placement,
       script,
+      thresholds: { maxExtendMs },
     });
-    const gatePath = await writeDubGateReport(dubDir, gate);
+    const gatePath = await writeDubGateReport(hasTimeRange ? synthDir : dubDir, gate);
     for (const issue of gate.issues) {
       const payload = { videoId, code: issue.code, severity: issue.severity };
       if (issue.severity === "hard") logger.error(payload, `dub gate: ${issue.message}`);
@@ -652,7 +675,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       videoPath: sourceVideo.videoPath,
       noVocalsPath: separated.noVocalsPath,
       placedLines: placement.lines,
-      dubDir,
+      dubDir: synthDir,
       reverseSrt,
       reverseSrtPath,
       outputPath: dubbedPath,

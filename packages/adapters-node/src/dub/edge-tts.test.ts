@@ -31,8 +31,22 @@ const mediaPathOf = (spec: ProcessSpec): string => {
   return args[at + 1] ?? "";
 };
 
+const DEFAULT_SUBTITLES = `1
+00:00:00,100 --> 00:00:01,200
+今天我们来聊配音
+`;
+
+const subtitlePathOf = (spec: ProcessSpec): string => {
+  const args = spec.args ?? [];
+  const at = args.indexOf("--write-subtitles");
+  return args[at + 1] ?? "";
+};
+
 /** 真 edge-tts 由子进程写文件，mock runner 也得写，否则读回来的路径永远是空的。 */
-const writingRunner = (bytes: Uint8Array): { runner: ProcessRunner; specs: ProcessSpec[] } => {
+const writingRunner = (
+  bytes: Uint8Array,
+  subtitles: string = DEFAULT_SUBTITLES,
+): { runner: ProcessRunner; specs: ProcessSpec[] } => {
   const specs: ProcessSpec[] = [];
   const runner: ProcessRunner = {
     run: async (spec) => {
@@ -40,6 +54,10 @@ const writingRunner = (bytes: Uint8Array): { runner: ProcessRunner; specs: Proce
       const target = mediaPathOf(spec);
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, bytes);
+      const subPath = subtitlePathOf(spec);
+      if (subPath.length > 0) {
+        await writeFile(subPath, subtitles);
+      }
       return okResult(spec);
     },
   };
@@ -91,12 +109,41 @@ describe("createEdgeTtsAdapter", () => {
     expect(args[3]).toBe(DEFAULT_EDGE_TTS_VOICE);
     expect(args).toContain("--rate=+0%");
     expect(args).toContain("--write-media");
+    expect(args).toContain("--write-subtitles");
     expect(mediaPathOf(spec).endsWith(".mp3")).toBe(true);
+    const subAt = args.indexOf("--write-subtitles");
+    expect(args[subAt + 1]?.endsWith(".vtt")).toBe(true);
 
     expect(result.audio).toEqual(audio);
     expect(result.format).toBe("mp3");
     expect(result.voice).toBe(DEFAULT_EDGE_TTS_VOICE);
     expect(result.rate).toBe(1);
+    expect(result.speechTiming).toEqual({
+      speechStartMs: 100,
+      speechEndMs: 1_200,
+      speechDurationMs: 1_100,
+      cues: [{ startMs: 100, endMs: 1_200, text: "今天我们来聊配音" }],
+    });
+  });
+
+  it("fails explicitly when --write-subtitles yields no usable cues", async () => {
+    const specs: ProcessSpec[] = [];
+    const runner: ProcessRunner = {
+      run: async (spec) => {
+        specs.push(spec);
+        const target = mediaPathOf(spec);
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, audio);
+        const args = spec.args ?? [];
+        const subAt = args.indexOf("--write-subtitles");
+        if (subAt >= 0) await writeFile(args[subAt + 1]!, "");
+        return okResult(spec);
+      },
+    };
+    const tts = createEdgeTtsAdapter({ runner });
+    await expect(tts.synthesize({ text: "无字幕", voice: "v" })).rejects.toMatchObject({
+      kind: "BAD_RESPONSE",
+    });
   });
 
   it("clamps the requested rate into the engine range and reports the used value", async () => {

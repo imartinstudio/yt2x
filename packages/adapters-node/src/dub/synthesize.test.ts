@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -37,19 +37,36 @@ const scriptOf = (lines: DubScriptLine[]): DubScript => ({
 });
 
 const stubTts = (
-  overrides: { rate?: number; audio?: Uint8Array } = {},
+  overrides: {
+    rate?: number;
+    audio?: Uint8Array;
+    /** Per-call speech durations (ms). Default 1000 each. speechStart=0 so no trim. */
+    speechDurationsMs?: readonly number[];
+    omitSpeechTiming?: boolean;
+  } = {},
 ): { tts: TtsPort; requests: TtsRequest[] } => {
   const requests: TtsRequest[] = [];
   const tts: TtsPort = {
     id: "stub-tts",
     rateRange: { min: 0.5, max: 2 },
     synthesize: async (req) => {
+      const call = requests.length;
       requests.push(req);
+      const speechDurationMs = overrides.speechDurationsMs?.[call] ?? 1_000;
       return {
         audio: overrides.audio ?? new Uint8Array([1, 2, 3, requests.length]),
         format: "mp3",
         voice: req.voice,
         rate: overrides.rate ?? req.rate ?? 1,
+        ...(overrides.omitSpeechTiming === true
+          ? {}
+          : {
+              speechTiming: {
+                speechStartMs: 0,
+                speechEndMs: speechDurationMs,
+                speechDurationMs,
+              },
+            }),
       };
     },
   };
@@ -168,8 +185,8 @@ describe("synthesizeDubLines", () => {
 
   it("summarizes ratio, overflow count and total drift", async () => {
     const dubDir = await tmpDubDir();
-    const { tts } = stubTts();
-    // 目标 2s/2s/2s，实测 1.0s / 2.0s / 3.0s → ratio 0.5 / 1.0 / 1.5
+    // 目标 2s/2s/2s，引擎语音 1.0s / 2.0s / 3.0s → ratio 0.5 / 1.0 / 1.5
+    const { tts } = stubTts({ speechDurationsMs: [1_000, 2_000, 3_000] });
     const { runner } = probeRunner(["1.0", "2.0", "3.0"]);
 
     const { report, warnings } = await synthesizeDubLines({
@@ -197,7 +214,7 @@ describe("synthesizeDubLines", () => {
 
   it("reports positive total drift when the dub runs long", async () => {
     const dubDir = await tmpDubDir();
-    const { tts } = stubTts();
+    const { tts } = stubTts({ speechDurationsMs: [3_000, 3_000] });
     const { runner } = probeRunner(["3.0", "3.0"]);
 
     const { report } = await synthesizeDubLines({
@@ -210,6 +227,102 @@ describe("synthesizeDubLines", () => {
 
     expect(report.totalDriftMs).toBe(2_000);
     expect(report.overflowCount).toBe(2);
+  });
+
+  it("uses engine speechDurationMs rather than whole-file ffprobe duration", async () => {
+    const dubDir = await tmpDubDir();
+    const tts: TtsPort = {
+      id: "stub-tts",
+      rateRange: { min: 0.5, max: 2 },
+      synthesize: async (req) => ({
+        audio: new Uint8Array([1, 2, 3]),
+        format: "mp3",
+        voice: req.voice,
+        rate: 1,
+        speechTiming: {
+          speechStartMs: 200,
+          speechEndMs: 1_200,
+          speechDurationMs: 1_000,
+        },
+      }),
+    };
+    const { runner, specs } = probeRunner(["1.5", "1.0"]);
+    const ffmpegCalls: ProcessSpec[] = [];
+    const combined: ProcessRunner = {
+      run: async (spec) => {
+        if (spec.command === "ffmpeg" || spec.command.endsWith("ffmpeg")) {
+          ffmpegCalls.push(spec);
+          const args = spec.args ?? [];
+          const outPath = args[args.length - 1]!;
+          await mkdir(path.dirname(outPath), { recursive: true });
+          await writeFile(outPath, new Uint8Array([9, 9, 9]));
+          return okResult(spec, "");
+        }
+        return runner.run(spec);
+      },
+    };
+
+    const { report } = await synthesizeDubLines({
+      tts,
+      script: scriptOf([line(1, 2_000, "带 padding")]),
+      voice: "v",
+      dubDir,
+      runner: combined,
+    });
+
+    expect(report.lines[0]?.synthesizedMs).toBe(1_000);
+    expect(report.lines[0]?.ratio).toBe(0.5);
+    expect(specs.length).toBe(2); // cross-check + post-trim measure
+    expect(ffmpegCalls.length).toBeGreaterThanOrEqual(1);
+    expect(new Uint8Array(await readFile(path.join(dubDir, "lines", "0001.mp3")))).toEqual(
+      new Uint8Array([9, 9, 9]),
+    );
+  });
+
+  it("fails explicitly when TTS returns no speechTiming", async () => {
+    const dubDir = await tmpDubDir();
+    const { tts } = stubTts({ omitSpeechTiming: true });
+    const { runner } = probeRunner(["1.0"]);
+
+    await expect(
+      synthesizeDubLines({
+        tts,
+        script: scriptOf([line(1, 2_000, "无时间戳")]),
+        voice: "v",
+        dubDir,
+        runner,
+      }),
+    ).rejects.toThrow(/speechTiming/iu);
+  });
+
+  it("fails when engine speech end exceeds the audio file duration", async () => {
+    const dubDir = await tmpDubDir();
+    const tts: TtsPort = {
+      id: "stub-tts",
+      rateRange: { min: 0.5, max: 2 },
+      synthesize: async (req) => ({
+        audio: new Uint8Array([1]),
+        format: "mp3",
+        voice: req.voice,
+        rate: 1,
+        speechTiming: {
+          speechStartMs: 0,
+          speechEndMs: 2_000,
+          speechDurationMs: 2_000,
+        },
+      }),
+    };
+    const { runner } = probeRunner(["1.0"]);
+
+    await expect(
+      synthesizeDubLines({
+        tts,
+        script: scriptOf([line(1, 2_000, "错位")]),
+        voice: "v",
+        dubDir,
+        runner,
+      }),
+    ).rejects.toThrow(/exceeds audio file duration/iu);
   });
 
   it("records ratio 0 rather than Infinity for a zero-length target", async () => {

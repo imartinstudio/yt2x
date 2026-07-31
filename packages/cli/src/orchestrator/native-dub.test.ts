@@ -82,3 +82,108 @@ describe("executeNativeDub hard-subtitle guard", () => {
     expect(remixDubbedVideoMock).not.toHaveBeenCalled();
   });
 });
+
+describe("executeNativeDub time range", () => {
+  it("rewrites only cues inside --start-ms/--end-ms and ignores a full-run script cache", async () => {
+    guardMock.mockResolvedValue({
+      hasBurnedSubtitles: false,
+      hasChineseBurnedSubtitles: false,
+      shouldSkipBurn: false,
+    });
+    generateDubScriptMock.mockResolvedValue({
+      script: {
+        version: 1,
+        videoId: "abc12345678",
+        sourceSubtitle: "video/full.zh.srt",
+        rewriteModel: "test-model",
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "窗内句",
+            sourceText: "窗内句",
+            cueIndices: [1],
+          },
+        ],
+      },
+      warnings: [],
+      rewrittenCount: 1,
+      fallbackCount: 0,
+    });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-range-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "abc12345678";
+    const dubDir = path.join(articleRoot, videoId, "dub");
+    await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
+    await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
+    await mkdir(dubDir, { recursive: true });
+    await writeFile(
+      path.join(articleRoot, videoId, "video", "full.zh.srt"),
+      [
+        "1",
+        "00:00:01,000 --> 00:00:02,000",
+        "窗内句",
+        "",
+        "2",
+        "00:03:00,000 --> 00:03:02,000",
+        "窗外句不应进入配音稿",
+        "",
+      ].join("\n"),
+    );
+    // Full-run cache that would silently skip filtering if reused.
+    await writeFile(
+      path.join(dubDir, "dub-script.json"),
+      JSON.stringify({
+        version: 1,
+        videoId,
+        sourceSubtitle: "video/full.zh.srt",
+        rewriteModel: "cached",
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "窗内句",
+            sourceText: "窗内句",
+            cueIndices: [1],
+          },
+          {
+            index: 2,
+            startMs: 180_000,
+            endMs: 182_000,
+            targetDurationMs: 2_000,
+            text: "窗外句不应进入配音稿",
+            sourceText: "窗外句不应进入配音稿",
+            cueIndices: [2],
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      scriptOnly: true,
+      startMs: "0",
+      endMs: "5000",
+    });
+
+    expect(code).toBe(0);
+    expect(generateDubScriptMock).toHaveBeenCalledOnce();
+    const segments = generateDubScriptMock.mock.calls[0]![0].segments as Array<{
+      text: string;
+      endMs: number;
+    }>;
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.text).toBe("窗内句");
+    expect(segments.every((segment) => segment.endMs <= 5_000)).toBe(true);
+    expect(synthesizeDubLinesMock).not.toHaveBeenCalled();
+  });
+});

@@ -217,17 +217,6 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
   const outRoot = path.resolve(flags.outDir ?? DEFAULT_OUT_DIR);
   const articleRoot = path.resolve(flags.articleOutDir ?? DEFAULT_ARTICLE_ROOT);
   const dubDir = dubDirFor(articleRoot, videoId);
-  const dubbedPath = dubbedVideoPathFor(articleRoot, videoId);
-
-  if (flags.force !== true && (await fileExists(dubbedPath))) {
-    logger.info({ videoId, dubbedPath }, "dubbed video already exists, skipping (use --force to redo)");
-    return 0;
-  }
-
-  // 成片路径才需要源视频；--script-only / --timing-only 可以没有 full.mp4
-  const needsVideo = flags.scriptOnly !== true && flags.timingOnly !== true;
-  let sourceVideo: { videoPath: string; preferred: boolean } | undefined;
-  let pythonPath: string | undefined;
 
   let timeRange: { startMs?: number; endMs?: number };
   try {
@@ -242,6 +231,25 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     });
     return EXIT_INPUT_MISSING;
   }
+  const hasTimeRange = timeRange.startMs !== undefined || timeRange.endMs !== undefined;
+  // 时间窗冒烟写到 dub/work/，避免覆盖全片 full.zh-dubbed.mp4 / 复用全片缓存。
+  const dubbedPath = hasTimeRange
+    ? path.join(
+        dubDir,
+        "work",
+        `window-${timeRange.startMs ?? 0}-${timeRange.endMs ?? "end"}.zh-dubbed.mp4`,
+      )
+    : dubbedVideoPathFor(articleRoot, videoId);
+
+  if (flags.force !== true && (await fileExists(dubbedPath))) {
+    logger.info({ videoId, dubbedPath }, "dubbed video already exists, skipping (use --force to redo)");
+    return 0;
+  }
+
+  // 成片路径才需要源视频；--script-only / --timing-only 可以没有 full.mp4
+  const needsVideo = flags.scriptOnly !== true && flags.timingOnly !== true;
+  let sourceVideo: { videoPath: string; preferred: boolean } | undefined;
+  let pythonPath: string | undefined;
 
   if (needsVideo) {
     try {
@@ -375,7 +383,17 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
 
   try {
     // ── 2. 配音稿（可复用） ──
-    let script = flags.force === true ? undefined : await readDubScript(dubDir).catch(() => undefined);
+    // 时间窗冒烟不得复用/覆盖全片缓存，否则 --start-ms/--end-ms 会被静默忽略。
+    const reuseFullRunArtifacts = flags.force !== true && !hasTimeRange;
+    let script = reuseFullRunArtifacts
+      ? await readDubScript(dubDir).catch(() => undefined)
+      : undefined;
+    if (hasTimeRange && flags.force !== true) {
+      logger.info(
+        { videoId, startMs: timeRange.startMs ?? 0, endMs: timeRange.endMs },
+        "dub: time range active — skipping full-run script/timing cache",
+      );
+    }
     if (script === undefined) {
       const cues = filterDubCuesByTimeRange(await readDubCues(srtPath), timeRange);
       const segments = mergeCuesIntoSegments(cues, mergeOptionsFrom(flags));
@@ -383,15 +401,29 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         printCliErrorBlock({
           command: "dub",
           subject: videoId,
-          reason: `No usable subtitle cues in ${srtPath}.`,
-          hints: ["The Chinese subtitle file is empty — re-run the subtitle stage."],
+          reason: hasTimeRange
+            ? `No usable subtitle cues in ${srtPath} for time range ` +
+              `[${timeRange.startMs ?? 0}, ${timeRange.endMs ?? "end"}).`
+            : `No usable subtitle cues in ${srtPath}.`,
+          hints: hasTimeRange
+            ? ["Widen --start-ms/--end-ms, or check that full.zh.srt covers that window."]
+            : ["The Chinese subtitle file is empty — re-run the subtitle stage."],
           retryCommand: `pnpm yt2x subtitle --video-id ${videoId}`,
         });
         return EXIT_INPUT_MISSING;
       }
 
       logger.info(
-        { videoId, srtPath, cues: cues.length, segments: segments.length, model: llm.model },
+        {
+          videoId,
+          srtPath,
+          cues: cues.length,
+          segments: segments.length,
+          model: llm.model,
+          ...(hasTimeRange
+            ? { startMs: timeRange.startMs ?? 0, endMs: timeRange.endMs }
+            : {}),
+        },
         "yt2x dub: rewriting the dubbing script…",
       );
 
@@ -404,7 +436,9 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       });
       for (const warning of generated.warnings) logger.warn({ videoId }, `dub script: ${warning}`);
       script = generated.script;
-      const scriptPath = await writeDubScript(dubDir, script);
+      // 时间窗产物写到 dub/work/，避免污染全片 dub-script.json
+      const scriptDir = hasTimeRange ? path.join(dubDir, "work") : dubDir;
+      const scriptPath = await writeDubScript(scriptDir, script);
       logger.info(
         {
           videoId,
@@ -454,8 +488,9 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     const { tts, voice } = resolvedTts;
 
     // ── 3. 自然语速合成 + 时长报告（可复用；换引擎必须重跑） ──
-    let timing =
-      flags.force === true ? undefined : await readDubTimingReport(dubDir).catch(() => undefined);
+    let timing = reuseFullRunArtifacts
+      ? await readDubTimingReport(dubDir).catch(() => undefined)
+      : undefined;
     if (timing !== undefined && timing.engine !== tts.id) {
       logger.info(
         { videoId, cachedEngine: timing.engine, engine: tts.id },
@@ -472,7 +507,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         tts,
         script,
         voice,
-        dubDir,
+        dubDir: hasTimeRange ? path.join(dubDir, "work") : dubDir,
         ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
         onLineDone: (done, total) => {
           if (done % 20 === 0 || done === total) {
@@ -482,7 +517,8 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       });
       for (const warning of synthWarnings) logger.warn({ videoId }, `dub synthesis: ${warning}`);
       timing = report;
-      const reportPath = await writeDubTimingReport(dubDir, timing);
+      const timingDir = hasTimeRange ? path.join(dubDir, "work") : dubDir;
+      const reportPath = await writeDubTimingReport(timingDir, timing);
       logger.info(
         {
           videoId,

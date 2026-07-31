@@ -1,0 +1,6 @@
+# Python deps for yt2x acquire/subtitle hard-sub detection and burn helpers.
+# Install: python3 -m pip install -r requirements.txt
+#
+# Heavy optional stacks (demucs, faster-whisper, torch) are NOT listed here —
+# install those separately when running dub / local ASR paths.
+Pillow>=10

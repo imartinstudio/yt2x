@@ -57,11 +57,20 @@ export {
 export {
   SYNTHESIS_RATE,
   probeAudioDurationMs,
+  requireTtsSpeechTiming,
+  assertSpeechEndWithinFile,
+  trimAudioToSpeechWindow,
+  materializeLineAudio,
   synthesizeDubLines,
   type ProbeAudioDurationInput,
   type SynthesizeDubLinesInput,
   type SynthesizeDubLinesResult,
+  type MaterializeLineAudioInput,
+  type MaterializeLineAudioResult,
 } from "./synthesize.js";
+export {
+  parseEdgeTtsSubtitles,
+} from "./edge-tts-subtitles.js";
 export {
   DemucsError,
   isDemucsError,

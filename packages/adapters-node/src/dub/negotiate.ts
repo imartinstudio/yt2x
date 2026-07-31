@@ -1,4 +1,8 @@
 import {
+  DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
+  FIT_SLACK_MS,
+  MIN_GAP_KEEP_MS,
+  PREFERRED_RATE_MAX,
   buildDubShortenRepairPrompt,
   buildDubShortenUserPrompt,
   getDubShortenSystemPrompt,
@@ -11,21 +15,20 @@ import {
 } from "@yt2x/core";
 import { parseJsonWithRepairs, salvagePartialJsonArray } from "../llm/parse-json.js";
 import type { ProcessRunner } from "../process/index.js";
-import { writeDubLineAudio } from "./file-store.js";
-import { probeAudioDurationMs } from "./synthesize.js";
+import { materializeLineAudio } from "./synthesize.js";
 
 /**
  * 执行时长协商计划：按需调速重合成 / LLM 改短 / 顺延，产出最终落点。
  *
  * keep 行直接复用 PR1 的 lines/*.mp3；speed / shorten 会覆盖同名文件。
  * shorten 失败或改短后仍装不下时降为 delay，保证整条链总能跑完。
+ * 落点同样遵守最小句间停顿（与 plan 层一致）。
  */
 
-const FIT_SLACK_MS = 50;
-const MIN_GAP_KEEP_MS = 80;
 const SHORTEN_BATCH_SIZE = 10;
 /** 改短后仍略超时，允许再加速到这个上限（与偏好上限一致）。 */
-const PREFERRED_RETRY_RATE = 1.15;
+const PREFERRED_RETRY_RATE = PREFERRED_RATE_MAX;
+
 
 export type ApplyDubNegotiationInput = {
   plan: DubNegotiatePlan;
@@ -38,8 +41,11 @@ export type ApplyDubNegotiationInput = {
   model?: string;
   runner?: ProcessRunner;
   ffprobePath?: string;
+  ffmpegPath?: string;
   signal?: AbortSignal;
   onLineDone?: (done: number, total: number) => void;
+  /** 相邻落点最小间隔；默认与 plan 层一致。 */
+  minInterSentencePauseMs?: number;
 };
 
 export type ApplyDubNegotiationResult = {
@@ -152,14 +158,17 @@ const synthesizeLine = async (
     format: "mp3",
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
-  const written = await writeDubLineAudio(input.dubDir, index, result.audio, result.format);
-  const durationMs = await probeAudioDurationMs({
-    filePath: written.absolutePath,
+  const measured = await materializeLineAudio({
+    result,
+    lineIndex: index,
+    engine: input.tts.id,
+    dubDir: input.dubDir,
     ...(input.runner !== undefined ? { runner: input.runner } : {}),
     ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
+    ...(input.ffmpegPath !== undefined ? { ffmpegPath: input.ffmpegPath } : {}),
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
-  return { durationMs, audioFile: written.relativePath };
+  return { durationMs: measured.synthesizedMs, audioFile: measured.relativePath };
 };
 
 export const applyDubNegotiation = async (
@@ -190,6 +199,8 @@ export const applyDubNegotiation = async (
   let shortenCount = 0;
   let delayCount = 0;
   const total = input.plan.lines.length;
+  const minInterSentencePauseMs =
+    input.minInterSentencePauseMs ?? DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS;
 
   for (let i = 0; i < input.plan.lines.length; i += 1) {
     const plan = input.plan.lines[i]!;
@@ -296,6 +307,12 @@ export const applyDubNegotiation = async (
       const gap = next.originalStartMs - plan.originalEndMs;
       const absorbable = Math.max(0, gap - MIN_GAP_KEEP_MS);
       drift = Math.max(0, drift - absorbable);
+
+      const minNextStart = endMs + minInterSentencePauseMs;
+      const nextStart = next.originalStartMs + drift;
+      if (nextStart < minNextStart) {
+        drift += minNextStart - nextStart;
+      }
     }
 
     input.onLineDone?.(i + 1, total);

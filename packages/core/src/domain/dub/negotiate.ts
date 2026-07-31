@@ -15,8 +15,9 @@ import type {
  *   3. shorten — 需要 LLM 改短（本函数只标记，改写在 adapter 层）
  *   4. delay — 以上都不行，接受溢出并累积漂移
  *
- * 累积漂移在相邻句的原片自然停顿（gap）处吸收；片尾剩多少就 extendMs 多少，
- * 混音时冻结末帧补齐。
+ * 句间硬约束：相邻落点间隔 ≥ minInterSentencePauseMs。
+ * 停顿优先于压缩；插入停顿带来的漂移由片尾 extendMs 吸收，但 extendMs 有封顶。
+ * 触顶后才允许回到压缩（从目标槽内借时间），且优先压缩而不是砍停顿。
  */
 
 /** 锁定决策里的偏好加速上限：超过就改短，避免听感崩坏。 */
@@ -27,8 +28,21 @@ export const PREFERRED_RATE_MIN = 0.95;
 /** 装得下的松弛：差几十毫秒不算溢出，避免无谓调速。 */
 export const FIT_SLACK_MS = 50;
 
-/** 吸收漂移时每个自然停顿至少留这么多，避免句与句粘在一起。 */
+/** 吸收漂移时每个原片自然停顿至少留这么多（与「最小句间停顿」不同：这是吸收上限保护）。 */
 export const MIN_GAP_KEEP_MS = 80;
+
+/**
+ * 相邻配音落点的最小间隔。听感硬约束；默认取 120–200ms 试听区间中位，可配置。
+ */
+export const DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS = 150;
+
+/**
+ * 片尾冻结末帧的绝对上限。停顿优先时漂移进 extendMs，但无封顶会长视频尾冻失控。
+ */
+export const DEFAULT_MAX_EXTEND_MS = 8_000;
+
+/** 相对正片时长的 extend 上限比例；与绝对上限取更严者（需传入 videoDurationMs）。 */
+export const DEFAULT_MAX_EXTEND_FRACTION = 0.02;
 
 export type NegotiateLineInput = {
   index: number;
@@ -48,6 +62,14 @@ export type PlanDubNegotiationInput = {
   preferredRateMin?: number;
   fitSlackMs?: number;
   minGapKeepMs?: number;
+  /** 相邻落点最小间隔（毫秒）。 */
+  minInterSentencePauseMs?: number;
+  /** 片尾 extendMs 绝对上限。 */
+  maxExtendMs?: number;
+  /** 片尾 extendMs 相对正片时长上限；与 maxExtendMs 取更严。 */
+  maxExtendFraction?: number;
+  /** 正片时长；提供时才启用 maxExtendFraction。 */
+  videoDurationMs?: number;
 };
 
 /**
@@ -104,12 +126,107 @@ export const shortenCharBudget = (text: string, naturalMs: number, targetDuratio
   return Math.max(4, Math.floor(trimmed.length * ratio));
 };
 
-export const planDubNegotiation = (input: PlanDubNegotiationInput): DubNegotiatePlan => {
-  const fitSlackMs = input.fitSlackMs ?? FIT_SLACK_MS;
-  const minGapKeepMs = input.minGapKeepMs ?? MIN_GAP_KEEP_MS;
-  const rateMax = effectiveRateMax(input.rateRange, input.preferredRateMax ?? PREFERRED_RATE_MAX);
-  const rateMin = effectiveRateMin(input.rateRange, input.preferredRateMin ?? PREFERRED_RATE_MIN);
+export const resolveMaxExtendMs = (input: {
+  maxExtendMs?: number;
+  maxExtendFraction?: number;
+  videoDurationMs?: number;
+}): number => {
+  const absolute = input.maxExtendMs ?? DEFAULT_MAX_EXTEND_MS;
+  const fraction = input.maxExtendFraction ?? DEFAULT_MAX_EXTEND_FRACTION;
+  if (
+    input.videoDurationMs !== undefined &&
+    Number.isFinite(input.videoDurationMs) &&
+    input.videoDurationMs > 0
+  ) {
+    return Math.min(absolute, Math.floor(input.videoDurationMs * fraction));
+  }
+  return absolute;
+};
 
+const decideLine = (input: {
+  line: NegotiateLineInput;
+  fitTargetMs: number;
+  plannedStartMs: number;
+  fitSlackMs: number;
+  rateMax: number;
+  rateMin: number;
+}): DubNegotiateLinePlan => {
+  const { line, fitTargetMs, plannedStartMs, fitSlackMs, rateMax, rateMin } = input;
+  const rate = requiredRate(line.naturalMs, fitTargetMs);
+
+  if (line.naturalMs <= fitTargetMs + fitSlackMs) {
+    return {
+      index: line.index,
+      action: "keep",
+      rate: 1,
+      originalStartMs: line.startMs,
+      originalEndMs: line.endMs,
+      targetDurationMs: line.targetDurationMs,
+      naturalMs: line.naturalMs,
+      plannedStartMs,
+      plannedEndMs: plannedStartMs + line.naturalMs,
+      text: line.text,
+    };
+  }
+
+  if (Number.isFinite(rate) && rate <= rateMax && rate >= rateMin) {
+    return {
+      index: line.index,
+      action: "speed",
+      rate: Math.min(rateMax, Math.max(rateMin, rate)),
+      originalStartMs: line.startMs,
+      originalEndMs: line.endMs,
+      targetDurationMs: line.targetDurationMs,
+      naturalMs: line.naturalMs,
+      plannedStartMs,
+      plannedEndMs: plannedStartMs + fitTargetMs,
+      text: line.text,
+    };
+  }
+
+  if (shortenCharBudget(line.text, line.naturalMs, fitTargetMs) < line.text.trim().length) {
+    const maxChars = shortenCharBudget(line.text, line.naturalMs, fitTargetMs);
+    return {
+      index: line.index,
+      action: "shorten",
+      rate: 1,
+      originalStartMs: line.startMs,
+      originalEndMs: line.endMs,
+      targetDurationMs: line.targetDurationMs,
+      naturalMs: line.naturalMs,
+      plannedStartMs,
+      plannedEndMs: plannedStartMs + fitTargetMs,
+      text: line.text,
+      shortenMaxChars: maxChars,
+    };
+  }
+
+  return {
+    index: line.index,
+    action: "delay",
+    rate: 1,
+    originalStartMs: line.startMs,
+    originalEndMs: line.endMs,
+    targetDurationMs: line.targetDurationMs,
+    naturalMs: line.naturalMs,
+    plannedStartMs,
+    plannedEndMs: plannedStartMs + line.naturalMs,
+    text: line.text,
+  };
+};
+
+const planOnce = (input: {
+  videoId: string;
+  lines: readonly NegotiateLineInput[];
+  fitSlackMs: number;
+  minGapKeepMs: number;
+  minInterSentencePauseMs: number;
+  maxExtendMs: number;
+  rateMax: number;
+  rateMin: number;
+  /** 触顶后从每句目标槽额外借出的毫秒，用于挤出停顿空间。 */
+  slotBorrowExtraMs: number;
+}): DubNegotiatePlan => {
   const lines: DubNegotiateLinePlan[] = [];
   let drift = 0;
   let keepCount = 0;
@@ -119,88 +236,44 @@ export const planDubNegotiation = (input: PlanDubNegotiationInput): DubNegotiate
 
   for (let i = 0; i < input.lines.length; i += 1) {
     const line = input.lines[i]!;
+    const next = input.lines[i + 1];
+    const sourceGap = next !== undefined ? next.startMs - line.endMs : Number.POSITIVE_INFINITY;
+    const pauseDeficit =
+      next !== undefined ? Math.max(0, input.minInterSentencePauseMs - Math.max(0, sourceGap)) : 0;
+    const extendRoom = Math.max(0, input.maxExtendMs - drift);
+    const pauseBorrow = Math.max(0, pauseDeficit - extendRoom) + input.slotBorrowExtraMs;
+    const fitTargetMs = Math.max(1, line.targetDurationMs - pauseBorrow);
+
     const plannedStartMs = line.startMs + drift;
-    const rate = requiredRate(line.naturalMs, line.targetDurationMs);
-
-    let plan: DubNegotiateLinePlan;
-
-    if (line.naturalMs <= line.targetDurationMs + fitSlackMs) {
-      // 装得进：按实测时长落点，多出来的空隙留给下一句的 gap 吸收
-      plan = {
-        index: line.index,
-        action: "keep",
-        rate: 1,
-        originalStartMs: line.startMs,
-        originalEndMs: line.endMs,
-        targetDurationMs: line.targetDurationMs,
-        naturalMs: line.naturalMs,
-        plannedStartMs,
-        plannedEndMs: plannedStartMs + line.naturalMs,
-        text: line.text,
-      };
-      keepCount += 1;
-    } else if (Number.isFinite(rate) && rate <= rateMax && rate >= rateMin) {
-      // 调速能压进目标区间：落点按目标时长估（真正合成后再 ffprobe 校正）
-      plan = {
-        index: line.index,
-        action: "speed",
-        rate: Math.min(rateMax, Math.max(rateMin, rate)),
-        originalStartMs: line.startMs,
-        originalEndMs: line.endMs,
-        targetDurationMs: line.targetDurationMs,
-        naturalMs: line.naturalMs,
-        plannedStartMs,
-        plannedEndMs: plannedStartMs + line.targetDurationMs,
-        text: line.text,
-      };
-      speedCount += 1;
-    } else if (shortenCharBudget(line.text, line.naturalMs, line.targetDurationMs) < line.text.trim().length) {
-      // 还有改短空间：标记 shorten，落点先按目标估；执行失败再降为 delay
-      const maxChars = shortenCharBudget(line.text, line.naturalMs, line.targetDurationMs);
-      plan = {
-        index: line.index,
-        action: "shorten",
-        rate: 1,
-        originalStartMs: line.startMs,
-        originalEndMs: line.endMs,
-        targetDurationMs: line.targetDurationMs,
-        naturalMs: line.naturalMs,
-        plannedStartMs,
-        plannedEndMs: plannedStartMs + line.targetDurationMs,
-        text: line.text,
-        shortenMaxChars: maxChars,
-      };
-      shortenCount += 1;
-    } else {
-      // 改短也救不了（预算 ≥ 原文）：直接顺延
-      plan = {
-        index: line.index,
-        action: "delay",
-        rate: 1,
-        originalStartMs: line.startMs,
-        originalEndMs: line.endMs,
-        targetDurationMs: line.targetDurationMs,
-        naturalMs: line.naturalMs,
-        plannedStartMs,
-        plannedEndMs: plannedStartMs + line.naturalMs,
-        text: line.text,
-      };
-      delayCount += 1;
-    }
+    const plan = decideLine({
+      line,
+      fitTargetMs,
+      plannedStartMs,
+      fitSlackMs: input.fitSlackMs,
+      rateMax: input.rateMax,
+      rateMin: input.rateMin,
+    });
 
     lines.push(plan);
+    if (plan.action === "keep") keepCount += 1;
+    else if (plan.action === "speed") speedCount += 1;
+    else if (plan.action === "shorten") shortenCount += 1;
+    else delayCount += 1;
 
-    // 用规划落点更新漂移：实际时长相对目标区间的溢出（可负，表示提前结束能还债）
     const plannedDuration = plan.plannedEndMs - plan.plannedStartMs;
     const overflow = plannedDuration - line.targetDurationMs;
     drift = Math.max(0, drift + overflow);
 
-    // 在与下一句之间的原片自然停顿处吸收
-    const next = input.lines[i + 1];
     if (next !== undefined) {
       const gap = next.startMs - line.endMs;
-      const absorbable = Math.max(0, gap - minGapKeepMs);
+      const absorbable = Math.max(0, gap - input.minGapKeepMs);
       drift = Math.max(0, drift - absorbable);
+
+      const minNextStart = plan.plannedEndMs + input.minInterSentencePauseMs;
+      const nextStart = next.startMs + drift;
+      if (nextStart < minNextStart) {
+        drift += minNextStart - nextStart;
+      }
     }
   }
 
@@ -215,4 +288,44 @@ export const planDubNegotiation = (input: PlanDubNegotiationInput): DubNegotiate
     delayCount,
     keepCount,
   };
+};
+
+export const planDubNegotiation = (input: PlanDubNegotiationInput): DubNegotiatePlan => {
+  const fitSlackMs = input.fitSlackMs ?? FIT_SLACK_MS;
+  const minGapKeepMs = input.minGapKeepMs ?? MIN_GAP_KEEP_MS;
+  const minInterSentencePauseMs =
+    input.minInterSentencePauseMs ?? DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS;
+  const maxExtendMs = resolveMaxExtendMs(input);
+  const rateMax = effectiveRateMax(input.rateRange, input.preferredRateMax ?? PREFERRED_RATE_MAX);
+  const rateMin = effectiveRateMin(input.rateRange, input.preferredRateMin ?? PREFERRED_RATE_MIN);
+
+  const base = {
+    videoId: input.videoId,
+    lines: input.lines,
+    fitSlackMs,
+    minGapKeepMs,
+    minInterSentencePauseMs,
+    maxExtendMs,
+    rateMax,
+    rateMin,
+  };
+
+  // 停顿优先：先不从槽内借时间，漂移进 extendMs
+  let plan = planOnce({ ...base, slotBorrowExtraMs: 0 });
+  if (plan.extendMs <= maxExtendMs) return plan;
+
+  // 触顶：从目标槽借时间压缩，优先压缩而不是砍停顿
+  const boundaries = Math.max(1, input.lines.length - 1);
+  const excess = plan.extendMs - maxExtendMs;
+  plan = planOnce({
+    ...base,
+    slotBorrowExtraMs: Math.ceil(excess / boundaries),
+  });
+  if (plan.extendMs <= maxExtendMs) return plan;
+
+  // 仍触顶：按最小停顿全额从槽内借
+  return planOnce({
+    ...base,
+    slotBorrowExtraMs: minInterSentencePauseMs,
+  });
 };

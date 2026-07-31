@@ -11,6 +11,7 @@ import {
   type TtsResult,
 } from "@yt2x/core";
 import { defaultProcessRunner, isProcessError, type ProcessRunner } from "../process/index.js";
+import { parseEdgeTtsSubtitles } from "./edge-tts-subtitles.js";
 
 /**
  * edge-tts 适配器。
@@ -18,9 +19,11 @@ import { defaultProcessRunner, isProcessError, type ProcessRunner } from "../pro
  * edge-tts 是一个本地 CLI（微软 Edge 朗读服务的非官方客户端），没有 HTTP SDK，
  * 只能把音频写到文件再读回来：
  *
- *   edge-tts -t "文本" -v zh-CN-YunxiNeural --rate=+10% --write-media out.mp3
+ *   edge-tts -t "文本" -v zh-CN-YunxiNeural --rate=+10% \
+ *     --write-media out.mp3 --write-subtitles out.vtt
  *
- * 免费、不计费，所以 PR1 用它跑真实时长分布；成片阶段再换 ElevenLabs。
+ * `--write-subtitles` 给出短语级时间戳；第一条 cue 起点即前置 padding。
+ * 免费、不计费，所以调试期用它跑真实时长分布；成片阶段再换 ElevenLabs。
  */
 
 export const EDGE_TTS_ENGINE_ID = "edge-tts";
@@ -136,6 +139,7 @@ export const createEdgeTtsAdapter = (options: EdgeTtsAdapterOptions = {}): TtsPo
     const rate = clampRate(req.rate, EDGE_TTS_RATE_RANGE);
     const workDir = await mkdtemp(path.join(options.tmpDir ?? os.tmpdir(), "yt2x-edge-tts-"));
     const outPath = path.join(workDir, "line.mp3");
+    const subtitlesPath = path.join(workDir, "line.vtt");
     try {
       await runner.run({
         command,
@@ -147,6 +151,8 @@ export const createEdgeTtsAdapter = (options: EdgeTtsAdapterOptions = {}): TtsPo
           `--rate=${formatEdgeTtsRate(rate)}`,
           "--write-media",
           outPath,
+          "--write-subtitles",
+          subtitlesPath,
         ],
         timeoutMs,
         ...(req.signal !== undefined ? { signal: req.signal } : {}),
@@ -171,7 +177,39 @@ export const createEdgeTtsAdapter = (options: EdgeTtsAdapterOptions = {}): TtsPo
         );
       }
 
-      return { audio, format: "mp3", voice: req.voice, rate };
+      let subtitlesRaw: string;
+      try {
+        subtitlesRaw = await readFile(subtitlesPath, "utf8");
+      } catch (err: unknown) {
+        throw new TtsError(
+          "BAD_RESPONSE",
+          "edge-tts exited successfully but wrote no subtitles file. Timing requires --write-subtitles.",
+          errorContext(req.voice),
+          { cause: err },
+        );
+      }
+
+      let speechTiming: TtsResult["speechTiming"];
+      try {
+        speechTiming = parseEdgeTtsSubtitles(subtitlesRaw);
+      } catch (err: unknown) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new TtsError(
+          "BAD_RESPONSE",
+          `edge-tts subtitles were unusable: ${detail}`,
+          errorContext(req.voice),
+          { cause: err },
+        );
+      }
+
+      return {
+        audio,
+        format: "mp3",
+        voice: req.voice,
+        rate,
+        speechTiming,
+        durationMs: speechTiming.speechDurationMs,
+      };
     } catch (err: unknown) {
       if (err instanceof TtsError) throw err;
       throw toTtsError(err, req.voice);

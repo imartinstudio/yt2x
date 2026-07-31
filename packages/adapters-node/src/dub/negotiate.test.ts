@@ -43,6 +43,11 @@ const fakeTts = (durationByRate: Record<string, number> = { "1": 1000 }): TtsPor
       durationMs,
       voice: req.voice,
       rate,
+      speechTiming: {
+        speechStartMs: 0,
+        speechEndMs: durationMs,
+        speechDurationMs: durationMs,
+      },
     };
   },
 });

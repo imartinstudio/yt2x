@@ -18,6 +18,10 @@ import {
  * speed 区间按官方 TTS / Playground 文档取 0.7–1.2（不是 Agents 专属文档里的
  * 同名参数，也不是部分 SDK 注释里写的 0.25–4.0）。协商层读 rateRange，
  * 不会向引擎要它做不到的加速。
+ *
+ * 时间戳（#113）：`speechTiming` 必须先真调 with-timestamps（或等价）验证后再接入。
+ * 未验证前不返回 speechTiming——下游 `materializeLineAudio` 会显式失败，
+ * 禁止静默退回整文件 ffprobe 时长。
  */
 
 export const ELEVENLABS_ENGINE_ID = "elevenlabs";

@@ -24,6 +24,7 @@ import {
   detectSubtitleLanguage,
   parseSubtitleBlocks,
   prepareSourceSubtitle,
+  resolveBurnSourceVideo,
   resolveSourceVideo,
   runSubtitlePipeline,
   transcribeLocal,
@@ -1152,6 +1153,45 @@ Second sentence.
     await writeFile(path.join(root, "video", "full.bilingual-burned.mp4"), "burned");
 
     await expect(resolveSourceVideo(root)).resolves.toBeUndefined();
+  });
+
+  it("keeps burn source resolution on downloads even when articles has a processed copy", async () => {
+    // Regression guard: dub used to prefer articles; burn must never grow the
+    // same dual-candidate lookup or it will re-process burned outputs.
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-burn-source-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "<videoId>";
+    await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
+    await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
+    const downloadsPath = path.join(outRoot, videoId, "video", "full.mp4");
+    await writeFile(downloadsPath, "downloads-original", "utf8");
+    await writeFile(
+      path.join(articleRoot, videoId, "video", "full.mp4"),
+      "article-processed",
+      "utf8",
+    );
+
+    const resolved = await resolveBurnSourceVideo({ outRoot, articleRoot, videoId });
+    expect(resolved.videoPath).toBe(downloadsPath);
+    expect(await readFile(resolved.videoPath, "utf8")).toBe("downloads-original");
+  });
+
+  it("refuses to burn from articles when downloads has no source video", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-burn-source-missing-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "<videoId>";
+    await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
+    await writeFile(
+      path.join(articleRoot, videoId, "video", "full.mp4"),
+      "article-processed",
+      "utf8",
+    );
+
+    await expect(resolveBurnSourceVideo({ outRoot, articleRoot, videoId })).rejects.toThrow(
+      /No source video found.*downloads/isu,
+    );
   });
 
   it("uses the article Chinese SRT for a direct burned-subtitle run", async () => {

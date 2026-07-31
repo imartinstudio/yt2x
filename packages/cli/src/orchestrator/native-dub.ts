@@ -7,12 +7,17 @@ import {
   applyDubNegotiation,
   createEdgeTtsAdapter,
   createElevenLabsAdapter,
+  defaultProcessRunner,
   dubDemucsDirFor,
   dubDirFor,
   dubbedVideoPathFor,
   dubReverseSrtPathFor,
+  extractDubSourceWindow,
+  filterDubCuesByTimeRange,
   generateDubScript,
+  guardDubSourceAgainstHardSubtitles,
   isDemucsError,
+  isDubHardSubtitleError,
   probeDemucs,
   readDubCues,
   readDubScript,
@@ -82,6 +87,9 @@ export type DubFlags = NativeLlmCliFlags & {
   /** 写出 dub-report.json 但不因 hard issue 阻断（调试用）。 */
   skipGate?: boolean;
   force?: boolean;
+  /** 只处理源片 [startMs, endMs) 时间窗；不裁文件进 downloads。 */
+  startMs?: string;
+  endMs?: string;
 };
 
 const EXIT_INPUT_MISSING = NATIVE_EXIT.NO_INPUT;
@@ -94,6 +102,30 @@ const exitFromTtsKind = (kind: string): number => {
   if (kind === "QUOTA") return NATIVE_EXIT.LLM_QUOTA;
   if (kind === "NETWORK" || kind === "RATE_LIMIT") return NATIVE_EXIT.LLM_NETWORK;
   return 1;
+};
+
+const parseNonNegativeInt = (raw: string | undefined, label: string): number | undefined => {
+  if (raw === undefined) return undefined;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`Invalid ${label}: expected a non-negative integer, got ${JSON.stringify(raw)}`);
+  }
+  return n;
+};
+
+const parseDubTimeRange = (
+  flags: DubFlags,
+): { startMs?: number; endMs?: number } => {
+  const startMs = parseNonNegativeInt(flags.startMs, "--start-ms");
+  const endMs = parseNonNegativeInt(flags.endMs, "--end-ms");
+  if (startMs === undefined && endMs === undefined) return {};
+  if (endMs !== undefined && (startMs ?? 0) >= endMs) {
+    throw new Error(`Invalid dub time range: --end-ms (${endMs}) must be greater than --start-ms (${startMs ?? 0}).`);
+  }
+  return {
+    ...(startMs !== undefined ? { startMs } : {}),
+    ...(endMs !== undefined ? { endMs } : {}),
+  };
 };
 
 const parsePositiveInt = (raw: string | undefined): number | undefined => {
@@ -192,6 +224,107 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     return 0;
   }
 
+  // 成片路径才需要源视频；--script-only / --timing-only 可以没有 full.mp4
+  const needsVideo = flags.scriptOnly !== true && flags.timingOnly !== true;
+  let sourceVideo: { videoPath: string; preferred: boolean } | undefined;
+  let pythonPath: string | undefined;
+
+  let timeRange: { startMs?: number; endMs?: number };
+  try {
+    timeRange = parseDubTimeRange(flags);
+  } catch (err: unknown) {
+    printCliErrorBlock({
+      command: "dub",
+      subject: videoId,
+      reason: err instanceof Error ? err.message : String(err),
+      hints: ["Use --start-ms / --end-ms with non-negative integers (end > start)."],
+      retryCommand: `pnpm yt2x dub --video-id ${videoId} --start-ms 0 --end-ms 90000`,
+    });
+    return EXIT_INPUT_MISSING;
+  }
+
+  if (needsVideo) {
+    try {
+      sourceVideo = await resolveDubSourceVideo({ articleRoot, outRoot, videoId });
+      logger.info(
+        { videoId, videoPath: sourceVideo.videoPath, preferred: sourceVideo.preferred },
+        "dub: using source video from downloads",
+      );
+      if (!sourceVideo.preferred) {
+        logger.warn(
+          { videoPath: sourceVideo.videoPath },
+          "dub: source is not full.mp4 — proceeding with the resolved file",
+        );
+      }
+    } catch (err: unknown) {
+      printCliErrorBlock({
+        command: "dub",
+        subject: videoId,
+        reason: err instanceof Error ? err.message : String(err),
+        hints: ["Run `yt2x acquire` so video/full.mp4 exists under downloads."],
+        retryCommand: `pnpm yt2x dub --video-id ${videoId}`,
+      });
+      return EXIT_INPUT_MISSING;
+    }
+
+    // 硬字幕检测必须先于 Demucs / LLM 改写 / TTS —— 否则会白花钱还产出不可用成片
+    try {
+      await guardDubSourceAgainstHardSubtitles(sourceVideo.videoPath, defaultProcessRunner);
+    } catch (err: unknown) {
+      printCliErrorBlock({
+        command: "dub",
+        subject: videoId,
+        reason: err instanceof Error ? err.message : String(err),
+        hints: [
+          "检测到源片已有中文硬字幕：配音会改时间轴，保留旧硬字幕必然音字错位。",
+          "换用 downloads 下未烧录字幕的原始素材后重试。",
+          "字幕烧录流程仍可跳过叠烧；只有配音流程会因此拒绝执行。",
+        ],
+        retryCommand: `pnpm yt2x dub --video-id ${videoId}`,
+      });
+      return isDubHardSubtitleError(err) ? EXIT_INPUT_MISSING : 1;
+    }
+
+    if (timeRange.startMs !== undefined || timeRange.endMs !== undefined) {
+      const windowPath = path.join(dubDir, "work", "source-window.mp4");
+      try {
+        await extractDubSourceWindow({
+          videoPath: sourceVideo.videoPath,
+          outputPath: windowPath,
+          startMs: timeRange.startMs ?? 0,
+          ...(timeRange.endMs !== undefined ? { endMs: timeRange.endMs } : {}),
+          runner: defaultProcessRunner,
+          ...(flags.ffmpegPath !== undefined ? { ffmpegPath: flags.ffmpegPath } : {}),
+        });
+        sourceVideo = {
+          videoPath: windowPath,
+          preferred: sourceVideo.preferred,
+        };
+        logger.info(
+          {
+            videoId,
+            windowPath,
+            startMs: timeRange.startMs ?? 0,
+            endMs: timeRange.endMs,
+          },
+          "dub: using temporary source window (not written to downloads)",
+        );
+      } catch (err: unknown) {
+        printCliErrorBlock({
+          command: "dub",
+          subject: videoId,
+          reason: err instanceof Error ? err.message : String(err),
+          hints: [
+            "Failed to extract the --start-ms/--end-ms window from the downloads original.",
+            "Check ffmpeg and the source timestamps.",
+          ],
+          retryCommand: `pnpm yt2x dub --video-id ${videoId}`,
+        });
+        return 1;
+      }
+    }
+  }
+
   const llm = resolveNativeLlm(flags);
   if (!llm.ok) {
     printCliErrorBlock({
@@ -218,13 +351,8 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     return EXIT_INPUT_MISSING;
   }
 
-  // 成片路径才需要源视频；--script-only / --timing-only 可以没有 full.mp4
-  const needsVideo = flags.scriptOnly !== true && flags.timingOnly !== true;
-  let sourceVideo: { videoPath: string; preferred: boolean } | undefined;
-  let pythonPath: string | undefined;
-
   if (needsVideo) {
-    // Demucs 探测必须前置于后续计费调用（改短 LLM / 调速 TTS）和分离本身
+    // Demucs 探测前置于后续计费调用（改短 LLM / 调速 TTS）和分离本身
     try {
       pythonPath = await probeDemucs({
         ...(flags.pythonPath !== undefined ? { pythonPath: flags.pythonPath } : {}),
@@ -243,32 +371,13 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       });
       return NATIVE_EXIT.CONFIG_MISSING;
     }
-
-    try {
-      sourceVideo = await resolveDubSourceVideo({ articleRoot, outRoot, videoId });
-      if (!sourceVideo.preferred) {
-        logger.warn(
-          { videoId, videoPath: sourceVideo.videoPath },
-          "dub: source is not full.mp4 — proceeding with the resolved file",
-        );
-      }
-    } catch (err: unknown) {
-      printCliErrorBlock({
-        command: "dub",
-        subject: videoId,
-        reason: err instanceof Error ? err.message : String(err),
-        hints: ["Run `yt2x acquire` so video/full.mp4 exists."],
-        retryCommand: `pnpm yt2x dub --video-id ${videoId}`,
-      });
-      return EXIT_INPUT_MISSING;
-    }
   }
 
   try {
     // ── 2. 配音稿（可复用） ──
     let script = flags.force === true ? undefined : await readDubScript(dubDir).catch(() => undefined);
     if (script === undefined) {
-      const cues = await readDubCues(srtPath);
+      const cues = filterDubCuesByTimeRange(await readDubCues(srtPath), timeRange);
       const segments = mergeCuesIntoSegments(cues, mergeOptionsFrom(flags));
       if (segments.length === 0) {
         printCliErrorBlock({

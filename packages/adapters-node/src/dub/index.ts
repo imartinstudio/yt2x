@@ -38,6 +38,7 @@ export {
   readDubTimingReport,
   resolveZhSubtitlePath,
   resolveDubSourceVideo,
+  filterDubCuesByTimeRange,
   writeDubLineAudio,
   writeDubScript,
   writeDubTimingReport,
@@ -46,6 +47,7 @@ export {
   writeDubGateReport,
   DubTimingReportSchema,
   type WrittenDubLineAudio,
+  type DubCueTimeRange,
 } from "./file-store.js";
 export {
   generateDubScript,
@@ -73,6 +75,13 @@ export {
   type SeparateDemucsResult,
 } from "./demucs.js";
 export {
+  DubHardSubtitleError,
+  assertNoChineseHardSubtitlesForDub,
+  guardDubSourceAgainstHardSubtitles,
+  isDubHardSubtitleError,
+  type GuardDubSourceOptions,
+} from "./source-guard.js";
+export {
   applyDubNegotiation,
   type ApplyDubNegotiationInput,
   type ApplyDubNegotiationResult,
@@ -88,6 +97,7 @@ export {
   computeDubbedOutputDurationMs,
   mixVoiceAndBgmFilterComplex,
   buildMuxDubbedVideoArgs,
+  extractDubSourceWindow,
   assertConcatEntriesHomogeneous,
   assertRenderedDurationMs,
   assertFfmpegStderrClean,

@@ -200,6 +200,39 @@ const runFfmpeg = async (
 };
 
 /**
+ * 从完整原片抽出时间窗到临时文件（不得写入 downloads）。
+ * 用 stream copy，失败时由调用方决定是否重编码。
+ */
+export const extractDubSourceWindow = async (input: {
+  videoPath: string;
+  outputPath: string;
+  startMs: number;
+  endMs?: number;
+  runner?: ProcessRunner;
+  ffmpegPath?: string;
+  signal?: AbortSignal;
+}): Promise<string> => {
+  const runner = input.runner ?? defaultProcessRunner;
+  const ffmpegPath = input.ffmpegPath ?? "ffmpeg";
+  await mkdir(path.dirname(input.outputPath), { recursive: true });
+  const args = ["-y", "-ss", (Math.max(0, input.startMs) / 1000).toFixed(3)];
+  if (input.endMs !== undefined) {
+    args.push("-to", (input.endMs / 1000).toFixed(3));
+  }
+  args.push(
+    "-i",
+    input.videoPath,
+    "-c",
+    "copy",
+    "-avoid_negative_ts",
+    "make_zero",
+    input.outputPath,
+  );
+  await runFfmpeg(runner, ffmpegPath, args, input.signal);
+  return input.outputPath;
+};
+
+/**
  * 用 concat demuxer 拼人声轨：前导静音 + 句 + 句间静音 + …
  *
  * 方案 C：行音频先解码成与静音相同的 WAV（pcm_s16le / 44100 / mono），再拼接。

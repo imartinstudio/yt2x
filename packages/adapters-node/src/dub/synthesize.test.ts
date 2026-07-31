@@ -1,9 +1,16 @@
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, copyFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DubScript, DubScriptLine, TtsPort, TtsRequest } from "@yt2x/core";
-import { SYNTHESIS_RATE, median, probeAudioDurationMs, synthesizeDubLines } from "./synthesize.js";
+import {
+  SYNTHESIS_RATE,
+  TTS_EDGE_SILENCE_TRIM_FILTER,
+  median,
+  probeAudioDurationMs,
+  synthesizeDubLine,
+  synthesizeDubLines,
+} from "./synthesize.js";
 import type { ProcessResult, ProcessRunner, ProcessSpec } from "../process/index.js";
 
 const okResult = (spec: ProcessSpec, stdout: string): ProcessResult => ({
@@ -17,6 +24,11 @@ const okResult = (spec: ProcessSpec, stdout: string): ProcessResult => ({
   command: spec.command,
   args: spec.args ?? [],
 });
+
+const isFfprobeSpec = (spec: ProcessSpec): boolean =>
+  spec.command === "ffprobe" ||
+  spec.command.endsWith("ffprobe") ||
+  (spec.args ?? []).includes("format=duration");
 
 const line = (index: number, targetDurationMs: number, text: string): DubScriptLine => ({
   index,
@@ -56,19 +68,71 @@ const stubTts = (
   return { tts, requests };
 };
 
-/** durations 按调用顺序返回秒数字符串，模拟 ffprobe 的 csv=p=0 输出。 */
+/** 模拟 ffmpeg 写出 trim 临时文件，否则 rename 会 ENOENT。 */
+const materializeFfmpegOutput = async (spec: ProcessSpec): Promise<void> => {
+  const args = spec.args ?? [];
+  const out = args[args.length - 1];
+  if (typeof out !== "string" || !out.includes(".trim-")) return;
+  const inIdx = args.indexOf("-i");
+  const inputPath = inIdx >= 0 ? args[inIdx + 1] : undefined;
+  if (typeof inputPath !== "string") return;
+  await copyFile(inputPath, out);
+};
+
+/**
+ * durations 按 **ffprobe** 调用顺序返回；ffmpeg（裁静音）不消耗该序列。
+ * 这样合成缝插入 trim 后，旧用例的时长字面量仍然成立。
+ */
 const probeRunner = (durations: readonly string[]): { runner: ProcessRunner; specs: ProcessSpec[] } => {
   const specs: ProcessSpec[] = [];
+  let probeIdx = 0;
   const runner: ProcessRunner = {
     run: async (spec) => {
       specs.push(spec);
-      return okResult(spec, `${durations[specs.length - 1] ?? "1.0"}\n`);
+      if (isFfprobeSpec(spec)) {
+        const d = durations[probeIdx] ?? "1.0";
+        probeIdx += 1;
+        return okResult(spec, `${d}\n`);
+      }
+      await materializeFfmpegOutput(spec);
+      return okResult(spec, "");
     },
   };
   return { runner, specs };
 };
 
 const tmpDubDir = (): Promise<string> => mkdtemp(path.join(os.tmpdir(), "yt2x-dub-"));
+
+describe("synthesizeDubLine", () => {
+  it("trims edge silence before probing and returns the post-trim duration", async () => {
+    const dubDir = await tmpDubDir();
+    const { tts } = stubTts();
+    // 若未裁剪就测时长，用例会误用「虚高」值；这里只提供裁剪后的秒数
+    const { runner, specs } = probeRunner(["0.800"]);
+
+    const result = await synthesizeDubLine({
+      tts,
+      text: "你好",
+      voice: "v",
+      rate: 1,
+      index: 1,
+      dubDir,
+      runner,
+    });
+
+    expect(result.durationMs).toBe(800);
+    expect(result.audioFile).toBe("lines/0001.mp3");
+
+    const ffmpegSpecs = specs.filter((s) => !isFfprobeSpec(s));
+    expect(ffmpegSpecs.length).toBeGreaterThanOrEqual(1);
+    const af = ffmpegSpecs[0]!.args?.[ffmpegSpecs[0]!.args.indexOf("-af") + 1];
+    expect(af).toBe(TTS_EDGE_SILENCE_TRIM_FILTER);
+    expect(af).toContain("start_periods=1");
+    expect(af).toContain("areverse");
+    expect(af).not.toContain("stop_periods=-1");
+    expect(af).not.toMatch(/stop_periods=1(?!\d)/);
+  });
+});
 
 describe("median", () => {
   it("returns 0 for an empty list", () => {

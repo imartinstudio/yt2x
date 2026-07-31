@@ -70,5 +70,5 @@ packages/cli/.../native-pipeline.ts             --dub → subtitle 只翻译；a
 
 ## 待定（可后续调）
 
-- 门禁硬阈值在跑过一批真实片子后按 `dub-timing.json` / `dub-report.json` 分布收紧
+- 门禁硬阈值在裁掉 TTS 首尾静音（issue #108）后按新口径重标：`advisoryMedianRatio=1.15`、`advisoryOverflowFraction=0.35`
 - edge-tts / ElevenLabs 默认音色试听后再定

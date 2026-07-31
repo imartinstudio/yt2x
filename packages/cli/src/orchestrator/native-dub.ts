@@ -364,13 +364,14 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         script,
         voice,
         dubDir,
-        ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
-        onLineDone: (done, total) => {
-          if (done % 20 === 0 || done === total) {
-            logger.info({ videoId, done, total }, "yt2x dub: synthesis progress");
-          }
-        },
-      });
+      ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
+      ...(flags.ffmpegPath !== undefined ? { ffmpegPath: flags.ffmpegPath } : {}),
+      onLineDone: (done, total) => {
+        if (done % 20 === 0 || done === total) {
+          logger.info({ videoId, done, total }, "yt2x dub: synthesis progress");
+        }
+      },
+    });
       for (const warning of synthWarnings) logger.warn({ videoId }, `dub synthesis: ${warning}`);
       timing = report;
       const reportPath = await writeDubTimingReport(dubDir, timing);
@@ -422,6 +423,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       llm: llm.adapter,
       model: llm.model,
       ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
+      ...(flags.ffmpegPath !== undefined ? { ffmpegPath: flags.ffmpegPath } : {}),
       onLineDone: (done, total) => {
         if (done % 20 === 0 || done === total) {
           logger.info({ videoId, done, total }, "yt2x dub: negotiation apply progress");

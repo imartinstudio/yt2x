@@ -11,14 +11,14 @@ import {
 } from "@yt2x/core";
 import { parseJsonWithRepairs, salvagePartialJsonArray } from "../llm/parse-json.js";
 import type { ProcessRunner } from "../process/index.js";
-import { writeDubLineAudio } from "./file-store.js";
-import { probeAudioDurationMs } from "./synthesize.js";
+import { synthesizeDubLine } from "./synthesize.js";
 
 /**
  * 执行时长协商计划：按需调速重合成 / LLM 改短 / 顺延，产出最终落点。
  *
  * keep 行直接复用 PR1 的 lines/*.mp3；speed / shorten 会覆盖同名文件。
  * shorten 失败或改短后仍装不下时降为 delay，保证整条链总能跑完。
+ * 凡重合成一律走 `synthesizeDubLine`（含首尾静音裁剪），与初次合成同缝。
  */
 
 const FIT_SLACK_MS = 50;
@@ -37,6 +37,7 @@ export type ApplyDubNegotiationInput = {
   llm?: LlmPort;
   model?: string;
   runner?: ProcessRunner;
+  ffmpegPath?: string;
   ffprobePath?: string;
   signal?: AbortSignal;
   onLineDone?: (done: number, total: number) => void;
@@ -145,21 +146,19 @@ const synthesizeLine = async (
   rate: number,
   index: number,
 ): Promise<{ durationMs: number; audioFile: string }> => {
-  const result = await input.tts.synthesize({
+  const synth = await synthesizeDubLine({
+    tts: input.tts,
     text,
     voice: input.voice,
     rate,
-    format: "mp3",
-    ...(input.signal !== undefined ? { signal: input.signal } : {}),
-  });
-  const written = await writeDubLineAudio(input.dubDir, index, result.audio, result.format);
-  const durationMs = await probeAudioDurationMs({
-    filePath: written.absolutePath,
+    index,
+    dubDir: input.dubDir,
     ...(input.runner !== undefined ? { runner: input.runner } : {}),
+    ...(input.ffmpegPath !== undefined ? { ffmpegPath: input.ffmpegPath } : {}),
     ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
-  return { durationMs, audioFile: written.relativePath };
+  return { durationMs: synth.durationMs, audioFile: synth.audioFile };
 };
 
 export const applyDubNegotiation = async (

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,6 +30,21 @@ const okResult = (spec: ProcessSpec, stdout = "1.000\n"): ProcessResult => ({
   args: spec.args ?? [],
 });
 
+const isFfprobeSpec = (spec: ProcessSpec): boolean =>
+  spec.command === "ffprobe" ||
+  spec.command.endsWith("ffprobe") ||
+  (spec.args ?? []).includes("format=duration");
+
+const materializeFfmpegOutput = async (spec: ProcessSpec): Promise<void> => {
+  const args = spec.args ?? [];
+  const out = args[args.length - 1];
+  if (typeof out !== "string" || !out.includes(".trim-")) return;
+  const inIdx = args.indexOf("-i");
+  const inputPath = inIdx >= 0 ? args[inIdx + 1] : undefined;
+  if (typeof inputPath !== "string") return;
+  await copyFile(inputPath, out);
+};
+
 const fakeTts = (durationByRate: Record<string, number> = { "1": 1000 }): TtsPort => ({
   id: "fake",
   rateRange: { min: 0.5, max: 2.0 },
@@ -47,10 +62,20 @@ const fakeTts = (durationByRate: Record<string, number> = { "1": 1000 }): TtsPor
   },
 });
 
-const probeRunner = (durationSec: string): ProcessRunner => ({
-  run: async (spec) => okResult(spec, `${durationSec}\n`),
-});
-
+const probeRunner = (
+  durationSec: string,
+): { runner: ProcessRunner; specs: ProcessSpec[] } => {
+  const specs: ProcessSpec[] = [];
+  const runner: ProcessRunner = {
+    run: async (spec) => {
+      specs.push(spec);
+      if (isFfprobeSpec(spec)) return okResult(spec, `${durationSec}\n`);
+      await materializeFfmpegOutput(spec);
+      return okResult(spec, "");
+    },
+  };
+  return { runner, specs };
+};
 const planFixture = (overrides?: Partial<DubNegotiatePlan["lines"][number]>): DubNegotiatePlan => ({
   version: 1,
   videoId: "vid",
@@ -81,13 +106,14 @@ describe("applyDubNegotiation", () => {
   it("reuses existing audio for keep lines", async () => {
     const dubDir = await makeTmp();
     const existing = new Map([[1, "lines/0001.mp3"]]);
+    const { runner } = probeRunner("0.9");
     const { report } = await applyDubNegotiation({
       plan: planFixture(),
       tts: fakeTts(),
       voice: "v",
       dubDir,
       existingAudioByIndex: existing,
-      runner: probeRunner("0.9"),
+      runner,
     });
     expect(report.keepCount).toBe(1);
     expect(report.lines[0]).toMatchObject({
@@ -98,20 +124,23 @@ describe("applyDubNegotiation", () => {
     });
   });
 
-  it("re-synthesizes speed lines and records the new audio", async () => {
+  it("re-synthesizes speed lines through the shared trim seam", async () => {
     const dubDir = await makeTmp();
+    const { runner, specs } = probeRunner("1.0");
     const { report } = await applyDubNegotiation({
       plan: planFixture({ action: "speed", rate: 1.1, naturalMs: 1100, plannedEndMs: 1000 }),
       tts: fakeTts({ "1.1": 1000 }),
       voice: "v",
       dubDir,
       existingAudioByIndex: new Map(),
-      runner: probeRunner("1.0"),
+      runner,
     });
     expect(report.speedCount).toBe(1);
     expect(report.lines[0]!.audioFile).toBe("lines/0001.mp3");
     const bytes = await readFile(path.join(dubDir, "lines", "0001.mp3"));
     expect(bytes.byteLength).toBeGreaterThan(0);
+    const ffmpegSpecs = specs.filter((s) => !isFfprobeSpec(s));
+    expect(ffmpegSpecs.some((s) => (s.args ?? []).includes("-af"))).toBe(true);
   });
 
   it("shortens via LLM then synthesizes", async () => {
@@ -123,6 +152,7 @@ describe("applyDubNegotiation", () => {
         finishReason: "stop",
       }),
     };
+    const { runner } = probeRunner("0.8");
     const { report } = await applyDubNegotiation({
       plan: planFixture({
         action: "shorten",
@@ -136,7 +166,7 @@ describe("applyDubNegotiation", () => {
       existingAudioByIndex: new Map(),
       llm,
       model: "m",
-      runner: probeRunner("0.8"),
+      runner,
     });
     expect(report.shortenCount).toBe(1);
     expect(report.lines[0]!.text).toBe("短句");

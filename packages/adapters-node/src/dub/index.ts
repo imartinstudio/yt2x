@@ -54,9 +54,14 @@ export {
 } from "./script.js";
 export {
   SYNTHESIS_RATE,
+  TTS_EDGE_SILENCE_TRIM_FILTER,
   probeAudioDurationMs,
+  trimLeadingTrailingSilence,
+  synthesizeDubLine,
   synthesizeDubLines,
   type ProbeAudioDurationInput,
+  type SynthesizeDubLineInput,
+  type SynthesizeDubLineResult,
   type SynthesizeDubLinesInput,
   type SynthesizeDubLinesResult,
 } from "./synthesize.js";

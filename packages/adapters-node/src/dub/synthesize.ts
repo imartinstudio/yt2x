@@ -1,11 +1,14 @@
+import { rename, rm } from "node:fs/promises";
 import type { DubLineTiming, DubScript, DubTimingReport, TtsPort } from "@yt2x/core";
 import { defaultProcessRunner, type ProcessRunner } from "../process/index.js";
 import { writeDubLineAudio } from "./file-store.js";
 
 /**
- * 逐句合成 + ffprobe 实测 + 汇总时长报告。
+ * 逐句合成 + 裁首尾静音 + ffprobe 实测 + 汇总时长报告。
  *
  * PR1 的全部意义就是这份报告：PR3 的门禁阈值必须从真实分布里定，拍脑袋的阈值会全错。
+ * edge-tts / ElevenLabs 文件头常带 ~200ms 前置静音；若不裁掉，字幕会早于人声，
+ * 且协商会按虚高时长做不必要的加速/改短（issue #108）。
  */
 
 /**
@@ -16,7 +19,17 @@ import { writeDubLineAudio } from "./file-store.js";
  */
 export const SYNTHESIS_RATE = 1;
 
+/**
+ * 只剥首尾静音，不动句中停顿（语气的一部分）。
+ * 用 areverse 双边剥头，避免 `stop_periods=1` 把句中气口当成片尾静音直接砍掉
+ *（issue #108 实测：同阈值下 stop_periods 会把 ~6s 句子裁成 ~0.4s）。
+ * 检测口径仍与实测一致：-45dB / 50ms。
+ */
+export const TTS_EDGE_SILENCE_TRIM_FILTER =
+  "silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse";
+
 const FFPROBE_TIMEOUT_MS = 15_000;
+const FFMPEG_TRIM_TIMEOUT_MS = 120_000;
 
 export type ProbeAudioDurationInput = {
   filePath: string;
@@ -57,6 +70,103 @@ export const median = (values: readonly number[]): number => {
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 };
 
+/** 就地裁掉音频文件首尾静音；句中静音保留。 */
+export const trimLeadingTrailingSilence = async (input: {
+  filePath: string;
+  runner?: ProcessRunner;
+  ffmpegPath?: string;
+  signal?: AbortSignal;
+}): Promise<void> => {
+  const runner = input.runner ?? defaultProcessRunner;
+  const ffmpegPath = input.ffmpegPath ?? "ffmpeg";
+  const tmpPath = `${input.filePath}.trim-${process.pid}-${Date.now()}.mp3`;
+  try {
+    const result = await runner.run({
+      command: ffmpegPath,
+      args: [
+        "-y",
+        "-i",
+        input.filePath,
+        "-af",
+        TTS_EDGE_SILENCE_TRIM_FILTER,
+        "-c:a",
+        "libmp3lame",
+        "-q:a",
+        "2",
+        tmpPath,
+      ],
+      timeoutMs: FFMPEG_TRIM_TIMEOUT_MS,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `ffmpeg silence trim failed (exit ${result.exitCode}): ${result.stderr.slice(-400)}`,
+      );
+    }
+    await rename(tmpPath, input.filePath);
+  } catch (err) {
+    await rm(tmpPath, { force: true }).catch(() => undefined);
+    throw err;
+  }
+};
+
+export type SynthesizeDubLineInput = {
+  tts: TtsPort;
+  text: string;
+  voice: string;
+  rate: number;
+  index: number;
+  /** 配音产物目录，音频写进 <dubDir>/lines/。 */
+  dubDir: string;
+  runner?: ProcessRunner;
+  ffmpegPath?: string;
+  ffprobePath?: string;
+  signal?: AbortSignal;
+};
+
+export type SynthesizeDubLineResult = {
+  durationMs: number;
+  audioFile: string;
+  absolutePath: string;
+  /** 引擎实际使用的倍率（可能被 rateRange 裁过）。 */
+  rate: number;
+};
+
+/**
+ * 共享「合成单行」缝：TTS → 落盘 → 裁首尾静音 → 实测裁剪后时长。
+ * 初次合成与协商重合成都必须走这里，避免第三个引擎静默带回前置静音。
+ */
+export const synthesizeDubLine = async (
+  input: SynthesizeDubLineInput,
+): Promise<SynthesizeDubLineResult> => {
+  const result = await input.tts.synthesize({
+    text: input.text,
+    voice: input.voice,
+    rate: input.rate,
+    format: "mp3",
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const written = await writeDubLineAudio(input.dubDir, input.index, result.audio, result.format);
+  await trimLeadingTrailingSilence({
+    filePath: written.absolutePath,
+    ...(input.runner !== undefined ? { runner: input.runner } : {}),
+    ...(input.ffmpegPath !== undefined ? { ffmpegPath: input.ffmpegPath } : {}),
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const durationMs = await probeAudioDurationMs({
+    filePath: written.absolutePath,
+    ...(input.runner !== undefined ? { runner: input.runner } : {}),
+    ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  return {
+    durationMs,
+    audioFile: written.relativePath,
+    absolutePath: written.absolutePath,
+    rate: result.rate,
+  };
+};
+
 export type SynthesizeDubLinesInput = {
   tts: TtsPort;
   script: DubScript;
@@ -64,6 +174,7 @@ export type SynthesizeDubLinesInput = {
   /** 配音产物目录，音频写进 <dubDir>/lines/。 */
   dubDir: string;
   runner?: ProcessRunner;
+  ffmpegPath?: string;
   ffprobePath?: string;
   signal?: AbortSignal;
   onLineDone?: (done: number, total: number) => void;
@@ -83,28 +194,26 @@ export const synthesizeDubLines = async (
   let done = 0;
 
   for (const line of input.script.lines) {
-    const result = await input.tts.synthesize({
+    const synth = await synthesizeDubLine({
+      tts: input.tts,
       text: line.text,
       voice: input.voice,
       rate: SYNTHESIS_RATE,
-      format: "mp3",
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
-    });
-    if (result.rate !== SYNTHESIS_RATE) {
-      // rateRange 把 1.0 裁掉说明适配器配置有问题，样本已经不可比，必须留痕
-      warnings.push(
-        `line ${line.index}: engine used rate ${result.rate} instead of ${SYNTHESIS_RATE}; timing sample is not comparable`,
-      );
-    }
-
-    const written = await writeDubLineAudio(input.dubDir, line.index, result.audio, result.format);
-    const synthesizedMs = await probeAudioDurationMs({
-      filePath: written.absolutePath,
+      index: line.index,
+      dubDir: input.dubDir,
       ...(input.runner !== undefined ? { runner: input.runner } : {}),
+      ...(input.ffmpegPath !== undefined ? { ffmpegPath: input.ffmpegPath } : {}),
       ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
+    if (synth.rate !== SYNTHESIS_RATE) {
+      // rateRange 把 1.0 裁掉说明适配器配置有问题，样本已经不可比，必须留痕
+      warnings.push(
+        `line ${line.index}: engine used rate ${synth.rate} instead of ${SYNTHESIS_RATE}; timing sample is not comparable`,
+      );
+    }
 
+    const synthesizedMs = synth.durationMs;
     timings.push({
       index: line.index,
       targetDurationMs: line.targetDurationMs,
@@ -112,7 +221,7 @@ export const synthesizeDubLines = async (
       // 目标时长为 0 的行（字幕时间戳异常）除下去会得到 Infinity，记 0 更好排查
       ratio: line.targetDurationMs > 0 ? synthesizedMs / line.targetDurationMs : 0,
       charCount: line.text.length,
-      audioFile: written.relativePath,
+      audioFile: synth.audioFile,
     });
 
     done += 1;

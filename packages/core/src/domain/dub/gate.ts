@@ -53,16 +53,19 @@ export type DubGateThresholds = {
 };
 
 /**
- * 临时硬阈值（PR3）。
+ * 临时硬阈值。
+ *
+ * issue #108 裁掉 TTS 首尾静音后，自然语速时长整体左移（不再含 ~200ms 虚高），
+ * 以 dubSmoke90 重跑分布重标 advisory：medianRatio 中枢约 0.7–1.0，overflow 约 20%。
+ * hard 项（extend / delay / 文本保留）本样本未触线，暂保持原约束。
  *
  * - extend ≤ 60s：超过一分钟的末帧冻结听感已经崩了
  * - delay ≤ 25%：超过四分之一句靠顺延，对齐策略基本失效
- * - medianRatio / overflow 先只警告：edge-tts 调试期分布偏高很常见
  * - 文本保留 ≥ 45%：改短预算通常在 50–70%，再低多半是 LLM 胡砍
  */
 export const DEFAULT_DUB_GATE_THRESHOLDS: DubGateThresholds = {
-  advisoryMedianRatio: 1.35,
-  advisoryOverflowFraction: 0.5,
+  advisoryMedianRatio: 1.15,
+  advisoryOverflowFraction: 0.35,
   maxExtendMs: 60_000,
   maxDelayFraction: 0.25,
   minTextRetainFraction: 0.45,

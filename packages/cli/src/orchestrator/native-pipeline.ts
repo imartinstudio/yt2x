@@ -13,6 +13,8 @@ import {
   readProcessStatusMerged,
   readYoutubePageUrl,
   resolveBurnSourceVideo,
+  resolveDubWordsPath,
+  transcribeLocal,
   type ProcessRunner,
 } from "@yt2x/adapters-node";
 import type { PipelineArgs } from "../args/pipeline.js";
@@ -29,7 +31,7 @@ import {
   createPipelineProgress,
   estimatePipelineVideoCount,
 } from "../progress/pipeline-progress.js";
-import { resolveNativeLlm } from "./native-stage-common.js";
+import { NATIVE_EXIT, resolveNativeLlm } from "./native-stage-common.js";
 
 export type NativePipelineOptions = {
   args: PipelineArgs;
@@ -335,7 +337,9 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
 
   // 如果用户要求烧录字幕，推迟到 article 阶段之后执行。
   // acquire 阶段只需生成 full.zh.srt，不需要烧录（无论 acquire 是否 skip）。
-  // --dub 时成片由配音反向 SRT 负责：zh 与 bilingual 烧录整段跳过（决策 #8：只出 full.zh-dubbed.mp4）。
+  // 配音只存在于本地转录通道（见 docs/dub-context-glossary）：--dub 不再消费 full.zh.srt，
+  // 不再替用户强制打开 zh 字幕翻译；仍需避免 acquire 自己把 zh/bilingual 烧进视频——
+  // 成片由 native-dub 自己的反向 SRT + remix 产出（decision #8 的旧框定，PR4 才会统一）。
   const dubRequested = args.control.dub === true;
   const bilingualBurnRequested =
     !dubRequested &&
@@ -345,14 +349,12 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
     (args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both") &&
     !bilingualBurnRequested;
 
-  // --dub 需要 full.zh.srt：若用户没开 subtitle，或只开了 burn，降为 srt。
-  // bilingual 同步压成 off，避免 acquire 内仍烧出第二个成片。
+  // --dub 时若用户显式要了 zh burned/both，降为 srt 避免 acquire 自己烧出第二份视频；
+  // 用户没开 zh 字幕（off）时保持 off——dub 不再需要 full.zh.srt，强行翻译只会白花钱。
   const effectiveSubtitleZh = dubRequested
-    ? args.acquire.subtitleZh === "off"
+    ? args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both"
       ? ("srt" as const)
-      : args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both"
-        ? ("srt" as const)
-        : args.acquire.subtitleZh
+      : args.acquire.subtitleZh
     : args.acquire.subtitleZh;
   const effectiveSubtitleBilingual = dubRequested ? ("off" as const) : args.acquire.subtitleBilingual;
 
@@ -390,11 +392,12 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         ...(runner !== undefined ? { runner } : {}),
       });
 
+      // 不再无条件因 dubRequested 加一条：dub 不消费 full.zh.srt，是否需要翻译完全由
+      // acquireSubtitleMode 本身（即用户的 --subtitle-zh 选择）决定。
       const needsTranslation =
         acquireSubtitleMode === "srt" ||
         acquireSubtitleMode === "burned" ||
-        acquireSubtitleMode === "both" ||
-        dubRequested;
+        acquireSubtitleMode === "both";
       let llmResult: ReturnType<typeof resolveNativeLlm> | undefined;
       if (needsTranslation) {
         llmResult = resolveNativeLlm({
@@ -456,6 +459,42 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
 
     if (args.stages.acquire === "skip" || args.control.continueFlag) {
       videoIds = await filterMaterializedVideoIds(outRoot, videoIds);
+    }
+
+    // 配音只存在于本地转录通道（docs/dub-context-glossary）：--dub 时确保每个视频都有本地
+    // 词级时间戳，缺失就地转写。放在 notes/article 之前 fail fast——不然要等 dub 阶段
+    // 读 words.json 失败时，notes + article 的 LLM 费用已经花完了。
+    if (dubRequested) {
+      for (const id of videoIds) {
+        const alreadyTranscribed = await resolveDubWordsPath({ outRoot, videoId: id })
+          .then(() => true)
+          .catch(() => false);
+        if (alreadyTranscribed) continue;
+
+        logger.info(
+          { videoId: id },
+          "yt2x pipeline --dub: no local transcript found, transcribing now…",
+        );
+        const result = await transcribeLocal({
+          videoDir: path.join(outRoot, id),
+          language: "en",
+          runner: runner ?? defaultProcessRunner,
+        });
+        if (result === undefined) {
+          logger.error(
+            { videoId: id },
+            "yt2x pipeline --dub: local transcription unavailable (faster-whisper not installed, " +
+              "or no downloaded source video found). Install faster-whisper, or run " +
+              "`yt2x subtitle transcribe-local <videoId>` manually, then retry.",
+          );
+          finalExitCode = NATIVE_EXIT.CONFIG_MISSING;
+          return finalExitCode;
+        }
+        logger.info(
+          { videoId: id, wordsPath: result.wordsPath, cueCount: result.cueCount },
+          "yt2x pipeline --dub: local transcript ready",
+        );
+      }
     }
 
     const notesForId = (id: string) =>

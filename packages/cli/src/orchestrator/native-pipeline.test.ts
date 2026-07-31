@@ -46,6 +46,9 @@ const executeNativeAcquireMock = vi.hoisted(() => vi.fn(async (opts: { outDir: s
   return 0;
 }));
 const burnZhSubtitlesForVideoMock = vi.hoisted(() => vi.fn(async () => ({ burned: true, skipped: false })));
+const transcribeLocalMock = vi.hoisted(() =>
+  vi.fn(async () => ({ srtPath: "video/full.local.en.srt", wordsPath: "video/full.local.en.words.json", cueCount: 1 })),
+);
 
 vi.mock("@yt2x/adapters-node", async (importOriginal) => {
   const actual = await importOriginal();
@@ -53,6 +56,7 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
     ...actual,
     executeNativeAcquire: executeNativeAcquireMock,
     burnZhSubtitlesForVideo: burnZhSubtitlesForVideoMock,
+    transcribeLocal: transcribeLocalMock,
   };
 });
 
@@ -77,6 +81,13 @@ beforeEach(() => {
   executeNativePublishMock.mockClear();
   executeNativeAcquireMock.mockClear();
   burnZhSubtitlesForVideoMock.mockClear();
+  executeNativeDubMock.mockClear();
+  transcribeLocalMock.mockClear();
+  transcribeLocalMock.mockImplementation(async () => ({
+    srtPath: "video/full.local.en.srt",
+    wordsPath: "video/full.local.en.words.json",
+    cueCount: 1,
+  }));
 });
 
 describe("mergePipelineExitCode", () => {
@@ -311,5 +322,91 @@ describe("runNativePipeline", () => {
     expect(acquireOpts.acquire.subtitleBilingual).toBe("off");
     expect(burnZhSubtitlesForVideoMock).not.toHaveBeenCalled();
     expect(executeNativeDubMock).toHaveBeenCalled();
+  });
+
+  it("does not force zh subtitle translation for --dub when subtitleZh is off (no consumer left)", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-no-forced-translate-"));
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      stages: { acquire: "auto", notes: "skip", article: "skip", publish: "skip" },
+      acquire: { subtitleZh: "off" },
+      sources: { urls: ["https://www.youtube.com/watch?v=abc123def45"] },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(executeNativeAcquireMock).toHaveBeenCalled();
+    const acquireOpts = executeNativeAcquireMock.mock.calls[0]![0] as {
+      acquire: { subtitleZh?: string };
+      llm?: unknown;
+    };
+    // --dub 不再消费 full.zh.srt：subtitleZh 保持用户的 off，不再被强制翻译。
+    expect(acquireOpts.acquire.subtitleZh).toBe("off");
+    expect(acquireOpts.llm).toBeUndefined();
+  });
+
+  it("transcribes the local words.json before notes/article when --dub is set and no transcript exists", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-transcribe-"));
+    const vid = "dubVid2";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      stages: { acquire: "skip", notes: "auto", article: "skip", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(transcribeLocalMock).toHaveBeenCalledOnce();
+    expect(transcribeLocalMock.mock.calls[0]![0]).toMatchObject({
+      videoDir: path.join(outRoot, vid),
+      language: "en",
+    });
+    // 转写必须先于 notes，否则花完 notes/article 的钱才失败就晚了。
+    expect(transcribeLocalMock.mock.invocationCallOrder[0]).toBeLessThan(
+      executeNativeNotesMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("skips local transcription when a local transcript already exists", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-skip-transcribe-"));
+    const vid = "dubVid3";
+    await mkdir(path.join(outRoot, vid, "video"), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    await writeFile(
+      path.join(outRoot, vid, "video", "full.local.en.words.json"),
+      JSON.stringify([{ word: "hi", start: 0, end: 0.2 }]),
+    );
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      stages: { acquire: "skip", notes: "skip", article: "skip", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(transcribeLocalMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).toHaveBeenCalledOnce();
+  });
+
+  it("fails fast before notes/article when local transcription is unavailable", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-transcribe-unavailable-"));
+    const vid = "dubVid4";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    transcribeLocalMock.mockImplementation(async () => undefined);
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(2); // NATIVE_EXIT.CONFIG_MISSING
+    expect(executeNativeNotesMock).not.toHaveBeenCalled();
+    expect(executeNativeArticleMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).not.toHaveBeenCalled();
   });
 });

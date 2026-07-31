@@ -45,6 +45,8 @@ import {
   planDubNegotiation,
   resolveMaxExtendMs,
   segmentUtterances,
+  type DubScript,
+  type DubTimingReport,
   type SegmentUtterancesOptions,
   type TtsPort,
 } from "@yt2x/core";
@@ -196,6 +198,24 @@ const resolveDubTts = (flags: DubFlags, engine: DubEngineId): ResolvedTts => {
       ...(flags.elevenlabsModel !== undefined ? { modelId: flags.elevenlabsModel } : {}),
     }),
   };
+};
+
+/**
+ * 校验磁盘上的 dub-timing.json 是否真的是当前 dub-script.json 合成出来的产物，而非
+ * 一次被拒的旧 script 遗留下来的同名文件。dub-timing.json 的 schema 自 PR3 起未变过，
+ * 单靠 zod 校验挡不住这种"形状对、内容配错"的复用——两者必须逐行 index 对齐、且
+ * charCount 与当前 script 行的文本长度一致，否则 buildNegotiateInputs 会按 index 把
+ * 新译文的时间轴配上旧改写稿合成的音频。
+ */
+const timingMatchesScript = (timing: DubTimingReport, script: DubScript): boolean => {
+  if (timing.lineCount !== script.lines.length || timing.lines.length !== script.lines.length) {
+    return false;
+  }
+  const byIndex = new Map(timing.lines.map((line) => [line.index, line]));
+  return script.lines.every((scriptLine) => {
+    const timingLine = byIndex.get(scriptLine.index);
+    return timingLine !== undefined && timingLine.charCount === scriptLine.text.length;
+  });
 };
 
 export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
@@ -395,6 +415,12 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
           return undefined;
         })
       : undefined;
+    // script 是否真的来自磁盘缓存（而非本次重新生成）——决定 dub-timing.json 和逐句音频
+    // 能不能复用。旧 dub-timing.json 的 schema 从未随 PR3 变过，单靠版本号/结构校验挡不住
+    // 「script 被拒后重新生成、timing 却还是旧链路产物」这种组合：timing 按 index 与新
+    // script 配对（buildNegotiateInputs 不校验文本），会把新译文的字幕烧上画面、却混上旧
+    // 改写稿合成的人声——参见 docs/DUB-TASK.md 对应记录。
+    const scriptFromCache = script !== undefined;
     if (hasTimeRange && flags.force !== true) {
       logger.info(
         { videoId, startMs: timeRange.startMs ?? 0, endMs: timeRange.endMs },
@@ -502,13 +528,28 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     const synthDir = hasTimeRange ? path.join(dubDir, "work") : dubDir;
 
     // ── 3. 自然语速合成 + 时长报告（可复用；换引擎必须重跑） ──
-    let timing = reuseFullRunArtifacts
-      ? await readDubTimingReport(dubDir).catch(() => undefined)
-      : undefined;
+    // scriptFromCache 为 false 时 script 是本次重新生成的（旧缓存被拒或首次运行），
+    // 决不能再复用磁盘上的旧 dub-timing.json / dub/lines 音频——它们是配着被拒的旧
+    // script 合成的，按 index 硬配对到新 script 上会出现"新字幕、旧人声"的错位。
+    let timing =
+      reuseFullRunArtifacts && scriptFromCache
+        ? await readDubTimingReport(dubDir).catch(() => undefined)
+        : undefined;
     if (timing !== undefined && timing.engine !== tts.id) {
       logger.info(
         { videoId, cachedEngine: timing.engine, engine: tts.id },
         "dub-timing.json engine mismatch — re-synthesizing",
+      );
+      timing = undefined;
+    }
+    if (timing !== undefined && !timingMatchesScript(timing, script)) {
+      logger.warn(
+        {
+          videoId,
+          cachedLineCount: timing.lineCount,
+          scriptLineCount: script.lines.length,
+        },
+        "dub-timing.json does not match dub-script.json (line count/char count mismatch) — ignoring cached timing and re-synthesizing",
       );
       timing = undefined;
     }

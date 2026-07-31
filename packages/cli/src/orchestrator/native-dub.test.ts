@@ -269,4 +269,144 @@ describe("executeNativeDub time range", () => {
     // 缓存版本不兼容必须被拒绝并重新生成，而不是静默复用旧链路的中文改写稿。
     expect(generateDubScriptMock).toHaveBeenCalledOnce();
   });
+
+  it("does not reuse dub-timing.json (or its audio) once dub-script.json was rejected as stale", async () => {
+    guardMock.mockResolvedValue({
+      hasBurnedSubtitles: false,
+      hasChineseBurnedSubtitles: false,
+      shouldSkipBurn: false,
+    });
+    generateDubScriptMock.mockResolvedValue({
+      script: {
+        version: 2,
+        videoId: "abc12345678",
+        sourceWords: "video/full.local.en.words.json",
+        rewriteModel: "fresh-model",
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            // Deliberately the same length as the stale cached line's text below, so a
+            // charCount-only check would be fooled — only the scriptFromCache gate should
+            // stop the stale dub-timing.json/audio from being reused here.
+            text: "新链路生成的句子",
+            sourceText: "Inside the window.",
+            cueIndices: [1],
+          },
+        ],
+        droppedCount: 0,
+      },
+      warnings: [],
+      translatedCount: 1,
+      droppedCount: 0,
+    });
+    synthesizeDubLinesMock.mockResolvedValue({
+      report: {
+        version: 1,
+        videoId: "abc12345678",
+        engine: "edge-tts",
+        voice: "zh-CN-YunxiNeural",
+        lineCount: 1,
+        medianRatio: 1,
+        overflowCount: 0,
+        totalDriftMs: 0,
+        lines: [
+          {
+            index: 1,
+            targetDurationMs: 1_000,
+            synthesizedMs: 1_000,
+            ratio: 1,
+            charCount: 8,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      },
+      warnings: [],
+    });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-stale-timing-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "abc12345678";
+    const dubDir = path.join(articleRoot, videoId, "dub");
+    await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
+    await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
+    await mkdir(dubDir, { recursive: true });
+    await writeFile(
+      path.join(outRoot, videoId, "video", "full.local.en.words.json"),
+      JSON.stringify([
+        { word: "Inside", start: 1.0, end: 1.3 },
+        { word: "the", start: 1.3, end: 1.5 },
+        { word: "window.", start: 1.5, end: 2.0 },
+      ]),
+      "utf8",
+    );
+    // Pre-PR3 stale script (rejected by version-gate) sitting alongside a dub-timing.json
+    // whose shape has never changed and therefore passes DubTimingReportSchema untouched.
+    await writeFile(
+      path.join(dubDir, "dub-script.json"),
+      JSON.stringify({
+        version: 1,
+        videoId,
+        sourceSubtitle: "video/full.zh.srt",
+        rewriteModel: "stale-cached",
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "旧链路缓存的句子",
+            sourceText: "旧链路缓存的中文原文",
+            cueIndices: [1],
+          },
+        ],
+      }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(dubDir, "dub-timing.json"),
+      JSON.stringify({
+        version: 1,
+        videoId,
+        engine: "edge-tts",
+        voice: "zh-CN-YunxiNeural",
+        lineCount: 1,
+        medianRatio: 1,
+        overflowCount: 0,
+        totalDriftMs: 0,
+        lines: [
+          {
+            index: 1,
+            targetDurationMs: 1_000,
+            synthesizedMs: 1_000,
+            ratio: 1,
+            charCount: 8,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    await mkdir(path.join(dubDir, "lines"), { recursive: true });
+    await writeFile(path.join(dubDir, "lines", "0001.mp3"), "stale-audio");
+
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      timingOnly: true,
+    });
+
+    expect(code).toBe(0);
+    expect(generateDubScriptMock).toHaveBeenCalledOnce();
+    // The regression: once the stale script is rejected, the stale dub-timing.json (and by
+    // extension the stale lines/0001.mp3 audio it points at) must never be reused — synthesis
+    // must re-run against the freshly generated script.
+    expect(synthesizeDubLinesMock).toHaveBeenCalledOnce();
+    const synthArgs = synthesizeDubLinesMock.mock.calls[0]?.[0] as { script: { lines: Array<{ text: string }> } };
+    expect(synthArgs.script.lines[0]?.text).toBe("新链路生成的句子");
+  });
 });

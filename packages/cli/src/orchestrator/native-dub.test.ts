@@ -9,6 +9,9 @@ const generateDubScriptMock = vi.hoisted(() => vi.fn());
 const synthesizeDubLinesMock = vi.hoisted(() => vi.fn());
 const separateDemucsMock = vi.hoisted(() => vi.fn());
 const remixDubbedVideoMock = vi.hoisted(() => vi.fn());
+// Real window extraction shells out to ffmpeg; mocked here since these tests exercise
+// reverse-SRT path routing, not ffmpeg trimming.
+const extractDubSourceWindowMock = vi.hoisted(() => vi.fn(async () => undefined));
 const guardMock = vi.hoisted(() =>
   vi.fn(async () => {
     throw Object.assign(new Error("hard subs"), {
@@ -29,6 +32,7 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
     separateDemucs: separateDemucsMock,
     remixDubbedVideo: remixDubbedVideoMock,
     guardDubSourceAgainstHardSubtitles: guardMock,
+    extractDubSourceWindow: extractDubSourceWindowMock,
   };
 });
 
@@ -40,6 +44,8 @@ beforeEach(() => {
   synthesizeDubLinesMock.mockClear();
   separateDemucsMock.mockClear();
   remixDubbedVideoMock.mockClear();
+  extractDubSourceWindowMock.mockClear();
+  extractDubSourceWindowMock.mockImplementation(async () => undefined);
   guardMock.mockClear();
   guardMock.mockImplementation(async () => {
     throw Object.assign(new Error("hard subs"), {
@@ -184,6 +190,108 @@ describe("executeNativeDub time range", () => {
     expect(utterances[0]?.text).toBe("Inside the window.");
     expect(utterances.every((u) => u.endMs <= 5_000)).toBe(true);
     expect(synthesizeDubLinesMock).not.toHaveBeenCalled();
+  });
+
+  it("writes the time-window reverse SRT to dub/work/, not the full-run video/full.zh-dub.srt path", async () => {
+    guardMock.mockResolvedValue({
+      hasBurnedSubtitles: false,
+      hasChineseBurnedSubtitles: false,
+      shouldSkipBurn: false,
+    });
+    generateDubScriptMock.mockResolvedValue({
+      script: {
+        version: 2,
+        videoId: "abc12345678",
+        sourceWords: "video/full.local.en.words.json",
+        rewriteModel: "test-model",
+        droppedCount: 0,
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "窗内句",
+            sourceText: "Inside the window.",
+            cueIndices: [1],
+          },
+        ],
+      },
+      warnings: [],
+      translatedCount: 1,
+      droppedCount: 0,
+    });
+    // ratio 1.0 (synthesizedMs === targetDurationMs) so the negotiation plan keeps this line
+    // as-is and applyDubNegotiation reuses the existing audio file instead of calling the
+    // (unmocked, real) TTS adapter.
+    synthesizeDubLinesMock.mockResolvedValue({
+      report: {
+        version: 1,
+        videoId: "abc12345678",
+        engine: "edge-tts",
+        voice: "test-voice",
+        lineCount: 1,
+        medianRatio: 1,
+        overflowCount: 0,
+        totalDriftMs: 0,
+        lines: [
+          {
+            index: 1,
+            targetDurationMs: 1_000,
+            synthesizedMs: 1_000,
+            ratio: 1,
+            charCount: 3,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      },
+      warnings: [],
+    });
+    separateDemucsMock.mockResolvedValue({
+      noVocalsPath: "/tmp/no_vocals.wav",
+      skipped: false,
+    });
+    remixDubbedVideoMock.mockResolvedValue({
+      outputPath: "/tmp/full.zh-dubbed.mp4",
+      burned: true,
+      skippedBurnReason: undefined,
+      extendMs: 0,
+    });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-window-srt-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "abc12345678";
+    const dubDir = path.join(articleRoot, videoId, "dub");
+    await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
+    await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
+    await mkdir(dubDir, { recursive: true });
+    await writeFile(path.join(outRoot, videoId, "video", "full.mp4"), "original");
+    await writeFile(
+      path.join(outRoot, videoId, "video", "full.local.en.words.json"),
+      JSON.stringify([
+        { word: "Inside", start: 1.0, end: 1.3 },
+        { word: "the", start: 1.3, end: 1.5 },
+        { word: "window.", start: 1.5, end: 2.0 },
+      ]),
+      "utf8",
+    );
+
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      startMs: "0",
+      endMs: "5000",
+    });
+
+    expect(code).toBe(0);
+    expect(remixDubbedVideoMock).toHaveBeenCalledOnce();
+    const remixCall = remixDubbedVideoMock.mock.calls[0]![0] as { reverseSrtPath: string };
+    const expectedWorkPath = path.join(dubDir, "work", "window-0-5000.zh-dub.srt");
+    const fullRunPath = path.join(articleRoot, videoId, "video", "full.zh-dub.srt");
+    expect(remixCall.reverseSrtPath).toBe(expectedWorkPath);
+    expect(remixCall.reverseSrtPath).not.toBe(fullRunPath);
   });
 
   it("ignores a stale version-1 (pre-PR3) dub-script.json full-run cache instead of reusing it", async () => {

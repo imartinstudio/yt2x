@@ -296,7 +296,12 @@ describe("runNativePipeline", () => {
     executeNativeDubMock.mockClear();
 
     const args = buildArgs({
-      control: { outDir: outRoot, dub: true, dubEngine: "elevenlabs" },
+      control: {
+        outDir: outRoot,
+        dub: true,
+        dubEngine: "elevenlabs",
+        pythonPath: ".venv-demucs/bin/python3",
+      },
       stages: { acquire: "skip", notes: "skip", article: "skip", publish: "skip" },
       acquire: { subtitleZh: "burned" },
     });
@@ -309,6 +314,11 @@ describe("runNativePipeline", () => {
       videoId: vid,
       dubEngine: "elevenlabs",
     });
+    // --python-path must also reach the actual dub stage call, not just the preflight probe —
+    // a typo'd option name or a missing forwarding hop here is otherwise invisible to any test.
+    expect(executeNativeDubMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pythonPath: ".venv-demucs/bin/python3" }),
+    );
   });
 
   it("forces bilingual burn off during acquire when --dub is set", async () => {
@@ -432,12 +442,23 @@ describe("runNativePipeline", () => {
     });
 
     const args = buildArgs({
-      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      control: {
+        outDir: outRoot,
+        dub: true,
+        dubEngine: "edge-tts",
+        pythonPath: ".venv-demucs/bin/python3",
+      },
       stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
     });
 
     const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
     expect(code).toBe(2); // NATIVE_EXIT.CONFIG_MISSING
+    // --python-path must reach the preflight probe, not just the real dub stage call —
+    // otherwise a venv-only demucs install is invisible to `pipeline --dub` even though
+    // the same flag works for the standalone `dub` command.
+    expect(probeDemucsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pythonPath: ".venv-demucs/bin/python3" }),
+    );
     expect(transcribeLocalMock).not.toHaveBeenCalled();
     expect(executeNativeNotesMock).not.toHaveBeenCalled();
     expect(executeNativeArticleMock).not.toHaveBeenCalled();

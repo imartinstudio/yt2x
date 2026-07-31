@@ -159,8 +159,16 @@
 ## 未决
 
 - 最小句间停顿默认值（当前 150ms）需在新链路上重新试听确定
-- 门禁阈值需在新链路跑通后以真实正片重新标定
+- **门禁阈值需在新链路跑通后以真实正片重新标定**——`advisoryTextBudgetRetainFraction = 0.3`
+  和 `maxDroppedCount = 0` 目前都只用一次 30 秒窗口的运行标过，不能因为某次 `issues: []`
+  就当作已经标定完成
 - ElevenLabs 时间戳能力仍未经真实调用验证，接入前必须先验证
+- **"译文回来了却被掏空"这一档目前没有任何 hard 兜底，advisory 阈值 0.3 也抓不到**：
+  `advisoryTextBudgetRetainFraction` 衡量的是译文占用了多少时长预算，但分辨不出"挤掉口水话"
+  与"砍掉内容"——一段填充词密集的发言忠实压缩后占用比天然很低，因此这个指标只能设成较低的
+  advisory 阈值，抓不住"内容被过度砍削但文本非空"的退化。实例见某次真实成片：第 3 行译文
+  只填到 22.56s 而源语音讲到 25.4s，中间 2.84 秒画面无字幕、无人声但说话人还在讲，该行占用比
+  0.423 高于 0.3，advisory 都不报
 - **烧录后校验在新链路上失败（`insufficient subtitle signal`），推迟到 PR4。** 根因已核实：
   `verifyBurnedSubtitles`（`packages/adapters-node/src/acquire/burn-subtitles.ts:338-352`）的采样点
   `firstCueStart + duration*0.85` 落在两条 cue 的空隙里（真实素材上算出 23.63s，卡在 cue3

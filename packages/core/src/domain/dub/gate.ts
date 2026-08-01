@@ -186,6 +186,16 @@ export type EvaluateDubGateInput = {
 
 const charLen = (text: string): number => [...text.trim()].length;
 
+/**
+ * 判定译文是否"退化为纯标点"：不含任何字母或数字（`\p{L}` / `\p{N}`）即视为等价于空文本。
+ *
+ * 原判据 `text.trim().length === 0` 抓不住这类退化——真实素材第 76 句被翻译成孤立的
+ * 全角问号「？」，长度为 1，直接放行；而 edge-tts 对纯标点文本 100% 确定性失败（手测
+ * 5/5 复现），会让整趟合成从这一行开始中止。标点、空白、控制字符都不构成"有内容"，
+ * 必须至少出现一个字母或数字才算通过。
+ */
+const isEffectivelyEmptyText = (text: string): boolean => !/[\p{L}\p{N}]/u.test(text);
+
 /** 相邻落点间隔（下一句 start − 上一句 end）。 */
 export const interSentenceGapsMs = (lines: readonly DubPlacedLine[]): number[] => {
   const gaps: number[] = [];
@@ -220,12 +230,12 @@ export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
         value: line.durationMs,
       });
     }
-    if (line.text.trim().length === 0) {
+    if (isEffectivelyEmptyText(line.text)) {
       emptyTextCount += 1;
       issues.push({
         code: "empty-text",
         severity: "hard",
-        message: `line ${line.index}: empty spoken text`,
+        message: `line ${line.index}: empty or punctuation-only spoken text (${JSON.stringify(line.text)})`,
       });
     }
   }

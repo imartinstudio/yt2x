@@ -406,6 +406,58 @@ describe("evaluateDubGate", () => {
     expect(report.issues.some((i) => i.code === "low-inter-sentence-pause")).toBe(true);
   });
 
+  it("hard-blocks a translation that degenerates into punctuation only", () => {
+    // 真实案例：第 76 句被翻译成孤立的全角问号「？」，长度为 1，旧判据
+    // `text.trim().length === 0` 直接放行；edge-tts 对纯标点文本 100% 确定性失败
+    // （手测 5/5 复现），会让整趟合成从这一行开始中止，必须在门禁层拦住。
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "？",
+            startMs: 0,
+            endMs: 900,
+            durationMs: 900,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      }),
+    });
+    expect(report.blocked).toBe(true);
+    expect(report.metrics.emptyTextCount).toBe(1);
+    const issue = report.issues.find((i) => i.code === "empty-text");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("hard");
+  });
+
+  it("does not flag ordinary text that happens to contain punctuation", () => {
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "真的吗？",
+            startMs: 0,
+            endMs: 900,
+            durationMs: 900,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      }),
+    });
+    expect(report.issues.some((i) => i.code === "empty-text")).toBe(false);
+    expect(report.metrics.emptyTextCount).toBe(0);
+  });
+
   it("keeps maxDelayFraction at 0.35, not the over-tightened 0.3", () => {
     // 复审用滑窗统计证明 0.3 是纯粹的误拦（见 DEFAULT_DUB_GATE_THRESHOLDS 注释）：
     // 一个 delayFraction=0.32 的样本必须放行，而不是被 0.3 拦下。

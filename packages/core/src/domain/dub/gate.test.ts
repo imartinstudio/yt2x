@@ -171,7 +171,7 @@ describe("evaluateDubGate", () => {
   });
 
   it("flags severe under-use of the time budget as advisory, without blocking", () => {
-    // targetDurationMs=8720 → budget ≈ 59 chars (真实素材 UzMNBN6xLLA 的量级)；
+    // targetDurationMs=8720 → budget ≈ 59 chars（真实素材的量级）；
     // 译文只有 1 字，占用比 ≈ 0.02，远低于 0.3 的 advisory 阈值。
     const report = evaluateDubGate({
       videoId: "vid",

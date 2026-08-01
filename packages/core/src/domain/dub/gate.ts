@@ -94,7 +94,7 @@ export type DubGateThresholds = {
  * - medianRatio / overflow / 文本时长预算占用：advisory
  *
  * 文本时长预算占用阈值（advisoryTextBudgetRetainFraction=0.3）取自真实素材
- * UzMNBN6xLLA（本地转录通道，长度受限翻译，DeepSeek）30s 窗实测：4 行占用比分别为
+ * `<videoId>`（本地转录通道，长度受限翻译，DeepSeek）30s 窗实测：4 行占用比分别为
  * 1.08 / 0.57 / 0.42 / 0.45，最低 0.42——0.3 留出余量不误伤合理的口语压缩，同时仍能
  * 抓到明显过短（<30%）的退化翻译。
  */

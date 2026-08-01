@@ -66,6 +66,37 @@ describe("evaluateDubBilingualGate", () => {
     expect(result.issues.some((i) => i.code === "glossary-violation")).toBe(true);
   });
 
+  it("does not block when a protected term lands in a different cue of the same utterance (utteranceBoundariesMs grouping)", async () => {
+    const runner = makeRunner(fitMeasurement);
+    // 一个话语单元被细分成两条显示单元，"PRD" 落在英文第一条、中文第二条——中英文
+    // 显示单元切分边界不同，是真实全片跑出来的假阳性形状。
+    const bilingualSrt = [
+      "1\n00:00:01,000 --> 00:00:02,000\n安全交付给团队的\nShip the PRD\n",
+      "2\n00:00:02,000 --> 00:00:04,000\nPRD。\nto the team.\n",
+    ].join("\n");
+    const zhSrt = [
+      "1\n00:00:01,000 --> 00:00:02,000\n安全交付给团队的\n",
+      "2\n00:00:02,000 --> 00:00:04,000\nPRD。\n",
+    ].join("\n");
+    const enSrt = [
+      "1\n00:00:01,000 --> 00:00:02,000\nShip the PRD\n",
+      "2\n00:00:02,000 --> 00:00:04,000\nto the team.\n",
+    ].join("\n");
+
+    const result = await evaluateDubBilingualGate({
+      bilingualSrt,
+      zhSrt,
+      enSrt,
+      videoWidth: 1280,
+      videoHeight: 720,
+      runner,
+      utteranceBoundariesMs: [4000],
+    });
+
+    expect(result.issues.some((i) => i.code === "glossary-violation")).toBe(false);
+    expect(result.readyForBurn).toBe(true);
+  });
+
   it("blocks when the three SRTs are not aligned cue-by-cue (timing mismatch)", async () => {
     const runner = makeRunner(fitMeasurement);
     const result = await evaluateDubBilingualGate({

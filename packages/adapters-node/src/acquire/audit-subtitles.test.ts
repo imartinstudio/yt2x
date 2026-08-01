@@ -190,6 +190,91 @@ describe("auditSubtitleArtifacts", () => {
     }));
   });
 
+  describe("glossary-violation with utteranceBoundariesMs (utterance-level grouping)", () => {
+    // 一个话语单元 [0, 4000)ms 被细分成两条显示单元；"PRD" 落在英文第一条，却落在
+    // 中文第二条——中英文切分边界不同（中文按视觉宽度切、英文按词数占比切），是
+    // 真实全片跑出来的假阳性形状，不是伪造样本。
+    const utteranceSourceSrt = srt([
+      { start: "00:00:00,000", end: "00:00:02,000", lines: ["Ship the PRD"] },
+      { start: "00:00:02,000", end: "00:00:04,000", lines: ["to the team."] },
+    ]);
+    const utteranceEnSrt = utteranceSourceSrt;
+    const utteranceSha256 = createHash("sha256").update(utteranceSourceSrt).digest("hex");
+
+    it("does not flag a protected term that lands in a different cue of the same utterance", () => {
+      const zh = srt([
+        { start: "00:00:00,000", end: "00:00:02,000", lines: ["安全交付给团队的"] },
+        { start: "00:00:02,000", end: "00:00:04,000", lines: ["PRD。"] },
+      ]);
+      const bilingual = srt([
+        { start: "00:00:00,000", end: "00:00:02,000", lines: ["安全交付给团队的", "Ship the PRD"] },
+        { start: "00:00:02,000", end: "00:00:04,000", lines: ["PRD。", "to the team."] },
+      ]);
+
+      const result = auditSubtitleArtifacts({
+        sourceSrt: utteranceSourceSrt,
+        enSrt: utteranceEnSrt,
+        zhSrt: zh,
+        bilingualSrt: bilingual,
+        manifest: { sourceSha256: utteranceSha256 },
+        utteranceBoundariesMs: [4000],
+      });
+
+      expect(result.issues).not.toContainEqual(
+        expect.objectContaining({ code: "glossary-violation" }),
+      );
+    });
+
+    it("still flags a protected term missing from every cue in the utterance group", () => {
+      const zh = srt([
+        { start: "00:00:00,000", end: "00:00:02,000", lines: ["安全交付给团队的"] },
+        { start: "00:00:02,000", end: "00:00:04,000", lines: ["产品需求文档。"] },
+      ]);
+      const bilingual = srt([
+        { start: "00:00:00,000", end: "00:00:02,000", lines: ["安全交付给团队的", "Ship the PRD"] },
+        { start: "00:00:02,000", end: "00:00:04,000", lines: ["产品需求文档。", "to the team."] },
+      ]);
+
+      const result = auditSubtitleArtifacts({
+        sourceSrt: utteranceSourceSrt,
+        enSrt: utteranceEnSrt,
+        zhSrt: zh,
+        bilingualSrt: bilingual,
+        manifest: { sourceSha256: utteranceSha256 },
+        utteranceBoundariesMs: [4000],
+      });
+
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ code: "glossary-violation", severity: "content" }),
+      );
+    });
+
+    it("falls back to per-cue comparison when utteranceBoundariesMs is not provided", () => {
+      // 与第一个用例完全同样的输入，但不传话语单元边界——必须复现旧的逐条比对行为，
+      // 确认没有传边界的调用方（纯字幕交付路径）不受这次改动影响。
+      const zh = srt([
+        { start: "00:00:00,000", end: "00:00:02,000", lines: ["安全交付给团队的"] },
+        { start: "00:00:02,000", end: "00:00:04,000", lines: ["PRD。"] },
+      ]);
+      const bilingual = srt([
+        { start: "00:00:00,000", end: "00:00:02,000", lines: ["安全交付给团队的", "Ship the PRD"] },
+        { start: "00:00:02,000", end: "00:00:04,000", lines: ["PRD。", "to the team."] },
+      ]);
+
+      const result = auditSubtitleArtifacts({
+        sourceSrt: utteranceSourceSrt,
+        enSrt: utteranceEnSrt,
+        zhSrt: zh,
+        bilingualSrt: bilingual,
+        manifest: { sourceSha256: utteranceSha256 },
+      });
+
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ code: "glossary-violation", cueIndex: 1 }),
+      );
+    });
+  });
+
   it("reports hard-layout when a measured cue exceeds the hard threshold", () => {
     const result = auditSubtitleArtifacts(validInput({
       measurements: [{ cueIndex: 1, severity: "hard", lineCount: 2 }],

@@ -801,6 +801,8 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       videoWidth: 1280,
       videoHeight: 720,
       runner: defaultProcessRunner,
+      // 每个话语单元的实测终点，供术语保护校验按话语单元分组比对（见 bilingual-gate.ts）。
+      utteranceBoundariesMs: placement.lines.map((line) => line.endMs),
     });
     for (const issue of bilingualGate.issues) {
       logger.warn(

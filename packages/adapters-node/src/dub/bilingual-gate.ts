@@ -31,6 +31,12 @@ export type DubBilingualGateInput = {
   videoHeight: number;
   runner: ProcessRunner;
   signal?: AbortSignal;
+  /**
+   * 每个话语单元的实测终点（毫秒，升序），来自 `DubPlacedLine.endMs`。传给
+   * `auditSubtitleArtifacts` 让术语保护校验按话语单元分组比对，而不是逐条显示单元
+   * 比对——见 `audit-subtitles.ts` 的 `utteranceBoundariesMs` 注释。
+   */
+  utteranceBoundariesMs?: readonly number[];
 };
 
 export type DubBilingualGateResult = {
@@ -58,6 +64,9 @@ export const evaluateDubBilingualGate = async (
     bilingualSrt: input.bilingualSrt,
     manifest: { sourceSha256: sha256(input.enSrt) },
     measurements,
+    ...(input.utteranceBoundariesMs !== undefined
+      ? { utteranceBoundariesMs: input.utteranceBoundariesMs }
+      : {}),
   });
 
   return {

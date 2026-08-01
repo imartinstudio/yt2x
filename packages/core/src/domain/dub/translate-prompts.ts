@@ -1,3 +1,4 @@
+import { PROTECTED_GLOSSARY_TERMS, PROTECTED_NAMES } from "./glossary.js";
 import type { Utterance } from "./types.js";
 
 /**
@@ -76,6 +77,13 @@ export const DUB_TRANSLATE_RULES: readonly string[] = [
   "6. Each item is one spoken sentence. Keep it self-contained so it can be understood by ear without the neighbouring lines.",
   '7. Return ONLY a JSON array of objects with "index" (number) and "text" (string). One object per input index, same indices, same order. No commentary, no code fences.',
   "8. The output MUST be Simplified Chinese (zh-CN). Traditional Chinese is forbidden.",
+  "9. " +
+    "These are skill/product names and person names — keep them EXACTLY as spelled in English, " +
+    "never translated or transliterated, even when the transcript writes them in lowercase " +
+    "(ASR output is not capitalized, so match case-insensitively): " +
+    `${PROTECTED_GLOSSARY_TERMS.join(", ")}. Names: ${PROTECTED_NAMES.join(", ")}. ` +
+    'This applies even inside a longer phrase, e.g. "grill me skills" keeps "grill me" ' +
+    'in English and translates only "skills".',
 ];
 
 export const getDubTranslateSystemPrompt = (): string =>

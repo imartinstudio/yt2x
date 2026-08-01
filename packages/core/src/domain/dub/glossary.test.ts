@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  containsTermCaseInsensitive,
+  findPresentProtectedTerms,
   findProtectedSpans,
   PROTECTED_GLOSSARY_TERMS,
   PROTECTED_NAMES,
@@ -14,6 +16,28 @@ describe("PROTECTED_TERMS", () => {
   it("carries the skill names the dub translation prompt must never translate", () => {
     expect(PROTECTED_GLOSSARY_TERMS).toContain("Grill Me");
     expect(PROTECTED_GLOSSARY_TERMS).toContain("Grill with Docs");
+  });
+});
+
+describe("containsTermCaseInsensitive", () => {
+  it("matches the lower-cased ASR transcript against the title-cased glossary entry", () => {
+    // 真实转写稿是纯小写；术语表沿用 "Grill Me" 这种首字母大写拼写
+    expect(containsTermCaseInsensitive("my grill me skills are great", "Grill Me")).toBe(true);
+    expect(containsTermCaseInsensitive("grill with docs is also live", "Grill with Docs")).toBe(
+      true,
+    );
+  });
+
+  it("does not match an unrelated substring", () => {
+    expect(containsTermCaseInsensitive("this has nothing to do with it", "Grill Me")).toBe(false);
+  });
+});
+
+describe("findPresentProtectedTerms", () => {
+  it("returns only the terms that actually occur in the source, case-insensitively", () => {
+    const enText = "My grill me skills and grill with docs have been out there for a while now.";
+    const present = findPresentProtectedTerms(enText, ["Grill Me", "Grill with Docs", "Codex"]);
+    expect(present).toEqual(["Grill Me", "Grill with Docs"]);
   });
 });
 

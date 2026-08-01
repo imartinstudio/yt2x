@@ -30,6 +30,24 @@ export const PROTECTED_NAMES = ["Matt Pocock", "Ryan Singer", "Gary Tan", "G Sta
 
 export const PROTECTED_TERMS: readonly string[] = [...PROTECTED_GLOSSARY_TERMS, ...PROTECTED_NAMES];
 
+/**
+ * 大小写不敏感地判断 `text` 中是否出现了 `term`。
+ *
+ * 转写稿（ASR）几乎总是纯小写（"grill me" 而非 "Grill Me"），术语表则沿用文档惯用的
+ * 首字母大写拼写；两边字面不一致，任何依据术语表判断"这句话里有没有这个词"的逻辑
+ * 都必须先做一次大小写归一化，否则表里列了词也匹配不上——真实成片里 4 句提到
+ * "grill me"/"grill with docs" 的话语单元只有 1 句偶然保住了英文，很可能就是这个
+ * 匹配缺陷的后果。
+ */
+export const containsTermCaseInsensitive = (text: string, term: string): boolean =>
+  text.toLocaleLowerCase("en").includes(term.toLocaleLowerCase("en"));
+
+/** 大小写不敏感地找出 `enText` 中实际出现（因而必须原样保留）的术语子集。 */
+export const findPresentProtectedTerms = (
+  enText: string,
+  terms: readonly string[] = PROTECTED_TERMS,
+): string[] => terms.filter((term) => containsTermCaseInsensitive(enText, term));
+
 // Chinese has no spaces between words, so a raw character-position split can
 // (and in real DeepSeek output did) land inside an ordinary multi-character
 // word like "范围" or "可能". Intl.Segmenter's dictionary-based word

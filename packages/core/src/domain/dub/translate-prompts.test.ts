@@ -77,6 +77,18 @@ describe("getDubTranslateSystemPrompt", () => {
     expect(prompt).toMatch(/verbatim|EXACTLY/i);
   });
 
+  it("lists the glossary skill names and names that must never be translated", () => {
+    // grill me / grill with docs 是本仓库真实存在的技能名，之前被当成普通短语翻译掉了
+    expect(prompt).toMatch(/Grill Me/);
+    expect(prompt).toMatch(/Grill with Docs/);
+    expect(prompt).toMatch(/Ryan Singer/);
+  });
+
+  it("tells the model the glossary match is case-insensitive against the lower-cased transcript", () => {
+    // ASR 转写稿几乎总是纯小写，术语表本身是首字母大写拼写
+    expect(prompt).toMatch(/case-insensitiv/i);
+  });
+
   it("tells the model to spend the budget on redundancy, not on content", () => {
     expect(prompt).toMatch(/filler|redundan/i);
     expect(prompt).toMatch(/fact|number|name/i);

@@ -55,6 +55,31 @@ describe("splitZhByWidth", () => {
     expect(parts.join("")).toBe(zh);
   });
 
+  it("never carves off a lone trailing punctuation mark as its own part (real-data regression)", () => {
+    // 真实成片复现过的 bug：目标位置附近没有标点，搜索半径一路扫到句子自己的结尾
+    // 句号，把它当成"最近的强标点"选中，切出一条只有单个「。」的显示单元。
+    const zh = "这些技能的核心就是不断追问你，一直问到你达成共识为止。";
+    const parts = splitZhByWidth(zh);
+    expect(parts).toEqual(["这些技能的核心就是不断追问你，", "一直问到你达成共识为止。"]);
+    for (const part of parts) {
+      // 每一片去掉标点后至少有实质内容，不是孤零零一个标点符号
+      expect(part.replace(/[，。！？、；：,.!?;:]/gu, "").length).toBeGreaterThan(0);
+    }
+  });
+
+  it("never produces a part shorter than 2 characters when a split happens", () => {
+    const samples = [
+      "这些技能的核心就是不断追问你，一直问到你达成共识为止。",
+      "在正式开始之前我们先聊聊这个环节具体是怎么运作的呢，然后再讲讲后面的安排。",
+      "第一部分讲的是背景知识，第二部分讲的是具体做法，第三部分则是一些常见的坑。",
+    ];
+    for (const zh of samples) {
+      for (const part of splitZhByWidth(zh)) {
+        expect(part.length).toBeGreaterThanOrEqual(2);
+      }
+    }
+  });
+
   it("never splits inside a protected glossary term", () => {
     // "Grill with Docs" 前后各垫一些字符，让默认目标宽度落在术语内部附近
     const zh = "在正式开始之前我们先聊聊 Grill with Docs 这个环节具体是怎么运作的呢";

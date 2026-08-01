@@ -71,31 +71,50 @@ const nudgeOutOfSpans = (
   return result;
 };
 
+/**
+ * 一个切点两侧都必须留下至少这么多字符，否则就是"孤字/孤标点"式退化切分——真实数据
+ * 复现过这个 bug：句末的句号被当成"离目标宽度最近的强标点"选中，切出一条只有单个「。」
+ * 的显示单元。
+ */
+const MIN_FRAGMENT_CHARS = 2;
+
+/**
+ * 标点搜索半径必须是一个小的固定值，不能随文本长度扩大——扩大到半个句子长时，扫描会
+ * 一路扫到句子自己的结尾标点（离目标位置很远，根本不是"目标附近"的切点），产生上面
+ * 那种孤立标点切分。找不到近处标点时交给调用方在目标位置硬切，而不是继续往远处找。
+ */
+const PUNCT_SEARCH_RADIUS = 10;
+
+const isViableSplit = (splitAt: number, length: number): boolean =>
+  splitAt >= MIN_FRAGMENT_CHARS && splitAt <= length - MIN_FRAGMENT_CHARS;
+
 /** 在 `text` 里找一个安全切点：优先句末标点，其次逗号顿号，都找不到就在目标宽度附近硬切。 */
 const findSplitPoint = (text: string, spans: readonly [number, number][]): number | null => {
   const length = text.length;
-  if (length < 2) return null;
+  if (length < MIN_FRAGMENT_CHARS * 2) return null;
 
   const ratio = CUE_TARGET_WIDTH / Math.max(visualWidth(text), 0.01);
-  const target = Math.max(1, Math.min(Math.round(length * Math.min(Math.max(ratio, 0), 1)), length - 1));
-  const searchRadius = Math.max(12, Math.ceil(length / 2));
+  const target = Math.max(
+    MIN_FRAGMENT_CHARS,
+    Math.min(Math.round(length * Math.min(Math.max(ratio, 0), 1)), length - MIN_FRAGMENT_CHARS),
+  );
 
   for (const pattern of [STRONG_PUNCT, WEAK_PUNCT]) {
-    for (let offset = 0; offset <= searchRadius; offset++) {
+    for (let offset = 0; offset <= PUNCT_SEARCH_RADIUS; offset++) {
       const fwd = target + offset;
-      if (fwd < length && pattern.test(text[fwd]!)) {
+      if (fwd < length && pattern.test(text[fwd]!) && isViableSplit(fwd + 1, length)) {
         const candidate = nudgeOutOfSpans(fwd + 1, spans, length);
-        if (candidate !== null) return candidate;
+        if (candidate !== null && isViableSplit(candidate, length)) return candidate;
       }
       const back = target - offset;
-      if (back > 0 && back < length && pattern.test(text[back]!)) {
+      if (back >= 0 && pattern.test(text[back]!) && isViableSplit(back + 1, length)) {
         const candidate = nudgeOutOfSpans(back + 1, spans, length);
-        if (candidate !== null) return candidate;
+        if (candidate !== null && isViableSplit(candidate, length)) return candidate;
       }
-      if (fwd >= length && back <= 0) break;
     }
   }
-  return nudgeOutOfSpans(target, spans, length);
+  const fallback = nudgeOutOfSpans(target, spans, length);
+  return fallback !== null && isViableSplit(fallback, length) ? fallback : null;
 };
 
 /**

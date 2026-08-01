@@ -33,7 +33,7 @@ const timing = (overrides?: Partial<DubTimingReport>): DubTimingReport => ({
 });
 
 const placement = (overrides?: Partial<DubPlacementReport>): DubPlacementReport => ({
-  version: 1,
+  version: 2,
   videoId: "vid",
   engine: "edge-tts",
   voice: "v",
@@ -41,6 +41,7 @@ const placement = (overrides?: Partial<DubPlacementReport>): DubPlacementReport 
   audioEndMs: 2000,
   keepCount: 2,
   speedCount: 0,
+  stretchCount: 0,
   delayCount: 0,
   lines: [
     {

@@ -82,27 +82,44 @@ export type DubGateThresholds = {
 };
 
 /**
- * 从零标定的默认阈值（#113，素材 A8mokin_YOs 30s 窗实测）。
+ * 从零标定的默认阈值（#113，最初素材 A8mokin_YOs 30s 窗实测）。
  *
- * 观测（2026-07-31，edge-tts，窗 0–30s）：
- *   minGap=150、zeroGap=0、extendMs≈1.4s、delayFraction≈0.29、
- *   overflowFraction≈0.71（中文自然语速偏长，先 advisory）。
+ * **PR4 重标定**（2026-08-01，edge-tts + zh-CN-YunjianNeural + stretch 反向放慢，
+ * 素材 `<videoId>` 全片 149 句实跑，非 30s 窗）——换音色（比旧默认云希慢约 4%）、
+ * 新增 stretch 动作都会改变自然语速分布与协商结果，旧阈值是按云希、且只按 30s
+ * 窗标定的，必须用真实全片重新核对：
  *
- * - extend ≤ 8s：与协商层封顶一致
- * - delay ≤ 35%：覆盖真实窗上缩短失败后的顺延占比，仍拦住大面积放弃对齐
- * - 零间隔 / 低于最小停顿：不允许
- * - medianRatio / overflow / 文本时长预算占用：advisory
+ *   medianRatio=0.921、overflowFraction=0.383（57/149）、extendMs=10、
+ *   delayFraction=0.188（28/149）、zeroGap=0、lowGap=0、minGap=150、
+ *   infoLossCount=0（占用比最低观测 0.407）。
  *
- * 文本时长预算占用阈值（advisoryTextBudgetRetainFraction=0.3）取自真实素材
- * `<videoId>`（本地转录通道，长度受限翻译，DeepSeek）30s 窗实测：4 行占用比分别为
- * 1.08 / 0.57 / 0.42 / 0.45，最低 0.42——0.3 留出余量不误伤合理的口语压缩，同时仍能
- * 抓到明显过短（<30%）的退化翻译。
+ * 与旧 30s 窗观测（medianRatio 无记录、overflowFraction≈0.71、delayFraction≈0.29）
+ * 相比，全片实测的 overflow / delay 都明显更低——30s 窗口偏小，容易被开头一两句
+ * 难压缩的内容带偏；全片分布更有代表性，本轮据此收紧而非照抄旧值：
+ *
+ * - advisoryMedianRatio 1.35 → **1.2**：真实全片 0.921（此前云希全片跑过 0.935，
+ *   见 docs/DUB-TASK.md），两次真实观测都聚在 0.92–0.94，1.2 留约 30% 余量，
+ *   仍远比 1.35 更有辨识力。
+ * - advisoryOverflowFraction 0.75 → **0.5**：真实观测 0.383（云健）/ 0.369（云希，
+ *   见 docs/DUB-TASK.md），1.5 倍（约 30–35%）留在最高观测之上，0.75 对这两次真实
+ *   全片跑而言形同虚设。
+ * - maxDelayFraction（hard）0.35 → **0.3**：真实观测 0.188，0.3 留约 60% 余量——
+ *   仍比旧的 30s 窗估计（≈0.29）更宽松一点，避免只拿一次全片样本的精确值当硬边界；
+ *   降到远低于 0.3（比如 0.25）会离单次真实观测太近，样本量不足以支撑那么紧。
+ * - maxExtendMs（hard）8s：不变，与协商层 DEFAULT_MAX_EXTEND_MS 对齐，是结构性
+ *   安全帽而非"典型值"——真实观测 extendMs=10ms（stretch 让绝大多数漂移在句内
+ *   被吸收），继续留 8s 上限本身不会挡住任何真实产出。
+ * - advisoryTextBudgetRetainFraction 0.3：不变。它衡量的是翻译阶段的产出，与
+ *   本次改动的音色/协商无关；全片重跑的最低观测占用比 0.407（129 条参与评估的行），
+ *   比 30s 窗当初的最低观测 0.42 更低但仍远高于 0.3，阈值继续留有余量，不用收紧。
+ *
+ * - 零间隔 / 低于最小停顿：仍不允许
  */
 export const DEFAULT_DUB_GATE_THRESHOLDS: DubGateThresholds = {
-  advisoryMedianRatio: 1.35,
-  advisoryOverflowFraction: 0.75,
+  advisoryMedianRatio: 1.2,
+  advisoryOverflowFraction: 0.5,
   maxExtendMs: DEFAULT_MAX_EXTEND_MS,
-  maxDelayFraction: 0.35,
+  maxDelayFraction: 0.3,
   advisoryTextBudgetRetainFraction: 0.3,
   maxDroppedCount: 0,
   minInterSentencePauseMs: DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,

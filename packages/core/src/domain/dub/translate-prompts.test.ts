@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDubTranslateExpandPrompt,
   buildDubTranslatePayload,
   buildDubTranslateRepairPrompt,
+  buildDubTranslateTightenPrompt,
   buildDubTranslateUserPrompt,
   dubTranslateCharBudget,
   estimateSpokenMs,
@@ -53,6 +55,21 @@ describe("getDubTranslateSystemPrompt", () => {
   it("frames the task as translating to fit, not translating then cutting", () => {
     expect(prompt).toMatch(/fit/i);
     expect(prompt).toMatch(/maxChars/);
+  });
+
+  it("tells the model to fill the budget (85-100%), not just avoid exceeding it", () => {
+    expect(prompt).toMatch(/FILL the budget/i);
+    expect(prompt).toMatch(/85-100%/);
+  });
+
+  it("warns that landing far under budget leaves dead air with no voice or subtitle", () => {
+    expect(prompt).toMatch(/60%/);
+    expect(prompt).toMatch(/no dubbed audio and no subtitle/i);
+  });
+
+  it("directs freed-up budget toward completeness, not padding", () => {
+    expect(prompt).toMatch(/restore details/i);
+    expect(prompt).toMatch(/not merely to consume characters|not padding/i);
   });
 
   it("requires proper nouns and identifiers to survive verbatim", () => {
@@ -107,5 +124,40 @@ describe("buildDubTranslateRepairPrompt", () => {
     expect(prompt).toContain("3");
     expect(prompt).toContain("7");
     expect(prompt).toMatch(/EXACTLY|exactly/);
+  });
+});
+
+describe("buildDubTranslateTightenPrompt", () => {
+  const prompt = buildDubTranslateTightenPrompt([{ index: 4, actualChars: 90, maxChars: 76 }]);
+
+  it("pins the previous length and the budget into the instruction", () => {
+    expect(prompt).toContain("index 4");
+    expect(prompt).toContain("90");
+    expect(prompt).toContain("76");
+  });
+
+  it("asks for a tighter retranslation, not a cut of the previous attempt", () => {
+    expect(prompt).toMatch(/tighter/i);
+    expect(prompt).toMatch(/NOT an instruction to cut/i);
+  });
+});
+
+describe("buildDubTranslateExpandPrompt", () => {
+  const prompt = buildDubTranslateExpandPrompt([{ index: 4, actualChars: 27, maxChars: 76 }]);
+
+  it("pins the previous length and the budget into the instruction", () => {
+    expect(prompt).toContain("index 4");
+    expect(prompt).toContain("27");
+    expect(prompt).toContain("76");
+  });
+
+  it("explains the consequence: dead air with no voice and no subtitle", () => {
+    expect(prompt).toMatch(/dead air/i);
+    expect(prompt).toMatch(/no voice and no subtitle/i);
+  });
+
+  it("asks for a fuller retranslation, not padding of the previous attempt", () => {
+    expect(prompt).toMatch(/use most of the budget/i);
+    expect(prompt).toMatch(/NOT an instruction to pad/i);
   });
 });

@@ -68,8 +68,8 @@ export const dubTranslateCharBudget = (
 };
 
 export const DUB_TRANSLATE_RULES: readonly string[] = [
-  '1. Translate to FIT. Each item carries a "maxChars" budget derived from how long that line may be spoken. Never exceed it. Shorter is always acceptable.',
-  "2. Spend the budget by dropping redundancy, never by dropping content. Spoken English is padded with filler and restatement — cut those first. Every fact, number, name, and causal link in the source must survive.",
+  '1. Translate to FILL the budget, not merely to fit inside it. Each item carries a "maxChars" budget derived from how long that line may be spoken. Target 85-100% of maxChars. Never exceed it — but landing far short of it (below roughly 60%) is just as much a failure: the Chinese voice stops talking while the English speaker is still going, leaving that stretch of video with no dubbed audio and no subtitle.',
+  "2. Spend the budget on completeness and natural phrasing, not padding. Spoken English is padded with filler and restatement — cut those first. Then use the room you freed up to restore details, qualifiers, examples, and causal links that a tight literal translation would drop, and to phrase the sentence the way a person would actually say it in Chinese. Do not add filler words, hedges, or repetition merely to consume characters — every character you add must carry meaning. Every fact, number, name, and causal link in the source must survive.",
   "3. Proper nouns, brand names, product names, shell commands, API names, and code identifiers stay EXACTLY as written. Never translate or transliterate them.",
   '4. Write for the EAR. Convert percentages, multipliers, and units into spoken Chinese ("30%" -> "百分之三十", "2x" -> "两倍"). Version numbers and model names (GPT-4, Claude 3.5, o3) stay verbatim.',
   '5. NEVER signal omission. No ellipses, no "等等", no "以此类推", no trailing dashes. A line that reads as truncated is a failure even when it fits.',
@@ -133,6 +133,29 @@ export const buildDubTranslateTightenPrompt = (
         `  index ${o.index}: previous attempt was ${o.actualChars} characters, the budget is ${o.maxChars}.`,
     ),
     "This is NOT an instruction to cut information out of your previous attempt. Translate the English source afresh and find a more compact wording for it.",
+    "",
+    "Rules:",
+    ...DUB_TRANSLATE_RULES,
+  ].join("\n");
+
+/**
+ * 低于预算重译 prompt：与 {@link buildDubTranslateTightenPrompt} 相反的方向。
+ *
+ * 把实际字数和预算一起写死，逼模型给出更完整的一版——不是让它灌水凑字数，而是把
+ * 上一版被过度精简掉的细节、限定语、例子补回来，用更自然完整的中文句式表达。
+ */
+export const buildDubTranslateExpandPrompt = (
+  under: readonly { index: number; actualChars: number; maxChars: number }[],
+): string =>
+  [
+    "You are a Chinese dubbing translator. Your previous translation of the following items used far less than its character budget.",
+    "This means the Chinese voice will finish speaking while the English speaker in the video is still talking — leaving dead air with no voice and no subtitle for the rest of that line's slot.",
+    "Translate each item again from the English source, and use most of the budget this time.",
+    ...under.map(
+      (o) =>
+        `  index ${o.index}: previous attempt was ${o.actualChars} characters, the budget is ${o.maxChars}.`,
+    ),
+    "This is NOT an instruction to pad the previous attempt with filler or repetition. Translate the English source afresh, restoring details, qualifiers, and examples a tight version dropped, and phrasing it the way a person would naturally say it in Chinese.",
     "",
     "Rules:",
     ...DUB_TRANSLATE_RULES,

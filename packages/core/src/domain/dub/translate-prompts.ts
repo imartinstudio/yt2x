@@ -83,7 +83,10 @@ export const DUB_TRANSLATE_RULES: readonly string[] = [
     "(ASR output is not capitalized, so match case-insensitively): " +
     `${PROTECTED_GLOSSARY_TERMS.join(", ")}. Names: ${PROTECTED_NAMES.join(", ")}. ` +
     'This applies even inside a longer phrase, e.g. "grill me skills" keeps "grill me" ' +
-    'in English and translates only "skills".',
+    'in English and translates only "skills". ' +
+    'Example: "My grill me skills and grill with docs have been out there for a while now" -> ' +
+    '"我的 Grill Me 技能和 Grill with Docs 已经发布一段时间了" — "grill me" and "grill with docs" ' +
+    "stay in English; everything around them is translated.",
   "10. " +
     "The following ARE ordinary English words, not proper nouns, so translate them — but their " +
     "Chinese rendering must be IDENTICAL every single time they occur anywhere in the whole " +
@@ -91,7 +94,10 @@ export const DUB_TRANSLATE_RULES: readonly string[] = [
     "decision, even when a different wording would otherwise read more naturally in a given " +
     "sentence: " +
     DUB_TERM_TRANSLATIONS.map((t) => `"${t.source}" -> ${t.zh}`).join(", ") +
-    ".",
+    '. This rule does NOT apply to "grill me" or "grill with docs" — those are the skill names ' +
+    "from rule 9 and must stay in English exactly as rule 9 says, even though the word " +
+    '"grill" appears inside them. Rule 9 always wins over this rule when both could apply to ' +
+    "the same words.",
 ];
 
 export const getDubTranslateSystemPrompt = (): string =>

@@ -102,6 +102,19 @@ describe("getDubTranslateSystemPrompt", () => {
     expect(prompt).toMatch(/fidelity.*保真度/);
   });
 
+  it("tells the model rule 9's skill names win over rule 10's generic grill/fidelity mapping", () => {
+    // 真实运行中 LLM 把 "grill me"/"grill with docs" 当成了裸词 "grill" 的派生用法，
+    // 套用了追问译法，把技能名也翻译掉了。两条规则必须明确谁优先。
+    expect(prompt).toMatch(/does NOT apply to.*grill me.*grill with docs/is);
+  });
+
+  it("gives a worked example translating the actual skill-name sentence", () => {
+    // 用真实的第一句台词做少样本示例，直接锚定"grill me"/"grill with docs" 保留英文、
+    // 其余部分翻译——比抽象规则更能防止模型把整个短语当成普通动词短语处理
+    expect(prompt).toMatch(/grill me skills and grill with docs/i);
+    expect(prompt).toMatch(/Example/i);
+  });
+
   it("tells the model to spend the budget on redundancy, not on content", () => {
     expect(prompt).toMatch(/filler|redundan/i);
     expect(prompt).toMatch(/fact|number|name/i);

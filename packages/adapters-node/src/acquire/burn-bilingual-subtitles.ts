@@ -37,6 +37,14 @@ export type BurnBilingualSubtitlesOptions = {
   watermarkXlate?: string;
   /** Progress callback for the long-running render/frames/encode phases */
   onProgress?: BurnProgressCallback;
+  /**
+   * Optional replacement audio track (e.g. a dubbed Chinese mix). When provided, the same
+   * ffmpeg call that overlays the subtitle strips also maps this track's audio instead of
+   * `videoPath`'s own — one encode does both, instead of muxing a new audio track into an
+   * intermediate video first and burning subtitles in a second pass. Omitted by default, in
+   * which case behaviour is unchanged: `videoPath`'s own audio (`0:a`) is kept as-is.
+   */
+  replaceAudioPath?: string;
 };
 
 export type BurnBilingualSubtitlesResult = {
@@ -180,18 +188,20 @@ export const burnBilingualSubtitles = async (
   if (!force) {
     try {
       await access(opts.outputPath);
-      const [outputStat, srtStat, enStat, zhStat] = await Promise.all([
+      const [outputStat, srtStat, enStat, zhStat, audioStat] = await Promise.all([
         stat(opts.outputPath),
         stat(opts.srtPath),
         stat(opts.enSrtPath),
         stat(opts.zhSrtPath),
+        opts.replaceAudioPath !== undefined ? stat(opts.replaceAudioPath) : Promise.resolve(undefined),
       ]);
 
       const outputMtime = outputStat.mtimeMs;
       if (
         srtStat.mtimeMs <= outputMtime &&
         enStat.mtimeMs <= outputMtime &&
-        zhStat.mtimeMs <= outputMtime
+        zhStat.mtimeMs <= outputMtime &&
+        (audioStat === undefined || audioStat.mtimeMs <= outputMtime)
       ) {
         return { burned: false, skipped: true, skipReason: "already_exists", warnings };
       }
@@ -419,13 +429,25 @@ export const burnBilingualSubtitles = async (
     "-framerate", String(OVERLAY_FPS),
     "-i", path.join(enFramesDir, "frame_%05d.png"),
   ];
+  // Input indices 0/1/2 (video/zh-frames/en-frames) are load-bearing constants baked into
+  // filterSteps above ([0:v], [1:v], [2:v], and — when a watermark is present — [3:v]).
+  // The optional replace-audio input is therefore always appended LAST, after the optional
+  // watermark input, so it never shifts those indices.
+  let nextInputIndex = 3;
   if (watermarkPath !== null) {
     // Loop a single-frame watermark for the full video duration.
     ffmpegArgs.push("-loop", "1", "-i", watermarkPath);
+    nextInputIndex += 1;
+  }
+  let audioMap = "0:a";
+  if (opts.replaceAudioPath !== undefined) {
+    ffmpegArgs.push("-i", opts.replaceAudioPath);
+    audioMap = `${nextInputIndex}:a`;
+    nextInputIndex += 1;
   }
   ffmpegArgs.push(
     "-filter_complex", filterComplex,
-    "-map", "[vfinal]", "-map", "0:a",
+    "-map", "[vfinal]", "-map", audioMap,
     "-c:v", "libx264", "-pix_fmt", "yuv420p",
     "-profile:v", "high", "-level", "4.0",
     "-c:a", "aac", "-b:a", "128k",

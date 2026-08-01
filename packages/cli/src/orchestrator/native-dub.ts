@@ -708,7 +708,10 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     if (sourceVideo === undefined || pythonPath === undefined) {
       throw new Error("internal error: source video / demucs python missing for remix path");
     }
-    const demucsDir = dubDemucsDirFor(dubDir);
+    // 时间窗冒烟写到 dub/work/demucs，与 dubbedPath / dub-script.json / reverseSrtPath
+    // 的规则一致：否则 30 秒窗口的人声分离结果会落进全片共用的 dub/demucs/，下一次
+    // 不带 --force 的全片跑会因 skipIfExists 命中这份 30 秒的 no_vocals.wav。
+    const demucsDir = hasTimeRange ? path.join(dubDir, "work", "demucs") : dubDemucsDirFor(dubDir);
     logger.info({ videoId, demucsDir }, "yt2x dub: separating background audio with Demucs…");
     const separated = await separateDemucs({
       inputPath: sourceVideo.videoPath,

@@ -1,4 +1,5 @@
 import {
+  buildDubTranslateExpandPrompt,
   buildDubTranslateRepairPrompt,
   buildDubTranslateTightenPrompt,
   buildDubTranslateUserPrompt,
@@ -19,6 +20,15 @@ import { parseJsonWithRepairs, salvagePartialJsonArray } from "../llm/parse-json
  */
 
 const BATCH_SIZE = 20;
+
+/**
+ * 低于该占用比就打回重写（相对于该行自己的时长预算）。
+ *
+ * 60% 而非门禁的 advisory 阈值（0.7）：这里是翻译阶段主动补救的触发线，门禁是
+ * 事后报告的观察线，两者职责不同——补救要在明显浪费预算时就出手，门禁允许更高
+ * 的容忍度以避免对"忠实压缩、天然短"的行误报。
+ */
+const UNDER_BUDGET_RETAIN_THRESHOLD = 0.6;
 
 export type DubTranslatedLine = {
   index: number;
@@ -188,6 +198,56 @@ export const translateUtterances = async (
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       warnings.push(`tighten pass failed: ${message}`);
+    }
+  }
+
+  // 反向：远低于预算的行拿英文原文重译一版，把省下的空间用来把内容说完整。
+  // 预算本身就短于固定开销的行（budgetOf 被钳到 1）没有真正的时长可填，
+  // 交给后续静音/协商吸收，重译解决不了。
+  const underBudget = input.utterances.filter((u) => {
+    const text = translated.get(u.index);
+    if (text === undefined) return false;
+    const availableMs = u.endMs - u.startMs;
+    if (availableMs <= rate.fixedOverheadMs) return false;
+    return text.length / budgetOf(u) < UNDER_BUDGET_RETAIN_THRESHOLD;
+  });
+
+  if (underBudget.length > 0) {
+    try {
+      const resp = await input.llm.chat({
+        model: input.model,
+        messages: [
+          {
+            role: "system",
+            content: buildDubTranslateExpandPrompt(
+              underBudget.map((u) => ({
+                index: u.index,
+                actualChars: translated.get(u.index)!.length,
+                maxChars: budgetOf(u),
+              })),
+            ),
+          },
+          { role: "user", content: buildDubTranslateUserPrompt(underBudget, rate) },
+        ],
+        temperature: input.temperature ?? 0.3,
+        maxTokens: input.maxTokens ?? 8192,
+        jsonMode: true,
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+      const known = new Set(underBudget.map((u) => u.index));
+      let expanded = 0;
+      for (const line of parseResponse(resp.content.trim())) {
+        if (!known.has(line.index)) continue;
+        // 只在真的更长时替换：重译偶尔仍给出同样短的版本，那一版没有价值
+        if (line.text.length > translated.get(line.index)!.length) {
+          translated.set(line.index, line.text);
+          expanded += 1;
+        }
+      }
+      warnings.push(`expanded ${expanded}/${underBudget.length} under-budget lines`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      warnings.push(`expand pass failed: ${message}`);
     }
   }
 

@@ -36,10 +36,12 @@ const allOf = (indices: number[]): Record<number, string> =>
 describe("translateUtterances", () => {
   it("returns one line per utterance, keyed by the original index", async () => {
     const { llm } = stubLlm((idx) => allOf(idx));
+    // 2300ms 的槽位换算出的字符预算恰好等于 "译文1"/"译文2" 的长度（3 字），既不超预算
+    // 也不会触发反向扩写重译，保持这个测试只关注「按 index 一一对应」这件事。
     const { lines, warnings } = await translateUtterances({
       llm,
       model: "m",
-      utterances: [utt(1, 3_000, "hello"), utt(2, 3_000, "world")],
+      utterances: [utt(1, 2_300, "hello"), utt(2, 2_300, "world")],
     });
     expect(lines.map((l) => l.index)).toEqual([1, 2]);
     expect(lines.map((l) => l.text)).toEqual(["译文1", "译文2"]);
@@ -134,5 +136,86 @@ describe("translateUtterances", () => {
     const { lines } = await translateUtterances({ llm: stub.llm, model: "m", utterances: [] });
     expect(lines).toEqual([]);
     expect(stub.calls()).toBe(0);
+  });
+
+  it("retranslates a line that used far less than its budget, asking it to fill in rather than cut", async () => {
+    let call = 0;
+    const llm: LlmPort = {
+      chat: async (req) => {
+        call += 1;
+        const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
+        const items = JSON.parse(user) as { index: number }[];
+        if (call === 1) {
+          // 首轮故意给一句远低于预算的短译文（9000ms 的槽位理应有约 62 字预算）
+          return {
+            content: JSON.stringify(items.map((i) => ({ index: i.index, text: "短" }))),
+            model: req.model,
+            finishReason: "stop" as const,
+          };
+        }
+        // 重译轮必须走反向扩写 prompt，而不是收紧 prompt
+        expect(system).toMatch(/used far less than its character budget/i);
+        expect(system).not.toMatch(/exceeded its character budget/i);
+        return {
+          content: JSON.stringify(
+            items.map((i) => ({
+              index: i.index,
+              text: "一句用满预算、把细节补全的自然中文译文示例文本，这里再多写几个字凑够长度",
+            })),
+          ),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+    const { lines, warnings } = await translateUtterances({
+      llm,
+      model: "m",
+      utterances: [utt(1, 9_000, "a long english sentence with plenty of things to say")],
+    });
+    expect(call).toBe(2);
+    expect(lines[0]?.text).not.toBe("短");
+    expect(lines[0]!.text.length).toBeGreaterThan(1);
+    expect(warnings.join(" ")).toMatch(/expanded 1\/1/);
+  });
+
+  it("does not attempt to expand a line whose slot is too short to have a real budget", async () => {
+    // availableMs(1000) 低于固定开销(1873ms)，budget 被钳到 1 字——这类槽位靠翻译
+    // 补不进去，重译只会浪费一次调用
+    const stub = stubLlm((idx) => Object.fromEntries(idx.map((i) => [i, "短"])));
+    const { lines, warnings } = await translateUtterances({
+      llm: stub.llm,
+      model: "m",
+      utterances: [utt(1, 1_000, "um")],
+    });
+    expect(lines[0]?.text).toBe("短");
+    expect(stub.calls()).toBe(1);
+    expect(warnings.some((w) => /expand/i.test(w))).toBe(false);
+  });
+
+  it("keeps the previous translation when the expand retry does not actually lengthen it", async () => {
+    let call = 0;
+    const llm: LlmPort = {
+      chat: async (req) => {
+        call += 1;
+        const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
+        const items = JSON.parse(user) as { index: number }[];
+        // 两轮都给同样短的译文——扩写没有真正生效，不该替换掉已有内容
+        return {
+          content: JSON.stringify(items.map((i) => ({ index: i.index, text: "短" }))),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+    const { lines, warnings } = await translateUtterances({
+      llm,
+      model: "m",
+      utterances: [utt(1, 9_000, "a long english sentence with plenty of things to say")],
+    });
+    expect(call).toBe(2);
+    expect(lines[0]?.text).toBe("短");
+    expect(warnings.join(" ")).toMatch(/expanded 0\/1/);
   });
 });

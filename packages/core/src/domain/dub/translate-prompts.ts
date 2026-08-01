@@ -98,7 +98,14 @@ export const DUB_TRANSLATE_RULES: readonly string[] = [
     'in English and translates only "skills". ' +
     'Example: "My grill me skills and grill with docs have been out there for a while now" -> ' +
     '"我的 Grill Me 技能和 Grill with Docs 已经发布一段时间了" — "grill me" and "grill with docs" ' +
-    "stay in English; everything around them is translated.",
+    "stay in English; everything around them is translated. " +
+    'A single sentence can contain BOTH the protected skill name AND an ordinary derived word ' +
+    'from rule 10 at the same time — do not let one "grill" pull the other into the same ' +
+    'treatment; scan the whole sentence for each pattern independently. Example: ' +
+    '"the grill me skills is trying to answer high fidelity questions during a grilling session" ' +
+    '-> "Grill Me 技能试图在追问环节回答高保真问题" — "grill me" (part of the skill name ' +
+    '"grill me skills") stays in English even though "grilling session", later in the very same ' +
+    'sentence, must be translated to 追问环节 per rule 10.',
   "10. " +
     "The following ARE ordinary English words, not proper nouns, so translate them — but their " +
     "Chinese rendering must be IDENTICAL every single time they occur anywhere in the whole " +

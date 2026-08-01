@@ -132,6 +132,17 @@ describe("getDubTranslateSystemPrompt", () => {
     expect(prompt).toMatch(/Example/i);
   });
 
+  it("gives a worked example where the protected skill name and a rule-10 derived word share one sentence", () => {
+    // 真实全片第 25 句复现过的形态："grill me skills"（专有名词，应保留英文）和
+    // "grilling session"（普通派生词，应译成"追问环节"）同句出现，模型把两者混为
+    // 一谈，连专名也一起译掉了。这条少样本示例直接锚定同句内两种词的正确处理方式。
+    expect(prompt).toMatch(
+      /the grill me skills is trying to answer high fidelity questions during a grilling session/i,
+    );
+    expect(prompt).toMatch(/Grill Me 技能/);
+    expect(prompt).toMatch(/追问环节回答高保真问题/);
+  });
+
   it("tells the model to spend the budget on redundancy, not on content", () => {
     expect(prompt).toMatch(/filler|redundan/i);
     expect(prompt).toMatch(/fact|number|name/i);

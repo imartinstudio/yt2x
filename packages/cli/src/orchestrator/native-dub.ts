@@ -747,7 +747,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     );
 
     // ── 7. 反向 SRT + 混音重烧 ──
-    const reverseSrt = formatReverseSrt(placement.lines);
+    const reverseSrt = formatReverseSrt(placement.lines, script.lines);
     // 时间窗冒烟写到 dub/work/，与 dubbedPath / dub-script.json 的规则一致，避免用
     // 30 秒窗口的字幕覆盖全片的 video/full.zh-dub.srt。
     const reverseSrtPath = hasTimeRange

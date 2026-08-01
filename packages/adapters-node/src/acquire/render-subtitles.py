@@ -208,47 +208,86 @@ def _is_cjk(ch: str) -> bool:
     )
 
 
+def _split_bilingual_lines(text: str) -> tuple[str, str] | None:
+    """Recognizes a dub bilingual cue: exactly two non-empty lines where the
+    first carries CJK (the dubbed Chinese) and the second doesn't (the
+    English source line placed under it — see reverse-srt.ts, which emits
+    "zh\\nen" blocks). Anything else — a single line, or Whisper's own
+    pre-wrapped multi-line CJK where every line is CJK — returns None and
+    falls through to the legacy single-language path unchanged."""
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    zh_raw, en_raw = lines
+    if not any(_is_cjk(ch) for ch in zh_raw):
+        return None
+    if any(_is_cjk(ch) for ch in en_raw):
+        return None
+    return zh_raw, en_raw
+
+
+def _fits_all(lines: list[str], font: ImageFont.FreeTypeFont, dd: ImageDraw.ImageDraw, width: int) -> bool:
+    return all(_text_width(ln, font, dd) <= width for ln in lines)
+
+
 def render_subtitle(text: str, _font: ImageFont.FreeTypeFont) -> Image.Image:
     """Render white text on a dark rounded background. No stroke, no shadow.
 
     Single-line strategy: pick the largest font in [ZH_MIN, ZH_MAX] (absolute
     px) that fits the cue on one line. Only cues too long even at ZH_MIN wrap
     onto extra lines (without splitting words). Text is always centered.
+
+    A dub bilingual cue (see `_split_bilingual_lines`) is a special case: the
+    Chinese and English lines are normalized independently — collapsing them
+    together first (like the legacy path does for Whisper's pre-wrapped CJK)
+    would merge both languages into one run-on line and strip the English's
+    own punctuation, which `_normalize_text` only intends for Chinese.
     """
     dummy = Image.new("RGBA", (1, 1))
     dd = ImageDraw.Draw(dummy)
 
-    text = _normalize_text(text)
+    bilingual = _split_bilingual_lines(text)
+    if bilingual is not None:
+        zh_line = _normalize_text(bilingual[0])
+        en_line = " ".join(bilingual[1].split())
+        base_lines = [zh_line] + ([en_line] if en_line else [])
+    else:
+        base_lines = [_normalize_text(text)]
 
     frac = WIDTH_FRAC_MAX
 
     def avail_width(size: int) -> int:
         return int(VIDEO_WIDTH * frac) - int(size * BG_PAD_X_RATIO) * 2
 
-    # Pick the largest size in [ZH_MIN, ZH_MAX] that fits on one line.
+    # Pick the largest size in [ZH_MIN, ZH_MAX] at which every base line fits
+    # on its own single line.
     size = ZH_MAX_FONT_SIZE
     font = _load_font(size)
     if font is None:
         raise RuntimeError("No usable CJK font found")
 
-    if text and _text_width(text, font, dd) > avail_width(size):
+    if not _fits_all(base_lines, font, dd, avail_width(size)):
         size = ZH_MIN_FONT_SIZE
         for candidate in range(ZH_MAX_FONT_SIZE, ZH_MIN_FONT_SIZE - 1, -1):
             f = _load_font(candidate)
-            if _text_width(text, f, dd) <= avail_width(candidate):
+            if _fits_all(base_lines, f, dd, avail_width(candidate)):
                 size = candidate
                 break
         font = _load_font(size)
 
-    # One line when it fits; otherwise wrap at the min size (word-safe, rare).
-    if not text:
+    # Each base line stands on its own; only a line that still doesn't fit at
+    # the chosen size gets wrapped onto extra lines (word-safe, rare).
+    lines: list[str] = []
+    for base_line in base_lines:
+        if not base_line:
+            continue
+        if _text_width(base_line, font, dd) <= avail_width(size):
+            lines.append(base_line)
+        else:
+            wrapped = [ln.strip() for ln in _wrap_cjk(base_line, font, dd, avail_width(size)) if ln.strip()]
+            lines.extend(wrapped if wrapped else [base_line])
+    if not lines:
         lines = [""]
-    elif _text_width(text, font, dd) <= avail_width(size):
-        lines = [text]
-    else:
-        lines = [ln.strip() for ln in _wrap_cjk(text, font, dd, avail_width(size)) if ln.strip()]
-        if not lines:
-            lines = [text]
 
     wrapped_text = "\n".join(lines)
     ls, bg_pad_x, bg_pad_y, bg_radius = _line_params(size)

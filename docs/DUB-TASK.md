@@ -170,8 +170,17 @@
   只填到 22.56s 而源语音讲到 25.4s，中间 2.84 秒画面无字幕、无人声但说话人还在讲，该行占用比
   0.423 高于 0.3，advisory 都不报
 - ~~既有 latent bug：`burn-subtitles.ts:349` 采样点落在 cue 空隙时回退用原始时刻抽帧，必然
-  判 FAIL~~ **已解决**：`verifyBurnedSubtitles`（`packages/adapters-node/src/acquire/burn-subtitles.ts:358-370`）
-  改为吸附到最近 cue 的中点再抽帧（不再回退到 `cp.timestamp`）。真实素材上 85% 采样点曾落在
+  判 FAIL~~ **已解决**：`verifyBurnedSubtitles` 函数体内的采样吸附逻辑
+  （`packages/adapters-node/src/acquire/burn-subtitles.ts`，`nearestCueByGap` 调用处；行号会随周边
+  代码变动漂移，故不在此处标注具体行号，定位以函数名为准）改为吸附到最近 cue 的中点再抽帧
+  （不再回退到 `cp.timestamp`）。真实素材上 85% 采样点曾落在
   两条 cue 的空隙里（cue3 22.472s 与 cue4 25.400s 之间），空隙成因是译文比时长预算短约 1/3
   （medianRatio≈0.675）；吸附到最近 cue 后 `verifyBurnedSubtitles` 现在 `passed: true`。这个
   bug 不限于配音链路，纯双语字幕路径同样受益。
+- **已 dub 视频跳过 preflight 后，`--dub-engine` 拼错不再报错**：`native-pipeline.ts` 里
+  `skipDubPreflight` 为真时跳过 `resolveDubEngine` 校验，而 `native-dub.ts` 的
+  `executeNativeDub` 又在解析引擎之前就因 `dubbedPath` 已存在而 early-return 0。于是
+  `pipeline --dub --dub-engine elevnlabs`（拼错）对一批已经 dub 过的视频会静默退出码
+  0，而不是预期的 `CONFIG_MISSING`。判定可接受：目标视频已经全部 dub 完成时，`--dub-engine`
+  取值本来就不影响这次运行的实际行为，报错反而会误伤"只想重跑 article"的场景。留作已知
+  行为记录，暂不处理。

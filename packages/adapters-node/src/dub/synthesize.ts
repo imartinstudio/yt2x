@@ -97,10 +97,20 @@ export const requireTtsSpeechTiming = (
 };
 
 /**
- * 引擎字幕时间戳与 ffprobe 文件时长各自独立取整到毫秒，因此哪怕两者测的是同一段
- * 音频，也可能相差 1ms。这个容差只吸收取整误差，不放过真实的时间戳越界。
+ * 引擎字幕时间戳与 ffprobe 文件时长测的**不是同一个量**，所以差值不止取整误差。
+ *
+ * edge-tts 返回 MP3，44.1kHz 下一帧固定 1152 个采样点 ≈ 26ms，ffprobe 报的容器时长
+ * 量化到帧边界；而字幕时间戳来自引擎自己的合成时间轴，两者天然对不齐。此前按"各自
+ * 取整到毫秒、最多差 1ms"的推断设成 2ms，真实素材上撞到过 3ms（`5235ms` vs `5232ms`）
+ * 而整趟中止——把容差往上挪一格只会在下一格再挂，必须按真实成因取值。
+ *
+ * 取一帧再加余量。这个断言要抓的是"引擎时间戳明显越界"（音频被截断、引擎错报），
+ * 那类偏差在 10²–10³ ms 量级，50ms 照样抓得住。
+ *
+ * 下游对越界本身是安全的：`trimAudioToSpeechWindow` 把它当 ffmpeg 的 `-to`，超出文件
+ * 末尾会自然收在 EOF；`needsSpeechWindowTrim` 的尾部裁剪判断也不会误触发。
  */
-export const SPEECH_END_TOLERANCE_MS = 2;
+export const SPEECH_END_TOLERANCE_MS = 50;
 
 export const assertSpeechEndWithinFile = (input: {
   lineIndex: number;

@@ -157,10 +157,26 @@ describe("assertSpeechEndWithinFile", () => {
     ).not.toThrow();
   });
 
-  it("passes on a 1ms independent-rounding mismatch (the real edge-tts case)", () => {
+  it("passes on a 1ms mismatch (the first real edge-tts case seen)", () => {
     expect(() =>
       assertSpeechEndWithinFile({ lineIndex: 1, speechEndMs: 5_737, fileDurationMs: 5_736 }),
     ).not.toThrow();
+  });
+
+  it("passes on a 3ms mismatch, which aborted a real full-video run", () => {
+    // 真实素材 line 81 实测：5235ms vs 5232ms。此前容差按「两者各自取整、最多差 1ms」
+    // 设成 2ms，这一行就把整趟合成中止了。差值来自 MP3 帧量化（44.1kHz 下一帧 ≈26ms），
+    // 不是取整误差，所以容差必须按帧长取，而不是在 2/3/4 之间往上挪。
+    expect(() =>
+      assertSpeechEndWithinFile({ lineIndex: 81, speechEndMs: 5_235, fileDurationMs: 5_232 }),
+    ).not.toThrow();
+  });
+
+  it("still throws on a truncation-scale overshoot", () => {
+    // 断言真正要抓的是音频被截断 / 引擎错报，那类偏差在 10²–10³ ms 量级。
+    expect(() =>
+      assertSpeechEndWithinFile({ lineIndex: 1, speechEndMs: 6_500, fileDurationMs: 5_736 }),
+    ).toThrow(/exceeds audio file duration/iu);
   });
 
   it(`passes at the tolerance boundary (${SPEECH_END_TOLERANCE_MS}ms over)`, () => {

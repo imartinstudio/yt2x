@@ -143,6 +143,16 @@ describe("getDubTranslateSystemPrompt", () => {
     expect(prompt).toMatch(/追问环节回答高保真问题/);
   });
 
+  it("tells the model not to drop a protected term split across two adjacent items by sentence segmentation", () => {
+    // 真实全片复现过："2PRD" 被 ASR 切断在两个话语单元的分界上（"...just run two" /
+    // "PRD in there. ..."），模型翻译第二个单元时把 "PRD" 直接漏译，理由大概是
+    // "已经在上一句体现过了"——但每个 item 是独立打分的，必须各自完整。
+    expect(prompt).toMatch(/split across two adjacent items/i);
+    expect(prompt).toMatch(/just run two/i);
+    expect(prompt).toMatch(/PRD in there/i);
+    expect(prompt).toMatch(/never drop it from an item/i);
+  });
+
   it("tells the model to spend the budget on redundancy, not on content", () => {
     expect(prompt).toMatch(/filler|redundan/i);
     expect(prompt).toMatch(/fact|number|name/i);

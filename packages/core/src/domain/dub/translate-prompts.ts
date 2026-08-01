@@ -117,6 +117,18 @@ export const DUB_TRANSLATE_RULES: readonly string[] = [
     "from rule 9 and must stay in English exactly as rule 9 says, even though the word " +
     '"grill" appears inside them. Rule 9 always wins over this rule when both could apply to ' +
     "the same words.",
+  "11. " +
+    "You are shown ALL items in this transcript together, but each is still translated and " +
+    "scored independently — a protected term (rule 9) can be split across two adjacent items " +
+    'by sentence segmentation, e.g. one item ends "...they create a new context window and ' +
+    'just run two" and the very next item begins "PRD in there. This is totally crazy to me. ' +
+    'What are you doing?" (the term "PRD", from the skill name "2PRD", spans the boundary). ' +
+    "When that happens, the term MUST still appear in the translation of EVERY item whose own " +
+    "source text contains it — never drop it from an item just because a neighboring item's " +
+    'translation already used it. For the example above: translate the second item as ' +
+    '"PRD 就搁在那儿，这太疯狂了，你在干什么？" (keeping "PRD"), never as "这太疯狂了，你在干什么？" ' +
+    "(dropping it). This redundancy across two adjacent items is required, not the kind of " +
+    "padding rule 2 tells you to avoid.",
 ];
 
 export const getDubTranslateSystemPrompt = (): string =>

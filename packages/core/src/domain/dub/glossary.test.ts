@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   containsTermCaseInsensitive,
+  DUB_TERM_TRANSLATIONS,
   findPresentProtectedTerms,
   findProtectedSpans,
   PROTECTED_GLOSSARY_TERMS,
@@ -38,6 +39,39 @@ describe("findPresentProtectedTerms", () => {
     const enText = "My grill me skills and grill with docs have been out there for a while now.";
     const present = findPresentProtectedTerms(enText, ["Grill Me", "Grill with Docs", "Codex"]);
     expect(present).toEqual(["Grill Me", "Grill with Docs"]);
+  });
+});
+
+describe("DUB_TERM_TRANSLATIONS", () => {
+  const lookup = (source: string): string | undefined =>
+    DUB_TERM_TRANSLATIONS.find((t) => t.source === source)?.zh;
+
+  it("locks the grill family to the 追问 (question relentlessly) reading, not 评审 (review)", () => {
+    expect(lookup("grill")).toBe("追问");
+    expect(lookup("grilling")).toBe("追问");
+    expect(lookup("grilling session")).toBe("追问环节");
+    expect(lookup("grillable")).toBe("可追问");
+    expect(lookup("ungrillable")).toBe("不可追问");
+  });
+
+  it("locks fidelity to a single rendering instead of 保真/精确/精度 mixed across the film", () => {
+    expect(lookup("fidelity")).toBe("保真度");
+    expect(lookup("high fidelity")).toBe("高保真");
+    expect(lookup("low fidelity")).toBe("低保真");
+  });
+
+  it("orders longer source phrases before the bare words they contain", () => {
+    // "grilling session" 必须排在裸词 "grilling" 之前，否则提示词里读到裸词条目时
+    // 模型可能提前套用短译法，看不到更具体的短语形式
+    const grillingSessionIdx = DUB_TERM_TRANSLATIONS.findIndex(
+      (t) => t.source === "grilling session",
+    );
+    const grillingIdx = DUB_TERM_TRANSLATIONS.findIndex((t) => t.source === "grilling");
+    expect(grillingSessionIdx).toBeLessThan(grillingIdx);
+
+    const highFidelityIdx = DUB_TERM_TRANSLATIONS.findIndex((t) => t.source === "high fidelity");
+    const fidelityIdx = DUB_TERM_TRANSLATIONS.findIndex((t) => t.source === "fidelity");
+    expect(highFidelityIdx).toBeLessThan(fidelityIdx);
   });
 });
 

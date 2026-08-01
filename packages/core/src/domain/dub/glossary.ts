@@ -88,3 +88,40 @@ export const findProtectedSpans = (
   }
   return spans;
 };
+
+/**
+ * 派生词的锁定译法：源词不是专有名词，允许翻译成中文，但全片必须逐字统一，不能一句
+ * 一个译法。与 {@link PROTECTED_GLOSSARY_TERMS} 相反——那张表是"整体保留英文"，这张
+ * 表是"必须翻译，但译法写死"。条目按长度降序排列，供构造提示词文本时优先展示更具体
+ * 的短语（如 "grilling session" 排在裸词 "grilling" 之前）。
+ *
+ * ## grill 系
+ *
+ * 技能名 "Grill Me" / "Grill with Docs" 本身整体保留英文（见上表）；但它的动词/形容词
+ * 派生形式（grilling、grillable、ungrillable）是普通英文构词，逐字保留英文会让中文
+ * 听感很怪。真实成片曾把同一个 "grill" 译成"提问环节""评审会""可评审""带文档的评审"
+ * 四种不同的东西——观众串不起来，而且"评审"本身就是误译：grill 在这里的字面意思是
+ * "追问、盘问"（该技能自己的描述是 "Grill the user relentlessly"）。统一改用"追问"系。
+ *
+ * ## fidelity
+ *
+ * 借自 Ryan Singer《Shape Up》的方法论术语（真实转写稿第 17 句明确点名了这个出处），
+ * 在同一支转写稿里出现 18 次，实测被译成"保真""精确""精度"三种不同的词——同样是
+ * 全片译法不统一，锁定为"保真度"（含 high/low fidelity 的常见搭配）。
+ *
+ * `scope`、`hand off`/`handoff`、`prototype session` 也在同一支转写稿里高频出现
+ * （分别 10 次、11 次、4 次），但抽样比对真实译文后发现它们已经被稳定译成"范围"、
+ * "交接"、"原型会议/环节"，没有观测到 grill / fidelity 那种全片译法打架的问题，因此
+ * 没有加入这张表——写死一个已经稳定的译法收益很小，却会让提示词变长。
+ */
+export const DUB_TERM_TRANSLATIONS: readonly { source: string; zh: string }[] = [
+  { source: "grilling session", zh: "追问环节" },
+  { source: "grilling sessions", zh: "追问环节" },
+  { source: "high fidelity", zh: "高保真" },
+  { source: "low fidelity", zh: "低保真" },
+  { source: "grillable", zh: "可追问" },
+  { source: "ungrillable", zh: "不可追问" },
+  { source: "grilling", zh: "追问" },
+  { source: "fidelity", zh: "保真度" },
+  { source: "grill", zh: "追问" },
+];

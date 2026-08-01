@@ -1,4 +1,4 @@
-import { PROTECTED_GLOSSARY_TERMS, PROTECTED_NAMES } from "./glossary.js";
+import { DUB_TERM_TRANSLATIONS, PROTECTED_GLOSSARY_TERMS, PROTECTED_NAMES } from "./glossary.js";
 import type { Utterance } from "./types.js";
 
 /**
@@ -84,6 +84,14 @@ export const DUB_TRANSLATE_RULES: readonly string[] = [
     `${PROTECTED_GLOSSARY_TERMS.join(", ")}. Names: ${PROTECTED_NAMES.join(", ")}. ` +
     'This applies even inside a longer phrase, e.g. "grill me skills" keeps "grill me" ' +
     'in English and translates only "skills".',
+  "10. " +
+    "The following ARE ordinary English words, not proper nouns, so translate them — but their " +
+    "Chinese rendering must be IDENTICAL every single time they occur anywhere in the whole " +
+    "transcript. Treat this as a fixed vocabulary lookup, not a case-by-case translation " +
+    "decision, even when a different wording would otherwise read more naturally in a given " +
+    "sentence: " +
+    DUB_TERM_TRANSLATIONS.map((t) => `"${t.source}" -> ${t.zh}`).join(", ") +
+    ".",
 ];
 
 export const getDubTranslateSystemPrompt = (): string =>

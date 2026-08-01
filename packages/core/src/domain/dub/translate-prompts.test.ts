@@ -89,6 +89,19 @@ describe("getDubTranslateSystemPrompt", () => {
     expect(prompt).toMatch(/case-insensitiv/i);
   });
 
+  it("locks the grill-family derived forms to one consistent Chinese rendering each", () => {
+    // 真实成片曾把同一个 grill 译成"提问环节""评审会""可评审""带文档的评审"四种
+    // 不同的东西；提示词必须把每个派生形式的译法写死，不能留给模型逐句现场决定
+    expect(prompt).toMatch(/grilling session.*追问环节/);
+    expect(prompt).toMatch(/grillable.*可追问/);
+    expect(prompt).toMatch(/ungrillable.*不可追问/);
+    expect(prompt).not.toMatch(/评审/);
+  });
+
+  it("locks fidelity to one rendering instead of letting it drift across 保真/精确/精度", () => {
+    expect(prompt).toMatch(/fidelity.*保真度/);
+  });
+
   it("tells the model to spend the budget on redundancy, not on content", () => {
     expect(prompt).toMatch(/filler|redundan/i);
     expect(prompt).toMatch(/fact|number|name/i);

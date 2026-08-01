@@ -31,6 +31,10 @@ export const registerDubCommand = (program: Command): void => {
       .option("--python-path <path>", "Python with demucs installed (default: python3)")
       .option("--demucs-model <name>", "Demucs model name (default: htdemucs)")
       .option("--max-duration-ms <ms>", "Max duration per utterance before a hard split (default 12000)")
+      .option(
+        "--min-duration-ms <ms>",
+        "Min duration per utterance before merging into a neighbor (default 3000)",
+      )
       .option("--script-only", "Write dub-script.json and stop before synthesis")
       .option("--timing-only", "Stop after natural-rate synthesis and dub-timing.json")
       .option("--skip-burn", "Replace audio only; do not burn the reverse SRT")

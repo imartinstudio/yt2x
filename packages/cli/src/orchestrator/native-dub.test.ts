@@ -36,7 +36,7 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
   };
 });
 
-import { executeNativeDub } from "./native-dub.js";
+import { DEFAULT_MIN_DURATION_MS, executeNativeDub, segmentOptionsFrom } from "./native-dub.js";
 
 beforeEach(() => {
   probeDemucsMock.mockClear();
@@ -57,6 +57,23 @@ beforeEach(() => {
   });
   vi.stubEnv("OPENAI_API_KEY", "test-key");
   vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+});
+
+describe("segmentOptionsFrom", () => {
+  it("defaults minDurationMs to 3000ms so sub-1.9s utterances stop clamping to a single char", () => {
+    expect(segmentOptionsFrom({})).toEqual({ minDurationMs: DEFAULT_MIN_DURATION_MS });
+  });
+
+  it("honors --min-duration-ms when provided", () => {
+    expect(segmentOptionsFrom({ minDurationMs: "5000" })).toEqual({ minDurationMs: 5_000 });
+  });
+
+  it("still passes through --max-duration-ms alongside the min-duration default", () => {
+    expect(segmentOptionsFrom({ maxDurationMs: "8000" })).toEqual({
+      maxDurationMs: 8_000,
+      minDurationMs: DEFAULT_MIN_DURATION_MS,
+    });
+  });
 });
 
 describe("executeNativeDub hard-subtitle guard", () => {

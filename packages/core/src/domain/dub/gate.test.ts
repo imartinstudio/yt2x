@@ -405,4 +405,30 @@ describe("evaluateDubGate", () => {
     expect(report.metrics.minObservedGapMs).toBe(50);
     expect(report.issues.some((i) => i.code === "low-inter-sentence-pause")).toBe(true);
   });
+
+  it("keeps maxDelayFraction at 0.35, not the over-tightened 0.3", () => {
+    // 复审用滑窗统计证明 0.3 是纯粹的误拦（见 DEFAULT_DUB_GATE_THRESHOLDS 注释）：
+    // 一个 delayFraction=0.32 的样本必须放行，而不是被 0.3 拦下。
+    expect(DEFAULT_DUB_GATE_THRESHOLDS.maxDelayFraction).toBe(0.35);
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing({ lineCount: 25 }),
+      placement: placement({
+        delayCount: 8,
+        lines: Array.from({ length: 25 }, (_, i) => ({
+          index: i + 1,
+          action: "keep" as const,
+          rate: 1,
+          text: "有字",
+          startMs: i * 1000,
+          endMs: i * 1000 + 700,
+          durationMs: 700,
+          audioFile: `lines/${i + 1}.mp3`,
+        })),
+      }),
+    });
+    expect(report.metrics.delayFraction).toBeCloseTo(0.32, 5);
+    expect(report.blocked).toBe(false);
+    expect(report.issues.some((i) => i.code === "high-delay-fraction")).toBe(false);
+  });
 });

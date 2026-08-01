@@ -103,15 +103,32 @@ export type DubGateThresholds = {
  * - advisoryOverflowFraction 0.75 → **0.5**：真实观测 0.383（云健）/ 0.369（云希，
  *   见 docs/DUB-TASK.md），1.5 倍（约 30–35%）留在最高观测之上，0.75 对这两次真实
  *   全片跑而言形同虚设。
- * - maxDelayFraction（hard）0.35 → **0.3**：真实观测 0.188，0.3 留约 60% 余量——
- *   仍比旧的 30s 窗估计（≈0.29）更宽松一点，避免只拿一次全片样本的精确值当硬边界；
- *   降到远低于 0.3（比如 0.25）会离单次真实观测太近，样本量不足以支撑那么紧。
+ * - maxDelayFraction（hard）**0.35：不收紧**。上一轮曾把它从 0.35 收紧到 0.3，复审用
+ *   滑窗统计推翻了这个改动：真实素材上 60s 窗口 delayFraction 中位/最大值分布很宽
+ *   （max 0.500，超 0.3 的窗口占比 25%），120s 窗口收窄但仍有 9% 的窗口超过 0.3、
+ *   而超过 0.35 的窗口占比是 0%——历史两次真实全片观测（0.188 / 0.2857）都落在
+ *   0.3–0.35 这个新增拦截带之外，说明收紧 0.05 买到的唯一确定后果是对短样本
+ *   （`AGENTS.md` 明确把 `dub --start-ms/--end-ms` 列为标准做法）的纯粹误拦，
+ *   没有对应挡住任何已知的真实退化。而且这条指标在短窗上的量化噪声本就远大于
+ *   0.05 的收紧幅度：历史样本只有 7 行，粒度 1/7≈0.143，比两次收紧的差值本身还粗，
+ *   在这个粒度上争论 0.30 还是 0.35 没有统计意义。退回 0.35。
  * - maxExtendMs（hard）8s：不变，与协商层 DEFAULT_MAX_EXTEND_MS 对齐，是结构性
  *   安全帽而非"典型值"——真实观测 extendMs=10ms（stretch 让绝大多数漂移在句内
  *   被吸收），继续留 8s 上限本身不会挡住任何真实产出。
- * - advisoryTextBudgetRetainFraction 0.3：不变。它衡量的是翻译阶段的产出，与
- *   本次改动的音色/协商无关；全片重跑的最低观测占用比 0.407（129 条参与评估的行），
- *   比 30s 窗当初的最低观测 0.42 更低但仍远高于 0.3，阈值继续留有余量，不用收紧。
+ * - advisoryMedianRatio 1.2、advisoryOverflowFraction 0.5：维持收紧后的值。这两条是
+ *   advisory，不阻断成片，即使分布随后续改动漂移触发得更频繁，代价也只是报告多几条
+ *   info 级提示，可以接受。
+ * - advisoryTextBudgetRetainFraction 0.3：不变，但下面这条论证站不住，如实改写——
+ *   全片重跑测出的最低观测占用比 0.407 只统计了 129 条**参与评估**的行；
+ *   `targetDurationMs <= fixedOverheadMs` 时整行跳过评估（见下方 evaluateDubGate
+ *   的 info-loss 分支），而这批被跳过的行正是 149 句里单字译文最集中的 17 句
+ *   （占比 11.4%）。129 = 149 − 17（另外 3 句因缺少可比对的 script line 一并跳过）。
+ *   也就是说 0.407 这个"最低观测"恰恰是把信息损失最惨的那批样本剔除之后剩下的，
+ *   `infoLossCount=0` 不代表没有信息损失，而是门禁对损失最惨的那一批**结构性失明**。
+ *   PR4 接上 `minDurationMs` 合并短话语单元后，这批盲区应会大幅缩小（单字译文改前
+ *   17/149，改后见 CLI `dub` 编排层 `DEFAULT_MIN_DURATION_MS` 注释与最新实测），但
+ *   `targetDurationMs <= fixedOverheadMs` 的跳过分支本身仍在，仍然是这个指标的
+ *   固有盲区，不是已解决问题。
  *
  * - 零间隔 / 低于最小停顿：仍不允许
  */
@@ -119,7 +136,7 @@ export const DEFAULT_DUB_GATE_THRESHOLDS: DubGateThresholds = {
   advisoryMedianRatio: 1.2,
   advisoryOverflowFraction: 0.5,
   maxExtendMs: DEFAULT_MAX_EXTEND_MS,
-  maxDelayFraction: 0.3,
+  maxDelayFraction: 0.35,
   advisoryTextBudgetRetainFraction: 0.3,
   maxDroppedCount: 0,
   minInterSentencePauseMs: DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,

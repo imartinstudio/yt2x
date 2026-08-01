@@ -202,6 +202,60 @@ export const splitEnglishByShares = (
   return pieces;
 };
 
+/**
+ * 单条显示单元最短允许显示时长。与双语字幕交付路径的 `flash` 判据同一个阈值——
+ * `packages/adapters-node/src/acquire/audit-subtitles.ts` 的
+ * `SUBTITLE_AUDIT_THRESHOLDS.minCueDurationSeconds`（1 秒）——两边必须保持一致，
+ * 否则这里"修好"的切分在审计那边仍然会被判定为 flash。core 不能依赖 adapters-node，
+ * 这个值只能各自维护一份，改动其中一个必须同步改另一个。
+ */
+export const MIN_CUE_DURATION_MS = 1000;
+
+/**
+ * 把按字符占比分配后时长会短于 {@link MIN_CUE_DURATION_MS} 的片段与相邻片段合并，
+ * 直到没有片段短于阈值，或者只剩一个片段为止。合并只是把两个相邻文本片段拼回去
+ * （不改变字符顺序、不引入分隔符——两者原本就是同一段连续文本按字符位置切开的），
+ * 时间边界随后按合并后的新片段重新计算，`endMs - startMs` 总量不变。
+ *
+ * 择邻策略：优先与视觉宽度更窄的一侧合并，减少合并结果超过 {@link CUE_HARD_WIDTH}
+ * 的概率（超宽只是 advisory 的 width-budget，不阻塞，但仍应尽量避免）。
+ *
+ * 如果合并到只剩一个片段、整个话语单元本身的时长仍短于阈值，这是真实的极短话语
+ * 单元（无法从别的话语单元借时间，见「两级切分」的不漂移约束），交给调用方按原样
+ * 显示——不是这个函数能解决的问题。
+ */
+export const mergeShortDurationParts = (
+  parts: readonly string[],
+  startMs: number,
+  endMs: number,
+): string[] => {
+  let current = [...parts];
+  while (current.length > 1) {
+    const boundaries = allocateBoundariesByChars(current, startMs, endMs);
+    let shortIndex = -1;
+    let shortestDuration = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < current.length; i++) {
+      const duration = boundaries[i + 1]! - boundaries[i]!;
+      if (duration < MIN_CUE_DURATION_MS && duration < shortestDuration) {
+        shortIndex = i;
+        shortestDuration = duration;
+      }
+    }
+    if (shortIndex === -1) break;
+
+    const mergeWithNext = shortIndex === 0
+      ? true
+      : shortIndex === current.length - 1
+        ? false
+        : visualWidth(current[shortIndex + 1]!) < visualWidth(current[shortIndex - 1]!);
+    const left = mergeWithNext ? shortIndex : shortIndex - 1;
+    const right = left + 1;
+    const merged = current[left]! + current[right]!;
+    current = [...current.slice(0, left), merged, ...current.slice(right + 1)];
+  }
+  return current;
+};
+
 export type DubDisplayCue = {
   /** 1-based，同一话语单元内部从 1 开始编号（跨话语单元的全局编号由调用方决定）。 */
   index: number;
@@ -227,9 +281,10 @@ export type DubDisplayCueInput = {
  * 分配。`zhText` 为空或纯空白时返回空数组（没有可显示的内容）。
  */
 export const splitUtteranceIntoCues = (line: DubDisplayCueInput): DubDisplayCue[] => {
-  const zhParts = splitZhByWidth(line.zhText);
-  if (zhParts.length === 0) return [];
+  const widthParts = splitZhByWidth(line.zhText);
+  if (widthParts.length === 0) return [];
 
+  const zhParts = mergeShortDurationParts(widthParts, line.startMs, line.endMs);
   const enParts = splitEnglishByShares(line.enText, zhParts);
   const boundaries = allocateBoundariesByChars(zhParts, line.startMs, line.endMs);
 

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   allocateBoundariesByChars,
   CUE_HARD_WIDTH,
+  MIN_CUE_DURATION_MS,
+  mergeShortDurationParts,
   splitEnglishByShares,
   splitUtteranceIntoCues,
   splitZhByWidth,
@@ -89,6 +91,49 @@ describe("splitZhByWidth", () => {
         expect(part).toContain("Grill with Docs");
       }
     }
+  });
+});
+
+describe("mergeShortDurationParts", () => {
+  it("merges a part whose proportional share would fall under the minimum display duration", () => {
+    // "乙" 只有 1 字，占比极小；在 8000ms 的话语单元里按字符占比分配会不足 1 秒。
+    const parts = mergeShortDurationParts(
+      ["甲", "乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌"],
+      0,
+      8000,
+    );
+    expect(parts.length).toBe(1);
+    const boundaries = allocateBoundariesByChars(parts, 0, 8000);
+    for (let i = 0; i < parts.length; i++) {
+      expect(boundaries[i + 1]! - boundaries[i]!).toBeGreaterThanOrEqual(MIN_CUE_DURATION_MS);
+    }
+  });
+
+  it("merges a short middle part with its narrower neighbor, keeping the rest intact", () => {
+    const original = ["甲乙丙丁戊己庚", "辛", "壬癸子丑寅卯辰巳午未"];
+    const parts = mergeShortDurationParts(original, 0, 9000);
+    expect(parts).toEqual(["甲乙丙丁戊己庚辛", "壬癸子丑寅卯辰巳午未"]);
+    const boundaries = allocateBoundariesByChars(parts, 0, 9000);
+    for (let i = 0; i < parts.length; i++) {
+      expect(boundaries[i + 1]! - boundaries[i]!).toBeGreaterThanOrEqual(MIN_CUE_DURATION_MS);
+    }
+  });
+
+  it("never drops or duplicates characters while merging", () => {
+    const original = ["甲乙丙丁戊己庚", "辛", "壬癸子丑寅卯辰巳午未"];
+    const parts = mergeShortDurationParts(original, 0, 9000);
+    expect(parts.join("")).toBe(original.join(""));
+  });
+
+  it("leaves a single part unmerged even when the whole utterance is itself shorter than the minimum", () => {
+    // 无法从别的话语单元借时间：真实的极短话语单元交给调用方按原样显示。
+    const parts = mergeShortDurationParts(["好"], 0, 400);
+    expect(parts).toEqual(["好"]);
+  });
+
+  it("returns the input unchanged when every part already meets the minimum duration", () => {
+    const parts = mergeShortDurationParts(["甲乙丙", "丁戊己"], 0, 8000);
+    expect(parts).toEqual(["甲乙丙", "丁戊己"]);
   });
 });
 
@@ -200,5 +245,36 @@ describe("splitUtteranceIntoCues", () => {
   it("assigns the same single character its whole utterance span", () => {
     const cues = splitUtteranceIntoCues({ zhText: "好", enText: "OK.", startMs: 0, endMs: 300 });
     expect(cues).toEqual([{ index: 1, zhText: "好", enText: "OK.", startMs: 0, endMs: 300 }]);
+  });
+
+  it("never produces a display cue shorter than the minimum duration when the utterance has enough total time (real-data regression: flash)", () => {
+    // "这" 单字紧跟一大段长句：按原始字符占比切分会把它分到一条 <1s 的显示单元，
+    // 真实全片复现过这种「闪一下就没了」的 flash。
+    const zhText =
+      "这是一句非常非常长的中文配音稿用来测试屏宽切分是否能够把它拆成好几条显示单元" +
+      "并且保证每一条都不会超过屏幕能显示的最大宽度同时也不会闪烁得读不清楚。";
+    const enText =
+      "this is a very long dubbed sentence meant to test whether width-based splitting " +
+      "can break it into several display cues while none of them flash by unreadably fast";
+    const cues = splitUtteranceIntoCues({ zhText, enText, startMs: 0, endMs: 9000 });
+
+    expect(cues.length).toBeGreaterThan(1);
+    for (const cue of cues) {
+      expect(cue.endMs - cue.startMs).toBeGreaterThanOrEqual(1000);
+    }
+    // 话语单元的时长总和必须仍精确等于实测的 [startMs, endMs]，误差不能跨话语单元累积。
+    expect(cues[0]!.startMs).toBe(0);
+    expect(cues[cues.length - 1]!.endMs).toBe(9000);
+    for (let i = 1; i < cues.length; i++) {
+      expect(cues[i]!.startMs).toBe(cues[i - 1]!.endMs);
+    }
+    // 合并只挪动切点，不丢字不重复
+    expect(cues.map((c) => c.zhText).join("")).toBe(zhText);
+  });
+
+  it("still allows a genuinely short cue when the whole utterance itself is shorter than the minimum", () => {
+    // 无法从别的话语单元借时间，见「两级切分」的不漂移约束——merge 只能在话语单元内部进行。
+    const cues = splitUtteranceIntoCues({ zhText: "好的", enText: "OK.", startMs: 0, endMs: 400 });
+    expect(cues).toEqual([{ index: 1, zhText: "好的", enText: "OK.", startMs: 0, endMs: 400 }]);
   });
 });

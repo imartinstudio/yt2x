@@ -268,8 +268,9 @@ describe("evaluateDubGate", () => {
   });
 
   it("flags moderate under-use of the time budget too, now that the advisory line is raised to 0.7", () => {
-    // 同一句译文（占用比 0.57）在旧阈值 0.3 下不报，在新阈值 0.7 下应该报——
-    // 这正是本轮要解决的"预算严重没花完"问题的中间地带。
+    // targetDurationMs=9000（云健标定后 budget≈44 字）→ 29 字译文占用比 ≈ 0.66，
+    // 低于收紧后的 advisory 阈值 0.7，应该报——这正是本轮要解决的
+    // "预算严重没花完"问题的中间地带。
     const report = evaluateDubGate({
       videoId: "vid",
       timing: timing(),
@@ -293,8 +294,8 @@ describe("evaluateDubGate", () => {
           {
             index: 1,
             startMs: 0,
-            endMs: 8340,
-            targetDurationMs: 8340,
+            endMs: 9000,
+            targetDurationMs: 9000,
             text: "但有时我听到用户反馈，说这个功能问了两百个问题，我有点尴尬",
             sourceText:
               "However, I sometimes hear from people using them like, this issue just asks me 200 questions and I kind of wince a little bit.",
@@ -312,7 +313,8 @@ describe("evaluateDubGate", () => {
 
   it("skips info-loss evaluation entirely when the time budget itself is unusable, instead of scoring against a clamped budget of 1", () => {
     // dubTranslateCharBudget clamps its return value to >=1 even when the raw available
-    // duration is below the fixed TTS overhead (1873ms) — a structurally unusable budget.
+    // duration is below the fixed TTS overhead (currently calibrated to 1132ms) — a
+    // structurally unusable budget.
     // Before the fix, the guard compared against that clamped value (always >0) and never
     // skipped, so an empty translation on one of these short lines picked up a spurious
     // "info-loss" advisory on top of the (correct) hard empty-text issue. The budget being

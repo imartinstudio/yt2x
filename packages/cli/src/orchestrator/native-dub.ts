@@ -155,15 +155,21 @@ const parsePositiveInt = (raw: string | undefined): number | undefined => {
  * `--min-duration-ms` 默认值推导。
  *
  * `dubTranslateCharBudget`（core/dub/translate-prompts.ts）把可用时长换算成字符预算：
- * `budget = floor((availableMs - 1873) / 114.5)`，clamp 到最低 1 字。任何目标时长不超过
- * 约 1900ms 的话语单元，预算都会被 clamp 到 1-2 字——这正是真实全片里 17/149（11.4%）
- * 译文被压成单字的根因（例如 "You need to understand things like scope." → 「懂」）。
+ * `budget = floor((availableMs - fixedOverheadMs) / msPerChar)`，clamp 到最低 1 字。任何
+ * 目标时长不超过固定开销的话语单元，预算都会被 clamp 到 1-2 字——这正是真实全片里
+ * 17/149（11.4%，`zh-CN-YunxiNeural` 时代的观测）译文被压成单字的根因（例如
+ * "You need to understand things like scope." → 「懂」）。
  *
- * 只把默认值抬到刚好越过 1873ms 开销（例如 1900ms）不够：那样预算仍只有 1-2 字，塞不下
- * 一个完整分句。反推需要多少字才够表达完整意思——取约 10 个汉字（如"你需要理解范围这个
- * 概念"）作为「一个简短但完整的分句」的下限，代入 `1873 + 114.5 × 10 ≈ 3018ms`，取整
- * 3000ms。低于此时长的话语单元在切分阶段就并入相邻单元，而不是把必然溢出的预算交给
- * 后续的翻译/时长协商去救。
+ * 只把默认值抬到刚好越过固定开销不够：那样预算仍只有 1-2 字，塞不下一个完整分句。
+ * 反推需要多少字才够表达完整意思——取约 10 个汉字（如"你需要理解范围这个概念"）作为
+ * 「一个简短但完整的分句」的下限。
+ *
+ * **2026-08-01 随 `zh-CN-YunjianNeural` 重新标定后复核**：`TTS_FIXED_OVERHEAD_MS`
+ * 1873→1132、`TTS_MS_PER_CHINESE_CHAR` 114.5→175.2，代入 `1132 + 175.2 × 10 ≈ 2884ms`，
+ * 仍取整 3000ms——不变，因为它在新模型下留出的余量反而更大：`floor((3000-1132)/175.2)
+ * = 10` 个字（旧模型下 `floor((3000-1873)/114.5) = 9` 个字），3000ms 仍然覆盖「10 个字
+ * 的简短完整分句」这条判据，无需调整。低于此时长的话语单元在切分阶段就并入相邻单元，
+ * 而不是把必然溢出的预算交给后续的翻译/时长协商去救。
  */
 export const DEFAULT_MIN_DURATION_MS = 3_000;
 

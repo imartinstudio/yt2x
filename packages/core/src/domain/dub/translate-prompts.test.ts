@@ -5,9 +5,12 @@ import {
   buildDubTranslateRepairPrompt,
   buildDubTranslateTightenPrompt,
   buildDubTranslateUserPrompt,
+  DEFAULT_SPEECH_RATE,
   dubTranslateCharBudget,
   estimateSpokenMs,
   getDubTranslateSystemPrompt,
+  TTS_FIXED_OVERHEAD_MS,
+  TTS_MS_PER_CHINESE_CHAR,
 } from "./translate-prompts.js";
 import type { Utterance } from "./types.js";
 
@@ -46,6 +49,20 @@ describe("dubTranslateCharBudget", () => {
   it("never returns a budget below one character", () => {
     expect(dubTranslateCharBudget(0)).toBeGreaterThanOrEqual(1);
     expect(dubTranslateCharBudget(-500)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("TTS_FIXED_OVERHEAD_MS / TTS_MS_PER_CHINESE_CHAR", () => {
+  it("matches the zh-CN-YunjianNeural calibration, not the stale zh-CN-YunxiNeural values", () => {
+    // 回归哨兵：这两个常数曾经按旧音色（云希）标定却从未随默认音色改成云健而重新
+    // 校准，导致字符预算系统性偏松、全片被硬门禁拦下。防止未来又出现同样的漂移——
+    // 换音色时这个测试会因为常数不匹配而失败，逼开发者显式更新并写清楚标定依据。
+    expect(TTS_FIXED_OVERHEAD_MS).toBe(1_132);
+    expect(TTS_MS_PER_CHINESE_CHAR).toBe(175.2);
+    expect(DEFAULT_SPEECH_RATE).toEqual({
+      fixedOverheadMs: 1_132,
+      msPerChar: 175.2,
+    });
   });
 });
 

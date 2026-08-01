@@ -36,12 +36,12 @@ const allOf = (indices: number[]): Record<number, string> =>
 describe("translateUtterances", () => {
   it("returns one line per utterance, keyed by the original index", async () => {
     const { llm } = stubLlm((idx) => allOf(idx));
-    // 2300ms 的槽位换算出的字符预算恰好等于 "译文1"/"译文2" 的长度（3 字），既不超预算
+    // 1700ms 的槽位换算出的字符预算恰好等于 "译文1"/"译文2" 的长度（3 字），既不超预算
     // 也不会触发反向扩写重译，保持这个测试只关注「按 index 一一对应」这件事。
     const { lines, warnings } = await translateUtterances({
       llm,
       model: "m",
-      utterances: [utt(1, 2_300, "hello"), utt(2, 2_300, "world")],
+      utterances: [utt(1, 1_700, "hello"), utt(2, 1_700, "world")],
     });
     expect(lines.map((l) => l.index)).toEqual([1, 2]);
     expect(lines.map((l) => l.text)).toEqual(["译文1", "译文2"]);
@@ -181,8 +181,8 @@ describe("translateUtterances", () => {
   });
 
   it("does not attempt to expand a line whose slot is too short to have a real budget", async () => {
-    // availableMs(1000) 低于固定开销(1873ms)，budget 被钳到 1 字——这类槽位靠翻译
-    // 补不进去，重译只会浪费一次调用
+    // availableMs(1000) 低于固定开销(当前标定 1132ms)，budget 被钳到 1 字——这类槽位靠
+    // 翻译补不进去，重译只会浪费一次调用
     const stub = stubLlm((idx) => Object.fromEntries(idx.map((i) => [i, "短"])));
     const { lines, warnings } = await translateUtterances({
       llm: stub.llm,

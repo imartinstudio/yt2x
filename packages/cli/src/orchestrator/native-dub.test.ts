@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type * as AdaptersNode from "@yt2x/adapters-node";
+import { dubTranslateCharBudget } from "@yt2x/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const probeDemucsMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/python3"));
@@ -77,8 +78,16 @@ beforeEach(() => {
 });
 
 describe("segmentOptionsFrom", () => {
-  it("defaults minDurationMs to 3000ms so sub-1.9s utterances stop clamping to a single char", () => {
+  it("defaults minDurationMs to 3000ms so sub-overhead utterances stop clamping to a single char", () => {
     expect(segmentOptionsFrom({})).toEqual({ minDurationMs: DEFAULT_MIN_DURATION_MS });
+  });
+
+  it("still leaves room for a full short sentence (>=10 chars) under the calibrated speech rate", () => {
+    // 回归哨兵：TTS_FIXED_OVERHEAD_MS / TTS_MS_PER_CHINESE_CHAR 换音色重新标定时，
+    // DEFAULT_MIN_DURATION_MS 的推导依据（见其上方注释）必须跟着复核。这条测试
+    // 不校验具体常数，只校验派生结果——3000ms 换算出的预算仍要够写一个"简短但
+    // 完整的分句"（约 10 个汉字），换算结果比这更紧就说明该重新审视 3000 这个默认值了。
+    expect(dubTranslateCharBudget(DEFAULT_MIN_DURATION_MS)).toBeGreaterThanOrEqual(10);
   });
 
   it("honors --min-duration-ms when provided", () => {

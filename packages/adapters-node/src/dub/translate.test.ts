@@ -218,4 +218,91 @@ describe("translateUtterances", () => {
     expect(lines[0]?.text).toBe("短");
     expect(warnings.join(" ")).toMatch(/expanded 0\/1/);
   });
+
+  it("repairs a line that dropped a protected term the English source contained", async () => {
+    let call = 0;
+    const llm: LlmPort = {
+      chat: async (req) => {
+        call += 1;
+        const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
+        const items = JSON.parse(user) as { index: number }[];
+        if (call === 1) {
+          // 首轮译文用满预算但漏掉了保护术语 "Grill Me"
+          return {
+            content: JSON.stringify(items.map((i) => ({ index: i.index, text: "占位符" }))),
+            model: req.model,
+            finishReason: "stop" as const,
+          };
+        }
+        // 补漏轮必须走术语补漏 prompt，且点名了具体缺失的术语
+        expect(system).toMatch(/dropped one or more protected terms/i);
+        expect(system).toContain('"Grill Me"');
+        return {
+          content: JSON.stringify(
+            items.map((i) => ({ index: i.index, text: "我的 Grill Me 技能很棒" })),
+          ),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+    const { lines, warnings } = await translateUtterances({
+      llm,
+      model: "m",
+      utterances: [utt(1, 1_700, "my grill me skills are great")],
+    });
+    expect(call).toBe(2);
+    expect(lines[0]?.text).toContain("Grill Me");
+    expect(warnings.join(" ")).toMatch(/glossary-repaired 1\/1/);
+  });
+
+  it("keeps the previous translation when the glossary repair retry still drops the term", async () => {
+    let call = 0;
+    const llm: LlmPort = {
+      chat: async (req) => {
+        call += 1;
+        const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
+        const items = JSON.parse(user) as { index: number }[];
+        // 两轮都不给 "Grill Me"——补漏没有真正生效，不该用它覆盖已有内容
+        return {
+          content: JSON.stringify(items.map((i) => ({ index: i.index, text: "占位符" }))),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+    const { lines, warnings } = await translateUtterances({
+      llm,
+      model: "m",
+      utterances: [utt(1, 1_700, "my grill me skills are great")],
+    });
+    expect(call).toBe(2);
+    expect(lines[0]?.text).toBe("占位符");
+    expect(warnings.join(" ")).toMatch(/glossary-repaired 0\/1/);
+  });
+
+  it("does not run the glossary repair pass when no protected term was dropped", async () => {
+    const systems: string[] = [];
+    const llm: LlmPort = {
+      chat: async (req) => {
+        systems.push(req.messages.find((m) => m.role === "system")?.content ?? "");
+        const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
+        const items = JSON.parse(user) as { index: number }[];
+        return {
+          content: JSON.stringify(
+            items.map((i) => ({ index: i.index, text: "我的Grill Me技能很棒，效果拔群，值得推荐" })),
+          ),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+    await translateUtterances({
+      llm,
+      model: "m",
+      utterances: [utt(1, 9_000, "my grill me skills are great")],
+    });
+    expect(systems.some((s) => /dropped one or more protected terms/i.test(s))).toBe(false);
+  });
 });

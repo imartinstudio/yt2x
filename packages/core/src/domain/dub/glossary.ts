@@ -48,6 +48,19 @@ export const findPresentProtectedTerms = (
   terms: readonly string[] = PROTECTED_TERMS,
 ): string[] => terms.filter((term) => containsTermCaseInsensitive(enText, term));
 
+/**
+ * 找出 `enText` 里出现、却没有原样出现在 `zhText` 里的保护术语——与双语交付门
+ * （`audit-subtitles.ts` 的 `glossary-violation` 检查）判定同一个术语"丢了"用的是
+ * 完全相同的判据：英文侧大小写不敏感命中，中文侧要求原样（大小写敏感）子串命中。
+ * 供翻译阶段做补漏重译，不必等到门禁事后才发现术语被丢。
+ */
+export const findMissingProtectedTerms = (
+  enText: string,
+  zhText: string,
+  terms: readonly string[] = PROTECTED_TERMS,
+): string[] =>
+  terms.filter((term) => containsTermCaseInsensitive(enText, term) && !zhText.includes(term));
+
 // Chinese has no spaces between words, so a raw character-position split can
 // (and in real DeepSeek output did) land inside an ordinary multi-character
 // word like "范围" or "可能". Intl.Segmenter's dictionary-based word

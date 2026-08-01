@@ -149,6 +149,26 @@ export const buildDubTranslateRepairPrompt = (missingIndices: readonly number[])
     ...DUB_TRANSLATE_RULES,
   ].join("\n");
 
+/**
+ * 术语补漏重译 prompt：上一版译文丢了源文本里该有的保护术语（rule 9），把具体缺失的
+ * 术语写死在指令里，逼模型把术语本身按原文拼写原样放回译文——不是抽象重申规则，而是
+ * 指名道姓地告诉它这次漏了什么。真实全片复现过这个缺陷即使有 few-shot 示例仍偶发
+ * （LLM 输出非确定），需要一道事后校验 + 定向重译兜底，而不是只靠提示词词法穷举。
+ */
+export const buildDubTranslateGlossaryRepairPrompt = (
+  missing: readonly { index: number; terms: readonly string[] }[],
+): string =>
+  [
+    "You are a Chinese dubbing translator. Your previous translation of the following items dropped one or more protected terms that rule 9 requires you to keep exactly as spelled in English.",
+    ...missing.map(
+      (m) => `  index ${m.index}: missing term(s): ${m.terms.map((t) => `"${t}"`).join(", ")}.`,
+    ),
+    "Translate each item again from the English source. Every term listed above MUST appear in your output with the exact same spelling and capitalization shown above. Do not drop a term just because a neighboring item's translation already mentions a related word — this item's own translation must contain it.",
+    "",
+    "Rules:",
+    ...DUB_TRANSLATE_RULES,
+  ].join("\n");
+
 export type DubTranslatePayloadItem = {
   index: number;
   text: string;

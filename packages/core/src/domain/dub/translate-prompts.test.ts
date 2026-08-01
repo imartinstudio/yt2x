@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDubTranslateExpandPrompt,
+  buildDubTranslateGlossaryRepairPrompt,
   buildDubTranslatePayload,
   buildDubTranslateRepairPrompt,
   buildDubTranslateTightenPrompt,
@@ -215,6 +216,27 @@ describe("buildDubTranslateTightenPrompt", () => {
   it("asks for a tighter retranslation, not a cut of the previous attempt", () => {
     expect(prompt).toMatch(/tighter/i);
     expect(prompt).toMatch(/NOT an instruction to cut/i);
+  });
+});
+
+describe("buildDubTranslateGlossaryRepairPrompt", () => {
+  const prompt = buildDubTranslateGlossaryRepairPrompt([
+    { index: 25, terms: ["Grill Me"] },
+  ]);
+
+  it("pins the index and the exact missing term into the instruction", () => {
+    expect(prompt).toContain("index 25");
+    expect(prompt).toContain('"Grill Me"');
+  });
+
+  it("demands the term reappear with the exact spelling shown, and forbids relying on a neighboring item", () => {
+    expect(prompt).toMatch(/exact same spelling and capitalization/i);
+    expect(prompt).toMatch(/neighboring item/i);
+  });
+
+  it("still includes the full rule set so other constraints (budget, other glossary terms) are not lost", () => {
+    expect(prompt).toMatch(/FILL the budget/i);
+    expect(prompt).toMatch(/Simplified Chinese/);
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   containsTermCaseInsensitive,
   DUB_TERM_TRANSLATIONS,
+  findMissingProtectedTerms,
   findPresentProtectedTerms,
   findProtectedSpans,
   PROTECTED_GLOSSARY_TERMS,
@@ -39,6 +40,26 @@ describe("findPresentProtectedTerms", () => {
     const enText = "My grill me skills and grill with docs have been out there for a while now.";
     const present = findPresentProtectedTerms(enText, ["Grill Me", "Grill with Docs", "Codex"]);
     expect(present).toEqual(["Grill Me", "Grill with Docs"]);
+  });
+});
+
+describe("findMissingProtectedTerms", () => {
+  it("returns terms present in the English source but absent from the Chinese translation", () => {
+    // 真实全片复现过的丢词："grill me skills" 出现在源文本，译文却整句漏掉了 "Grill Me"
+    const enText =
+      "And the first failure mode I see with the grill me skills is trying to answer high fidelity questions during a grilling session.";
+    const zhText = "我见到的首个失败模式：在追问环节试图回答高保真问题。";
+    expect(findMissingProtectedTerms(enText, zhText)).toEqual(["Grill Me"]);
+  });
+
+  it("returns an empty array when every present term survived into the translation", () => {
+    const enText = "My grill me skills and grill with docs have been out there for a while now.";
+    const zhText = "我的 Grill Me 技能和 Grill with Docs 已经发布一段时间了。";
+    expect(findMissingProtectedTerms(enText, zhText)).toEqual([]);
+  });
+
+  it("does not report a term that never occurred in the English source", () => {
+    expect(findMissingProtectedTerms("nothing relevant here", "无关内容")).toEqual([]);
   });
 });
 

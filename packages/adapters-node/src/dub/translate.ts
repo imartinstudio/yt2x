@@ -1,10 +1,12 @@
 import {
   buildDubTranslateExpandPrompt,
+  buildDubTranslateGlossaryRepairPrompt,
   buildDubTranslateRepairPrompt,
   buildDubTranslateTightenPrompt,
   buildDubTranslateUserPrompt,
   DEFAULT_SPEECH_RATE,
   dubTranslateCharBudget,
+  findMissingProtectedTerms,
   getDubTranslateSystemPrompt,
   type LlmPort,
   type SpeechRateModel,
@@ -248,6 +250,62 @@ export const translateUtterances = async (
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       warnings.push(`expand pass failed: ${message}`);
+    }
+  }
+
+  // 术语补漏：扫一遍已有译文，找出源文本里出现却没有原样进入译文的保护术语
+  // （rule 9），拿具体缺了什么词定向重译。这是门禁 glossary-violation 检查会拦的
+  // 同一个缺陷类别——放在翻译阶段修，不必等真的跑到门禁才发现要重跑全片。
+  const glossaryMissing = input.utterances
+    .map((u) => {
+      const text = translated.get(u.index);
+      if (text === undefined) return undefined;
+      const missingTerms = findMissingProtectedTerms(u.text, text);
+      return missingTerms.length > 0 ? { utterance: u, missingTerms } : undefined;
+    })
+    .filter((entry): entry is { utterance: Utterance; missingTerms: string[] } => entry !== undefined);
+
+  if (glossaryMissing.length > 0) {
+    try {
+      const resp = await input.llm.chat({
+        model: input.model,
+        messages: [
+          {
+            role: "system",
+            content: buildDubTranslateGlossaryRepairPrompt(
+              glossaryMissing.map((m) => ({ index: m.utterance.index, terms: m.missingTerms })),
+            ),
+          },
+          {
+            role: "user",
+            content: buildDubTranslateUserPrompt(
+              glossaryMissing.map((m) => m.utterance),
+              rate,
+            ),
+          },
+        ],
+        // 定向补漏，不需要创造性；低温更容易老实照抄指定术语。
+        temperature: 0.1,
+        maxTokens: input.maxTokens ?? 8192,
+        jsonMode: true,
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+      const byIndex = new Map(glossaryMissing.map((m) => [m.utterance.index, m]));
+      let repaired = 0;
+      for (const line of parseResponse(resp.content.trim())) {
+        const entry = byIndex.get(line.index);
+        if (entry === undefined) continue;
+        // 只在新译文真的把缺失术语补回来时才替换，否则保留原译文——不用一个
+        // "同样丢词"的版本去覆盖一个已知丢词的版本，门禁该拦的还是拦得住。
+        if (findMissingProtectedTerms(entry.utterance.text, line.text).length === 0) {
+          translated.set(line.index, line.text);
+          repaired += 1;
+        }
+      }
+      warnings.push(`glossary-repaired ${repaired}/${glossaryMissing.length} lines`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      warnings.push(`glossary repair pass failed: ${message}`);
     }
   }
 

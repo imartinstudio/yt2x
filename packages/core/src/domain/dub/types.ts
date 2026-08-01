@@ -108,11 +108,16 @@ export type DubTimingReport = {
 /**
  * 时长协商对单行采取的动作。
  *
- * 顺序固定：keep → speed → delay。前一步能压进目标区间就停，不会为了"更紧凑"
- * 去无谓加速。事后改短（原第三档 shorten）已被长度受限翻译取代——冗余在翻译阶段
- * 就被挤掉，不再需要合成完再回头砍。
+ * 溢出方向顺序固定：keep → speed → delay。前一步能压进目标区间就停，不会为了
+ * "更紧凑"去无谓加速。事后改短（原第三档 shorten）已被长度受限翻译取代——冗余在
+ * 翻译阶段就被挤掉，不再需要合成完再回头砍。
+ *
+ * `stretch`（PR4 新增）处理相反方向：合成音明显短于目标时长时反向放慢语速去
+ * 填充，而不是把富余的时间全部留成死寂。只在富余超过阈值时触发，且放慢幅度受
+ * `TtsPort.rateRange` 下限约束——engine 报的下限不允许放慢时不会硬来，回落到
+ * `keep`。见 `docs/DUB-TASK.md` PR4「句间停顿过长」。
  */
-export type DubNegotiateAction = "keep" | "speed" | "delay";
+export type DubNegotiateAction = "keep" | "speed" | "stretch" | "delay";
 
 /** 规划阶段对单行的决策（尚未真正重新合成）。 */
 export type DubNegotiateLinePlan = {
@@ -136,10 +141,10 @@ export type DubNegotiateLinePlan = {
 
 export type DubNegotiatePlan = {
   /**
-   * 2：删除时长协商的第三档（事后 LLM 改短），其专属计数字段和动作枚举成员
-   * 随之一并移除。旧版 1 的落盘文件不再能被读取——它是中间产物，重跑即可重新生成。
+   * 3：新增 `stretch` 动作（反向放慢填充富余时长）与对应的 `stretchCount`
+   * 统计字段。它是中间产物，重跑 `yt2x dub` 即可重新生成，不提供旧版本兼容读取。
    */
-  version: 2;
+  version: 3;
   videoId: string;
   lines: readonly DubNegotiateLinePlan[];
   /** 片尾仍未吸收完的累积漂移，混音时用冻结末帧延长视频。 */
@@ -147,6 +152,8 @@ export type DubNegotiatePlan = {
   /** 规划阶段预计的总漂移，与 extendMs 相同。 */
   plannedDriftMs: number;
   speedCount: number;
+  /** 反向放慢填充富余时长的行数。 */
+  stretchCount: number;
   delayCount: number;
   keepCount: number;
 };
@@ -167,7 +174,8 @@ export type DubPlacedLine = {
 };
 
 export type DubPlacementReport = {
-  version: 1;
+  /** 2：新增 `stretch` 落点动作与 `stretchCount` 统计字段，见 DubNegotiatePlan。 */
+  version: 2;
   videoId: string;
   engine: string;
   voice: string;
@@ -177,6 +185,8 @@ export type DubPlacementReport = {
   /** 最终音频轨总时长（最后一句 endMs）。 */
   audioEndMs: number;
   speedCount: number;
+  /** 反向放慢填充富余时长的行数。 */
+  stretchCount: number;
   delayCount: number;
   keepCount: number;
 };

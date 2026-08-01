@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PREFERRED_RATE_MAX,
   DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
+  DEFAULT_STRETCH_MIN_UNDERRUN_MS,
   buildNegotiateInputs,
   effectiveRateMax,
   planDubNegotiation,
@@ -230,5 +231,76 @@ describe("planDubNegotiation", () => {
       expect(gap).toBeGreaterThanOrEqual(150);
     }
     expect(plan.extendMs).toBeGreaterThan(0);
+  });
+
+  describe("stretch (反向放慢填充富余)", () => {
+    it("slows down when there is meaningful slack", () => {
+      // target 5000ms，自然合成只用 2000ms，占用比 0.4 远低于阈值，富余 3000ms 远超阈值
+      const plan = planDubNegotiation({
+        videoId: "vid",
+        rateRange: { min: 0.5, max: 2.0 },
+        lines: [line(1, 0, 5000, 2000)],
+      });
+      expect(plan.stretchCount).toBe(1);
+      expect(plan.lines[0]!.action).toBe("stretch");
+      expect(plan.lines[0]!.rate).toBeLessThan(1);
+      expect(plan.lines[0]!.rate).toBeGreaterThanOrEqual(0.95); // 偏好下限
+      // 放慢后时长变长（naturalMs / rate），但仍不超过目标区间
+      expect(plan.lines[0]!.plannedEndMs).toBeGreaterThan(2000);
+      expect(plan.lines[0]!.plannedEndMs).toBeLessThanOrEqual(5000);
+      expect(plan.keepCount).toBe(0);
+    });
+
+    it("does not slow down when the slack is too small to matter", () => {
+      // target 1000ms，自然合成用了 700ms：富余 300ms < 默认阈值 400ms，保持 keep
+      expect(300).toBeLessThan(DEFAULT_STRETCH_MIN_UNDERRUN_MS);
+      const plan = planDubNegotiation({
+        videoId: "vid",
+        rateRange: { min: 0.5, max: 2.0 },
+        lines: [line(1, 0, 1000, 700)],
+      });
+      expect(plan.lines[0]!.action).toBe("keep");
+      expect(plan.lines[0]!.rate).toBe(1);
+      expect(plan.stretchCount).toBe(0);
+      expect(plan.keepCount).toBe(1);
+    });
+
+    it("does not slow down when the occupancy ratio is already high enough", () => {
+      // target 6000ms，自然合成 5580ms：占用比 0.93（中位水平），不该被 stretch 碰到
+      const plan = planDubNegotiation({
+        videoId: "vid",
+        rateRange: { min: 0.5, max: 2.0 },
+        lines: [line(1, 0, 6000, 5580)],
+      });
+      expect(plan.lines[0]!.action).toBe("keep");
+      expect(plan.stretchCount).toBe(0);
+    });
+
+    it("clamps the slow-down rate to the engine's reported rateRange lower bound", () => {
+      // 引擎自报下限 0.92 比默认偏好下限 0.95 更宽松，但仍是约束（effectiveRateMin
+      // 取引擎与偏好两者较严格的一侧——这里刻意让偏好比引擎更宽松，验证引擎下限生效）
+      const plan = planDubNegotiation({
+        videoId: "vid",
+        rateRange: { min: 0.92, max: 2.0 },
+        preferredRateMin: 0.8,
+        lines: [line(1, 0, 5000, 1000)], // 理论所需 rate = 1000/5000 = 0.2，远低于 0.92
+      });
+      expect(plan.lines[0]!.action).toBe("stretch");
+      expect(plan.lines[0]!.rate).toBeCloseTo(0.92);
+      // 只放慢到地板，装不满整个 target（1000 / 0.92 ≈ 1087ms，仍远小于 5000ms）
+      expect(plan.lines[0]!.plannedEndMs).toBeLessThan(5000);
+    });
+
+    it("falls back to keep when the engine cannot slow down at all", () => {
+      // 引擎 rateRange.min = 1.0：effectiveRateMin = max(1.0, 0.95) = 1.0，不满足 rateMin < 1
+      const plan = planDubNegotiation({
+        videoId: "vid",
+        rateRange: { min: 1.0, max: 2.0 },
+        lines: [line(1, 0, 5000, 2000)], // 换成宽松引擎时本会 stretch 的富余
+      });
+      expect(plan.lines[0]!.action).toBe("keep");
+      expect(plan.stretchCount).toBe(0);
+      expect(plan.lines[0]!.plannedEndMs).toBe(2000);
+    });
   });
 });

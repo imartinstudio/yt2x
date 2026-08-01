@@ -21,7 +21,7 @@ export const registerDubCommand = (program: Command): void => {
       .option("--dub-engine <id>", "TTS engine: edge-tts (default) | elevenlabs")
       .option(
         "--voice <id>",
-        "TTS voice id (edge-tts default zh-CN-YunxiNeural; ElevenLabs requires --voice or ELEVENLABS_VOICE_ID)",
+        "TTS voice id (edge-tts default zh-CN-YunjianNeural; ElevenLabs requires --voice or ELEVENLABS_VOICE_ID)",
       )
       .option("--tts-command <path>", "Path to the edge-tts executable (default: edge-tts on PATH)")
       .option("--elevenlabs-base-url <url>", "ElevenLabs API base URL override")

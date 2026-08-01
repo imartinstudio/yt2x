@@ -8,7 +8,9 @@ const probeDemucsMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/python3"));
 const generateDubScriptMock = vi.hoisted(() => vi.fn());
 const synthesizeDubLinesMock = vi.hoisted(() => vi.fn());
 const separateDemucsMock = vi.hoisted(() => vi.fn());
-const remixDubbedVideoMock = vi.hoisted(() => vi.fn());
+const remixDubbedAudioMock = vi.hoisted(() => vi.fn());
+const evaluateDubBilingualGateMock = vi.hoisted(() => vi.fn());
+const burnBilingualSubtitlesMock = vi.hoisted(() => vi.fn());
 // Real window extraction shells out to ffmpeg; mocked here since these tests exercise
 // reverse-SRT path routing, not ffmpeg trimming.
 const extractDubSourceWindowMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -30,7 +32,9 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
     generateDubScript: generateDubScriptMock,
     synthesizeDubLines: synthesizeDubLinesMock,
     separateDemucs: separateDemucsMock,
-    remixDubbedVideo: remixDubbedVideoMock,
+    remixDubbedAudio: remixDubbedAudioMock,
+    evaluateDubBilingualGate: evaluateDubBilingualGateMock,
+    burnBilingualSubtitles: burnBilingualSubtitlesMock,
     guardDubSourceAgainstHardSubtitles: guardMock,
     extractDubSourceWindow: extractDubSourceWindowMock,
   };
@@ -43,7 +47,20 @@ beforeEach(() => {
   generateDubScriptMock.mockClear();
   synthesizeDubLinesMock.mockClear();
   separateDemucsMock.mockClear();
-  remixDubbedVideoMock.mockClear();
+  remixDubbedAudioMock.mockClear();
+  remixDubbedAudioMock.mockResolvedValue({
+    videoForBurnPath: "/downloads/full.mp4",
+    replaceAudioPath: "/tmp/mixed.m4a",
+    voiceTrackPath: "/tmp/voice.wav",
+    mixedAudioPath: "/tmp/mixed.m4a",
+    outputDurationMs: 5_000,
+    videoPadMs: 0,
+    extendMs: 0,
+  });
+  evaluateDubBilingualGateMock.mockClear();
+  evaluateDubBilingualGateMock.mockResolvedValue({ readyForBurn: true, issues: [] });
+  burnBilingualSubtitlesMock.mockClear();
+  burnBilingualSubtitlesMock.mockResolvedValue({ burned: true, skipped: false, warnings: [] });
   extractDubSourceWindowMock.mockClear();
   extractDubSourceWindowMock.mockImplementation(async () => undefined);
   guardMock.mockClear();
@@ -98,7 +115,7 @@ describe("executeNativeDub hard-subtitle guard", () => {
     expect(generateDubScriptMock).not.toHaveBeenCalled();
     expect(synthesizeDubLinesMock).not.toHaveBeenCalled();
     expect(separateDemucsMock).not.toHaveBeenCalled();
-    expect(remixDubbedVideoMock).not.toHaveBeenCalled();
+    expect(remixDubbedAudioMock).not.toHaveBeenCalled();
   });
 });
 
@@ -268,12 +285,6 @@ describe("executeNativeDub time range", () => {
       noVocalsPath: "/tmp/no_vocals.wav",
       skipped: false,
     });
-    remixDubbedVideoMock.mockResolvedValue({
-      outputPath: "/tmp/full.zh-dubbed.mp4",
-      burned: true,
-      skippedBurnReason: undefined,
-      extendMs: 0,
-    });
 
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-window-srt-"));
     const outRoot = path.join(root, "downloads");
@@ -303,12 +314,12 @@ describe("executeNativeDub time range", () => {
     });
 
     expect(code).toBe(0);
-    expect(remixDubbedVideoMock).toHaveBeenCalledOnce();
-    const remixCall = remixDubbedVideoMock.mock.calls[0]![0] as { reverseSrtPath: string };
+    expect(burnBilingualSubtitlesMock).toHaveBeenCalledOnce();
+    const burnCall = burnBilingualSubtitlesMock.mock.calls[0]![0] as { srtPath: string };
     const expectedWorkPath = path.join(dubDir, "work", "window-0-5000.zh-dub.srt");
     const fullRunPath = path.join(articleRoot, videoId, "video", "full.zh-dub.srt");
-    expect(remixCall.reverseSrtPath).toBe(expectedWorkPath);
-    expect(remixCall.reverseSrtPath).not.toBe(fullRunPath);
+    expect(burnCall.srtPath).toBe(expectedWorkPath);
+    expect(burnCall.srtPath).not.toBe(fullRunPath);
   });
 
   it("separates Demucs into dub/work/demucs for a time window, not the full-run dub/demucs dir", async () => {
@@ -369,12 +380,6 @@ describe("executeNativeDub time range", () => {
     separateDemucsMock.mockResolvedValue({
       noVocalsPath: "/tmp/no_vocals.wav",
       skipped: false,
-    });
-    remixDubbedVideoMock.mockResolvedValue({
-      outputPath: "/tmp/full.zh-dubbed.mp4",
-      burned: true,
-      skippedBurnReason: undefined,
-      extendMs: 0,
     });
 
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-window-demucs-"));

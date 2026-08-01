@@ -102,6 +102,11 @@ export {
   type ApplyDubNegotiationResult,
 } from "./negotiate.js";
 export {
+  evaluateDubBilingualGate,
+  type DubBilingualGateInput,
+  type DubBilingualGateResult,
+} from "./bilingual-gate.js";
+export {
   DUBBED_VIDEO_NAME,
   DUB_REVERSE_SRT_NAME,
   DUB_RENDER_DURATION_TOLERANCE_MS,

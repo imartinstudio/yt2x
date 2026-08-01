@@ -130,6 +130,26 @@ export type DubGateThresholds = {
  *   `targetDurationMs <= fixedOverheadMs` 的跳过分支本身仍在，仍然是这个指标的
  *   固有盲区，不是已解决问题。
  *
+ * **本轮改动（2026-08-01，"嘴动无声"根治）**——用户反馈"原片人还在说、中文已说完，
+ * 既无声音也无字幕"，实测根因是译文提示词把"越短越好"当成明确指令，模型严格照办：
+ * 60s 窗真实素材里最惨一行预算 76 字只用了约 27 字。修法在翻译阶段（见
+ * `translate-prompts.ts` 规则改写 + `translate.ts` 新增的低于预算反向重译），门禁侧
+ * 只做同步收紧，不是主因：
+ *
+ * - advisoryTextBudgetRetainFraction **0.3 → 0.7**：0.3 这个值本身就是本文件其他地方
+ *   明确记录过的已知缺陷——"标定"从未真正发生，只是拿单次 30s 窗跑出的 `issues: []`
+ *   当成合格线，而全片复查显示它连预算只用 42% 的行都不拦（advisory 都不报，见上面
+ *   "0.407 只统计了参与评估的行"那段记录）。0.7 让指标真正开始起作用：结合翻译阶段的
+ *   反向重译（低于 60% 会被打回重写一次），门禁在重译之后仍量到低于 70% 的行，大概率
+ *   是重译也没能把内容填起来的顽固案例，这正是应该被报出来、供人工复查的信号。
+ * - **仍为 advisory，不升 hard**：本文件其他地方两次记录过"拿单次样本收紧 hard 阈值"
+ *   被复审推翻的教训（见 `maxDelayFraction` 0.35→0.3 那次的完整论证）；这次只用一个 60s
+ *   窗口验证过新提示词 + 反向重译的效果，同样不足以支撑升级为阻断整条流水线的 hard
+ *   规则。更根本的原因没变：这个指标结构性分辨不出"忠实压缩掉的是口水话"还是"翻译
+ *   退化砍掉了内容"——一段填充词密集的发言忠实压缩后天然占用比低，hard 拦这类行会
+ *   误杀本该通过的正常压缩。升 hard 需要在真实全片上验证反向重译后残留的低占用行
+ *   究竟是哪一类，而不是先拦了再说。
+ *
  * - 零间隔 / 低于最小停顿：仍不允许
  */
 export const DEFAULT_DUB_GATE_THRESHOLDS: DubGateThresholds = {
@@ -137,7 +157,7 @@ export const DEFAULT_DUB_GATE_THRESHOLDS: DubGateThresholds = {
   advisoryOverflowFraction: 0.5,
   maxExtendMs: DEFAULT_MAX_EXTEND_MS,
   maxDelayFraction: 0.35,
-  advisoryTextBudgetRetainFraction: 0.3,
+  advisoryTextBudgetRetainFraction: 0.7,
   maxDroppedCount: 0,
   minInterSentencePauseMs: DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
   maxZeroGapFraction: 0,

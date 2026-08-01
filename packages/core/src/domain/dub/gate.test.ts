@@ -97,6 +97,15 @@ const script = (overrides?: Partial<DubScript>): DubScript => ({
   ...overrides,
 });
 
+describe("DEFAULT_DUB_GATE_THRESHOLDS", () => {
+  it("keeps advisoryTextBudgetRetainFraction as an advisory-only signal, raised to 0.7", () => {
+    // 0.3 曾经形同虚设——真实素材证明它连预算只用 42% 的行都不拦。0.7 逼门禁真正
+    // 开始起作用，但仍是 advisory：这个指标结构性分辨不出"忠实压缩掉口水话"与
+    // "翻译退化砍掉内容"，升 hard 需要更多真实全片验证（见 gate.ts 顶部注释）。
+    expect(DEFAULT_DUB_GATE_THRESHOLDS.advisoryTextBudgetRetainFraction).toBe(0.7);
+  });
+});
+
 describe("evaluateDubGate", () => {
   it("passes a healthy placement", () => {
     const report = evaluateDubGate({
@@ -218,8 +227,49 @@ describe("evaluateDubGate", () => {
   });
 
   it("does not flag translations that use most of their time budget", () => {
-    // targetDurationMs=8340 → budget ≈ 56 chars；32 字译文占用比 ≈ 0.57，
-    // 与真实素材（0.42–1.08）同量级，不应触发 advisory。
+    // targetDurationMs=8340 → budget ≈ 56 chars；44 字译文占用比 ≈ 0.79，高于收紧后的
+    // advisory 阈值 0.7（见 gate.ts 2026-08-01 的"嘴动无声"根治：阈值从 0.3 提到 0.7，
+    // 逼译文真正用满预算而不是"能短则短"）。
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "但有时我确实会听到有用户反馈说，这个功能一连问了差不多两百个问题，让我多少有点尴尬和意外",
+            startMs: 0,
+            endMs: 8000,
+            durationMs: 8000,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      }),
+      script: {
+        ...script(),
+        lines: [
+          {
+            index: 1,
+            startMs: 0,
+            endMs: 8340,
+            targetDurationMs: 8340,
+            text: "但有时我确实会听到有用户反馈说，这个功能一连问了差不多两百个问题，让我多少有点尴尬和意外",
+            sourceText:
+              "However, I sometimes hear from people using them like, this issue just asks me 200 questions and I kind of wince a little bit.",
+            cueIndices: [1],
+          },
+        ],
+      },
+    });
+    expect(report.blocked).toBe(false);
+    expect(report.issues.some((i) => i.code === "info-loss")).toBe(false);
+  });
+
+  it("flags moderate under-use of the time budget too, now that the advisory line is raised to 0.7", () => {
+    // 同一句译文（占用比 0.57）在旧阈值 0.3 下不报，在新阈值 0.7 下应该报——
+    // 这正是本轮要解决的"预算严重没花完"问题的中间地带。
     const report = evaluateDubGate({
       videoId: "vid",
       timing: timing(),
@@ -254,7 +304,10 @@ describe("evaluateDubGate", () => {
       },
     });
     expect(report.blocked).toBe(false);
-    expect(report.issues.some((i) => i.code === "info-loss")).toBe(false);
+    expect(report.passed).toBe(true);
+    const issue = report.issues.find((i) => i.code === "info-loss");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("advisory");
   });
 
   it("skips info-loss evaluation entirely when the time budget itself is unusable, instead of scoring against a clamped budget of 1", () => {

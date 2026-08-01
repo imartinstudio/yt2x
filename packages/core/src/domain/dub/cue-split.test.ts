@@ -3,10 +3,10 @@ import {
   allocateBoundariesByChars,
   CUE_HARD_WIDTH,
   MIN_CUE_DURATION_MS,
-  mergeShortDurationParts,
   splitEnglishByShares,
   splitUtteranceIntoCues,
   splitZhByWidth,
+  splitZhForUtterance,
   visualWidth,
 } from "./cue-split.js";
 
@@ -94,46 +94,51 @@ describe("splitZhByWidth", () => {
   });
 });
 
-describe("mergeShortDurationParts", () => {
-  it("merges a part whose proportional share would fall under the minimum display duration", () => {
-    // "乙" 只有 1 字，占比极小；在 8000ms 的话语单元里按字符占比分配会不足 1 秒。
-    const parts = mergeShortDurationParts(
-      ["甲", "乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌"],
-      0,
-      8000,
-    );
-    expect(parts.length).toBe(1);
-    const boundaries = allocateBoundariesByChars(parts, 0, 8000);
-    for (let i = 0; i < parts.length; i++) {
-      expect(boundaries[i + 1]! - boundaries[i]!).toBeGreaterThanOrEqual(MIN_CUE_DURATION_MS);
-    }
+describe("splitZhForUtterance", () => {
+  it("splits normally when both sides comfortably clear the minimum duration", () => {
+    const zh = "这些技能的核心就是不断追问你，一直问到你达成共识为止。";
+    expect(visualWidth(zh)).toBeGreaterThan(CUE_HARD_WIDTH);
+    const parts = splitZhForUtterance(zh, 0, 9000);
+    expect(parts).toEqual(["这些技能的核心就是不断追问你，", "一直问到你达成共识为止。"]);
   });
 
-  it("merges a short middle part with its narrower neighbor, keeping the rest intact", () => {
-    const original = ["甲乙丙丁戊己庚", "辛", "壬癸子丑寅卯辰巳午未"];
-    const parts = mergeShortDurationParts(original, 0, 9000);
-    expect(parts).toEqual(["甲乙丙丁戊己庚辛", "壬癸子丑寅卯辰巳午未"]);
-    const boundaries = allocateBoundariesByChars(parts, 0, 9000);
-    for (let i = 0; i < parts.length; i++) {
-      expect(boundaries[i + 1]! - boundaries[i]!).toBeGreaterThanOrEqual(MIN_CUE_DURATION_MS);
-    }
+  it("keeps a wide utterance as a single leaf when splitting would leave a child under the minimum duration", () => {
+    // 同一句话，总时长太短——按字符占比切开后至少一侧会分不到 1 秒，因此宁可整段
+    // 保持不切（哪怕因此超出 CUE_HARD_WIDTH），也不切出一条会闪烁的碎片。
+    const zh = "这些技能的核心就是不断追问你，一直问到你达成共识为止。";
+    const parts = splitZhForUtterance(zh, 0, 1200);
+    expect(parts).toEqual([zh]);
   });
 
-  it("never drops or duplicates characters while merging", () => {
-    const original = ["甲乙丙丁戊己庚", "辛", "壬癸子丑寅卯辰巳午未"];
-    const parts = mergeShortDurationParts(original, 0, 9000);
-    expect(parts.join("")).toBe(original.join(""));
+  it("never drops or duplicates characters regardless of whether it splits", () => {
+    const zh = "这些技能的核心就是不断追问你，一直问到你达成共识为止。";
+    expect(splitZhForUtterance(zh, 0, 9000).join("")).toBe(zh);
+    expect(splitZhForUtterance(zh, 0, 1200).join("")).toBe(zh);
   });
 
-  it("leaves a single part unmerged even when the whole utterance is itself shorter than the minimum", () => {
+  it("leaves a single character unsplit even when the whole utterance is itself shorter than the minimum", () => {
     // 无法从别的话语单元借时间：真实的极短话语单元交给调用方按原样显示。
-    const parts = mergeShortDurationParts(["好"], 0, 400);
-    expect(parts).toEqual(["好"]);
+    expect(splitZhForUtterance("好", 0, 400)).toEqual(["好"]);
   });
 
-  it("returns the input unchanged when every part already meets the minimum duration", () => {
-    const parts = mergeShortDurationParts(["甲乙丙", "丁戊己"], 0, 8000);
-    expect(parts).toEqual(["甲乙丙", "丁戊己"]);
+  it("real-data regression: refuses a protected-term-adjacent split that would leave a 2-character flash tail", () => {
+    // 真实全片复现：唯一不切进 "Grill with Docs" 内部的候选切点，会把「会话。」
+    // 切成独立一条——这句话总时长只有 5186ms，「会话。」（2 字）分不到 1 秒。
+    // 联合决策必须拒绝这一刀，整段保持不切（超出 CUE_HARD_WIDTH 是可接受的代价）。
+    const zh = "然后转至原型会话，再回到原Grill with Docs会话。";
+    const parts = splitZhForUtterance(zh, 216_427, 221_613);
+    expect(parts).toEqual([zh]);
+  });
+
+  it("keeps every leaf's implied duration at or above the minimum when it does split", () => {
+    const zh = "这些技能的核心就是不断追问你，一直问到你达成共识为止。";
+    const startMs = 10_000;
+    const endMs = 19_000;
+    const parts = splitZhForUtterance(zh, startMs, endMs);
+    const boundaries = allocateBoundariesByChars(parts, startMs, endMs);
+    for (let i = 0; i < parts.length; i++) {
+      expect(boundaries[i + 1]! - boundaries[i]!).toBeGreaterThanOrEqual(MIN_CUE_DURATION_MS);
+    }
   });
 });
 

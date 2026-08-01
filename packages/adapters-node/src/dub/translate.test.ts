@@ -236,8 +236,14 @@ describe("translateUtterances", () => {
           };
         }
         // 补漏轮必须走术语补漏 prompt，且点名了具体缺失的术语
-        expect(system).toMatch(/dropped one or more protected terms/i);
+        expect(system).toMatch(/missing one or more protected terms/i);
         expect(system).toContain('"Grill Me"');
+        // 且必须把**当前译文**交给模型编辑，而不是让它从英文原文重译一遍——
+        // 重译等于把刚失败的那道题再出一次，真实素材上连续失败过（见 prompt 注释）。
+        expect(system).toMatch(/editing task, not a translation task/i);
+        const repairItems = items as unknown as { text: string; maxChars: number }[];
+        expect(repairItems[0]?.text).toBe("占位符");
+        expect(repairItems[0]?.maxChars).toBeGreaterThan(0);
         return {
           content: JSON.stringify(
             items.map((i) => ({ index: i.index, text: "我的 Grill Me 技能很棒" })),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDubTranslateExpandPrompt,
+  buildDubGlossaryRepairUserPrompt,
   buildDubTranslateGlossaryRepairPrompt,
   buildDubTranslatePayload,
   buildDubTranslateRepairPrompt,
@@ -229,14 +230,46 @@ describe("buildDubTranslateGlossaryRepairPrompt", () => {
     expect(prompt).toContain('"Grill Me"');
   });
 
-  it("demands the term reappear with the exact spelling shown, and forbids relying on a neighboring item", () => {
-    expect(prompt).toMatch(/exact same spelling and capitalization/i);
-    expect(prompt).toMatch(/neighboring item/i);
+  it("demands the term reappear with the exact spelling shown", () => {
+    expect(prompt).toMatch(/exact spelling and capitalization/i);
   });
 
-  it("still includes the full rule set so other constraints (budget, other glossary terms) are not lost", () => {
-    expect(prompt).toMatch(/FILL the budget/i);
-    expect(prompt).toMatch(/Simplified Chinese/);
+  it("frames the work as editing the existing Chinese, not translating afresh", () => {
+    // 让模型「从英文重译一遍」等于把它刚失败的那道题再出一次——真实素材上连续失败过。
+    // 改成编辑已有译文后才修得动，所以这条框定必须钉住。
+    expect(prompt).toMatch(/editing task, not a translation task/i);
+    expect(prompt).not.toMatch(/translate each item again/i);
+  });
+
+  it("forbids repurposing an existing rendering of a neighbouring ordinary word", () => {
+    // 观察到的失败形态：补 "Grill Me" 时把已有的「追问环节」(grilling session) 顶掉，
+    // 检查放行而译文更错。
+    expect(prompt).toMatch(/proper noun/i);
+    expect(prompt).toMatch(/leave the ordinary word/i);
+  });
+
+  it("keeps the character budget in play so the repair cannot overflow the slot", () => {
+    expect(prompt).toMatch(/maxChars/);
+  });
+});
+
+describe("buildDubGlossaryRepairUserPrompt", () => {
+  it("sends the current Chinese and its budget, not the English source", () => {
+    // 裸数组，与其余各 pass 的载荷格式一致——parseResponse 只认数组，包一层
+    // {lines:[…]} 会让整个补漏轮解析失败。
+    const payload = JSON.parse(
+      buildDubGlossaryRepairUserPrompt([
+        { index: 25, text: "第一个失败模式：在追问环节试图回答高保真问题。", maxChars: 33 },
+      ]),
+    ) as { index: number; text: string; maxChars: number }[];
+
+    expect(payload).toEqual([
+      {
+        index: 25,
+        text: "第一个失败模式：在追问环节试图回答高保真问题。",
+        maxChars: 33,
+      },
+    ]);
   });
 });
 

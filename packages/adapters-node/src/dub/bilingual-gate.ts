@@ -69,8 +69,24 @@ export const evaluateDubBilingualGate = async (
       : {}),
   });
 
+  // 配音链路把 glossary-violation 降为 advisory：仍然报出来，但不阻塞交付。
+  //
+  // 理由与 `core/dub/gate.ts` 把 info-loss 降为 advisory 的理由同源——这个检查分辨
+  // 不出「专名丢了、意思也丢了」和「专名丢了、意思用意译保住了」。更要命的是它**可以
+  // 通过让输出变糟来满足**：真实素材第 25 句里 `grill me`（专名）与 `grilling session`
+  // （派生词）在英文里紧挨着，逼模型补回专名时，它三次都是把已有的「追问环节」改写成
+  // 「Grill Me 环节」——检查放行了，译文却错了。一个既阻塞发布、又能被劣化满足的门禁，
+  // 制造的压力方向是错的。
+  //
+  // 只作用于配音链路。纯字幕链路（`video-subtitles.ts`）的语义不同——它比对的是翻译
+  // 前后的同一份文本，漏词更可能是真丢失，那边维持阻塞。
+  const blocking = {
+    ...report,
+    issues: report.issues.filter((issue) => issue.code !== "glossary-violation"),
+  };
+
   return {
-    readyForBurn: isSubtitleAuditReadyForDelivery(report, "burned"),
+    readyForBurn: isSubtitleAuditReadyForDelivery(blocking, "burned"),
     issues: report.issues,
   };
 };

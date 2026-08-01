@@ -212,48 +212,53 @@ export const splitEnglishByShares = (
 export const MIN_CUE_DURATION_MS = 1000;
 
 /**
- * 把按字符占比分配后时长会短于 {@link MIN_CUE_DURATION_MS} 的片段与相邻片段合并，
- * 直到没有片段短于阈值，或者只剩一个片段为止。合并只是把两个相邻文本片段拼回去
- * （不改变字符顺序、不引入分隔符——两者原本就是同一段连续文本按字符位置切开的），
- * 时间边界随后按合并后的新片段重新计算，`endMs - startMs` 总量不变。
+ * 在宽度、最短显示时长、术语完整这三个约束之间联合决策，一棵递归树同时满足三者——
+ * 不是"先按宽度切、切完再把太短的片段合并回去"这种两道互相打补丁的独立后处理
+ * （合并会把宽度重新推过 {@link CUE_HARD_WIDTH}，而"切窄一点"又会把时长压短，
+ * 两道后处理来回打架）。真实全片复现过这个冲突：`"...原Grill with Docs会话。"`
+ * 只有一个不切进术语内部的候选切点，切开后尾片段「会话。」只有 2 字，在原句
+ * 5.2 秒的时长预算下会分不到 1 秒；这里在**决定要不要切**的那一刻就检查两侧的
+ * 估算时长，都够才真的切，不够就整段保持不切（哪怕因此超宽——超宽只是 advisory
+ * 的 width-budget，不阻塞交付；切出一条会闪烁的碎片没有对应的兜底）。
  *
- * 择邻策略：优先与视觉宽度更窄的一侧合并，减少合并结果超过 {@link CUE_HARD_WIDTH}
- * 的概率（超宽只是 advisory 的 width-budget，不阻塞，但仍应尽量避免）。
- *
- * 如果合并到只剩一个片段、整个话语单元本身的时长仍短于阈值，这是真实的极短话语
- * 单元（无法从别的话语单元借时间，见「两级切分」的不漂移约束），交给调用方按原样
- * 显示——不是这个函数能解决的问题。
+ * `startMs`/`endMs` 只用于估算某个候选切点两侧各自能分到多少时长（按字符占比
+ * 线性估算，只服务于"切不切"这个决策）。真正落地的时间边界仍然由调用方对最终
+ * 确定的全部叶子片段统一调用 {@link allocateBoundariesByChars} 计算——那个函数
+ * 已经保证累计取整误差只在话语单元内部的相邻边界间挪动、总量精确等于
+ * `endMs - startMs`，这里不重新发明一遍取整逻辑，避免两套四舍五入互相打架。
  */
-export const mergeShortDurationParts = (
-  parts: readonly string[],
+export const splitZhForUtterance = (
+  zh: string,
   startMs: number,
   endMs: number,
+  maxWidth: number = CUE_HARD_WIDTH,
 ): string[] => {
-  let current = [...parts];
-  while (current.length > 1) {
-    const boundaries = allocateBoundariesByChars(current, startMs, endMs);
-    let shortIndex = -1;
-    let shortestDuration = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < current.length; i++) {
-      const duration = boundaries[i + 1]! - boundaries[i]!;
-      if (duration < MIN_CUE_DURATION_MS && duration < shortestDuration) {
-        shortIndex = i;
-        shortestDuration = duration;
-      }
-    }
-    if (shortIndex === -1) break;
+  const trimmed = zh.trim();
+  if (trimmed.length === 0) return [];
+  if (visualWidth(trimmed) <= maxWidth) return [trimmed];
 
-    const mergeWithNext = shortIndex === 0
-      ? true
-      : shortIndex === current.length - 1
-        ? false
-        : visualWidth(current[shortIndex + 1]!) < visualWidth(current[shortIndex - 1]!);
-    const left = mergeWithNext ? shortIndex : shortIndex - 1;
-    const right = left + 1;
-    const merged = current[left]! + current[right]!;
-    current = [...current.slice(0, left), merged, ...current.slice(right + 1)];
+  const spans = findProtectedSpans(trimmed);
+  const splitAt = findSplitPoint(trimmed, spans);
+  if (splitAt === null) return [trimmed]; // 找不到安全切点，宁可超宽也不破坏词/术语完整性
+
+  const left = trimmed.slice(0, splitAt).trim();
+  const right = trimmed.slice(splitAt).trim();
+  if (left.length === 0 || right.length === 0) return [trimmed];
+
+  const totalChars = left.length + right.length;
+  const durationMs = endMs - startMs;
+  const leftDurationMs = Math.round((durationMs * left.length) / totalChars);
+  const rightDurationMs = durationMs - leftDurationMs;
+  if (leftDurationMs < MIN_CUE_DURATION_MS || rightDurationMs < MIN_CUE_DURATION_MS) {
+    // 这一刀会切出一条分不到最短时长的碎片——不切，整段留作一个（可能超宽的）叶子。
+    return [trimmed];
   }
-  return current;
+
+  const boundaryMs = startMs + leftDurationMs;
+  return [
+    ...splitZhForUtterance(left, startMs, boundaryMs, maxWidth),
+    ...splitZhForUtterance(right, boundaryMs, endMs, maxWidth),
+  ];
 };
 
 export type DubDisplayCue = {
@@ -277,14 +282,14 @@ export type DubDisplayCueInput = {
 };
 
 /**
- * 把一个话语单元切成若干显示单元：中文按屏宽切，时间和英文都按中文各片段的字符占比
- * 分配。`zhText` 为空或纯空白时返回空数组（没有可显示的内容）。
+ * 把一个话语单元切成若干显示单元：中文按屏宽/最短时长/术语完整三个约束联合切分
+ * （见 {@link splitZhForUtterance}），时间和英文都按中文各片段的字符占比分配。
+ * `zhText` 为空或纯空白时返回空数组（没有可显示的内容）。
  */
 export const splitUtteranceIntoCues = (line: DubDisplayCueInput): DubDisplayCue[] => {
-  const widthParts = splitZhByWidth(line.zhText);
-  if (widthParts.length === 0) return [];
+  const zhParts = splitZhForUtterance(line.zhText, line.startMs, line.endMs);
+  if (zhParts.length === 0) return [];
 
-  const zhParts = mergeShortDurationParts(widthParts, line.startMs, line.endMs);
   const enParts = splitEnglishByShares(line.enText, zhParts);
   const boundaries = allocateBoundariesByChars(zhParts, line.startMs, line.endMs);
 

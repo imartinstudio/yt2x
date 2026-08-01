@@ -51,7 +51,11 @@ describe("evaluateDubBilingualGate", () => {
     expect(result.issues).toEqual([]);
   });
 
-  it("blocks when a protected term (grill me / grill with docs) drops out of the Chinese line", async () => {
+  it("reports a dropped protected term but does not block on it", async () => {
+    // 配音链路把 glossary-violation 降为 advisory——检查分辨不出「专名丢了、意思也丢了」
+    // 和「专名丢了、意思用意译保住了」，而且可以通过让输出变糟来满足：逼模型补回专名时，
+    // 它会把已有的派生词译法改写成专名（真实素材上「追问环节」→「Grill Me 环节」），
+    // 检查放行而译文更错。理由见 bilingual-gate.ts 的实现注释。
     const runner = makeRunner(fitMeasurement);
     const result = await evaluateDubBilingualGate({
       bilingualSrt: bilingual("我们来试试这个功能", "Let's Grill Me this feature"),
@@ -62,8 +66,8 @@ describe("evaluateDubBilingualGate", () => {
       runner,
     });
 
-    expect(result.readyForBurn).toBe(false);
     expect(result.issues.some((i) => i.code === "glossary-violation")).toBe(true);
+    expect(result.readyForBurn).toBe(true);
   });
 
   it("does not block when a protected term lands in a different cue of the same utterance (utteranceBoundariesMs grouping)", async () => {

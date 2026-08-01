@@ -1,4 +1,5 @@
 import {
+  buildDubGlossaryRepairUserPrompt,
   buildDubTranslateExpandPrompt,
   buildDubTranslateGlossaryRepairPrompt,
   buildDubTranslateRepairPrompt,
@@ -278,9 +279,14 @@ export const translateUtterances = async (
           },
           {
             role: "user",
-            content: buildDubTranslateUserPrompt(
-              glossaryMissing.map((m) => m.utterance),
-              rate,
+            // 喂当前译文而非英文原文——补漏是编辑任务，重译只会让模型把刚做错的
+            // 取舍再做一遍（见 buildDubTranslateGlossaryRepairPrompt 的注释）。
+            content: buildDubGlossaryRepairUserPrompt(
+              glossaryMissing.map((m) => ({
+                index: m.utterance.index,
+                text: translated.get(m.utterance.index) ?? "",
+                maxChars: dubTranslateCharBudget(m.utterance.endMs - m.utterance.startMs, rate),
+              })),
             ),
           },
         ],

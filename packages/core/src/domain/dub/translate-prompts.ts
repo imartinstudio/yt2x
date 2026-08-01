@@ -155,19 +155,48 @@ export const buildDubTranslateRepairPrompt = (missingIndices: readonly number[])
  * 指名道姓地告诉它这次漏了什么。真实全片复现过这个缺陷即使有 few-shot 示例仍偶发
  * （LLM 输出非确定），需要一道事后校验 + 定向重译兜底，而不是只靠提示词词法穷举。
  */
+/**
+ * 术语补漏 prompt：**编辑任务，不是重译任务**。
+ *
+ * 上一版让模型「从英文原文重译一遍」，等于把它刚刚失败的那道题原样再出一次——真实
+ * 素材上复现过一句连续失败：`"...with the grill me skills is trying to answer high
+ * fidelity questions during a grilling session"` 里，专名 `grill me` 与派生词
+ * `grilling session` 紧挨着出现，模型两次都把整块处理成「追问」，即使被点名要求补
+ * `Grill Me` 也不改。加 few-shot 示例同样无效。
+ *
+ * 改成把**已有译文**交给它、只要求把缺的词插回去：模型不必再做那个它已经证明会
+ * 做错的取舍，只需在一句现成的中文里找个位置插入。同时给出字符上限，避免补词把
+ * 这一行推过时长预算。
+ */
 export const buildDubTranslateGlossaryRepairPrompt = (
   missing: readonly { index: number; terms: readonly string[] }[],
 ): string =>
   [
-    "You are a Chinese dubbing translator. Your previous translation of the following items dropped one or more protected terms that rule 9 requires you to keep exactly as spelled in English.",
+    "You are editing existing Chinese dubbing subtitles. Each item below is a finished Chinese translation that is missing one or more protected terms — proper nouns that must appear verbatim in English.",
     ...missing.map(
       (m) => `  index ${m.index}: missing term(s): ${m.terms.map((t) => `"${t}"`).join(", ")}.`,
     ),
-    "Translate each item again from the English source. Every term listed above MUST appear in your output with the exact same spelling and capitalization shown above. Do not drop a term just because a neighboring item's translation already mentions a related word — this item's own translation must contain it.",
     "",
-    "Rules:",
-    ...DUB_TRANSLATE_RULES,
+    "Your job is to insert the listed term(s) into the existing Chinese text. This is an editing task, not a translation task:",
+    "- Keep the existing wording. Change as little as possible around the insertion point.",
+    "- Each term must appear with the exact spelling and capitalization shown above.",
+    "- A term is a proper noun even when a related ordinary word sits next to it in the same sentence. Insert the proper noun; leave the ordinary word's existing Chinese rendering alone.",
+    "- Stay within each item's `maxChars` budget. Drop filler elsewhere in the line if you need the room.",
+    "",
+    'Return a JSON array: [{"index":<number>,"text":"<edited Chinese>"}]',
   ].join("\n");
+
+export type DubGlossaryRepairItem = {
+  index: number;
+  /** 当前译文——模型要编辑的对象，不是英文原文。 */
+  text: string;
+  maxChars: number;
+};
+
+/** 术语补漏的用户消息：喂当前中文译文，不喂英文原文；格式与其余各 pass 一致，裸数组。 */
+export const buildDubGlossaryRepairUserPrompt = (
+  items: readonly DubGlossaryRepairItem[],
+): string => JSON.stringify(items);
 
 export type DubTranslatePayloadItem = {
   index: number;

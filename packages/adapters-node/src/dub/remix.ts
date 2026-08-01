@@ -2,18 +2,22 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DubPlacedLine } from "@yt2x/core";
-import { burnSubtitles } from "../acquire/burn-subtitles.js";
-import { detectBurnedSubtitles } from "../acquire/detect-burned-subs.js";
 import { defaultProcessRunner, type ProcessRunner } from "../process/index.js";
 import { probeAudioDurationMs } from "./synthesize.js";
 
 /**
- * 混音 + 可选字幕重烧 → full.zh-dubbed.mp4。
+ * 混音 + 冻结帧 → 交给双语字幕交付路径统一烧录一次（不再自建烧录，见
+ * docs/DUB-TASK.md「数据流」结尾：「配音不再自己烧片。它交出音轨与时间轴映射，由双语
+ * 交付路径统一烧录」）。
  *
  * 1. 按落点把逐句 mp3 拼成完整人声轨（句间补静音）
  * 2. 与 Demucs no_vocals 混合；音轨长度对齐「原片 + 冻结延长」，不是止于最后一句人声
- * 3. 画面 tpad 冻结末帧补到同一长度（决策 #11）
- * 4. 换成混合音轨；若原片无中文硬字幕，再烧反向 SRT
+ *    → 交出的「中文音轨」
+ * 3. 只有当人声跑到原片时长之外时，才需要画面 tpad 冻结末帧补到同一长度（决策 #11）——
+ *    这一刀必须现在就切，因为下一步的双语烧录只按原片时长生成字幕叠加帧序列，画面本身
+ *    的时长要在交给它之前就锁定好。多数情况下（人声不超原片时长）完全不需要这一步，
+ *    这时直接把原片路径交出去，双语烧录会在它自己那一次 ffmpeg 调用里换上这里产出的
+ *    中文音轨、烧上字幕——全程只编码一次。
  *
  * 注意：绝不用 `-shortest` 收尾——它会把刚 tpad 出的冻结帧按短音频砍掉，
  * 使决策 #11 变成死代码。改用显式 `-t` 锁定成片时长。
@@ -147,37 +151,38 @@ export const buildMuxDubbedVideoArgs = (input: {
   return args;
 };
 
-export type RemixDubbedVideoInput = {
+export type RemixDubbedAudioInput = {
   videoPath: string;
   noVocalsPath: string;
   placedLines: readonly DubPlacedLine[];
-  /** 配音目录，用于解析 audioFile 相对路径。 */
+  /** 配音目录，用于解析 audioFile 相对路径，也是 voice.wav / mixed.m4a 的落盘目录。 */
   dubDir: string;
-  /** 反向 SRT 文本（可空——空则不烧字幕）。 */
-  reverseSrt?: string;
-  /** 成片输出路径，通常 article/.../video/full.zh-dubbed.mp4。 */
-  outputPath: string;
-  /** 反向 SRT 落盘路径；提供且 reverseSrt 非空时写入。 */
-  reverseSrtPath?: string;
   extendMs: number;
   runner?: ProcessRunner;
   ffmpegPath?: string;
   ffprobePath?: string;
-  /** 原片已有中文硬字幕时跳过烧录（默认 true）。 */
-  skipBurnIfChineseBurned?: boolean;
-  /** 强制不烧字幕。 */
-  skipBurn?: boolean;
   signal?: AbortSignal;
-  watermarkVideo?: string;
-  watermarkXlate?: string;
 };
 
-export type RemixDubbedVideoResult = {
-  outputPath: string;
-  burned: boolean;
-  skippedBurnReason?: string;
+export type RemixDubbedAudioResult = {
+  /**
+   * 交给双语烧录路径当视频输入：人声没有跑出原片时长时就是 `videoPath` 本身（未改动、
+   * 未重编码）；跑出时长时是已经 tpad 冻结延长、且已经带上正确中文音轨的中间产物——
+   * 这种情况下 `replaceAudioPath` 是 undefined，因为音轨已经在这一步烧进去了。
+   */
+  videoForBurnPath: string;
+  /**
+   * 交给双语烧录路径的「替换音轨」参数；`videoForBurnPath` 已经自带正确音轨（冻结帧
+   * 分支）时为 undefined，调用方不应再传。
+   */
+  replaceAudioPath?: string;
   voiceTrackPath: string;
+  /** 混音后的中文音轨（人声 + BGM），已 pad 到 outputDurationMs——这是交出的「中文音轨」。 */
   mixedAudioPath: string;
+  /** 成片目标时长：覆盖完整原片，并容纳协商残留漂移。 */
+  outputDurationMs: number;
+  /** 画面需要冻结延长的毫秒数；0 表示不需要冻结帧。 */
+  videoPadMs: number;
   extendMs: number;
 };
 
@@ -434,24 +439,19 @@ export const muxDubbedVideo = async (input: {
   });
 };
 
-export const remixDubbedVideo = async (
-  input: RemixDubbedVideoInput,
-): Promise<RemixDubbedVideoResult> => {
+/**
+ * 混音 + （按需）冻结帧，交出给双语烧录路径的中文音轨与视频输入——不再产出成片，
+ * 也不再触碰字幕。见文件头注释。
+ */
+export const remixDubbedAudio = async (
+  input: RemixDubbedAudioInput,
+): Promise<RemixDubbedAudioResult> => {
   const runner = input.runner ?? defaultProcessRunner;
   const ffmpegPath = input.ffmpegPath ?? "ffmpeg";
-  const skipBurnIfChineseBurned = input.skipBurnIfChineseBurned !== false;
-
-  await mkdir(path.dirname(input.outputPath), { recursive: true });
-
-  if (input.reverseSrt !== undefined && input.reverseSrtPath !== undefined && input.reverseSrt.length > 0) {
-    await mkdir(path.dirname(input.reverseSrtPath), { recursive: true });
-    await writeFile(input.reverseSrtPath, input.reverseSrt.endsWith("\n") ? input.reverseSrt : `${input.reverseSrt}\n`, "utf8");
-  }
 
   const workDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-dub-remix-"));
   const voiceTrackPath = path.join(input.dubDir, "voice.wav");
   const mixedAudioPath = path.join(input.dubDir, "mixed.m4a");
-  const muxedPath = path.join(workDir, "muxed.mp4");
   await mkdir(input.dubDir, { recursive: true });
 
   try {
@@ -494,73 +494,42 @@ export const remixDubbedVideo = async (
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
 
-    await muxDubbedVideo({
-      videoPath: input.videoPath,
-      audioPath: mixedAudioPath,
-      outputPath: muxedPath,
-      videoPadMs,
-      outputDurationMs,
-      runner,
-      ffmpegPath,
-      ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
-    });
-
-    let burned = false;
-    let skippedBurnReason: string | undefined;
-    const shouldConsiderBurn =
-      input.skipBurn !== true &&
-      input.reverseSrtPath !== undefined &&
-      input.reverseSrt !== undefined &&
-      input.reverseSrt.trim().length > 0;
-
-    if (shouldConsiderBurn) {
-      let skipBurn = false;
-      if (skipBurnIfChineseBurned) {
-        const detect = await detectBurnedSubtitles(input.videoPath, runner, {
-          ...(input.signal !== undefined ? { signal: input.signal } : {}),
-        });
-        if (detect.shouldSkipBurn) {
-          skipBurn = true;
-          skippedBurnReason = "chinese_burned_detected";
-        }
-      }
-      if (!skipBurn) {
-        await burnSubtitles({
-          videoPath: muxedPath,
-          srtPath: input.reverseSrtPath!,
-          outputPath: input.outputPath,
-          runner,
-          ...(input.signal !== undefined ? { signal: input.signal } : {}),
-          ...(input.watermarkVideo !== undefined ? { watermarkVideo: input.watermarkVideo } : {}),
-          ...(input.watermarkXlate !== undefined ? { watermarkXlate: input.watermarkXlate } : {}),
-        });
-        burned = true;
-      } else {
-        await runFfmpeg(runner, ffmpegPath, ["-y", "-i", muxedPath, "-c", "copy", input.outputPath], input.signal);
-      }
-    } else {
-      skippedBurnReason = input.skipBurn === true ? "skip_burn_flag" : "no_reverse_srt";
-      await runFfmpeg(runner, ffmpegPath, ["-y", "-i", muxedPath, "-c", "copy", input.outputPath], input.signal);
+    if (videoPadMs > 0) {
+      // 人声跑出了原片时长：必须现在就把画面冻结延长到位，下游的双语烧录只按视频
+      // 输入自身的时长生成叠加帧序列，没有能力再延长画面。这一分支不可避免要多编码
+      // 一次（mux 本身），但音轨已经在这一步就绑定正确——双语烧录那次调用不需要
+      // 再传 replaceAudioPath，用它自带的 0:a 即可。
+      const paddedPath = path.join(input.dubDir, "video-padded.mp4");
+      await muxDubbedVideo({
+        videoPath: input.videoPath,
+        audioPath: mixedAudioPath,
+        outputPath: paddedPath,
+        videoPadMs,
+        outputDurationMs,
+        runner,
+        ffmpegPath,
+        ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+      return {
+        videoForBurnPath: paddedPath,
+        voiceTrackPath,
+        mixedAudioPath,
+        outputDurationMs,
+        videoPadMs,
+        extendMs: Math.max(0, input.extendMs),
+      };
     }
 
-    // 校验成片存在且时长可读——防止 ffmpeg 写出 0 字节文件还当成功
-    await probeAudioDurationMs({
-      filePath: input.outputPath,
-      runner,
-      ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
-    }).catch(async () => {
-      // 视频用 format=duration 也行；probeAudioDurationMs 对 mp4 同样适用
-      throw new Error(`dubbed video was not produced or has no duration: ${input.outputPath}`);
-    });
-
+    // 常见情况：人声没有超出原片时长，画面完全不需要改动。原片原样交给双语烧录，
+    // 音轨用 replaceAudioPath 在那一次 ffmpeg 调用里换掉——全程只编码一次。
     return {
-      outputPath: input.outputPath,
-      burned,
-      ...(skippedBurnReason !== undefined ? { skippedBurnReason } : {}),
+      videoForBurnPath: input.videoPath,
+      replaceAudioPath: mixedAudioPath,
       voiceTrackPath,
       mixedAudioPath,
+      outputDurationMs,
+      videoPadMs,
       extendMs: Math.max(0, input.extendMs),
     };
   } finally {

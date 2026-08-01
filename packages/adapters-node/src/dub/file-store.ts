@@ -24,8 +24,10 @@ import { resolveSourceVideo } from "../acquire/video-subtitles.js";
  *     demucs/no_vocals.wav
  *     voice.wav / mixed.m4a
  *   files/articles/<videoId>/video/
- *     full.zh-dub.srt
- *     full.zh-dubbed.mp4
+ *     full.zh-dub.srt      双语反向 SRT（中文在上、英文在下），交给统一烧录路径
+ *     full.zh-dub.zh.srt   中文单语，只供双语质量门的三份 SRT 一致性检查比对
+ *     full.zh-dub.en.srt   英文单语，同上
+ *     full.zh-dubbed.mp4   统一烧录后的成片（不再由 dub 自己产出，见 remix.ts）
  */
 
 export const DUB_DIR_NAME = "dub";
@@ -47,6 +49,14 @@ export const dubbedVideoPathFor = (articleRoot: string, videoId: string): string
 
 export const dubReverseSrtPathFor = (articleRoot: string, videoId: string): string =>
   path.join(articleRoot, videoId, "video", "full.zh-dub.srt");
+
+/** 中文单语变体，仅供双语质量门的三份 SRT 一致性检查用，不单独烧录。 */
+export const dubZhSrtPathFor = (articleRoot: string, videoId: string): string =>
+  path.join(articleRoot, videoId, "video", "full.zh-dub.zh.srt");
+
+/** 英文单语变体，用途同上。 */
+export const dubEnSrtPathFor = (articleRoot: string, videoId: string): string =>
+  path.join(articleRoot, videoId, "video", "full.zh-dub.en.srt");
 
 const exists = async (candidate: string): Promise<boolean> =>
   access(candidate)

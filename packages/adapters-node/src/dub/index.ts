@@ -31,6 +31,8 @@ export {
   dubDemucsDirFor,
   dubbedVideoPathFor,
   dubReverseSrtPathFor,
+  dubZhSrtPathFor,
+  dubEnSrtPathFor,
   dubLineAudioName,
   parseDubWords,
   readDubWords,
@@ -103,7 +105,7 @@ export {
   DUBBED_VIDEO_NAME,
   DUB_REVERSE_SRT_NAME,
   DUB_RENDER_DURATION_TOLERANCE_MS,
-  remixDubbedVideo,
+  remixDubbedAudio,
   buildVoiceTrack,
   mixVoiceAndBgm,
   muxDubbedVideo,
@@ -114,7 +116,7 @@ export {
   assertConcatEntriesHomogeneous,
   assertRenderedDurationMs,
   assertFfmpegStderrClean,
-  type RemixDubbedVideoInput,
-  type RemixDubbedVideoResult,
+  type RemixDubbedAudioInput,
+  type RemixDubbedAudioResult,
 } from "./remix.js";
 

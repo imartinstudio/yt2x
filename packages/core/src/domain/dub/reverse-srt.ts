@@ -99,3 +99,52 @@ export const formatReverseSrt = (
   }
   return blocks.join("\n");
 };
+
+/**
+ * 中文单语 SRT——与 {@link formatReverseSrt} 共用同一批 cue（相同 index / 相同时间戳），
+ * 只是每条只留中文一行。存在的唯一目的是供双语交付路径的质量门
+ * （`auditSubtitleArtifacts` 的三份 SRT 一致性检查）比对，不单独烧录。
+ */
+export const formatReverseZhSrt = (
+  lines: readonly DubPlacedLine[],
+  scriptLines: readonly DubScriptLine[],
+): string => {
+  const cues = buildReverseSrtCues(lines, scriptLines);
+  if (cues.length === 0) return "";
+
+  const blocks: string[] = [];
+  for (const cue of cues) {
+    blocks.push(
+      String(cue.index),
+      `${formatMsToSrtTimestamp(cue.startMs)} --> ${formatMsToSrtTimestamp(cue.endMs)}`,
+      cue.zhText,
+      "",
+    );
+  }
+  return blocks.join("\n");
+};
+
+/**
+ * 英文单语 SRT，用途同 {@link formatReverseZhSrt}。故意不像 {@link formatReverseSrt}
+ * 那样在缺英文源文本时省略该行——三份 SRT 必须逐条 index/时间戳对齐，省略会打破对齐
+ * 检查；找不到源文本时该条留空文本本身就是一个真实信号（该行没有对应的英文原文可比对），
+ * 应该被质量门的 empty-text 检查抓到，而不是被静默吞掉。
+ */
+export const formatReverseEnSrt = (
+  lines: readonly DubPlacedLine[],
+  scriptLines: readonly DubScriptLine[],
+): string => {
+  const cues = buildReverseSrtCues(lines, scriptLines);
+  if (cues.length === 0) return "";
+
+  const blocks: string[] = [];
+  for (const cue of cues) {
+    blocks.push(
+      String(cue.index),
+      `${formatMsToSrtTimestamp(cue.startMs)} --> ${formatMsToSrtTimestamp(cue.endMs)}`,
+      cue.enText,
+      "",
+    );
+  }
+  return blocks.join("\n");
+};

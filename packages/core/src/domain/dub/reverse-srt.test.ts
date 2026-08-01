@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildReverseSrtCues, formatReverseSrt } from "./reverse-srt.js";
+import {
+  buildReverseSrtCues,
+  formatReverseEnSrt,
+  formatReverseSrt,
+  formatReverseZhSrt,
+} from "./reverse-srt.js";
 import type { DubPlacedLine, DubScriptLine } from "./types.js";
 
 const placed = (
@@ -115,5 +120,50 @@ describe("formatReverseSrt", () => {
   it("returns empty string when there are no cues", () => {
     expect(formatReverseSrt([], [])).toBe("");
     expect(formatReverseSrt([placed(1, 0, 100, "  ")], [scriptLine(1, "x")])).toBe("");
+  });
+});
+
+describe("formatReverseZhSrt / formatReverseEnSrt", () => {
+  it("emit the same cue index and timestamps as formatReverseSrt, one language each", () => {
+    const linesInput = [placed(1, 0, 900, "你好"), placed(2, 1000, 2500, "世界")];
+    const scriptLines = [scriptLine(1, "Hello"), scriptLine(2, "World")];
+
+    const zh = formatReverseZhSrt(linesInput, scriptLines);
+    const en = formatReverseEnSrt(linesInput, scriptLines);
+
+    expect(zh).toBe(
+      [
+        "1",
+        "00:00:00,000 --> 00:00:00,900",
+        "你好",
+        "",
+        "2",
+        "00:00:01,000 --> 00:00:02,500",
+        "世界",
+        "",
+      ].join("\n"),
+    );
+    expect(en).toBe(
+      [
+        "1",
+        "00:00:00,000 --> 00:00:00,900",
+        "Hello",
+        "",
+        "2",
+        "00:00:01,000 --> 00:00:02,500",
+        "World",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps an empty English line (not a dropped cue) when no source text is available — index/timing must stay aligned with the bilingual and Chinese SRTs", () => {
+    const en = formatReverseEnSrt([placed(1, 0, 900, "你好")], []);
+    expect(en).toBe(["1", "00:00:00,000 --> 00:00:00,900", "", ""].join("\n"));
+  });
+
+  it("returns empty string when there are no cues", () => {
+    expect(formatReverseZhSrt([], [])).toBe("");
+    expect(formatReverseEnSrt([], [])).toBe("");
   });
 });

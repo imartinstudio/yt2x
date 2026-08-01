@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { DubPlacedLine } from "@yt2x/core";
 import type { ProcessResult, ProcessRunner, ProcessSpec } from "../process/index.js";
 import {
   assertConcatEntriesHomogeneous,
@@ -8,6 +12,7 @@ import {
   computeDubbedOutputDurationMs,
   DUB_RENDER_DURATION_TOLERANCE_MS,
   mixVoiceAndBgmFilterComplex,
+  remixDubbedAudio,
 } from "./remix.js";
 
 describe("assertConcatEntriesHomogeneous", () => {
@@ -173,5 +178,129 @@ describe("mixVoiceAndBgm ffmpeg args", () => {
     const filter = args[args.indexOf("-filter_complex") + 1]!;
     expect(filter).toContain("apad=whole_dur=125.000");
     expect(filter.match(/apad=whole_dur=125\.000/g)?.length).toBe(2);
+  });
+});
+
+describe("remixDubbedAudio", () => {
+  let dubDir: string;
+
+  beforeEach(async () => {
+    dubDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-remix-test-"));
+  });
+
+  afterEach(async () => {
+    await rm(dubDir, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  /** ffprobe replies keyed by the basename of the probed file. */
+  const makeRunner = (
+    durationSecByBasename: Record<string, number>,
+  ): { runner: ProcessRunner; specs: ProcessSpec[] } => {
+    const specs: ProcessSpec[] = [];
+    const runner: ProcessRunner = {
+      run: async (spec): Promise<ProcessResult> => {
+        specs.push(spec);
+        if (spec.command === "ffprobe") {
+          const filePath = spec.args?.[spec.args.length - 1] ?? "";
+          const seconds = durationSecByBasename[path.basename(filePath)];
+          return {
+            exitCode: 0,
+            signal: null,
+            stdout: seconds !== undefined ? seconds.toFixed(3) : "0",
+            stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            durationMs: 1,
+            command: spec.command,
+            args: spec.args ?? [],
+          };
+        }
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 1,
+          command: spec.command,
+          args: spec.args ?? [],
+        };
+      },
+    };
+    return { runner, specs };
+  };
+
+  const line = (index: number, startMs: number, endMs: number): DubPlacedLine => ({
+    index,
+    action: "keep",
+    rate: 1,
+    text: "占位",
+    startMs,
+    endMs,
+    durationMs: endMs - startMs,
+    audioFile: `lines/${String(index).padStart(4, "0")}.mp3`,
+  });
+
+  it("hands the original video straight through and asks the burn step to replace audio when voice fits inside the source (no pad)", async () => {
+    // 单句 0–2000ms → voice.wav 实测 2000ms；原片 10000ms 比人声长，不需要冻结帧。
+    const { runner, specs } = makeRunner({
+      "voice.wav": 2.0,
+      "source.mp4": 10.0,
+      "mixed.m4a": 10.0,
+    });
+
+    const result = await remixDubbedAudio({
+      videoPath: "/downloads/source.mp4",
+      noVocalsPath: "/downloads/no_vocals.wav",
+      placedLines: [line(1, 0, 2000)],
+      dubDir,
+      extendMs: 0,
+      runner,
+      ffmpegPath: "ffmpeg",
+    });
+
+    expect(result.videoForBurnPath).toBe("/downloads/source.mp4");
+    expect(result.replaceAudioPath).toBe(path.join(dubDir, "mixed.m4a"));
+    expect(result.videoPadMs).toBe(0);
+    expect(result.outputDurationMs).toBe(10_000);
+    expect(result.mixedAudioPath).toBe(path.join(dubDir, "mixed.m4a"));
+
+    // 没有任何一次 ffmpeg 调用去 mux/pad 画面（tpad 只在冻结帧分支出现）。
+    const tpadCalls = specs.filter(
+      (s) => s.command === "ffmpeg" && (s.args ?? []).some((a) => a.includes("tpad=")),
+    );
+    expect(tpadCalls).toHaveLength(0);
+  });
+
+  it("freezes the last frame and bakes the audio in when voice runs past the source video (pad branch)", async () => {
+    // 单句 0–8000ms → voice.wav 实测 8000ms；原片只有 5000ms，需要冻结 3000ms。
+    const { runner, specs } = makeRunner({
+      "voice.wav": 8.0,
+      "source.mp4": 5.0,
+      "mixed.m4a": 8.0,
+      "video-padded.mp4": 8.0,
+    });
+
+    const result = await remixDubbedAudio({
+      videoPath: "/downloads/source.mp4",
+      noVocalsPath: "/downloads/no_vocals.wav",
+      placedLines: [line(1, 0, 8000)],
+      dubDir,
+      extendMs: 0,
+      runner,
+      ffmpegPath: "ffmpeg",
+    });
+
+    expect(result.videoForBurnPath).toBe(path.join(dubDir, "video-padded.mp4"));
+    expect(result.replaceAudioPath).toBeUndefined();
+    expect(result.videoPadMs).toBe(3_000);
+    expect(result.outputDurationMs).toBe(8_000);
+
+    const muxCall = specs.find(
+      (s) => s.command === "ffmpeg" && (s.args ?? []).some((a) => a.includes("tpad=")),
+    );
+    expect(muxCall).toBeDefined();
+    expect(muxCall!.args).toContain(path.join(dubDir, "video-padded.mp4"));
   });
 });

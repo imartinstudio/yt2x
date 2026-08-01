@@ -114,15 +114,31 @@ describe("segmentUtterances · 最小时长合并", () => {
   });
 
   it("leaves a short utterance alone when merging would breach the duration cap", () => {
+    // 合并上限固定取 max(maxDurationMs, 12_000)（见实现注释），所以要触发「不能并」
+    // 必须让合并后跨过 12s，maxDurationMs 本身也要调高到盖过这个上限。
     const words: TimedWord[] = [
-      { word: "a", startMs: 0, endMs: 5_000 },
-      { word: "b.", startMs: 5_000, endMs: 9_500 },
-      // 并入前一句会跨到 10.4s，超过 10s 上限，因此不能并
-      { word: "c.", startMs: 10_100, endMs: 10_400 },
+      { word: "a", startMs: 0, endMs: 15_000 },
+      { word: "b.", startMs: 15_000, endMs: 19_500 },
+      // 并入前一句会跨到 20.4s，超过 20s 上限，因此不能并
+      { word: "c.", startMs: 20_100, endMs: 20_400 },
     ];
-    const u = segmentUtterances(words, { minDurationMs: 2_000, maxDurationMs: 10_000 });
+    const u = segmentUtterances(words, { minDurationMs: 2_000, maxDurationMs: 20_000 });
     expect(u).toHaveLength(2);
     expect(u[1]?.text).toBe("c.");
+  });
+
+  // 合并上限与切分阈值解耦：调低 maxDurationMs 去主动拆句时，拆出的收尾碎片仍应能
+  // 并回相邻单元，而不是被同一个（已经调低的）阈值卡死在原地变成单字译文的温床。
+  it("still merges a short remainder across a lowered split threshold, up to the 12s merge ceiling", () => {
+    const words: TimedWord[] = [
+      { word: "a.", startMs: 0, endMs: 2_500 },
+      // 只有 300ms，必须并入相邻单元；合并后跨度 2.9s 远超切分阈值 1s，
+      // 但仍在 12s 合并上限内——不应被同一个（已调低的）阈值卡死。
+      { word: "b.", startMs: 2_600, endMs: 2_900 },
+    ];
+    const u = segmentUtterances(words, { minDurationMs: 2_000, maxDurationMs: 1_000 });
+    expect(u).toHaveLength(1);
+    expect(u[0]?.text).toBe("a. b.");
   });
 
   it("does not merge when no floor is configured", () => {

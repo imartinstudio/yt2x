@@ -30,7 +30,7 @@ export const registerDubCommand = (program: Command): void => {
       .option("--ffmpeg-path <path>", "Path to ffmpeg (default: ffmpeg on PATH)")
       .option("--python-path <path>", "Python with demucs installed (default: python3)")
       .option("--demucs-model <name>", "Demucs model name (default: htdemucs)")
-      .option("--max-duration-ms <ms>", "Max duration per utterance before a hard split (default 12000)")
+      .option("--max-duration-ms <ms>", "Max duration per utterance before a hard split (default 8000)")
       .option(
         "--min-duration-ms <ms>",
         "Min duration per utterance before merging into a neighbor (default 3000)",

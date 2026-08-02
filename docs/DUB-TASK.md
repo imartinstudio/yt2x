@@ -185,25 +185,30 @@
 
 ## 未决
 
+> 四个 PR 已全部完成。真实素材试听后剩余的收尾微调（句间静默、书面语残留、超宽显示
+> 单元、调试回路提速、Qsync 环境风险）已切成 spec，见 issue #130——**不要在本节重复
+> 记录那些条目**，以 issue 为准。本节只留与 spec 不重叠的长期约束。
+
 - 最小句间停顿默认值（当前 150ms）需在新链路上重新试听确定
-- **门禁阈值需在新链路跑通后以真实正片重新标定**——`advisoryTextBudgetRetainFraction = 0.3`
-  和 `maxDroppedCount = 0` 目前都只用一次 30 秒窗口的运行标过，不能因为某次 `issues: []`
-  就当作已经标定完成
-- ElevenLabs 时间戳能力仍未经真实调用验证，接入前必须先验证
-- **"译文回来了却被掏空"这一档目前没有任何 hard 兜底，advisory 阈值 0.3 也抓不到**：
-  `advisoryTextBudgetRetainFraction` 衡量的是译文占用了多少时长预算，但分辨不出"挤掉口水话"
-  与"砍掉内容"——一段填充词密集的发言忠实压缩后占用比天然很低，因此这个指标只能设成较低的
-  advisory 阈值，抓不住"内容被过度砍削但文本非空"的退化。实例见某次真实成片：第 3 行译文
-  只填到 22.56s 而源语音讲到 25.4s，中间 2.84 秒画面无字幕、无人声但说话人还在讲，该行占用比
-  0.423 高于 0.3，advisory 都不报
-- ~~既有 latent bug：`burn-subtitles.ts:349` 采样点落在 cue 空隙时回退用原始时刻抽帧，必然
-  判 FAIL~~ **已解决**：`verifyBurnedSubtitles` 函数体内的采样吸附逻辑
-  （`packages/adapters-node/src/acquire/burn-subtitles.ts`，`nearestCueByGap` 调用处；行号会随周边
-  代码变动漂移，故不在此处标注具体行号，定位以函数名为准）改为吸附到最近 cue 的中点再抽帧
-  （不再回退到 `cp.timestamp`）。真实素材上 85% 采样点曾落在
-  两条 cue 的空隙里（cue3 22.472s 与 cue4 25.400s 之间），空隙成因是译文比时长预算短约 1/3
-  （medianRatio≈0.675）；吸附到最近 cue 后 `verifyBurnedSubtitles` 现在 `passed: true`。这个
-  bug 不限于配音链路，纯双语字幕路径同样受益。
+- **门禁阈值只在一支真实素材上标定过**。当前值（`advisoryMedianRatio 1.2`、
+  `advisoryOverflowFraction 0.5`、`maxDelayFraction 0.35`、`advisoryTextBudgetRetainFraction 0.7`）
+  来自 zh-CN-YunjianNeural 的一次全片实跑，样本量不足以支撑更紧。收紧 hard 阈值尤其危险——
+  曾因「拿单次样本收紧 `maxDelayFraction`」被打回，实测按收紧后的值，对同一支已通过全片
+  门禁的视频做 2 分钟窗试跑会有约 9% 的起点被误拦。
+- **换音色必须同时重标定两处**：字符预算的时长模型（`TTS_FIXED_OVERHEAD_MS` /
+  `TTS_MS_PER_CHINESE_CHAR`）**和**门禁阈值。上次换音色只标了后者，云健的每字成本比云希
+  高约 53%（不是「慢 4%」），字符预算因此系统性偏松，全片被 `extendMs` 硬门禁拦下。
+  代码里已有回归哨兵测试钉住这两个常数，换音色时它会失败并逼你显式更新。
+- **"译文回来了却被掏空"没有 hard 兜底**：`advisoryTextBudgetRetainFraction` 衡量译文占用了
+  多少时长预算，但分辨不出"挤掉口水话"与"砍掉内容"——填充词密集的发言忠实压缩后占用比
+  天然很低，所以它只能是 advisory。同理，配音链路的 `glossary-violation` 也已降为 advisory：
+  该检查**可以通过让输出变糟来满足**（逼模型补回专名时，它会把已有的派生词译法顶掉，
+  检查放行而译文更错）。一个既阻塞发布、又能被劣化满足的门禁，制造的压力方向是错的。
+- **窗口冒烟的产物必须与全片隔离**。已隔离：配音稿、时长报告、协商计划、落点报告、门禁
+  报告、逐句音频、人声轨、混音轨、源窗口视频、窗口成片与窗口 SRT、**人声分离结果**。
+  最后一项曾被漏掉，后果是先跑 30 秒窗验收、再跑全片时背景音只有 30 秒，而门禁
+  `issues: []` 全绿完全看不见——正是本文开头警告的「测试全绿而成片是坏的」。新增中间
+  产物时按这张表逐项检查。
 - **已 dub 视频跳过 preflight 后，`--dub-engine` 拼错不再报错**：`native-pipeline.ts` 里
   `skipDubPreflight` 为真时跳过 `resolveDubEngine` 校验，而 `native-dub.ts` 的
   `executeNativeDub` 又在解析引擎之前就因 `dubbedPath` 已存在而 early-return 0。于是

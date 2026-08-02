@@ -1,5 +1,6 @@
 export * from "./srt-time.js";
 export * from "./cue-split.js";
+export * from "./metrics.js";
 export * from "./utterance.js";
 export * from "./glossary.js";
 export * from "./translate-prompts.js";

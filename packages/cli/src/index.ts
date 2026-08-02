@@ -9,6 +9,7 @@ import { registerClipsCommand } from "./commands/clips.js";
 import { registerDashboardCommand } from "./commands/dashboard.js";
 import { registerDeconstructCommand } from "./commands/deconstruct.js";
 import { registerDubCommand } from "./commands/dub.js";
+import { registerDubReplayCommand } from "./commands/dub-replay.js";
 import { registerInfoCommand } from "./commands/info.js";
 import { registerLlmCommand } from "./commands/llm.js";
 import { registerNotesCommand } from "./commands/notes.js";
@@ -42,6 +43,7 @@ registerClipsCommand(program);
 registerDashboardCommand(program);
 registerDeconstructCommand(program);
 registerDubCommand(program);
+  registerDubReplayCommand(program);
 registerLlmCommand(program);
 registerWechatFormatCommand(program);
 

@@ -42,6 +42,8 @@ import {
   writeDubTimingReport,
 } from "@yt2x/adapters-node";
 import {
+  DEFAULT_STRETCH_MAX_OCCUPANCY,
+  PREFERRED_RATE_MIN,
   buildNegotiateInputs,
   evaluateDubGate,
   filterUtterancesByTimeRange,
@@ -86,6 +88,8 @@ export type DubFlags = NativeLlmCliFlags & {
   videoId?: string;
   outDir?: string;
   articleOutDir?: string;
+  /** 最终视频输出路径；不传则写入默认的 full.zh-dubbed.mp4。 */
+  outputPath?: string;
   voice?: string;
   /** TTS 引擎：edge-tts（默认）| elevenlabs。 */
   dubEngine?: string;
@@ -109,6 +113,8 @@ export type DubFlags = NativeLlmCliFlags & {
   endMs?: string;
   /** 原声垫底音量，相对中文配音 1.0（默认 0.2）；0 退回两路混音，不引入静音输入。 */
   originalVoiceVolume?: string;
+  /** 反事实试听：覆盖协商阶段的语速下限；不传则使用当前默认值。 */
+  preferredRateMin?: string;
 };
 
 const EXIT_INPUT_MISSING = NATIVE_EXIT.NO_INPUT;
@@ -161,6 +167,105 @@ export const parseOriginalVoiceVolume = (raw: string | undefined): number | unde
     );
   }
   return n;
+};
+
+/**
+ * 导出给单测直接验证 `--preferred-rate-min` 的解析。这个参数只覆盖本次协商，
+ * 不改变默认值；这样两版试听成片可以共享同一份脚本、自然语速时长和其余参数，
+ * 唯一变量就是反向放慢的语速地板（见 issue #134）。
+ */
+export const negotiationOptionsFrom = (
+  flags: Pick<DubFlags, "preferredRateMin">,
+): { preferredRateMin?: number } => {
+  if (flags.preferredRateMin === undefined) return {};
+  const value = Number(flags.preferredRateMin);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(
+      `Invalid --preferred-rate-min: expected a positive number, got ${JSON.stringify(flags.preferredRateMin)}`,
+    );
+  }
+  return { preferredRateMin: value };
+};
+
+/**
+ * Resolve the final video path without changing the intermediate artifact layout. A separate
+ * output path lets two rate-floor auditions share the cached script, natural-rate timing, and
+ * Demucs outputs while keeping both rendered videos for side-by-side listening.
+ */
+export const resolveDubOutputPath = (
+  flags: Pick<DubFlags, "outputPath">,
+  input: {
+    articleRoot: string;
+    videoId: string;
+    timeRange: { startMs?: number; endMs?: number };
+  },
+): string => {
+  const requested = flags.outputPath?.trim();
+  if (requested !== undefined) {
+    if (requested.length === 0) {
+      throw new Error("Invalid --output-path: expected a non-empty path");
+    }
+    const resolved = path.resolve(requested);
+    const articleVideoRoot = path.resolve(input.articleRoot, input.videoId, "video");
+    const relative = path.relative(articleVideoRoot, resolved);
+    if (
+      relative.length === 0 ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      throw new Error(
+        `Invalid --output-path: output must stay under ${articleVideoRoot}; files/downloads is read-only`,
+      );
+    }
+    return resolved;
+  }
+
+  const hasTimeRange = input.timeRange.startMs !== undefined || input.timeRange.endMs !== undefined;
+  if (hasTimeRange) {
+    return path.join(
+      dubDirFor(input.articleRoot, input.videoId),
+      "work",
+      `window-${input.timeRange.startMs ?? 0}-${input.timeRange.endMs ?? "end"}.zh-dubbed.mp4`,
+    );
+  }
+  return dubbedVideoPathFor(input.articleRoot, input.videoId);
+};
+
+const auditionManifestPathFor = (outputPath: string): string => `${outputPath}.audition.json`;
+
+const ensureExistingDubAuditionManifest = async (input: {
+  outputPath: string;
+  videoId: string;
+  preferredRateMin?: number;
+  flags: Pick<DubFlags, "force" | "skipGate" | "skipBurn">;
+}): Promise<void> => {
+  const manifestPath = auditionManifestPathFor(input.outputPath);
+  if (await fileExists(manifestPath)) return;
+  await mkdir(path.dirname(manifestPath), { recursive: true });
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        status: "reused-existing-output",
+        videoId: input.videoId,
+        outputPath: input.outputPath,
+        preferredRateMin: input.preferredRateMin ?? PREFERRED_RATE_MIN,
+        stretchMaxOccupancy: DEFAULT_STRETCH_MAX_OCCUPANCY,
+        flags: {
+          force: input.flags.force === true,
+          skipGate: input.flags.skipGate === true,
+          skipBurn: input.flags.skipBurn === true,
+        },
+        gates: null,
+        note: "The output already existed, so this invocation did not rerun dubbing or evaluate gates. Use --force to regenerate it.",
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
 };
 
 const parsePositiveInt = (raw: string | undefined): number | undefined => {
@@ -327,17 +432,57 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     });
     return EXIT_INPUT_MISSING;
   }
+  let negotiationOptions: { preferredRateMin?: number };
+  try {
+    negotiationOptions = negotiationOptionsFrom(flags);
+  } catch (err: unknown) {
+    printCliErrorBlock({
+      command: "dub",
+      subject: videoId,
+      reason: err instanceof Error ? err.message : String(err),
+      hints: ["Use --preferred-rate-min with a positive number, e.g. 0.85."],
+      retryCommand: `pnpm yt2x dub --video-id ${videoId} --preferred-rate-min 0.85`,
+    });
+    return EXIT_INPUT_MISSING;
+  }
   const hasTimeRange = timeRange.startMs !== undefined || timeRange.endMs !== undefined;
-  // 时间窗冒烟写到 dub/work/，避免覆盖全片 full.zh-dubbed.mp4 / 复用全片缓存。
-  const dubbedPath = hasTimeRange
-    ? path.join(
-        dubDir,
-        "work",
-        `window-${timeRange.startMs ?? 0}-${timeRange.endMs ?? "end"}.zh-dubbed.mp4`,
-      )
-    : dubbedVideoPathFor(articleRoot, videoId);
+  let dubbedPath: string;
+  try {
+    // 时间窗默认写到 dub/work/；全片试听可通过 --output-path 保留多个成片版本。
+    dubbedPath = resolveDubOutputPath(flags, { articleRoot, videoId, timeRange });
+  } catch (err: unknown) {
+    printCliErrorBlock({
+      command: "dub",
+      subject: videoId,
+      reason: err instanceof Error ? err.message : String(err),
+      hints: [
+        `Use --output-path with a non-empty file path under ${path.join(articleRoot, videoId, "video")}, or omit it for the default output.`,
+      ],
+      retryCommand: `pnpm yt2x dub --video-id ${videoId} --output-path ./files/articles/${videoId}/video/rate-085.mp4`,
+    });
+    return EXIT_INPUT_MISSING;
+  }
 
   if (flags.force !== true && (await fileExists(dubbedPath))) {
+    if (flags.outputPath !== undefined) {
+      try {
+        await ensureExistingDubAuditionManifest({
+          outputPath: dubbedPath,
+          videoId,
+          ...negotiationOptions,
+          flags,
+        });
+      } catch (err: unknown) {
+        printCliErrorBlock({
+          command: "dub",
+          subject: videoId,
+          reason: err instanceof Error ? err.message : String(err),
+          hints: ["Use a new --output-path, or pass --force to regenerate the audition output."],
+          retryCommand: `pnpm yt2x dub --video-id ${videoId} --force --output-path ${dubbedPath}`,
+        });
+        return 1;
+      }
+    }
     logger.info({ videoId, dubbedPath }, "dubbed video already exists, skipping (use --force to redo)");
     return 0;
   }
@@ -691,6 +836,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       lines: negotiateInputs,
       rateRange: tts.rateRange,
       maxExtendMs,
+      ...negotiationOptions,
       ...(videoDurationMs !== undefined ? { videoDurationMs } : {}),
     });
     const planPath = await writeDubPlan(hasTimeRange ? synthDir : dubDir, plan);
@@ -864,6 +1010,79 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       return EXIT_GATE_BLOCKED;
     }
 
+    const auditionManifestPath =
+      flags.outputPath === undefined ? undefined : auditionManifestPathFor(dubbedPath);
+    const writeDubAuditionManifest = async (render: {
+      mode: "bilingual-burn" | "audio-only";
+      burned?: boolean;
+      skipped?: boolean;
+    }): Promise<string | undefined> => {
+      if (auditionManifestPath === undefined) return undefined;
+      await mkdir(path.dirname(auditionManifestPath), { recursive: true });
+      await writeFile(
+        auditionManifestPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            videoId,
+            outputPath: dubbedPath,
+            preferredRateMin: negotiationOptions.preferredRateMin ?? PREFERRED_RATE_MIN,
+            stretchMaxOccupancy: DEFAULT_STRETCH_MAX_OCCUPANCY,
+            timeRange,
+            flags: {
+              force: flags.force === true,
+              skipGate: flags.skipGate === true,
+              skipBurn: flags.skipBurn === true,
+            },
+            sharedArtifacts: {
+              script: path.join(synthDir, "dub-script.json"),
+              timing: path.join(synthDir, "dub-timing.json"),
+            },
+            render,
+            subtitleArtifacts: {
+              bilingual: bilingualSrtPath,
+              zh: zhSrtPath,
+              en: enSrtPath,
+            },
+            plan: {
+              keepCount: plan.keepCount,
+              speedCount: plan.speedCount,
+              stretchCount: plan.stretchCount,
+              delayCount: plan.delayCount,
+              extendMs: plan.extendMs,
+            },
+            placement: {
+              audioEndMs: placement.audioEndMs,
+              stretchCount: placement.stretchCount,
+              delayCount: placement.delayCount,
+              extendMs: placement.extendMs,
+            },
+            gates: {
+              dub: {
+                passed: gate.passed,
+                blocked: gate.blocked,
+                issues: gate.issues.map((issue) => ({
+                  code: issue.code,
+                  severity: issue.severity,
+                })),
+              },
+              bilingual: {
+                readyForBurn: bilingualGate.readyForBurn,
+                issues: bilingualGate.issues.map((issue) => ({
+                  code: issue.code,
+                  severity: issue.severity,
+                })),
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      return auditionManifestPath;
+    };
+
     // ── 9. 混音 + 按需冻结帧：交出中文音轨与（必要时）冻结延长后的画面，不再自建烧录 ──
     logger.info({ videoId, dubbedPath }, "yt2x dub: mixing the Chinese voice track…");
     const remix = await remixDubbedAudio({
@@ -906,6 +1125,10 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
           ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
         });
       }
+      const manifestPath = await writeDubAuditionManifest({ mode: "audio-only" });
+      if (manifestPath !== undefined) {
+        logger.info({ videoId, manifestPath }, "yt2x dub: audition manifest written");
+      }
       logger.info(
         { videoId, outputPath: dubbedPath, extendMs: remix.extendMs },
         "yt2x dub: done (--skip-burn, audio replaced only)",
@@ -926,6 +1149,14 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       ...(remix.replaceAudioPath !== undefined ? { replaceAudioPath: remix.replaceAudioPath } : {}),
     });
     for (const warning of burn.warnings) logger.warn({ videoId }, `dub burn: ${warning}`);
+    const manifestPath = await writeDubAuditionManifest({
+      mode: "bilingual-burn",
+      burned: burn.burned,
+      skipped: burn.skipped,
+    });
+    if (manifestPath !== undefined) {
+      logger.info({ videoId, manifestPath }, "yt2x dub: audition manifest written");
+    }
 
     logger.info(
       {

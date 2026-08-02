@@ -281,7 +281,7 @@ describe("burnBilingualSubtitles", () => {
     const opts = {
       ...defaultOpts(),
       watermarkVideo: "@channel",
-      watermarkXlate: "@php_martin",
+      watermarkSubtitler: "@php_martin",
     };
     await burnBilingualSubtitles(opts);
 
@@ -397,7 +397,7 @@ describe("burnBilingualSubtitles", () => {
         ...defaultOpts(),
         replaceAudioPath: audioPath,
         watermarkVideo: "@channel",
-        watermarkXlate: "@translator",
+        watermarkSubtitler: "@subtitler",
       };
       await burnBilingualSubtitles(opts);
 

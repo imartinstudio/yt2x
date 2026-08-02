@@ -513,12 +513,12 @@ Second line
       outputPath: "/v/full.zh-burned.mp4",
       runner,
       watermarkVideo: "@channel",
-      watermarkXlate: "@php_martin",
+      watermarkSubtitler: "@php_martin",
     });
 
     const watermarkCall = calls.find((call) => call.args?.[0]?.includes("gen-watermark.py"));
     expect(watermarkCall?.args).toEqual(expect.arrayContaining([
-      "--watermark-video", "@channel", "--watermark-xlate", "@php_martin",
+      "--watermark-video", "@channel", "--watermark-subtitler", "@php_martin",
     ]));
     const ffmpegCall = calls.find((call) => call.command === "ffmpeg" && call.args?.includes("-filter_complex"));
     const filter = ffmpegCall?.args?.[ffmpegCall.args.indexOf("-filter_complex") + 1] ?? "";

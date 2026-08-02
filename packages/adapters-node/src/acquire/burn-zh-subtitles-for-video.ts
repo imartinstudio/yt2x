@@ -34,7 +34,7 @@ export type BurnZhSubtitlesForVideoOptions = {
   /** 来源频道账号，用于与双语烧录一致的水印。 */
   watermarkVideo?: string;
   /** 字幕作者账号，用于与双语烧录一致的水印。 */
-  watermarkXlate?: string;
+  watermarkSubtitler?: string;
   /** 渲染 / 帧序列 / 编码阶段进度回调（透传给 burnSubtitles）。 */
   onProgress?: BurnProgressCallback;
 };
@@ -184,7 +184,7 @@ export const burnZhSubtitlesForVideo = async (
     outputPath: burnedPath,
     runner: opts.runner,
     ...(opts.watermarkVideo !== undefined ? { watermarkVideo: opts.watermarkVideo } : {}),
-    ...(opts.watermarkXlate !== undefined ? { watermarkXlate: opts.watermarkXlate } : {}),
+    ...(opts.watermarkSubtitler !== undefined ? { watermarkSubtitler: opts.watermarkSubtitler } : {}),
     ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });

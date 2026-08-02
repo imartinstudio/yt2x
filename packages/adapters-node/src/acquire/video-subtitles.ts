@@ -1554,7 +1554,7 @@ export const runSubtitlePipeline = async (
       ...(opts.force !== undefined ? { force: opts.force } : {}),
       ...(opts.videoLanguage !== undefined ? { videoLanguage: opts.videoLanguage } : {}),
       ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
-      watermarkXlate: "@php_martin",
+      watermarkSubtitler: "@php_martin",
       ...(() => {
         const onProgress = reportBurnProgress(opts.onProgress, "中文");
         return onProgress !== undefined ? { onProgress } : {};
@@ -1679,7 +1679,7 @@ export const runSubtitlePipeline = async (
             ...(opts.force !== undefined ? { force: opts.force } : {}),
             ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
             ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
-            watermarkXlate: "@php_martin",
+            watermarkSubtitler: "@php_martin",
             ...(() => {
               const onProgress = reportBurnProgress(opts.onProgress, "双语");
               return onProgress !== undefined ? { onProgress } : {};

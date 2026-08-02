@@ -11,6 +11,8 @@ This map is intentionally short. Use it to route changes before reading code.
 - `packages/cli/src/commands/dashboard-style.ts`: dashboard CSS.
 - `packages/cli/src/commands/dashboard-client.ts`: dashboard browser JS.
 - `packages/cli/src/orchestrator/`: native pipeline stage orchestration.
+- `packages/cli/src/orchestrator/native-dub.ts`: dub orchestration end to end.
+- `packages/cli/src/orchestrator/native-dub-replay.ts`: replays negotiation and subtitles from a previous dub's artifacts; pure computation, no LLM/synthesis/separation/burning.
 - `packages/cli/src/args/`: CLI and pipeline argument parsing.
 - `packages/cli/src/config/`: env, dotenv, credentials, monorepo root helpers.
 

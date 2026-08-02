@@ -82,7 +82,7 @@ export type DubGateThresholds = {
 };
 
 /**
- * 从零标定的默认阈值（#113，最初素材 A8mokin_YOs 30s 窗实测）。
+ * 从零标定的默认阈值（#113，最初素材 `<videoId>` 30s 窗实测）。
  *
  * **PR4 重标定**（2026-08-01，edge-tts + zh-CN-YunjianNeural + stretch 反向放慢，
  * 素材 `<videoId>` 全片 149 句实跑，非 30s 窗）——换音色（比旧默认云希慢约 4%）、

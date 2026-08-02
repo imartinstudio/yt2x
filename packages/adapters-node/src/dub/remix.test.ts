@@ -198,6 +198,87 @@ describe("mixVoiceAndBgm ffmpeg args", () => {
     expect(filter).toContain("apad=whole_dur=125.000");
     expect(filter.match(/apad=whole_dur=125\.000/g)?.length).toBe(2);
   });
+
+  it("threads a custom originalVoiceVolume all the way into the actual ffmpeg -filter_complex arg", async () => {
+    const specs: ProcessSpec[] = [];
+    const runner: ProcessRunner = {
+      run: async (spec): Promise<ProcessResult> => {
+        specs.push(spec);
+        const isFfprobe = spec.command === "ffprobe" || spec.command.endsWith("ffprobe");
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: isFfprobe ? "125.000" : "",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 1,
+          command: spec.command,
+          args: spec.args ?? [],
+        };
+      },
+    };
+
+    const { mixVoiceAndBgm } = await import("./remix.js");
+    await mixVoiceAndBgm({
+      voicePath: "/voice.wav",
+      noVocalsPath: "/bgm.wav",
+      vocalsPath: "/vocals.wav",
+      originalVoiceVolume: 0.5,
+      outputPath: "/mixed.m4a",
+      durationMs: 125_000,
+      runner,
+      ffmpegPath: "ffmpeg",
+    });
+
+    const ffmpegSpecs = specs.filter((s) => s.command === "ffmpeg");
+    const args = ffmpegSpecs[0]!.args ?? [];
+    expect(args).toContain("/vocals.wav");
+    const filter = args[args.indexOf("-filter_complex") + 1]!;
+    expect(filter).toContain("volume=0.5");
+    expect(filter).toContain("amix=inputs=3:duration=first");
+    expect(filter).toContain("normalize=0");
+  });
+
+  it("drops the vocals input from ffmpeg args (no silent input) when originalVoiceVolume is 0", async () => {
+    const specs: ProcessSpec[] = [];
+    const runner: ProcessRunner = {
+      run: async (spec): Promise<ProcessResult> => {
+        specs.push(spec);
+        const isFfprobe = spec.command === "ffprobe" || spec.command.endsWith("ffprobe");
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: isFfprobe ? "125.000" : "",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 1,
+          command: spec.command,
+          args: spec.args ?? [],
+        };
+      },
+    };
+
+    const { mixVoiceAndBgm } = await import("./remix.js");
+    await mixVoiceAndBgm({
+      voicePath: "/voice.wav",
+      noVocalsPath: "/bgm.wav",
+      vocalsPath: "/vocals.wav",
+      originalVoiceVolume: 0,
+      outputPath: "/mixed.m4a",
+      durationMs: 125_000,
+      runner,
+      ffmpegPath: "ffmpeg",
+    });
+
+    const ffmpegSpecs = specs.filter((s) => s.command === "ffmpeg");
+    const args = ffmpegSpecs[0]!.args ?? [];
+    expect(args).not.toContain("/vocals.wav");
+    const filter = args[args.indexOf("-filter_complex") + 1]!;
+    expect(filter).toContain("amix=inputs=2:duration=first");
+    expect(filter).toContain("normalize=0");
+  });
 });
 
 describe("remixDubbedAudio", () => {

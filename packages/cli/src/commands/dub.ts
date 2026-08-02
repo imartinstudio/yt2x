@@ -44,6 +44,11 @@ export const registerDubCommand = (program: Command): void => {
         "Only dub utterances overlapping [start, end); extracts a temp window (never writes into downloads)",
       )
       .option("--end-ms <ms>", "Exclusive end of the dub time window in source timeline ms")
+      .option(
+        "--original-voice-volume <value>",
+        "Original speaker's voice volume under the Chinese dub, relative to the dub's 1.0 (default 0.2); " +
+          "0 drops the original voice entirely and falls back to a two-input mix",
+      )
       .option("--force", "Re-run even when dubbed video / intermediate artifacts already exist"),
   ).action(async (flags: DubFlags) => {
     process.exitCode = await executeNativeDub(flags);

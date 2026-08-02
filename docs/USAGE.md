@@ -226,6 +226,27 @@ pnpm yt2x acquire \
 
 注意：这些 cookies 只从本机浏览器读取并传给本机 `yt-dlp` 进程；不要把浏览器 cookies、导出的 cookie 文件、API key 或 OAuth token 提交到仓库。
 
+### 配音（dub）
+
+`yt2x dub --video-id <videoId>` 生成中文配音成片 `full.zh-dubbed.mp4`：把本地词级转写切成话语单元、
+翻译并按时长预算改写、用 edge-tts（默认）或 ElevenLabs 合成、与 Demucs 分离出的背景音混音、
+按需协商时长，最后统一烧录双语硬字幕。完整参数见 `pnpm yt2x dub --help`。
+
+成片音轨是三路混音：中文配音（音量 1.0）、背景音（0.7）、以及压低垫在下面的原声（默认
+0.2）——保留原声是为了让观众仍能隐约听见讲者本人的语气与情绪，不是把原声整条替换掉。
+不同素材适合不同的垫底强度（访谈类可能想调高，纯讲解类可能想调低甚至关掉），用
+`--original-voice-volume <value>` 覆盖默认值：
+
+```bash
+# 提高原声存在感（访谈、对谈类素材）
+pnpm yt2x dub --video-id <videoId> --original-voice-volume 0.4
+
+# 关闭原声垫底，只保留中文配音 + 背景音（自动退回两路混音，不引入静音输入）
+pnpm yt2x dub --video-id <videoId> --original-voice-volume 0
+```
+
+不传 `--original-voice-volume` 时行为与此前完全一致（垫底音量 0.2）。
+
 ### Pipeline 阶段控制参数
 
 | 参数                           | 默认值   | 说明                                                             |

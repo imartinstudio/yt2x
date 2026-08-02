@@ -107,6 +107,8 @@ export type DubFlags = NativeLlmCliFlags & {
   /** 只处理源片 [startMs, endMs) 时间窗；不裁文件进 downloads。 */
   startMs?: string;
   endMs?: string;
+  /** 原声垫底音量，相对中文配音 1.0（默认 0.2）；0 退回两路混音，不引入静音输入。 */
+  originalVoiceVolume?: string;
 };
 
 const EXIT_INPUT_MISSING = NATIVE_EXIT.NO_INPUT;
@@ -143,6 +145,22 @@ const parseDubTimeRange = (
     ...(startMs !== undefined ? { startMs } : {}),
     ...(endMs !== undefined ? { endMs } : {}),
   };
+};
+
+/**
+ * 导出给单测直接验证 `--original-voice-volume` 的解析：不传时返回 undefined（下游用
+ * remix.ts 的 DEFAULT_ORIGINAL_VOICE_VOLUME 兜底，行为与不传参数前完全一致），传入负数
+ * 或非数字即报错。0 是合法值——它触发 remix.ts 的两路混音回退，不在这里特殊处理。
+ */
+export const parseOriginalVoiceVolume = (raw: string | undefined): number | undefined => {
+  if (raw === undefined) return undefined;
+  const n = Number.parseFloat(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(
+      `Invalid --original-voice-volume: expected a non-negative number, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return n;
 };
 
 const parsePositiveInt = (raw: string | undefined): number | undefined => {
@@ -293,6 +311,19 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       reason: err instanceof Error ? err.message : String(err),
       hints: ["Use --start-ms / --end-ms with non-negative integers (end > start)."],
       retryCommand: `pnpm yt2x dub --video-id ${videoId} --start-ms 0 --end-ms 90000`,
+    });
+    return EXIT_INPUT_MISSING;
+  }
+  let originalVoiceVolume: number | undefined;
+  try {
+    originalVoiceVolume = parseOriginalVoiceVolume(flags.originalVoiceVolume);
+  } catch (err: unknown) {
+    printCliErrorBlock({
+      command: "dub",
+      subject: videoId,
+      reason: err instanceof Error ? err.message : String(err),
+      hints: ["Use --original-voice-volume with a non-negative number, e.g. 0.2, 0.35, or 0 to drop the original voice."],
+      retryCommand: `pnpm yt2x dub --video-id ${videoId} --original-voice-volume 0.2`,
     });
     return EXIT_INPUT_MISSING;
   }
@@ -843,6 +874,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       placedLines: placement.lines,
       dubDir: synthDir,
       extendMs: placement.extendMs,
+      ...(originalVoiceVolume !== undefined ? { originalVoiceVolume } : {}),
       ...(flags.ffmpegPath !== undefined ? { ffmpegPath: flags.ffmpegPath } : {}),
       ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
     });

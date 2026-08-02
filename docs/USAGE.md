@@ -7,7 +7,32 @@
 - **Node.js**：≥ 22（见根目录 `package.json` 的 `engines`）
 - **包管理**：`pnpm` 9.x（`packageManager` 字段）
 - **采集阶段（`yt2x acquire` / `yt2x pipeline` 默认）**：系统需安装 **`yt-dlp`**、**`ffmpeg`**（Node 采集实现，见 `@yt2x/adapters-node` `src/acquire/`），并按需配置浏览器 cookies 等（见 `yt2x acquire --help`）
-- **硬字幕检测 / 烧录辅助（Python）**：需要 Python 3 + **Pillow**（`detect-burned-subs.py` 与烧录测量脚本）。安装：`python3 -m pip install -r requirements.txt`。demucs / faster-whisper 等为可选重型依赖，不在该文件中。
+- **硬字幕检测 / 烧录辅助（Python）**：需要 Python 3 + **Pillow**（`detect-burned-subs.py` 与烧录测量脚本）。安装：`python3 -m pip install -r requirements.txt`
+- **可选重型依赖（Python）**：见下方「可选 Python 依赖」。它们**刻意不在 `requirements.txt` 里**——装上会引入数 GB 的 torch，而只跑主链路的人用不到
+
+### 可选 Python 依赖
+
+只有走特定链路时才需要，各自独立安装：
+
+| 依赖             | 什么时候需要                                     | 装法                                              |
+| ---------------- | ------------------------------------------------ | ------------------------------------------------- |
+| `demucs`         | `yt2x dub` / `yt2x pipeline --dub`（分离背景音） | `pip install demucs`（会带上 torch / torchaudio） |
+| `faster-whisper` | 本地词级转写（配音链路的输入）                   | `pip install faster-whisper`                      |
+
+推荐装进独立 venv，避免把 torch 塞进基础环境：
+
+```bash
+python3 -m venv .venv-demucs
+.venv-demucs/bin/pip install demucs faster-whisper
+```
+
+这样装的话，运行时要用 **`--python-path`** 指过去，否则 yt2x 找的是基础环境的 `python3`：
+
+```bash
+pnpm yt2x dub --video-id <videoId> --python-path .venv-demucs/bin/python3
+```
+
+配音链路在**任何计费调用之前**先探测 demucs，缺了直接失败并提示上面这条命令——不会静默降级交出一个背景音被抹掉的成片。
 
 ## 安装
 
@@ -40,7 +65,7 @@ pnpm install
 里的全部话语单元。`--preferred-rate-min` / `--stretch-max-occupancy` 用于反事实对比不同协商参数
 对句间静默的影响；注意它算出的时间是协商阶段的**预估**，适合横向比较，绝对值以真实跑为准。
 
-需要制作试听成片时，`dub` 也接受 `--preferred-rate-min <n>`，只覆盖本次时长协商，不改变默认值。
+需要制作试听成片时，`dub` 也接受 `--preferred-rate-min <n>`，只覆盖本次时长协商，不改变默认值（当前默认 `0.85`）。
 两次运行使用同一视频 `article` 目录下不同的 `--output-path`，这样会保留两份绝对路径不同的成片，同时复用同一份配音稿、
 自然语速时长报告和其余中间产物：
 
@@ -56,7 +81,7 @@ pnpm yt2x dub \
 ```
 
 请按顺序运行且不要加 `--force`；`--force` 会重新生成脚本和自然语速音频，使比较不再只改变协商地板。
-每个成片旁还会写入同名的 `.audition.json`，记录语速地板、协商摘要和两道门结果；输出文件名不同只是为了避免覆盖，不是试听变量。默认语速下限须在人耳确认试听代价后再调整。
+每个成片旁还会写入同名的 `.audition.json`，记录语速地板、协商摘要和两道门结果；输出文件名不同只是为了避免覆盖，不是试听变量。默认语速下限只能在人耳确认试听代价后再调整——当前的 `0.85` 就是按这个流程比对 `0.95` 之后定的。
 
 `pipeline` 安全默认：`--publish review` 只预览发布内容并写 `publish-preview.json` / `process-status.json`，不会真实调用 X API；真实发帖必须显式传 **`--publish auto`**。只想跑到内容生成产物时继续使用 **`--publish skip`**。
 
@@ -265,9 +290,11 @@ pnpm yt2x dub --video-id <videoId> --original-voice-volume 0
 
 不传 `--original-voice-volume` 时行为与此前完全一致（垫底音量 0.2）。
 
-`--preferred-rate-min <n>` 是句间静默实验参数：它覆盖本次协商的反向放慢地板，默认仍为 `0.95`。
-例如 `0.85` 版本会以更慢的语速填充较长句间空档；配合 `--output-path` 可保存两份成片，
-请先与默认版本试听对比，再决定是否改变默认值。
+`--preferred-rate-min <n>` 覆盖本次协商的反向放慢地板，**默认 `0.85`**——即允许把语速放慢到
+原速的 85% 去填充较长的句间空档。这个值是试听 `0.85` 与 `0.95` 两版成片后定下的：`0.95` 留下
+的静默明显偏长（全片总静默 77.1s，5.0% 的句间空档超过 2 秒），`0.85` 降到 40.0s / 0.8%，慢下来
+的语速听感上可接受。调低还能进一步压静默，但会开始像在拖。改这个值请配合 `--output-path`
+保存两份成片实际试听，不要只看数字。
 
 ### Pipeline 阶段控制参数
 

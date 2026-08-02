@@ -55,7 +55,7 @@ export const registerDubCommand = (program: Command): void => {
       )
       .option(
         "--preferred-rate-min <n>",
-        "Counterfactual: override the negotiation speech-rate floor for a listening comparison (default 0.95)",
+        "Counterfactual: override the negotiation speech-rate floor for a listening comparison (default 0.85)",
       )
       .option("--force", "Re-run even when dubbed video / intermediate artifacts already exist"),
   ).action(async (flags: DubFlags) => {

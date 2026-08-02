@@ -112,6 +112,36 @@ manifest、烧录视频或本地转写临时文件。双语模式只读取已经
 - 冒烟/测试若需要短片段，必须从原始素材裁切且放在 downloads **之外**的临时/夹具目录；或使用 `yt2x dub --start-ms/--end-ms` 限定处理时间窗（临时窗写在 article `dub/work/`，不进 downloads）。
 - 可执行检查：`pnpm check:downloads`（跟随 `files/` 符号链接；干净基线应零报警）。
 
+### Qsync 同步边界（环境约束）
+
+`files/` 是逻辑产物根目录，可能通过符号链接指向 Qsync 的实时同步目录。先用
+`readlink files` 和 `realpath files` 确认当前机器的实际目标；解析目标不会改变上面的
+产物路径契约，也不应要求调用方改用另一套路径。
+
+`files/downloads/` 源素材与 `files/articles/<videoId>/video/` 下的成片、字幕等稳定交付物
+需要保留备份；`files/articles/<videoId>/dub/` 则是可由 `yt2x dub` 重建的高频工作目录，包含
+配音稿、时长/计划/落点/门禁 JSON、逐句音频和人声分离结果。Qsync 应在客户端的选择性同步
+设置中排除 `**/dub/`（或等价的目录模式），而不是把整个 `files/` 移出同步范围。Qsync
+客户端设置不属于仓库配置，勿直接编辑 `~/.Qsync/` 下的内部规则文件。
+
+工单 #132 已记录本机现象：多次运行配音时，`dub/` 中间 JSON 会随机消失；丢失时间与
+`~/.Qsync/Debug/QNLog.log` 中的 `Check NAS file error (1040)` 相吻合，而同一进程的下游
+阶段仍使用内存结果，成片与门禁结果不受影响。因此该现象判定为 Qsync/NAS 同步故障，
+不是配音业务逻辑的代码缺陷。
+
+若配音过程中发现中间 JSON 在磁盘上消失，按以下顺序判别是否为同步环境故障：
+
+1. 记录丢失文件的绝对路径、进程时间和 `readlink files` / `realpath files` 结果，确认它位于
+   实际同步根目录下的 `articles/<videoId>/dub/`。
+2. 对照 `~/.Qsync/Debug/QNLog.log` 的同一时间段；`Check NAS file error (1040)` 与本地文件
+   消失时间吻合，且多次运行稳定复现时，判定为 Qsync/NAS 同步失败后的外部删除。
+3. 不要先在代码中搜索一个不存在的删除调用：配音 JSON 由 `packages/adapters-node/src/dub/file-store.ts`
+   采用临时文件加 `rename` 的方式写入，下游阶段同时使用内存中的结果。若进程内下游已完成、
+   但文件随后从磁盘消失，且成片和门禁结果不受影响，该现象不是配音业务逻辑的代码缺陷。
+4. 配置排除规则后，在获得正常运行授权的前提下连续运行数次
+   `pnpm yt2x dub --video-id <videoId>`，确认 `dub/` 中间 JSON 不再随机消失，同时确认
+   `files/articles/<videoId>/video/` 的稳定交付物仍正常写入。
+
 缓存分为翻译与展示两层：源 SHA、翻译规则、模型和三份 SRT SHA 都一致时复用翻译；
 字体回退结果、视频尺寸、宽度比例或布局/样式版本变化时，只重新测量、定向重排和烧录，
 不会无故重新翻译。内容验证、语义边界或展示质量失败会写

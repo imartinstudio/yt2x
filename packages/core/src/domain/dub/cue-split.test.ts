@@ -121,13 +121,50 @@ describe("splitZhForUtterance", () => {
     expect(splitZhForUtterance("好", 0, 400)).toEqual(["好"]);
   });
 
-  it("real-data regression: refuses a protected-term-adjacent split that would leave a 2-character flash tail", () => {
-    // 真实全片复现：唯一不切进 "Grill with Docs" 内部的候选切点，会把「会话。」
-    // 切成独立一条——这句话总时长只有 5186ms，「会话。」（2 字）分不到 1 秒。
-    // 联合决策必须拒绝这一刀，整段保持不切（超出 CUE_HARD_WIDTH 是可接受的代价）。
+  it("splits before a protected term when choosing its end would leave a wide cue", () => {
+    // 真实全片复现：按字符距离择近会选到 "Grill with Docs" 的末尾，留下「会话。」
+    // 的短尾片段并触发 flash 回退，整句因此落成 20.5 格。应改选术语前的安全边界，
+    // 让两条都在宽度预算内，同时保持术语完整且不产生短时长碎片。
     const zh = "然后转至原型会话，再回到原Grill with Docs会话。";
-    const parts = splitZhForUtterance(zh, 216_427, 221_613);
-    expect(parts).toEqual([zh]);
+    const parts = splitZhForUtterance(zh, 216_427, 225_427);
+    expect(parts).toEqual(["然后转至原型会话，再回到原", "Grill with Docs会话。"]);
+    expect(parts.map(visualWidth)).toEqual([12, 8.5]);
+    expect(parts.every((part) => visualWidth(part) <= CUE_HARD_WIDTH)).toBe(true);
+    expect(parts.every((part) => part.length > 0)).toBe(true);
+    expect(parts.join("")).toBe(zh);
+    expect(parts[1]).toContain("Grill with Docs");
+
+    const cues = splitUtteranceIntoCues({
+      zhText: zh,
+      enText: "Then move to the prototype session, and return to the Grill with Docs session.",
+      startMs: 216_427,
+      endMs: 225_427,
+    });
+    expect(cues.every((cue) => cue.endMs - cue.startMs >= MIN_CUE_DURATION_MS)).toBe(true);
+    expect(cues[cues.length - 1]!.endMs).toBe(225_427);
+  });
+
+  it("tries the other protected-term edge when the visually best edge would flash", () => {
+    const cases = [
+      {
+        zh: "我的Grill Me和Grill with Docs技能已发布一阵了，",
+        endMs: 3_688,
+        expected: ["我的Grill Me和", "Grill with Docs技能已发布一阵了，"],
+      },
+      {
+        zh: "我们刚在星数上超过了Gary Tan的G Stack，太疯狂了。",
+        endMs: 5_287,
+        expected: ["我们刚在星数上超过了Gary Tan的", "G Stack，太疯狂了。"],
+      },
+    ];
+
+    for (const { zh, endMs, expected } of cases) {
+      const parts = splitZhForUtterance(zh, 0, endMs);
+      expect(parts).toEqual(expected);
+      expect(parts.every((part) => visualWidth(part) <= CUE_HARD_WIDTH)).toBe(true);
+      expect(parts.every((part) => part.length > 0)).toBe(true);
+      expect(parts.join("")).toBe(zh);
+    }
   });
 
   it("keeps every leaf's implied duration at or above the minimum when it does split", () => {

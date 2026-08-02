@@ -44,31 +44,37 @@ const WEAK_PUNCT = /[，；：、,;:]/u;
 
 /**
  * 把 `splitAt`（切点左侧字符数）挪出所有 `spans` 标出的保护区（术语、多字词、拉丁数字
- * 连续段），绝不允许切点落在保护区内部。找不到安全落点时返回 null。
+ * 连续段），绝不允许切点落在保护区内部。若保护区横跨目标切点，在安全的起点/终点中
+ * 选择两侧视觉宽度更均衡的一刀，而不是只按字符距离择近——拉丁术语的字符数和视觉
+ * 宽度不同，后者才是字幕会不会超屏的实际约束。找不到安全落点时返回空数组。
  */
-const nudgeOutOfSpans = (
+const safeSplitCandidates = (
   splitAt: number,
   spans: readonly [number, number][],
   length: number,
-): number | null => {
-  let result = Math.max(1, Math.min(splitAt, length - 1));
-  for (let pass = 0; pass < 4; pass++) {
-    const hit = spans.find(([start, end]) => result > start && result < end);
-    if (hit === undefined) return result;
-    const [start, end] = hit;
-    const canLeft = start >= 1;
-    const canRight = end <= length - 1;
-    if (canLeft && canRight) {
-      result = result - start <= end - result ? start : end;
-    } else if (canLeft) {
-      result = start;
-    } else if (canRight) {
-      result = end;
-    } else {
-      return null;
+  text: string,
+): number[] => {
+  const initial = Math.max(1, Math.min(splitAt, length - 1));
+  const candidates = new Set<number>();
+  const collectSafeBoundaries = (candidate: number, seen: Set<number>): void => {
+    if (seen.has(candidate)) return;
+    seen.add(candidate);
+    const hit = spans.find(([start, end]) => candidate > start && candidate < end);
+    if (hit === undefined) {
+      candidates.add(candidate);
+      return;
     }
-  }
-  return result;
+    collectSafeBoundaries(hit[0], seen);
+    collectSafeBoundaries(hit[1], seen);
+  };
+  collectSafeBoundaries(initial, new Set());
+
+  const viable = [...candidates].filter((candidate) => isViableSplit(candidate, length));
+  return viable.sort((a, b) => {
+    const aMaxWidth = Math.max(visualWidth(text.slice(0, a)), visualWidth(text.slice(a)));
+    const bMaxWidth = Math.max(visualWidth(text.slice(0, b)), visualWidth(text.slice(b)));
+    return aMaxWidth - bMaxWidth || Math.abs(a - initial) - Math.abs(b - initial) || a - b;
+  });
 };
 
 /**
@@ -88,10 +94,10 @@ const PUNCT_SEARCH_RADIUS = 10;
 const isViableSplit = (splitAt: number, length: number): boolean =>
   splitAt >= MIN_FRAGMENT_CHARS && splitAt <= length - MIN_FRAGMENT_CHARS;
 
-/** 在 `text` 里找一个安全切点：优先句末标点，其次逗号顿号，都找不到就在目标宽度附近硬切。 */
-const findSplitPoint = (text: string, spans: readonly [number, number][]): number | null => {
+/** 在 `text` 里找安全切点：优先句末标点，其次逗号顿号，最后是目标宽度附近的硬切。 */
+const findSplitCandidates = (text: string, spans: readonly [number, number][]): number[] => {
   const length = text.length;
-  if (length < MIN_FRAGMENT_CHARS * 2) return null;
+  if (length < MIN_FRAGMENT_CHARS * 2) return [];
 
   const ratio = CUE_TARGET_WIDTH / Math.max(visualWidth(text), 0.01);
   const target = Math.max(
@@ -99,23 +105,32 @@ const findSplitPoint = (text: string, spans: readonly [number, number][]): numbe
     Math.min(Math.round(length * Math.min(Math.max(ratio, 0), 1)), length - MIN_FRAGMENT_CHARS),
   );
 
+  const candidates: number[] = [];
+  const appendCandidates = (raw: number): void => {
+    for (const candidate of safeSplitCandidates(raw, spans, length, text)) {
+      if (!candidates.includes(candidate)) candidates.push(candidate);
+    }
+  };
+
   for (const pattern of [STRONG_PUNCT, WEAK_PUNCT]) {
     for (let offset = 0; offset <= PUNCT_SEARCH_RADIUS; offset++) {
       const fwd = target + offset;
       if (fwd < length && pattern.test(text[fwd]!) && isViableSplit(fwd + 1, length)) {
-        const candidate = nudgeOutOfSpans(fwd + 1, spans, length);
-        if (candidate !== null && isViableSplit(candidate, length)) return candidate;
+        appendCandidates(fwd + 1);
       }
       const back = target - offset;
       if (back >= 0 && pattern.test(text[back]!) && isViableSplit(back + 1, length)) {
-        const candidate = nudgeOutOfSpans(back + 1, spans, length);
-        if (candidate !== null && isViableSplit(candidate, length)) return candidate;
+        appendCandidates(back + 1);
       }
     }
   }
-  const fallback = nudgeOutOfSpans(target, spans, length);
-  return fallback !== null && isViableSplit(fallback, length) ? fallback : null;
+  appendCandidates(target);
+  return candidates;
 };
+
+/** 在 `text` 里找一个安全切点：保留旧的标点优先级，返回视觉上最合适的候选。 */
+const findSplitPoint = (text: string, spans: readonly [number, number][]): number | null =>
+  findSplitCandidates(text, spans)[0] ?? null;
 
 /**
  * 把 `zh` 递归切成每片视觉宽度都 <= `maxWidth` 的若干段，切点绝不落在
@@ -238,27 +253,38 @@ export const splitZhForUtterance = (
   if (visualWidth(trimmed) <= maxWidth) return [trimmed];
 
   const spans = findProtectedSpans(trimmed);
-  const splitAt = findSplitPoint(trimmed, spans);
-  if (splitAt === null) return [trimmed]; // 找不到安全切点，宁可超宽也不破坏词/术语完整性
+  const candidates = findSplitCandidates(trimmed, spans);
+  if (candidates.length === 0) return [trimmed]; // 找不到安全切点，宁可超宽也不破坏词/术语完整性
 
-  const left = trimmed.slice(0, splitAt).trim();
-  const right = trimmed.slice(splitAt).trim();
-  if (left.length === 0 || right.length === 0) return [trimmed];
+  let best: string[] | undefined;
+  let bestMaxWidth = Number.POSITIVE_INFINITY;
+  for (const splitAt of candidates) {
+    const left = trimmed.slice(0, splitAt).trim();
+    const right = trimmed.slice(splitAt).trim();
+    if (left.length === 0 || right.length === 0) continue;
 
-  const totalChars = left.length + right.length;
-  const durationMs = endMs - startMs;
-  const leftDurationMs = Math.round((durationMs * left.length) / totalChars);
-  const rightDurationMs = durationMs - leftDurationMs;
-  if (leftDurationMs < MIN_CUE_DURATION_MS || rightDurationMs < MIN_CUE_DURATION_MS) {
-    // 这一刀会切出一条分不到最短时长的碎片——不切，整段留作一个（可能超宽的）叶子。
-    return [trimmed];
+    const totalChars = left.length + right.length;
+    const durationMs = endMs - startMs;
+    const leftDurationMs = Math.round((durationMs * left.length) / totalChars);
+    const rightDurationMs = durationMs - leftDurationMs;
+    if (leftDurationMs < MIN_CUE_DURATION_MS || rightDurationMs < MIN_CUE_DURATION_MS) continue;
+
+    const boundaryMs = startMs + leftDurationMs;
+    const parts = [
+      ...splitZhForUtterance(left, startMs, boundaryMs, maxWidth),
+      ...splitZhForUtterance(right, boundaryMs, endMs, maxWidth),
+    ];
+    const partsMaxWidth = Math.max(...parts.map(visualWidth));
+    if (partsMaxWidth < bestMaxWidth) {
+      best = parts;
+      bestMaxWidth = partsMaxWidth;
+    }
+    if (partsMaxWidth <= maxWidth) return parts;
   }
 
-  const boundaryMs = startMs + leftDurationMs;
-  return [
-    ...splitZhForUtterance(left, startMs, boundaryMs, maxWidth),
-    ...splitZhForUtterance(right, boundaryMs, endMs, maxWidth),
-  ];
+  // 所有安全切点都无法把每一片压进宽度预算时，仍选最均衡且不闪现的方案；若没有
+  // 任何切点满足最短时长，整段保留，继续以术语完整和不闪现优先。
+  return best ?? [trimmed];
 };
 
 export type DubDisplayCue = {

@@ -103,12 +103,31 @@ describe("computeDubbedOutputDurationMs", () => {
 });
 
 describe("mixVoiceAndBgmFilterComplex", () => {
-  it("pads both voice and BGM to the output duration (not voice-only)", () => {
+  it("pads every input to the output duration (not voice-only)", () => {
     const filter = mixVoiceAndBgmFilterComplex(125.0);
-    // 人声也必须 apad——否则 amix duration=first 仍以短人声为准
+    // 每一路都必须 apad——否则 amix duration=first 会以最短的一路为准
     expect(filter).toMatch(/\[0:a\].*apad=whole_dur=125\.000/);
     expect(filter).toMatch(/\[1:a\].*apad=whole_dur=125\.000/);
+    expect(filter).toMatch(/\[2:a\].*apad=whole_dur=125\.000/);
+  });
+
+  it("lays the original voice under the dub at a fraction of its volume", () => {
+    // 需求是「压低原声垫在下面」，不是整条替换——观众仍要能听见讲者本人的语气
+    const filter = mixVoiceAndBgmFilterComplex(125.0, 0.2);
+    expect(filter).toMatch(/\[2:a\].*volume=0\.2/);
+    expect(filter).toMatch(/\[0:a\].*volume=1/);
+    expect(filter).toMatch(/amix=inputs=3:duration=first/);
+  });
+
+  it("keeps normalize=0 so adding the third input does not duck the dub", () => {
+    // amix 默认按输入路数归一化，多接一路原声会把中文配音一起压低，等于白改
+    expect(mixVoiceAndBgmFilterComplex(125.0, 0.2)).toMatch(/normalize=0/);
+  });
+
+  it("falls back to a two-input mix when the original voice is turned off", () => {
+    const filter = mixVoiceAndBgmFilterComplex(125.0, 0);
     expect(filter).toMatch(/amix=inputs=2:duration=first/);
+    expect(filter).not.toMatch(/\[2:a\]/);
   });
 });
 

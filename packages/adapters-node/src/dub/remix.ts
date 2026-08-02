@@ -91,14 +91,41 @@ export const computeDubbedOutputDurationMs = (input: {
   return Math.max(input.voiceEndMs, input.videoDurationMs + extend);
 };
 
-/** 人声与 BGM 都 apad 到成片时长，避免 amix duration=first 被人声截断。 */
-export const mixVoiceAndBgmFilterComplex = (durationSec: number): string => {
+/**
+ * 原声（Demucs 分离出的 vocals 轨）在成片里保留的音量。
+ *
+ * 不是「替换原声」而是「压低垫在下面」：观众仍能隐约听见讲者本人的语气与情绪，
+ * 像同传/纪录片旁白，而不是完全译制片。0.2 是相对中文配音（1.0）的比例——再高
+ * 两个人声会互相干扰、中文听不清。
+ */
+export const DEFAULT_ORIGINAL_VOICE_VOLUME = 0.2;
+
+/**
+ * 三路混音：中文配音 + BGM + 压低的原声。
+ *
+ * 三路都 apad 到成片时长，避免 amix `duration=first` 被最短的一路截断。
+ * `normalize=0` 是必须的——开启归一化会按输入路数自动衰减，多加一路原声就会把
+ * 中文配音也一起压低，等于白改。
+ */
+export const mixVoiceAndBgmFilterComplex = (
+  durationSec: number,
+  originalVoiceVolume: number = DEFAULT_ORIGINAL_VOICE_VOLUME,
+): string => {
   const whole = durationSec.toFixed(3);
-  return [
+  const keepOriginal = originalVoiceVolume > 0;
+  const parts = [
     `[0:a]aformat=sample_rates=44100:channel_layouts=mono,volume=1.0,apad=whole_dur=${whole}[voice]`,
     `[1:a]aformat=sample_rates=44100:channel_layouts=mono,volume=0.7,apad=whole_dur=${whole}[bgm]`,
-    `[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix]`,
-  ].join(";");
+  ];
+  if (!keepOriginal) {
+    parts.push(`[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mix]`);
+    return parts.join(";");
+  }
+  parts.push(
+    `[2:a]aformat=sample_rates=44100:channel_layouts=mono,volume=${originalVoiceVolume},apad=whole_dur=${whole}[orig]`,
+    `[voice][bgm][orig]amix=inputs=3:duration=first:dropout_transition=0:normalize=0[mix]`,
+  );
+  return parts.join(";");
 };
 
 export const buildMuxDubbedVideoArgs = (input: {
@@ -154,6 +181,9 @@ export const buildMuxDubbedVideoArgs = (input: {
 export type RemixDubbedAudioInput = {
   videoPath: string;
   noVocalsPath: string;
+  /** Demucs 分离出的原声轨；给了就压低垫在成片里（见 DEFAULT_ORIGINAL_VOICE_VOLUME）。 */
+  vocalsPath?: string;
+  originalVoiceVolume?: number;
   placedLines: readonly DubPlacedLine[];
   /** 配音目录，用于解析 audioFile 相对路径，也是 voice.wav / mixed.m4a 的落盘目录。 */
   dubDir: string;
@@ -358,6 +388,9 @@ export const buildVoiceTrack = async (input: {
 export const mixVoiceAndBgm = async (input: {
   voicePath: string;
   noVocalsPath: string;
+  /** Demucs 分离出的原声轨；给了就压低垫在成片里，不给则退回纯替换。 */
+  vocalsPath?: string;
+  originalVoiceVolume?: number;
   outputPath: string;
   durationMs: number;
   runner: ProcessRunner;
@@ -366,14 +399,17 @@ export const mixVoiceAndBgm = async (input: {
   signal?: AbortSignal;
 }): Promise<void> => {
   const durationSec = (input.durationMs / 1000).toFixed(3);
+  const volume = input.originalVoiceVolume ?? DEFAULT_ORIGINAL_VOICE_VOLUME;
+  const keepOriginal = input.vocalsPath !== undefined && volume > 0;
   await runFfmpeg(input.runner, input.ffmpegPath, [
     "-y",
     "-i",
     input.voicePath,
     "-i",
     input.noVocalsPath,
+    ...(keepOriginal ? ["-i", input.vocalsPath!] : []),
     "-filter_complex",
-    mixVoiceAndBgmFilterComplex(Number.parseFloat(durationSec)),
+    mixVoiceAndBgmFilterComplex(Number.parseFloat(durationSec), keepOriginal ? volume : 0),
     "-map",
     "[mix]",
     "-t",
@@ -486,6 +522,10 @@ export const remixDubbedAudio = async (
     await mixVoiceAndBgm({
       voicePath: voiceTrackPath,
       noVocalsPath: input.noVocalsPath,
+      ...(input.vocalsPath !== undefined ? { vocalsPath: input.vocalsPath } : {}),
+      ...(input.originalVoiceVolume !== undefined
+        ? { originalVoiceVolume: input.originalVoiceVolume }
+        : {}),
       outputPath: mixedAudioPath,
       durationMs: outputDurationMs,
       runner,

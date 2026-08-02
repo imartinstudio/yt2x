@@ -838,6 +838,8 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     const remix = await remixDubbedAudio({
       videoPath: sourceVideo.videoPath,
       noVocalsPath: separated.noVocalsPath,
+      // 原声压低垫在成片里，不是整条替换掉——观众仍能听见讲者本人的语气。
+      vocalsPath: separated.vocalsPath,
       placedLines: placement.lines,
       dubDir: synthDir,
       extendMs: placement.extendMs,

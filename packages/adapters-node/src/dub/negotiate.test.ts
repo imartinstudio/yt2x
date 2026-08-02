@@ -142,6 +142,43 @@ describe("applyDubNegotiation", () => {
     expect(report.lines[0]).toMatchObject({ action: "stretch", audioFile: "lines/0001.mp3" });
   });
 
+  it("stamps the report with a run identifier and generation time from this call", async () => {
+    // issue #110：落点报告此前只写不读，也没有任何字段能证明它属于哪一次运行。
+    // 断言这两个字段存在、格式可用，且每次调用都是新值——不是写死的占位符。
+    const before = Date.now();
+    const dubDir1 = await makeTmp();
+    const dubDir2 = await makeTmp();
+    const existing = new Map([[1, "lines/0001.mp3"]]);
+    const [{ report: reportA }, { report: reportB }] = await Promise.all([
+      applyDubNegotiation({
+        plan: planFixture(),
+        tts: fakeTts(),
+        voice: "v",
+        dubDir: dubDir1,
+        existingAudioByIndex: existing,
+        runner: probeRunner("0.9"),
+      }),
+      applyDubNegotiation({
+        plan: planFixture(),
+        tts: fakeTts(),
+        voice: "v",
+        dubDir: dubDir2,
+        existingAudioByIndex: existing,
+        runner: probeRunner("0.9"),
+      }),
+    ]);
+    const after = Date.now();
+
+    expect(reportA.runId.length).toBeGreaterThan(0);
+    expect(reportB.runId.length).toBeGreaterThan(0);
+    expect(reportA.runId).not.toBe(reportB.runId);
+
+    const generatedAtMs = new Date(reportA.generatedAt).getTime();
+    expect(Number.isNaN(generatedAtMs)).toBe(false);
+    expect(generatedAtMs).toBeGreaterThanOrEqual(before);
+    expect(generatedAtMs).toBeLessThanOrEqual(after);
+  });
+
   it("demotes a stretch line to delay when the slowed-down synthesis still overflows", async () => {
     // 引擎的调速不总是线性——即使按规划的 rate 放慢，实测仍可能超出目标区间；
     // 与 speed 分支共用同一道安全网，超出时降级为 delay 而不是假装装得下

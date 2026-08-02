@@ -33,7 +33,9 @@ const timing = (overrides?: Partial<DubTimingReport>): DubTimingReport => ({
 });
 
 const placement = (overrides?: Partial<DubPlacementReport>): DubPlacementReport => ({
-  version: 2,
+  version: 3,
+  runId: "test-run-id",
+  generatedAt: "2026-01-01T00:00:00.000Z",
   videoId: "vid",
   engine: "edge-tts",
   voice: "v",

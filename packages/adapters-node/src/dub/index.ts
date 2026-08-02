@@ -38,6 +38,7 @@ export {
   readDubWords,
   readDubScript,
   readDubTimingReport,
+  readDubPlacementReport,
   resolveDubWordsPath,
   resolveDubSourceVideo,
   writeDubLineAudio,
@@ -47,6 +48,7 @@ export {
   writeDubPlacement,
   writeDubGateReport,
   DubTimingReportSchema,
+  DubPlacementReportSchema,
   type WrittenDubLineAudio,
 } from "./file-store.js";
 export {

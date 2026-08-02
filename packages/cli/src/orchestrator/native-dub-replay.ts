@@ -1,12 +1,11 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
 import {
-  DUB_PLACEMENT_FILE,
   EDGE_TTS_RATE_RANGE,
   ELEVENLABS_RATE_RANGE,
   defaultProcessRunner,
   dubDirFor,
   evaluateDubBilingualGate,
+  readDubPlacementReport,
   readDubScript,
   readDubTimingReport,
   sanitizeVideoId,
@@ -78,28 +77,46 @@ const pct = (n: number, total: number): string =>
  * 真正能核的是决策本身：同样的输入、同样的参数，应当选出同样的动作序列。对不上才
  * 说明那次运行用过非默认协商参数，此时重放的相对比较仍然成立，但绝对数字不代表那次成片。
  */
+type NegotiationDriftResult = { ok: boolean; message: string };
+
 const negotiationDrift = async (
   dubDir: string,
   replayed: readonly DubPlacedLine[],
-): Promise<string | undefined> => {
-  let persisted: { lines?: { index: number; action: string }[] };
+): Promise<NegotiationDriftResult> => {
+  let persisted;
   try {
-    persisted = JSON.parse(
-      await readFile(`${dubDir}/${DUB_PLACEMENT_FILE}`, "utf8"),
-    ) as typeof persisted;
-  } catch {
-    return "盘上没有落点报告，无法核对重放是否重现了原运行的协商决策";
+    // 走与 dub-timing.json 一致的 schema 校验读回：残缺或被覆写的落点报告
+    // （例如事故中出现过的、只剩总时长字段的对象）在这里就会被拒绝，而不是
+    // 悄悄拿部分字段继续对账、把工具问题误判成协商逻辑缺陷。
+    persisted = await readDubPlacementReport(dubDir);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      message: `盘上没有可用的落点报告（${message}），无法核对重放是否重现了原运行的协商决策`,
+    };
   }
-  const lines = persisted.lines ?? [];
+  // runId/generatedAt 是这份落点报告的来源标记（见 issue #110）：无论核对结果如何都
+  // 附在提示里，这样读到输出的人不用再去比对文件系统修改时间来判断新鲜度。
+  const provenance = `盘上报告 runId=${persisted.runId}，生成于 ${persisted.generatedAt}`;
+  const lines = persisted.lines;
   if (lines.length !== replayed.length) {
-    return `行数不一致：盘上 ${lines.length}，重放 ${replayed.length}`;
+    return {
+      ok: false,
+      message: `行数不一致：盘上 ${lines.length}，重放 ${replayed.length}（${provenance}）`,
+    };
   }
   const byIndex = new Map(replayed.map((l) => [l.index, l]));
   const drifted = lines.filter((l) => byIndex.get(l.index)?.action !== l.action);
-  return drifted.length === 0
-    ? undefined
-    : `${drifted.length}/${lines.length} 行协商动作与盘上不一致——原运行可能用过非默认参数，` +
-      "相对比较仍然成立，但绝对数字不代表那次成片";
+  if (drifted.length > 0) {
+    return {
+      ok: false,
+      message:
+        `${drifted.length}/${lines.length} 行协商动作与盘上不一致——原运行可能用过非默认参数，` +
+        `相对比较仍然成立，但绝对数字不代表那次成片（${provenance}）`,
+    };
+  }
+  return { ok: true, message: `协商决策与盘上落点报告一致（${provenance}）` };
 };
 
 export const executeDubReplay = async (flags: DubReplayFlags): Promise<number> => {
@@ -184,8 +201,7 @@ export const executeDubReplay = async (flags: DubReplayFlags): Promise<number> =
   for (const issue of gate.issues) byCode.set(issue.code, (byCode.get(issue.code) ?? 0) + 1);
 
   // 无覆盖参数时才核对：给了反事实参数本来就该偏离盘上落点。
-  const drift =
-    overridesApplied ? undefined : await negotiationDrift(dubDir, placed);
+  const drift = overridesApplied ? undefined : await negotiationDrift(dubDir, placed);
 
   const lines = [
     `话语单元 ${script.lines.length} 条${overrides.length > 0 ? `   覆盖参数: ${overrides.join(" ")}` : ""}`,
@@ -211,7 +227,7 @@ export const executeDubReplay = async (flags: DubReplayFlags): Promise<number> =
       : [...byCode]
           .sort((a, b) => b[1] - a[1])
           .map(([code, n]) => `  ${code}: ${n}`)),
-    ...(drift !== undefined ? ["", `⚠️ ${drift}`] : []),
+    ...(drift !== undefined ? ["", `${drift.ok ? "✓" : "⚠️"} ${drift.message}`] : []),
   ];
   process.stdout.write(`${lines.join("\n")}\n`);
 

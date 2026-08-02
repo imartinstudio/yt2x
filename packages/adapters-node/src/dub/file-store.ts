@@ -254,6 +254,56 @@ export const writeDubPlacement = async (
   return filePath;
 };
 
+const DubPlacedLineSchema = z.object({
+  index: z.number().int(),
+  action: z.enum(["keep", "speed", "stretch", "delay"]),
+  rate: z.number().positive(),
+  text: z.string(),
+  startMs: z.number().nonnegative(),
+  endMs: z.number().nonnegative(),
+  durationMs: z.number().nonnegative(),
+  audioFile: z.string().min(1),
+});
+
+/**
+ * 磁盘上的落点报告必须通过 runtime 校验，口径与 DubTimingReportSchema 一致——
+ * 残缺内容（例如被手工命令覆写成只剩 audioEndMs 的对象）必须报错，而不是被当作
+ * 有效产物静默消费。version 锁死在 3：runId/generatedAt 是本次改动新增的来源
+ * 标记（见 issue #110），旧版本没有这两个字段，不提供兼容读取。
+ */
+export const DubPlacementReportSchema = z.object({
+  version: z.literal(3),
+  runId: z.string().min(1),
+  generatedAt: z.string().min(1),
+  videoId: z.string().min(1),
+  engine: z.string().min(1),
+  voice: z.string().min(1),
+  lines: z.array(DubPlacedLineSchema).min(1),
+  extendMs: z.number(),
+  audioEndMs: z.number().nonnegative(),
+  speedCount: z.number().int().nonnegative(),
+  stretchCount: z.number().int().nonnegative(),
+  delayCount: z.number().int().nonnegative(),
+  keepCount: z.number().int().nonnegative(),
+});
+
+/**
+ * 校验失败（含旧版本号、残缺字段）时抛出可定位的错误，而不是把裸 JSON 当
+ * DubPlacementReport 塞回去——目前唯一的读取方是 dub-replay 的协商核对，读回
+ * 出错时它会把这份报告当作不可用，而不是拿残缺数据继续对账。
+ */
+export const readDubPlacementReport = async (dubDir: string): Promise<DubPlacementReport> => {
+  const raw: unknown = JSON.parse(await readFile(path.join(dubDir, DUB_PLACEMENT_FILE), "utf8"));
+  const parsed = DubPlacementReportSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid ${DUB_PLACEMENT_FILE} in ${dubDir} (expected schema version 3): ` +
+        `${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+    );
+  }
+  return parsed.data;
+};
+
 export const writeDubGateReport = async (
   dubDir: string,
   report: DubGateReport,

@@ -288,14 +288,66 @@ describe("auditSubtitleArtifacts", () => {
     expect(result.verdict).toBe("warn");
   });
 
+  it("accepts a Chinese cue that spans several display cues", () => {
+    // issue #109：中文单语产物是显示时间轴的「粗化」——一句中文覆盖它原本被
+    // 复制到的那几条显示单元。这是期望形态，不该报 bilingual-timing。
+    const mergedZh = srt([
+      { start: "00:00:00,000", end: "00:00:04,000", lines: ["你好，世界。"] },
+    ]);
+
+    const result = auditSubtitleArtifacts(validInput({ zhSrt: mergedZh }));
+
+    expect(result.issues.filter((issue) => issue.code === "bilingual-timing")).toEqual([]);
+  });
+
+  it("rejects a Chinese cue whose span does not land on display cue boundaries", () => {
+    // 粗化必须落在显示单元的边界上。切在中间意味着中文轨与显示轨已经错开，
+    // 那正是这道校验要拦的——不能因为放宽了 cue 数就把时间漂移一起放过去。
+    const driftedZh = srt([
+      { start: "00:00:00,000", end: "00:00:03,000", lines: ["你好，世界。"] },
+      { start: "00:00:03,000", end: "00:00:04,000", lines: ["安全交付 Codex。"] },
+    ]);
+
+    const result = auditSubtitleArtifacts(validInput({ zhSrt: driftedZh }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "bilingual-timing",
+      severity: "content",
+    }));
+  });
+
+  it("rejects a Chinese track that stops short of the last display cue", () => {
+    // 丢内容也要拦：中文轨只覆盖了前半段，后面的显示单元没有对应的中文。
+    const truncatedZh = srt([
+      { start: "00:00:00,000", end: "00:00:02,000", lines: ["你好，世界。"] },
+    ]);
+
+    const result = auditSubtitleArtifacts(validInput({ zhSrt: truncatedZh }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "bilingual-timing",
+      severity: "content",
+      message: expect.stringContaining("covers 1 of 2 display cues") as unknown as string,
+    }));
+  });
+
   it("reports width-budget from text width alone, with or without measurements", () => {
     // The run that shipped a 44-cell Chinese line across five cues measured
     // clean — one cps finding, no hard-layout, no line-count — because the
     // line did fit the frame. It was simply far too much text for one
     // caption, and no check looked at width in the writer's own units.
+    // Width is a property of what gets rendered, so it is read off the
+    // bilingual artifact's Chinese line — the mono artifact may cover several
+    // display cues with one entry (issue #109) and cannot answer "how wide is
+    // this caption".
+    const wideZhText = `安全交付 Codex${"测".repeat(25)}`;
     const wideZh = srt([
       { start: "00:00:00,000", end: "00:00:02,000", lines: ["你好，世界。"] },
-      { start: "00:00:02,000", end: "00:00:04,000", lines: [`安全交付 Codex${"测".repeat(25)}`] },
+      { start: "00:00:02,000", end: "00:00:04,000", lines: [wideZhText] },
+    ]);
+    const wideBilingual = srt([
+      { start: "00:00:00,000", end: "00:00:02,000", lines: ["你好，世界。", "Hello world."] },
+      { start: "00:00:02,000", end: "00:00:04,000", lines: [wideZhText, "Ship Codex safely."] },
     ]);
 
     for (const measurements of [
@@ -304,7 +356,9 @@ describe("auditSubtitleArtifacts", () => {
         { cueIndex: 2, severity: "fit" as const, lineCount: 1 }],
     ]) {
       const result = auditSubtitleArtifacts(validInput(
-        measurements === undefined ? { zhSrt: wideZh } : { zhSrt: wideZh, measurements },
+        measurements === undefined
+          ? { zhSrt: wideZh, bilingualSrt: wideBilingual }
+          : { zhSrt: wideZh, bilingualSrt: wideBilingual, measurements },
       ));
 
       expect(result.issues).toContainEqual(expect.objectContaining({

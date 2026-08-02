@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { segmentUtterances } from "./utterance.js";
-import type { TimedWord } from "./types.js";
+import { filterUtterancesByTimeRange, segmentUtterances } from "./utterance.js";
+import type { TimedWord, Utterance } from "./types.js";
 
 /** 连续词流：每词 200ms，词间无间隔，模拟 ASR 的典型输出。 */
 const stream = (text: string, startMs = 0, gapMs = 0): TimedWord[] => {
@@ -139,5 +139,40 @@ describe("segmentUtterances · 最小时长合并", () => {
     });
     expect(u).toHaveLength(1);
     expect(u[0]?.text).toBe("Hi.");
+  });
+});
+
+describe("filterUtterancesByTimeRange", () => {
+  const utterances: Utterance[] = [
+    { index: 1, startMs: 1_000, endMs: 3_500, text: "we look at this first", wordCount: 5 },
+    { index: 2, startMs: 3_500, endMs: 6_000, text: "how this tool works", wordCount: 4 },
+  ];
+
+  it("keeps all utterances unchanged when no range is set", () => {
+    expect(filterUtterancesByTimeRange(utterances, {})).toEqual(utterances);
+  });
+
+  it("keeps only overlapping utterances and shifts them to the window origin", () => {
+    expect(filterUtterancesByTimeRange(utterances, { startMs: 2_000, endMs: 5_000 })).toEqual([
+      { index: 1, startMs: 0, endMs: 1_500, text: "we look at this first", wordCount: 5 },
+      { index: 2, startMs: 1_500, endMs: 3_000, text: "how this tool works", wordCount: 4 },
+    ]);
+  });
+
+  it("renumbers surviving utterances sequentially from 1", () => {
+    const filtered = filterUtterancesByTimeRange(utterances, { startMs: 3_000 });
+    expect(filtered.map((u) => u.index)).toEqual([1, 2]);
+  });
+
+  it("rejects an inverted range", () => {
+    expect(() =>
+      filterUtterancesByTimeRange(utterances, { startMs: 5_000, endMs: 1_000 }),
+    ).toThrow(/endMs.*startMs/iu);
+  });
+
+  it("drops utterances entirely outside the window", () => {
+    expect(filterUtterancesByTimeRange(utterances, { startMs: 10_000, endMs: 20_000 })).toEqual(
+      [],
+    );
   });
 });

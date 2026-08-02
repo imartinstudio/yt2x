@@ -33,52 +33,44 @@ export type Utterance = {
   wordCount: number;
 };
 
-/** 从 full.zh.srt 解析出来的单条中文字幕。 */
-export type DubCue = {
-  index: number;
-  startMs: number;
-  endMs: number;
-  text: string;
-};
-
-/**
- * 若干条字幕合并出的"自然句"，是 TTS 的合成单位。
- *
- * 合并的动机：full.zh.srt 是按屏宽切的，每条 15-20 字。按条合成会让 TTS 在
- * 每条之间硬断气，听起来像念条目。合并回自然句后语气连贯，而且对齐区间更长、
- * 相对误差更小，混合策略更容易在自然语速内压进去。
- */
-export type DubSegment = {
-  index: number;
-  startMs: number;
-  endMs: number;
-  /** 构成这一句的原字幕条 index，PR2 反向生成 SRT 时要用。 */
-  cueIndices: readonly number[];
-  text: string;
-};
-
-/** 朗读化改写后的配音稿行，送进 TTS 的就是 `text`。 */
+/** 长度受限翻译后的配音稿行，送进 TTS 的就是 `text`。 */
 export type DubScriptLine = {
   index: number;
   startMs: number;
   endMs: number;
-  /** 原字幕区间时长，即这一句配音的目标时长。 */
+  /** 话语单元的实测时长，即这一句配音的目标时长。 */
   targetDurationMs: number;
-  /** 朗读化改写后的文本。 */
+  /** 长度受限翻译后的中文文本。 */
   text: string;
-  /** 改写前的合并原文，供 audit 对照信息有没有丢。 */
+  /** 对应话语单元的英文原文，供 audit 对照信息有没有丢。 */
   sourceText: string;
+  /**
+   * 构成这一句的原话语单元 index。当前恒为单元素数组（一句配音稿对应一个话语单元）；
+   * 字段保留是为了 PR4 在话语单元内部细分显示单元时复用同一套形状。
+   */
   cueIndices: readonly number[];
 };
 
 export type DubScript = {
-  version: 1;
+  /**
+   * 2：PR3 切换输入通道后 schema 实质变了——sourceWords 取代 sourceSubtitle，
+   * sourceText 从中文变英文，cueIndices 语义从"字幕条"变"话语单元"，外加新增
+   * droppedCount。version 仍为 1 的旧文件语义完全不同，不能被当作可复用缓存
+   * 静默读入（见 file-store.ts 的 DubScriptSchema）。
+   */
+  version: 2;
   videoId: string;
-  /** 生成配音稿所依据的字幕文件相对路径，如 "video/full.zh.srt"。 */
-  sourceSubtitle: string;
-  /** 改写用的 LLM 模型 ID，供复现。 */
+  /** 生成配音稿所依据的词级时间戳文件相对路径，如 "video/full.local.en.words.json"。 */
+  sourceWords: string;
+  /** 翻译用的 LLM 模型 ID，供复现。 */
   rewriteModel: string;
   lines: readonly DubScriptLine[];
+  /**
+   * 翻译失败、未能进入 lines 的话语单元数。落盘而不只留在日志里，是因为门禁
+   * （evaluateDubGate）要用它拦住"静默丢句"——丢弃的那几句在成片里只有 BGM
+   * 没有配音也没有字幕，仅凭 lines 本身看不出曾经丢过东西。
+   */
+  droppedCount: number;
 };
 
 /**
@@ -116,16 +108,17 @@ export type DubTimingReport = {
 /**
  * 时长协商对单行采取的动作。
  *
- * 顺序固定：keep → speed → shorten → delay。前一步能压进目标区间就停，
- * 不会为了"更紧凑"去无谓加速或改短。
+ * 顺序固定：keep → speed → delay。前一步能压进目标区间就停，不会为了"更紧凑"
+ * 去无谓加速。事后改短（原第三档 shorten）已被长度受限翻译取代——冗余在翻译阶段
+ * 就被挤掉，不再需要合成完再回头砍。
  */
-export type DubNegotiateAction = "keep" | "speed" | "shorten" | "delay";
+export type DubNegotiateAction = "keep" | "speed" | "delay";
 
 /** 规划阶段对单行的决策（尚未真正重新合成）。 */
 export type DubNegotiateLinePlan = {
   index: number;
   action: DubNegotiateAction;
-  /** 请求的语速倍率。keep/delay 为 1；speed 为协商值；shorten 先按 1 合成再视结果。 */
+  /** 请求的语速倍率。keep/delay 为 1；speed 为协商值。 */
   rate: number;
   /** 原字幕区间起点。 */
   originalStartMs: number;
@@ -135,27 +128,25 @@ export type DubNegotiateLinePlan = {
   naturalMs: number;
   /** 规划时预计的放置起点（已计入此前累积漂移）。 */
   plannedStartMs: number;
-  /** 规划时预计的放置终点。shorten 在真正改短前只能按目标时长估。 */
+  /** 规划时预计的放置终点。 */
   plannedEndMs: number;
-  /** 送进 TTS 的文本（shorten 阶段会被改写覆盖）。 */
+  /** 送进 TTS 的文本。 */
   text: string;
-  /**
-   * shorten 时的字符上限。按 naturalMs/target 比例从原文长度推，
-   * 让 LLM 有一个可操作的数字而不是"尽量短"。
-   */
-  shortenMaxChars?: number;
 };
 
 export type DubNegotiatePlan = {
-  version: 1;
+  /**
+   * 2：删除时长协商的第三档（事后 LLM 改短），其专属计数字段和动作枚举成员
+   * 随之一并移除。旧版 1 的落盘文件不再能被读取——它是中间产物，重跑即可重新生成。
+   */
+  version: 2;
   videoId: string;
   lines: readonly DubNegotiateLinePlan[];
   /** 片尾仍未吸收完的累积漂移，混音时用冻结末帧延长视频。 */
   extendMs: number;
-  /** 规划阶段预计的总漂移（与 extendMs 相同；执行 shorten 后可能变化）。 */
+  /** 规划阶段预计的总漂移，与 extendMs 相同。 */
   plannedDriftMs: number;
   speedCount: number;
-  shortenCount: number;
   delayCount: number;
   keepCount: number;
 };
@@ -186,7 +177,6 @@ export type DubPlacementReport = {
   /** 最终音频轨总时长（最后一句 endMs）。 */
   audioEndMs: number;
   speedCount: number;
-  shortenCount: number;
   delayCount: number;
   keepCount: number;
 };

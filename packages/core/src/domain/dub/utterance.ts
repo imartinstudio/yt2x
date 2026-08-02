@@ -161,3 +161,50 @@ export const segmentUtterances = (
 
   return merged.map((g, i) => buildUtterance(g, i + 1));
 };
+
+export type UtteranceTimeRange = {
+  /** Inclusive lower bound in source timeline ms. */
+  startMs?: number;
+  /** Exclusive upper bound in source timeline ms. */
+  endMs?: number;
+};
+
+/**
+ * 按源片时间窗筛选话语单元，并把时间轴平移到窗口起点（0）、重新编号。
+ *
+ * 用于短样本冒烟：不裁文件进 downloads，只限定处理范围（`yt2x dub --start-ms/--end-ms`）。
+ * 只在边界处截断起止时间，不改动 text / wordCount——话语单元不可再切分，跨边界的
+ * 单元原样保留、按边界裁剪时间戳，取舍与旧的（已删除的）filterDubCuesByTimeRange 一致。
+ */
+export const filterUtterancesByTimeRange = (
+  utterances: readonly Utterance[],
+  range: UtteranceTimeRange,
+): Utterance[] => {
+  const windowStart = range.startMs ?? 0;
+  const windowEnd = range.endMs;
+  if ((range.startMs === undefined || range.startMs <= 0) && range.endMs === undefined) {
+    return [...utterances];
+  }
+  if (windowEnd !== undefined && windowEnd <= windowStart) {
+    throw new Error(
+      `Invalid dub time range: endMs (${windowEnd}) must be greater than startMs (${windowStart}).`,
+    );
+  }
+
+  const filtered = utterances.filter((u) => {
+    if (u.endMs <= windowStart) return false;
+    if (windowEnd !== undefined && u.startMs >= windowEnd) return false;
+    return true;
+  });
+
+  return filtered.map((u, index) => {
+    const startMs = Math.max(u.startMs, windowStart) - windowStart;
+    const endMs = (windowEnd !== undefined ? Math.min(u.endMs, windowEnd) : u.endMs) - windowStart;
+    return {
+      ...u,
+      index: index + 1,
+      startMs,
+      endMs: Math.max(endMs, startMs + 1),
+    };
+  });
+};

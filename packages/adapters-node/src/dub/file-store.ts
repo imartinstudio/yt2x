@@ -2,15 +2,14 @@ import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
-  parseSrtTimestampToMs,
-  type DubCue,
   type DubGateReport,
   type DubNegotiatePlan,
   type DubPlacementReport,
   type DubScript,
   type DubTimingReport,
+  type TimedWord,
 } from "@yt2x/core";
-import { parseSubtitleBlocks, resolveSourceVideo } from "../acquire/video-subtitles.js";
+import { resolveSourceVideo } from "../acquire/video-subtitles.js";
 
 /**
  * 配音产物布局（沿用 files/articles/<videoId>/ 约定）：
@@ -55,90 +54,52 @@ const exists = async (candidate: string): Promise<boolean> =>
     .catch(() => false);
 
 /**
- * full.zh.srt 在两处都可能存在：subtitle 阶段写到 article 目录，早期 pipeline 写在
- * 下载目录。两处都找，找不到就报出两条候选路径——只报一条会让人以为另一条不该有。
+ * 本地转录（faster-whisper，见 transcribe-local.py）产出的词级时间戳只写在下载
+ * 目录一处，不像 full.zh.srt 有 article/downloads 两个历史候选——配音的本地转录
+ * 通道就是它的唯一真源（见 docs/dub-context-glossary 的“字幕通道”定义）。
  */
-export const resolveZhSubtitlePath = async (input: {
-  articleRoot: string;
+export const resolveDubWordsPath = async (input: {
   outRoot: string;
   videoId: string;
+  /** 转录源语言，默认 "en"（配音目前只支持英文源）。 */
+  language?: string;
 }): Promise<string> => {
-  const candidates = [
-    path.join(input.articleRoot, input.videoId, "video", "full.zh.srt"),
-    path.join(input.outRoot, input.videoId, "video", "full.zh.srt"),
-  ];
-  for (const candidate of candidates) {
-    if (await exists(candidate)) return candidate;
-  }
+  const language = input.language ?? "en";
+  const candidate = path.join(
+    input.outRoot,
+    input.videoId,
+    "video",
+    `full.local.${language}.words.json`,
+  );
+  if (await exists(candidate)) return candidate;
   throw new Error(
-    `No Chinese subtitle found for "${input.videoId}". Looked at: ${candidates.join(", ")}. Run \`yt2x subtitle\` first.`,
+    `No local word-level transcript found for "${input.videoId}". Looked at: ${candidate}. ` +
+      "Run `yt2x subtitle transcribe-local <videoId>` first.",
   );
 };
 
-/** 把 SRT 文本解析成 DubCue：时间戳在这里一次性转成毫秒，之后全是数值运算。 */
-export const parseDubCues = (srt: string): DubCue[] => {
-  const cues: DubCue[] = [];
-  for (const block of parseSubtitleBlocks(srt)) {
-    const text = block.text.join(" ").trim();
-    if (text.length === 0) continue;
-    const startMs = parseSrtTimestampToMs(block.start);
-    const endMs = parseSrtTimestampToMs(block.end);
-    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) continue;
-    cues.push({ index: block.index, startMs, endMs, text });
-  }
-  return cues;
-};
-
-export const readDubCues = async (srtPath: string): Promise<DubCue[]> =>
-  parseDubCues(await readFile(srtPath, "utf8"));
-
-export type DubCueTimeRange = {
-  /** Inclusive lower bound in source timeline ms. */
-  startMs?: number;
-  /** Exclusive upper bound in source timeline ms. */
-  endMs?: number;
-};
+const DubWordSchema = z.object({
+  word: z.string(),
+  start: z.number(),
+  end: z.number(),
+});
 
 /**
- * 按源片时间窗筛选字幕，并把时间轴平移到窗口起点（0）。
- * 用于短样本冒烟：不裁文件进 downloads，只限定处理范围。
+ * 把 transcribe-local.py 写出的词级时间戳解析成 TimedWord[]：时间戳在这里一次性
+ * 从秒转成毫秒，之后全是整数毫秒运算。
  */
-export const filterDubCuesByTimeRange = (
-  cues: readonly DubCue[],
-  range: DubCueTimeRange,
-): DubCue[] => {
-  const windowStart = range.startMs ?? 0;
-  const windowEnd = range.endMs;
-  if (
-    (range.startMs === undefined || range.startMs <= 0) &&
-    range.endMs === undefined
-  ) {
-    return [...cues];
-  }
-  if (windowEnd !== undefined && windowEnd <= windowStart) {
-    throw new Error(
-      `Invalid dub time range: endMs (${windowEnd}) must be greater than startMs (${windowStart}).`,
-    );
-  }
-
-  const filtered = cues.filter((cue) => {
-    if (cue.endMs <= windowStart) return false;
-    if (windowEnd !== undefined && cue.startMs >= windowEnd) return false;
-    return true;
-  });
-
-  return filtered.map((cue, index) => {
-    const startMs = Math.max(cue.startMs, windowStart) - windowStart;
-    const endMs =
-      (windowEnd !== undefined ? Math.min(cue.endMs, windowEnd) : cue.endMs) - windowStart;
-    return {
-      index: index + 1,
-      startMs,
-      endMs: Math.max(endMs, startMs + 1),
-      text: cue.text,
-    };
-  });
+export const parseDubWords = (raw: string): TimedWord[] => {
+  const parsed: unknown = JSON.parse(raw);
+  const words = z.array(DubWordSchema).parse(parsed);
+  return words.map((w) => ({
+    word: w.word,
+    startMs: Math.round(w.start * 1000),
+    endMs: Math.round(w.end * 1000),
+  }));
 };
+
+export const readDubWords = async (wordsPath: string): Promise<TimedWord[]> =>
+  parseDubWords(await readFile(wordsPath, "utf8"));
 
 /** 临时文件 + rename。中途崩溃不会留下半截 JSON 让下一次运行读到坏数据。 */
 const atomicWrite = async (filePath: string, content: string | Uint8Array): Promise<void> => {
@@ -190,8 +151,50 @@ export const writeDubLineAudio = async (
   return { absolutePath, relativePath };
 };
 
-export const readDubScript = async (dubDir: string): Promise<DubScript> =>
-  JSON.parse(await readFile(path.join(dubDir, DUB_SCRIPT_FILE), "utf8")) as DubScript;
+const DubScriptLineSchema = z.object({
+  index: z.number().int(),
+  startMs: z.number().nonnegative(),
+  endMs: z.number().nonnegative(),
+  targetDurationMs: z.number().nonnegative(),
+  text: z.string(),
+  sourceText: z.string(),
+  cueIndices: z.array(z.number().int()),
+});
+
+/**
+ * version 必须锁死在 2：PR3 切换到本地转录通道后 schema 实质变了（sourceWords 取代
+ * sourceSubtitle、sourceText 从中文变英文、cueIndices 语义从字幕条变话语单元、新增
+ * droppedCount），旧版 1 的落盘文件语义完全不同。读回不校验会让旧缓存被静默复用——
+ * 门禁会用错误基准判定信息损失，而 gate 恰好因为 sourceText 又变回中文而"通过"，
+ * 问题被完全掩盖（见 docs/DUB-TASK.md 对应验收记录）。
+ */
+export const DubScriptSchema = z.object({
+  version: z.literal(2),
+  videoId: z.string().min(1),
+  sourceWords: z.string().min(1),
+  rewriteModel: z.string().min(1),
+  lines: z.array(DubScriptLineSchema),
+  droppedCount: z.number().int().nonnegative(),
+});
+
+/**
+ * 校验失败（含旧版本号）时直接拒绝复用缓存并抛错，而不是把裸 JSON 当 DubScript
+ * 塞回去——调用方（native-dub.ts）捕获后应当把它当缓存未命中处理，重新生成。
+ */
+export const readDubScript = async (dubDir: string): Promise<DubScript> => {
+  const filePath = path.join(dubDir, DUB_SCRIPT_FILE);
+  const raw: unknown = JSON.parse(await readFile(filePath, "utf8"));
+  const parsed = DubScriptSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid or incompatible ${DUB_SCRIPT_FILE} in ${dubDir} (expected schema version 2): ` +
+        `${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}. ` +
+        "This is likely a pre-PR3 cache from the old Chinese-subtitle dubbing path — delete the " +
+        "file or re-run with --force to regenerate it.",
+    );
+  }
+  return parsed.data;
+};
 
 /** 磁盘上的 timing 报告必须通过 runtime 校验——字段缺失不能带着 undefined 进协商。 */
 const DubLineTimingSchema = z.object({

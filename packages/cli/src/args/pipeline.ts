@@ -138,12 +138,19 @@ export const ControlOptionsSchema = z.object({
   /** 覆盖已有 structured-notes.md 等产物（native notes 阶段） */
   force: z.boolean().default(false),
   /**
-   * 跑配音阶段：产出 full.zh-dubbed.mp4。
-   * 开启时 subtitle 降为只翻译（srt），跳过 zh 烧录；成片由 dub 反向 SRT 负责。
+   * 跑配音阶段：产出 full.zh-dubbed.mp4。配音只存在于本地转录通道（见
+   * docs/dub-context-glossary）：开启时会在 notes/article 之前确保本地词级时间戳存在
+   * （缺失就地转写），不再强制翻译 full.zh.srt；若用户显式要 zh burned/both，仍降级为
+   * srt 避免 acquire 自己烧出第二份视频——成片由 dub 反向 SRT 负责。
    */
   dub: z.boolean().default(false),
   /** 配音引擎；pipeline --dub 默认 elevenlabs（成片），可改 edge-tts。 */
   dubEngine: z.enum(["edge-tts", "elevenlabs"]).default("elevenlabs"),
+  /**
+   * 配音 Demucs 探测/分离用的 Python 解释器；`dub` 单命令已支持同名 flag，pipeline 此前
+   * 一直没有透传，本机 demucs 只装在虚拟环境时 `pipeline --dub` 永远探测不到。
+   */
+  pythonPath: z.string().optional(),
 });
 export type ControlOptions = z.infer<typeof ControlOptionsSchema>;
 

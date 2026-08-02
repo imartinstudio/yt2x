@@ -1,4 +1,4 @@
-import { formatMsToSrtTimestamp } from "./segment.js";
+import { formatMsToSrtTimestamp } from "./srt-time.js";
 import type { DubPlacedLine } from "./types.js";
 
 /**

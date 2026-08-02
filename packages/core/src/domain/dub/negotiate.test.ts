@@ -6,7 +6,6 @@ import {
   effectiveRateMax,
   planDubNegotiation,
   requiredRate,
-  shortenCharBudget,
   type NegotiateLineInput,
 } from "./negotiate.js";
 import type { DubLineTiming, DubScriptLine } from "./types.js";
@@ -42,17 +41,6 @@ describe("effectiveRateMax", () => {
   it("takes the lower of preferred and engine max", () => {
     expect(effectiveRateMax({ min: 0.5, max: 2.0 })).toBe(PREFERRED_RATE_MAX);
     expect(effectiveRateMax({ min: 0.5, max: 1.1 })).toBe(1.1);
-  });
-});
-
-describe("shortenCharBudget", () => {
-  it("scales by the duration ratio with a safety margin", () => {
-    // 2000ms natural into 1000ms slot → ~47% of chars
-    expect(shortenCharBudget("一二三四五六七八九十", 2000, 1000)).toBe(4);
-  });
-
-  it("never returns below 4 for non-empty text", () => {
-    expect(shortenCharBudget("很长很长很长很长很长很长", 10_000, 100)).toBe(4);
   });
 });
 
@@ -128,21 +116,21 @@ describe("planDubNegotiation", () => {
     expect(plan.extendMs).toBe(0);
   });
 
-  it("marks shorten when speed would exceed the preferred max", () => {
-    // 1500 into 1000 → rate 1.5 > 1.15, and shorten budget < original length
-    const long = "这是一句明显偏长需要被改短的中文配音句子内容";
+  it("delays when speed would exceed the preferred max", () => {
+    // 1500 into 1000 → rate 1.5 > 1.15，超出偏好加速上限，退到 delay
+    // （原第三档 shorten 已删除：冗余现在由长度受限翻译在生成配音稿阶段挤掉）
+    const long = "这是一句明显偏长需要被压缩的中文配音句子内容";
     const plan = planDubNegotiation({
       videoId: "vid",
       rateRange,
       lines: [line(1, 0, 1000, 1500, long)],
     });
-    expect(plan.shortenCount).toBe(1);
-    expect(plan.lines[0]!.action).toBe("shorten");
-    expect(plan.lines[0]!.shortenMaxChars).toBeLessThan(long.length);
+    expect(plan.delayCount).toBe(1);
+    expect(plan.lines[0]!.action).toBe("delay");
   });
 
-  it("delays when even shortening has no room", () => {
-    // 单字压不短：budget 下限 4 ≥ 原文长度时走 delay
+  it("delays when there is no room at all", () => {
+    // 单字装不下，走 delay
     const plan = planDubNegotiation({
       videoId: "vid",
       rateRange,
@@ -180,15 +168,15 @@ describe("planDubNegotiation", () => {
   });
 
   it("respects a narrower engine rateRange", () => {
-    // 需要 1.12，但引擎上限只有 1.05 → 不能 speed，改 shorten
-    const long = "这是一句需要改短的中文配音句子用来测试引擎区间";
+    // 需要 1.12，但引擎上限只有 1.05 → 不能 speed，退到 delay
+    const long = "这是一句用来测试引擎区间的中文配音句子";
     const plan = planDubNegotiation({
       videoId: "vid",
       rateRange: { min: 0.8, max: 1.05 },
       lines: [line(1, 0, 1000, 1120, long)],
     });
     expect(plan.speedCount).toBe(0);
-    expect(plan.shortenCount).toBe(1);
+    expect(plan.delayCount).toBe(1);
   });
 
   it("enforces a minimum pause between abutting sentences", () => {
@@ -222,8 +210,11 @@ describe("planDubNegotiation", () => {
     expect(plan.speedCount).toBe(0);
   });
 
-  it("compresses instead of cutting the pause once extendMs would exceed the cap", () => {
-    // 贴句 + 偏长：停顿会把 extend 顶破；触顶后应从槽内借时间压缩，停顿仍保留
+  it("still enforces the minimum pause once borrowing can no longer keep extendMs under the cap", () => {
+    // 贴句 + 偏长：触顶后从槽内借时间压缩语速，但删除 shorten 档后借时间对已经
+    // 超出偏好加速上限的行无能为力——它们退到 delay，extendMs 可能顶破 maxExtendMs。
+    // 这是删除第三档后的已知取舍（见 docs/DUB-TASK.md）：extendMs 硬上限不再由
+    // 规划器单独保证，改由下游门禁（gate）兜底。规划器唯一不可退让的是句间停顿。
     const lines = Array.from({ length: 8 }, (_, i) =>
       line(i + 1, i * 1000, i * 1000 + 1000, 1100, `这是第${i + 1}句偏长需要压缩的配音内容`),
     );
@@ -238,7 +229,6 @@ describe("planDubNegotiation", () => {
       const gap = plan.lines[i + 1]!.plannedStartMs - plan.lines[i]!.plannedEndMs;
       expect(gap).toBeGreaterThanOrEqual(150);
     }
-    expect(plan.speedCount + plan.shortenCount).toBeGreaterThan(0);
-    expect(plan.extendMs).toBeLessThanOrEqual(400);
+    expect(plan.extendMs).toBeGreaterThan(0);
   });
 });

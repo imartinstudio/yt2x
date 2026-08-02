@@ -4,13 +4,14 @@
  * 阈值必须用真实素材从零标定（见 issue #113）：旧 smoke 样本已删除且曾被
  * 污染，不能在旧数上微调。分层：
  *  - hard：阻断成片（空音频、极端漂移、大比例 delay、句间零/低间隔）
- *  - advisory：写进 report，不阻断（偏高的 medianRatio 等）
+ *  - advisory：写进 report，不阻断（偏高的 medianRatio、译文明显短于时长预算等）
  */
 
 import {
   DEFAULT_MAX_EXTEND_MS,
   DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
 } from "./negotiate.js";
+import { DEFAULT_SPEECH_RATE, dubTranslateCharBudget } from "./translate-prompts.js";
 import type {
   DubPlacementReport,
   DubPlacedLine,
@@ -28,6 +29,7 @@ export type DubGateIssueCode =
   | "high-extend-ms"
   | "high-delay-fraction"
   | "info-loss"
+  | "dropped-utterances"
   | "zero-inter-sentence-pause"
   | "low-inter-sentence-pause";
 
@@ -50,10 +52,27 @@ export type DubGateThresholds = {
   /** delay 行占比硬上限。 */
   maxDelayFraction: number;
   /**
-   * 改写后文本相对 sourceText 的最低保留比例（按 Unicode 码点）。
-   * 过低视为信息损失嫌疑——朗读化/改短不该砍掉大半内容。
+   * 译文相对该行**时长预算**（`dubTranslateCharBudget(targetDurationMs)`）的最低占用比例。
+   *
+   * PR3 之前这里比较的是 sourceText（源语言）与译文的码点数比——切到本地转录通道后
+   * sourceText 变成英文，英文码点数天然是中文的 3–4 倍，忠实翻译落在 0.35–0.5 是常态，
+   * 那套比例在跨语言场景下语义已经失效（见 docs/DUB-TASK.md 的 info-loss 处置）。
+   * 换成"译文占用了多少可用时长预算"后，两侧单位一致，仍能捕捉"翻译明显短于预算、
+   * 疑似被过度精简"的退化情况；advisory 而非 hard——**不是**因为真实素材普遍逼近阈值
+   * （单位口径修好后，默认阈值 0.3 在标定素材上并不会挡住产出，见默认值注释里的最低观测
+   * 0.42）。真正的原因是这个指标本身分辨不出"挤掉的是口水话"还是"砍掉的是内容"：一段
+   * 8 秒、塞满填充词的发言，忠实翻译成 7 个字就可能只占用预算的 12%——占用比低完全是
+   * 合理压缩的正常结果，不是翻译退化的信号，hard 拦这类行会误杀。这也意味着这个指标目前
+   * 抓不住真正的退化案例（译文被过度砍削但仍非空）；见 docs/DUB-TASK.md 未决事项。
    */
-  minTextRetainFraction: number;
+  advisoryTextBudgetRetainFraction: number;
+  /**
+   * `script.droppedCount`（翻译失败、未进入配音稿的话语单元数）硬上限；默认 0，
+   * 即一句都不允许静默丢弃。丢弃的话语单元在成片里只有 BGM、没有配音也没有字幕，
+   * 且不会被 lineCount 之类的统计口径体现——必须显式拦住，而不是让门禁在完全不知情
+   * 的情况下 passed（见 docs/DUB-TASK.md 对应验收记录）。
+   */
+  maxDroppedCount: number;
   /** 低于此间隔（毫秒）计为 low-gap；默认等于最小句间停顿。 */
   minInterSentencePauseMs: number;
   /** 句间间隔 < 1ms 的边界占比硬上限；0 表示不允许零间隔。 */
@@ -67,21 +86,25 @@ export type DubGateThresholds = {
  *
  * 观测（2026-07-31，edge-tts，窗 0–30s）：
  *   minGap=150、zeroGap=0、extendMs≈1.4s、delayFraction≈0.29、
- *   overflowFraction≈0.71（中文自然语速偏长，先 advisory）、
- *   改短偶发压到 ~44% 源长 → 仍用 45% 硬拦信息损失。
+ *   overflowFraction≈0.71（中文自然语速偏长，先 advisory）。
  *
  * - extend ≤ 8s：与协商层封顶一致
  * - delay ≤ 35%：覆盖真实窗上缩短失败后的顺延占比，仍拦住大面积放弃对齐
  * - 零间隔 / 低于最小停顿：不允许
- * - medianRatio / overflow：advisory
- * - 文本保留 ≥ 45%
+ * - medianRatio / overflow / 文本时长预算占用：advisory
+ *
+ * 文本时长预算占用阈值（advisoryTextBudgetRetainFraction=0.3）取自真实素材
+ * `<videoId>`（本地转录通道，长度受限翻译，DeepSeek）30s 窗实测：4 行占用比分别为
+ * 1.08 / 0.57 / 0.42 / 0.45，最低 0.42——0.3 留出余量不误伤合理的口语压缩，同时仍能
+ * 抓到明显过短（<30%）的退化翻译。
  */
 export const DEFAULT_DUB_GATE_THRESHOLDS: DubGateThresholds = {
   advisoryMedianRatio: 1.35,
   advisoryOverflowFraction: 0.75,
   maxExtendMs: DEFAULT_MAX_EXTEND_MS,
   maxDelayFraction: 0.35,
-  minTextRetainFraction: 0.45,
+  advisoryTextBudgetRetainFraction: 0.3,
+  maxDroppedCount: 0,
   minInterSentencePauseMs: DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
   maxZeroGapFraction: 0,
   maxLowGapFraction: 0,
@@ -108,6 +131,7 @@ export type DubGateReport = {
     emptyAudioCount: number;
     emptyTextCount: number;
     infoLossCount: number;
+    droppedCount: number;
     boundaryCount: number;
     zeroGapCount: number;
     zeroGapFraction: number;
@@ -178,21 +202,37 @@ export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
     for (const scriptLine of input.script.lines) {
       const placed = byIndex.get(scriptLine.index);
       if (placed === undefined) continue;
-      const sourceLen = charLen(scriptLine.sourceText);
+      // dubTranslateCharBudget clamps its result to >=1 (see translate-prompts.ts), so
+      // checking the clamped value here would never skip anything — measured on a real
+      // 149-utterance video, 13.4% of utterances have targetDurationMs at or below the
+      // fixed overhead (budget genuinely unusable) and this guard must catch those
+      // against the *raw* duration instead.
+      if (scriptLine.targetDurationMs <= DEFAULT_SPEECH_RATE.fixedOverheadMs) continue;
+      const budgetChars = dubTranslateCharBudget(scriptLine.targetDurationMs, DEFAULT_SPEECH_RATE);
       const finalLen = charLen(placed.text);
-      if (sourceLen <= 0) continue;
-      const retain = finalLen / sourceLen;
-      if (retain < thresholds.minTextRetainFraction) {
+      const retain = finalLen / budgetChars;
+      if (retain < thresholds.advisoryTextBudgetRetainFraction) {
         infoLossCount += 1;
         issues.push({
           code: "info-loss",
-          severity: "hard",
-          message: `line ${scriptLine.index}: spoken text retained ${(retain * 100).toFixed(0)}% of source (${finalLen}/${sourceLen})`,
+          severity: "advisory",
+          message: `line ${scriptLine.index}: spoken text used ${(retain * 100).toFixed(0)}% of its time budget (${finalLen}/${budgetChars} chars) — possible over-compression`,
           value: retain,
-          threshold: thresholds.minTextRetainFraction,
+          threshold: thresholds.advisoryTextBudgetRetainFraction,
         });
       }
     }
+  }
+
+  const droppedCount = input.script?.droppedCount ?? 0;
+  if (droppedCount > thresholds.maxDroppedCount) {
+    issues.push({
+      code: "dropped-utterances",
+      severity: "hard",
+      message: `${droppedCount} utterance(s) had no usable translation and were silently dropped from the dubbing script (exceeds hard max ${thresholds.maxDroppedCount})`,
+      value: droppedCount,
+      threshold: thresholds.maxDroppedCount,
+    });
   }
 
   const gaps = interSentenceGapsMs(input.placement.lines);
@@ -285,6 +325,7 @@ export const evaluateDubGate = (input: EvaluateDubGateInput): DubGateReport => {
       emptyAudioCount,
       emptyTextCount,
       infoLossCount,
+      droppedCount,
       boundaryCount,
       zeroGapCount,
       zeroGapFraction,

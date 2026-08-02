@@ -35,9 +35,13 @@ vi.mock("./native-stage-common.js", async (importOriginal) => {
 });
 
 const executeNativeDubMock = vi.hoisted(() => vi.fn(async () => 0));
-vi.mock("./native-dub.js", () => ({
-  executeNativeDub: executeNativeDubMock,
-}));
+vi.mock("./native-dub.js", async (importOriginal) => {
+  const actual = await importOriginal<object>();
+  return {
+    ...actual,
+    executeNativeDub: executeNativeDubMock,
+  };
+});
 
 const executeNativeAcquireMock = vi.hoisted(() => vi.fn(async (opts: { outDir: string }) => {
   const videoId = "abc123def45";
@@ -46,6 +50,12 @@ const executeNativeAcquireMock = vi.hoisted(() => vi.fn(async (opts: { outDir: s
   return 0;
 }));
 const burnZhSubtitlesForVideoMock = vi.hoisted(() => vi.fn(async () => ({ burned: true, skipped: false })));
+const transcribeLocalMock = vi.hoisted(() =>
+  vi.fn(async () => ({ srtPath: "video/full.local.en.srt", wordsPath: "video/full.local.en.words.json", cueCount: 1 })),
+);
+// pipeline --dub 的前置块会先探测 demucs 才跑转写/notes/article；默认让它成功，
+// 单独的 fail-fast 测试再覆盖成拒绝。
+const probeDemucsMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/python3"));
 
 vi.mock("@yt2x/adapters-node", async (importOriginal) => {
   const actual = await importOriginal();
@@ -53,6 +63,8 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
     ...actual,
     executeNativeAcquire: executeNativeAcquireMock,
     burnZhSubtitlesForVideo: burnZhSubtitlesForVideoMock,
+    transcribeLocal: transcribeLocalMock,
+    probeDemucs: probeDemucsMock,
   };
 });
 
@@ -77,6 +89,17 @@ beforeEach(() => {
   executeNativePublishMock.mockClear();
   executeNativeAcquireMock.mockClear();
   burnZhSubtitlesForVideoMock.mockClear();
+  executeNativeDubMock.mockClear();
+  transcribeLocalMock.mockClear();
+  transcribeLocalMock.mockImplementation(async () => ({
+    srtPath: "video/full.local.en.srt",
+    wordsPath: "video/full.local.en.words.json",
+    cueCount: 1,
+  }));
+  probeDemucsMock.mockClear();
+  probeDemucsMock.mockImplementation(async () => "/usr/bin/python3");
+  vi.stubEnv("ELEVENLABS_API_KEY", "test-elevenlabs-key");
+  vi.stubEnv("ELEVENLABS_VOICE_ID", "test-voice-id");
 });
 
 describe("mergePipelineExitCode", () => {
@@ -273,7 +296,12 @@ describe("runNativePipeline", () => {
     executeNativeDubMock.mockClear();
 
     const args = buildArgs({
-      control: { outDir: outRoot, dub: true, dubEngine: "elevenlabs" },
+      control: {
+        outDir: outRoot,
+        dub: true,
+        dubEngine: "elevenlabs",
+        pythonPath: ".venv-demucs/bin/python3",
+      },
       stages: { acquire: "skip", notes: "skip", article: "skip", publish: "skip" },
       acquire: { subtitleZh: "burned" },
     });
@@ -286,6 +314,11 @@ describe("runNativePipeline", () => {
       videoId: vid,
       dubEngine: "elevenlabs",
     });
+    // --python-path must also reach the actual dub stage call, not just the preflight probe —
+    // a typo'd option name or a missing forwarding hop here is otherwise invisible to any test.
+    expect(executeNativeDubMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pythonPath: ".venv-demucs/bin/python3" }),
+    );
   });
 
   it("forces bilingual burn off during acquire when --dub is set", async () => {
@@ -311,5 +344,176 @@ describe("runNativePipeline", () => {
     expect(acquireOpts.acquire.subtitleBilingual).toBe("off");
     expect(burnZhSubtitlesForVideoMock).not.toHaveBeenCalled();
     expect(executeNativeDubMock).toHaveBeenCalled();
+  });
+
+  it("does not force zh subtitle translation for --dub when subtitleZh is off (no consumer left)", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-no-forced-translate-"));
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      stages: { acquire: "auto", notes: "skip", article: "skip", publish: "skip" },
+      acquire: { subtitleZh: "off" },
+      sources: { urls: ["https://www.youtube.com/watch?v=abc123def45"] },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(executeNativeAcquireMock).toHaveBeenCalled();
+    const acquireOpts = executeNativeAcquireMock.mock.calls[0]![0] as {
+      acquire: { subtitleZh?: string };
+      llm?: unknown;
+    };
+    // --dub 不再消费 full.zh.srt：subtitleZh 保持用户的 off，不再被强制翻译。
+    expect(acquireOpts.acquire.subtitleZh).toBe("off");
+    expect(acquireOpts.llm).toBeUndefined();
+  });
+
+  it("transcribes the local words.json before notes/article when --dub is set and no transcript exists", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-transcribe-"));
+    const vid = "dubVid2";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      stages: { acquire: "skip", notes: "auto", article: "skip", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(transcribeLocalMock).toHaveBeenCalledOnce();
+    expect(transcribeLocalMock.mock.calls[0]![0]).toMatchObject({
+      videoDir: path.join(outRoot, vid),
+      language: "en",
+    });
+    // 转写必须先于 notes，否则花完 notes/article 的钱才失败就晚了。
+    expect(transcribeLocalMock.mock.invocationCallOrder[0]).toBeLessThan(
+      executeNativeNotesMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("skips local transcription when a local transcript already exists", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-skip-transcribe-"));
+    const vid = "dubVid3";
+    await mkdir(path.join(outRoot, vid, "video"), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    await writeFile(
+      path.join(outRoot, vid, "video", "full.local.en.words.json"),
+      JSON.stringify([{ word: "hi", start: 0, end: 0.2 }]),
+    );
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      stages: { acquire: "skip", notes: "skip", article: "skip", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(transcribeLocalMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).toHaveBeenCalledOnce();
+  });
+
+  it("fails fast before notes/article when local transcription is unavailable", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-transcribe-unavailable-"));
+    const vid = "dubVid4";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    transcribeLocalMock.mockImplementation(async () => undefined);
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(2); // NATIVE_EXIT.CONFIG_MISSING
+    expect(executeNativeNotesMock).not.toHaveBeenCalled();
+    expect(executeNativeArticleMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).not.toHaveBeenCalled();
+  });
+
+  it("fails fast before notes/article/transcription when demucs is unavailable", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-demucs-unavailable-"));
+    const vid = "dubVid5";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    probeDemucsMock.mockImplementation(async () => {
+      throw Object.assign(new Error("demucs not found"), { name: "DemucsError" });
+    });
+
+    const args = buildArgs({
+      control: {
+        outDir: outRoot,
+        dub: true,
+        dubEngine: "edge-tts",
+        pythonPath: ".venv-demucs/bin/python3",
+      },
+      stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(2); // NATIVE_EXIT.CONFIG_MISSING
+    // --python-path must reach the preflight probe, not just the real dub stage call —
+    // otherwise a venv-only demucs install is invisible to `pipeline --dub` even though
+    // the same flag works for the standalone `dub` command.
+    expect(probeDemucsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pythonPath: ".venv-demucs/bin/python3" }),
+    );
+    expect(transcribeLocalMock).not.toHaveBeenCalled();
+    expect(executeNativeNotesMock).not.toHaveBeenCalled();
+    expect(executeNativeArticleMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).not.toHaveBeenCalled();
+  });
+
+  it("fails fast before notes/article/transcription when ElevenLabs credentials are missing", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-tts-missing-"));
+    const vid = "dubVid6";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    vi.stubEnv("ELEVENLABS_API_KEY", "");
+    vi.stubEnv("XI_API_KEY", "");
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "elevenlabs" },
+      stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(2); // NATIVE_EXIT.CONFIG_MISSING
+    expect(probeDemucsMock).not.toHaveBeenCalled();
+    expect(transcribeLocalMock).not.toHaveBeenCalled();
+    expect(executeNativeNotesMock).not.toHaveBeenCalled();
+    expect(executeNativeArticleMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).not.toHaveBeenCalled();
+  });
+
+  it("exits 0 without running the demucs/TTS preflight when every target video is already dubbed", async () => {
+    // Regression: a machine with no demucs install (or no ElevenLabs credentials) that just
+    // wants to re-run `pipeline --dub` for a video whose full.zh-dubbed.mp4 already exists
+    // must still exit 0 — the preflight has nothing real to check in that case.
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-already-dubbed-"));
+    const vid = "dubVid7";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    const dubbedVideoPath = path.join("/tmp/yt2x-monorepo", "files", "articles", vid, "video", "full.zh-dubbed.mp4");
+    await mkdir(path.dirname(dubbedVideoPath), { recursive: true });
+    await writeFile(dubbedVideoPath, "already dubbed");
+    probeDemucsMock.mockImplementation(async () => {
+      throw Object.assign(new Error("demucs not found"), { name: "DemucsError" });
+    });
+    vi.stubEnv("ELEVENLABS_API_KEY", "");
+    vi.stubEnv("XI_API_KEY", "");
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "elevenlabs" },
+      stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(probeDemucsMock).not.toHaveBeenCalled();
+    expect(transcribeLocalMock).not.toHaveBeenCalled();
+    expect(executeNativeNotesMock).toHaveBeenCalled();
+    expect(executeNativeArticleMock).toHaveBeenCalled();
   });
 });

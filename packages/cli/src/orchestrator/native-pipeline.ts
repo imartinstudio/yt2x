@@ -7,17 +7,21 @@ import {
   DEFAULT_ARTICLE_OUT_DIR,
   DEFAULT_OUT_DIR,
   defaultProcessRunner,
+  dubbedVideoPathFor,
   executeNativeAcquire,
   extractVideoId,
   listBatchVideosFromOutRoot,
+  probeDemucs,
   readProcessStatusMerged,
   readYoutubePageUrl,
   resolveBurnSourceVideo,
+  resolveDubWordsPath,
+  transcribeLocal,
   type ProcessRunner,
 } from "@yt2x/adapters-node";
 import type { PipelineArgs } from "../args/pipeline.js";
 import { executeNativeArticle } from "./native-article.js";
-import { executeNativeDub } from "./native-dub.js";
+import { executeNativeDub, resolveDubEngine, resolveDubTts } from "./native-dub.js";
 import { executeNativeNotes } from "./native-notes.js";
 import { executeNativePublish } from "./native-publish.js";
 import { runDeconstructCommand } from "../commands/deconstruct.js";
@@ -29,7 +33,7 @@ import {
   createPipelineProgress,
   estimatePipelineVideoCount,
 } from "../progress/pipeline-progress.js";
-import { resolveNativeLlm } from "./native-stage-common.js";
+import { NATIVE_EXIT, resolveNativeLlm } from "./native-stage-common.js";
 
 export type NativePipelineOptions = {
   args: PipelineArgs;
@@ -73,6 +77,23 @@ const hasMetadata = async (outRoot: string, id: string): Promise<boolean> =>
   access(path.join(outRoot, id, "metadata.json"))
     .then(() => true)
     .catch(() => false);
+
+const hasDubbedVideo = async (articleOutRoot: string, id: string): Promise<boolean> =>
+  access(dubbedVideoPathFor(articleOutRoot, id))
+    .then(() => true)
+    .catch(() => false);
+
+/** 每个目标视频都已有 full.zh-dubbed.mp4 时，preflight（凭据/Demucs 探测）没有必要再跑。 */
+const allVideosAlreadyDubbed = async (
+  articleOutRoot: string,
+  ids: readonly string[],
+): Promise<boolean> => {
+  if (ids.length === 0) return false;
+  for (const id of ids) {
+    if (!(await hasDubbedVideo(articleOutRoot, id))) return false;
+  }
+  return true;
+};
 
 const filterMaterializedVideoIds = async (outRoot: string, ids: string[]): Promise<string[]> => {
   const materialized: string[] = [];
@@ -335,7 +356,9 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
 
   // 如果用户要求烧录字幕，推迟到 article 阶段之后执行。
   // acquire 阶段只需生成 full.zh.srt，不需要烧录（无论 acquire 是否 skip）。
-  // --dub 时成片由配音反向 SRT 负责：zh 与 bilingual 烧录整段跳过（决策 #8：只出 full.zh-dubbed.mp4）。
+  // 配音只存在于本地转录通道（见 docs/dub-context-glossary）：--dub 不再消费 full.zh.srt，
+  // 不再替用户强制打开 zh 字幕翻译；仍需避免 acquire 自己把 zh/bilingual 烧进视频——
+  // 成片由 native-dub 自己的反向 SRT + remix 产出（decision #8 的旧框定，PR4 才会统一）。
   const dubRequested = args.control.dub === true;
   const bilingualBurnRequested =
     !dubRequested &&
@@ -345,14 +368,12 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
     (args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both") &&
     !bilingualBurnRequested;
 
-  // --dub 需要 full.zh.srt：若用户没开 subtitle，或只开了 burn，降为 srt。
-  // bilingual 同步压成 off，避免 acquire 内仍烧出第二个成片。
+  // --dub 时若用户显式要了 zh burned/both，降为 srt 避免 acquire 自己烧出第二份视频；
+  // 用户没开 zh 字幕（off）时保持 off——dub 不再需要 full.zh.srt，强行翻译只会白花钱。
   const effectiveSubtitleZh = dubRequested
-    ? args.acquire.subtitleZh === "off"
+    ? args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both"
       ? ("srt" as const)
-      : args.acquire.subtitleZh === "burned" || args.acquire.subtitleZh === "both"
-        ? ("srt" as const)
-        : args.acquire.subtitleZh
+      : args.acquire.subtitleZh
     : args.acquire.subtitleZh;
   const effectiveSubtitleBilingual = dubRequested ? ("off" as const) : args.acquire.subtitleBilingual;
 
@@ -390,11 +411,12 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         ...(runner !== undefined ? { runner } : {}),
       });
 
+      // 不再无条件因 dubRequested 加一条：dub 不消费 full.zh.srt，是否需要翻译完全由
+      // acquireSubtitleMode 本身（即用户的 --subtitle-zh 选择）决定。
       const needsTranslation =
         acquireSubtitleMode === "srt" ||
         acquireSubtitleMode === "burned" ||
-        acquireSubtitleMode === "both" ||
-        dubRequested;
+        acquireSubtitleMode === "both";
       let llmResult: ReturnType<typeof resolveNativeLlm> | undefined;
       if (needsTranslation) {
         llmResult = resolveNativeLlm({
@@ -456,6 +478,96 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
 
     if (args.stages.acquire === "skip" || args.control.continueFlag) {
       videoIds = await filterMaterializedVideoIds(outRoot, videoIds);
+    }
+
+    // 配音只存在于本地转录通道（docs/dub-context-glossary）：--dub 时确保每个视频都有本地
+    // 词级时间戳，缺失就地转写；同时前置 Demucs 探测与 TTS 凭据校验。三者都放在
+    // notes/article 之前 fail fast——不然要等 dub 阶段才报错时，notes + article 的整片
+    // LLM 翻译费用已经花完了（demucs 缺失、ElevenLabs 凭据缺失，此前都只在 dub 阶段内部
+    // 才被发现）。
+    if (dubRequested) {
+      // 每个目标视频都已有 full.zh-dubbed.mp4 且未 --force 时，preflight 探测的都是这次
+      // 重跑根本用不到的东西——例如只想重跑 article 的机器可能压根没装 demucs。这类
+      // 空跑必须仍然退出码 0，不能被 preflight 拖成 CONFIG_MISSING。
+      const skipDubPreflight =
+        args.control.force !== true && (await allVideosAlreadyDubbed(articleOutRoot, videoIds));
+
+      if (skipDubPreflight) {
+        logger.info(
+          { videos: videoIds.length },
+          "yt2x pipeline --dub: all target videos already have a dubbed output — " +
+            "skipping demucs/TTS preflight (use --force to redo)",
+        );
+      } else {
+        let dubEngine;
+        try {
+          dubEngine = resolveDubEngine(args.control.dubEngine);
+        } catch (err: unknown) {
+          logger.error(
+            { err: err instanceof Error ? err.message : String(err) },
+            "yt2x pipeline --dub: invalid --dub-engine",
+          );
+          finalExitCode = NATIVE_EXIT.CONFIG_MISSING;
+          return finalExitCode;
+        }
+
+        const resolvedTts = resolveDubTts({ dubEngine: args.control.dubEngine }, dubEngine);
+        if (!resolvedTts.ok) {
+          logger.error(
+            { reason: resolvedTts.reason },
+            "yt2x pipeline --dub: TTS credentials unavailable — checked before notes/article " +
+              "so a missing ElevenLabs key doesn't waste an already-paid-for translation pass",
+          );
+          finalExitCode = resolvedTts.exitCode;
+          return finalExitCode;
+        }
+
+        try {
+          await probeDemucs({
+            ...(args.control.pythonPath !== undefined ? { pythonPath: args.control.pythonPath } : {}),
+          });
+        } catch (err: unknown) {
+          logger.error(
+            { err: err instanceof Error ? err.message : String(err) },
+            "yt2x pipeline --dub: demucs unavailable — install demucs, or pass --python-path " +
+              "to a Python that has it (e.g. `--python-path .venv-demucs/bin/python3`); checked " +
+              "before notes/article to avoid wasted LLM cost",
+          );
+          finalExitCode = NATIVE_EXIT.CONFIG_MISSING;
+          return finalExitCode;
+        }
+
+        for (const id of videoIds) {
+          const alreadyTranscribed = await resolveDubWordsPath({ outRoot, videoId: id })
+            .then(() => true)
+            .catch(() => false);
+          if (alreadyTranscribed) continue;
+
+          logger.info(
+            { videoId: id },
+            "yt2x pipeline --dub: no local transcript found, transcribing now…",
+          );
+          const result = await transcribeLocal({
+            videoDir: path.join(outRoot, id),
+            language: "en",
+            runner: runner ?? defaultProcessRunner,
+          });
+          if (result === undefined) {
+            logger.error(
+              { videoId: id },
+              "yt2x pipeline --dub: local transcription unavailable (faster-whisper not installed, " +
+                "or no downloaded source video found). Install faster-whisper, or run " +
+                "`yt2x subtitle transcribe-local <videoId>` manually, then retry.",
+            );
+            finalExitCode = NATIVE_EXIT.CONFIG_MISSING;
+            return finalExitCode;
+          }
+          logger.info(
+            { videoId: id, wordsPath: result.wordsPath, cueCount: result.cueCount },
+            "yt2x pipeline --dub: local transcript ready",
+          );
+        }
+      }
     }
 
     const notesForId = (id: string) =>
@@ -567,6 +679,7 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
           llmProvider: args.llm.provider,
           ...(args.llm.model !== undefined ? { llmModel: args.llm.model } : {}),
           ...(args.llm.baseUrl !== undefined ? { llmBaseUrl: args.llm.baseUrl } : {}),
+          ...(args.control.pythonPath !== undefined ? { pythonPath: args.control.pythonPath } : {}),
         });
         progress.record(stageTimingKey("dub", id), Math.round(performance.now() - t0));
         if (code !== 0) {

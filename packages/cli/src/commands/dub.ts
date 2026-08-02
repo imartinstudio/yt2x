@@ -8,8 +8,9 @@ export const registerDubCommand = (program: Command): void => {
   const cmd = program
     .command("dub")
     .description(
-      "Generate a Chinese dubbed video: rewrite full.zh.srt for speech, synthesize (edge-tts or ElevenLabs), " +
-        "separate BGM via Demucs, negotiate timing, gate quality, then remix into full.zh-dubbed.mp4.",
+      "Generate a Chinese dubbed video: segment the local word-level transcript into utterances, translate " +
+        "them against a duration budget, synthesize (edge-tts or ElevenLabs), separate BGM via Demucs, " +
+        "negotiate timing, gate quality, then remix into full.zh-dubbed.mp4.",
     );
 
   addLlmOptions(
@@ -29,16 +30,14 @@ export const registerDubCommand = (program: Command): void => {
       .option("--ffmpeg-path <path>", "Path to ffmpeg (default: ffmpeg on PATH)")
       .option("--python-path <path>", "Python with demucs installed (default: python3)")
       .option("--demucs-model <name>", "Demucs model name (default: htdemucs)")
-      .option("--max-gap-ms <ms>", "Split merged sentences on pauses longer than this")
-      .option("--max-chars <n>", "Max characters per merged sentence")
-      .option("--max-duration-ms <ms>", "Max duration per merged sentence")
+      .option("--max-duration-ms <ms>", "Max duration per utterance before a hard split (default 12000)")
       .option("--script-only", "Write dub-script.json and stop before synthesis")
       .option("--timing-only", "Stop after natural-rate synthesis and dub-timing.json")
       .option("--skip-burn", "Replace audio only; do not burn the reverse SRT")
       .option("--skip-gate", "Write dub-report.json but do not block on hard gate failures")
       .option(
         "--start-ms <ms>",
-        "Only dub cues overlapping [start, end); extracts a temp window (never writes into downloads)",
+        "Only dub utterances overlapping [start, end); extracts a temp window (never writes into downloads)",
       )
       .option("--end-ms <ms>", "Exclusive end of the dub time window in source timeline ms")
       .option("--force", "Re-run even when dubbed video / intermediate artifacts already exist"),

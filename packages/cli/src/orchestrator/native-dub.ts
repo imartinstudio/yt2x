@@ -13,20 +13,19 @@ import {
   dubbedVideoPathFor,
   dubReverseSrtPathFor,
   extractDubSourceWindow,
-  filterDubCuesByTimeRange,
   generateDubScript,
   guardDubSourceAgainstHardSubtitles,
   isDemucsError,
   isDubHardSubtitleError,
   probeDemucs,
-  readDubCues,
+  readDubWords,
   readDubScript,
   readDubTimingReport,
   readElevenLabsApiKeyFromEnv,
   readElevenLabsVoiceFromEnv,
   remixDubbedVideo,
   resolveDubSourceVideo,
-  resolveZhSubtitlePath,
+  resolveDubWordsPath,
   sanitizeVideoId,
   separateDemucs,
   synthesizeDubLines,
@@ -40,12 +39,15 @@ import {
 import {
   buildNegotiateInputs,
   evaluateDubGate,
+  filterUtterancesByTimeRange,
   formatReverseSrt,
   isTtsError,
-  mergeCuesIntoSegments,
   planDubNegotiation,
   resolveMaxExtendMs,
-  type MergeCuesOptions,
+  segmentUtterances,
+  type DubScript,
+  type DubTimingReport,
+  type SegmentUtterancesOptions,
   type TtsPort,
 } from "@yt2x/core";
 import { logger } from "../logger.js";
@@ -80,8 +82,6 @@ export type DubFlags = NativeLlmCliFlags & {
   ffmpegPath?: string;
   demucsModel?: string;
   pythonPath?: string;
-  maxGapMs?: string;
-  maxChars?: string;
   maxDurationMs?: string;
   scriptOnly?: boolean;
   timingOnly?: boolean;
@@ -136,13 +136,9 @@ const parsePositiveInt = (raw: string | undefined): number | undefined => {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 };
 
-const mergeOptionsFrom = (flags: DubFlags): MergeCuesOptions => {
-  const options: MergeCuesOptions = {};
-  const maxGapMs = parsePositiveInt(flags.maxGapMs);
-  const maxChars = parsePositiveInt(flags.maxChars);
+const segmentOptionsFrom = (flags: DubFlags): SegmentUtterancesOptions => {
+  const options: SegmentUtterancesOptions = {};
   const maxDurationMs = parsePositiveInt(flags.maxDurationMs);
-  if (maxGapMs !== undefined) options.maxGapMs = maxGapMs;
-  if (maxChars !== undefined) options.maxChars = maxChars;
   if (maxDurationMs !== undefined) options.maxDurationMs = maxDurationMs;
   return options;
 };
@@ -152,18 +148,28 @@ const fileExists = async (candidate: string): Promise<boolean> =>
     .then(() => true)
     .catch(() => false);
 
-const resolveDubEngine = (raw: string | undefined): DubEngineId => {
+/**
+ * 导出给 native-pipeline.ts 复用：`pipeline --dub` 需要在 notes/article 之前就校验
+ * TTS 凭据是否可用（见下方 resolveDubTts 的导出注释），而引擎解析是凭据校验的前置步骤。
+ */
+export const resolveDubEngine = (raw: string | undefined): DubEngineId => {
   const value = (raw ?? "edge-tts").trim().toLowerCase();
   if (value === "edge-tts" || value === "edge") return "edge-tts";
   if (value === "elevenlabs" || value === "eleven") return "elevenlabs";
   throw new Error(`Unknown --dub-engine "${raw}". Use edge-tts or elevenlabs.`);
 };
 
-type ResolvedTts =
+export type ResolvedTts =
   | { ok: true; tts: TtsPort; voice: string; engine: DubEngineId }
   | { ok: false; exitCode: number; reason: string };
 
-const resolveDubTts = (flags: DubFlags, engine: DubEngineId): ResolvedTts => {
+/**
+ * 导出给 native-pipeline.ts 复用：`pipeline --dub` 默认引擎是 elevenlabs，而这里的凭据
+ * 校验此前只在 executeNativeDub 内部、script 生成**之后**才跑——pipeline 场景下等于
+ * notes+article 的整片 LLM 翻译已经付过费才报 CONFIG_MISSING。构造适配器本身不产生
+ * 网络请求，只在这里读环境变量/flags，可以安全地在 notes/article 之前调用一次。
+ */
+export const resolveDubTts = (flags: DubFlags, engine: DubEngineId): ResolvedTts => {
   if (engine === "edge-tts") {
     return {
       ok: true,
@@ -204,12 +210,30 @@ const resolveDubTts = (flags: DubFlags, engine: DubEngineId): ResolvedTts => {
   };
 };
 
+/**
+ * 校验磁盘上的 dub-timing.json 是否真的是当前 dub-script.json 合成出来的产物，而非
+ * 一次被拒的旧 script 遗留下来的同名文件。dub-timing.json 的 schema 自 PR3 起未变过，
+ * 单靠 zod 校验挡不住这种"形状对、内容配错"的复用——两者必须逐行 index 对齐、且
+ * charCount 与当前 script 行的文本长度一致，否则 buildNegotiateInputs 会按 index 把
+ * 新译文的时间轴配上旧改写稿合成的音频。
+ */
+const timingMatchesScript = (timing: DubTimingReport, script: DubScript): boolean => {
+  if (timing.lineCount !== script.lines.length || timing.lines.length !== script.lines.length) {
+    return false;
+  }
+  const byIndex = new Map(timing.lines.map((line) => [line.index, line]));
+  return script.lines.every((scriptLine) => {
+    const timingLine = byIndex.get(scriptLine.index);
+    return timingLine !== undefined && timingLine.charCount === scriptLine.text.length;
+  });
+};
+
 export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
   if (flags.videoId === undefined || flags.videoId.trim().length === 0) {
     printCliErrorBlock({
       command: "dub",
       reason: "Missing target. Dub requires --video-id <id>.",
-      hints: ["Run `yt2x subtitle` first so full.zh.srt exists."],
+      hints: ["Run `yt2x subtitle transcribe-local <videoId>` first so full.local.en.words.json exists."],
       retryCommand: "pnpm yt2x dub --video-id <videoId>",
     });
     return EXIT_INPUT_MISSING;
@@ -347,22 +371,22 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     return llm.exitCode;
   }
 
-  let srtPath: string;
+  let wordsPath: string;
   try {
-    srtPath = await resolveZhSubtitlePath({ articleRoot, outRoot, videoId });
+    wordsPath = await resolveDubWordsPath({ outRoot, videoId });
   } catch (err: unknown) {
     printCliErrorBlock({
       command: "dub",
       subject: videoId,
       reason: err instanceof Error ? err.message : String(err),
-      hints: ["Run `yt2x subtitle --video-id <videoId>` to produce full.zh.srt."],
+      hints: ["Run `yt2x subtitle transcribe-local <videoId>` to produce full.local.en.words.json."],
       retryCommand: `pnpm yt2x dub --video-id ${videoId}`,
     });
     return EXIT_INPUT_MISSING;
   }
 
   if (needsVideo) {
-    // Demucs 探测前置于后续计费调用（改短 LLM / 调速 TTS）和分离本身
+    // Demucs 探测前置于后续计费调用（翻译 LLM / 调速 TTS）和分离本身
     try {
       pythonPath = await probeDemucs({
         ...(flags.pythonPath !== undefined ? { pythonPath: flags.pythonPath } : {}),
@@ -388,8 +412,25 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     // 时间窗冒烟不得复用/覆盖全片缓存，否则 --start-ms/--end-ms 会被静默忽略。
     const reuseFullRunArtifacts = flags.force !== true && !hasTimeRange;
     let script = reuseFullRunArtifacts
-      ? await readDubScript(dubDir).catch(() => undefined)
+      ? await readDubScript(dubDir).catch((err: unknown) => {
+          // 缺文件是正常的首次运行；版本不匹配/校验失败则是需要说明的缓存拒绝，
+          // 两者都落到"没有可复用缓存"，但后者应该被看见，不能悄悄发生。
+          const message = err instanceof Error ? err.message : String(err);
+          if (!message.includes("ENOENT")) {
+            logger.warn(
+              { videoId, err: message },
+              "dub: ignoring cached dub-script.json — regenerating",
+            );
+          }
+          return undefined;
+        })
       : undefined;
+    // script 是否真的来自磁盘缓存（而非本次重新生成）——决定 dub-timing.json 和逐句音频
+    // 能不能复用。旧 dub-timing.json 的 schema 从未随 PR3 变过，单靠版本号/结构校验挡不住
+    // 「script 被拒后重新生成、timing 却还是旧链路产物」这种组合：timing 按 index 与新
+    // script 配对（buildNegotiateInputs 不校验文本），会把新译文的字幕烧上画面、却混上旧
+    // 改写稿合成的人声——参见 docs/DUB-TASK.md 对应记录。
+    const scriptFromCache = script !== undefined;
     if (hasTimeRange && flags.force !== true) {
       logger.info(
         { videoId, startMs: timeRange.startMs ?? 0, endMs: timeRange.endMs },
@@ -397,20 +438,23 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       );
     }
     if (script === undefined) {
-      const cues = filterDubCuesByTimeRange(await readDubCues(srtPath), timeRange);
-      const segments = mergeCuesIntoSegments(cues, mergeOptionsFrom(flags));
-      if (segments.length === 0) {
+      const words = await readDubWords(wordsPath);
+      const utterances = filterUtterancesByTimeRange(
+        segmentUtterances(words, segmentOptionsFrom(flags)),
+        timeRange,
+      );
+      if (utterances.length === 0) {
         printCliErrorBlock({
           command: "dub",
           subject: videoId,
           reason: hasTimeRange
-            ? `No usable subtitle cues in ${srtPath} for time range ` +
+            ? `No usable speech in ${wordsPath} for time range ` +
               `[${timeRange.startMs ?? 0}, ${timeRange.endMs ?? "end"}).`
-            : `No usable subtitle cues in ${srtPath}.`,
+            : `No usable speech in ${wordsPath}.`,
           hints: hasTimeRange
-            ? ["Widen --start-ms/--end-ms, or check that full.zh.srt covers that window."]
-            : ["The Chinese subtitle file is empty — re-run the subtitle stage."],
-          retryCommand: `pnpm yt2x subtitle --video-id ${videoId}`,
+            ? ["Widen --start-ms/--end-ms, or check that the local transcript covers that window."]
+            : ["The local transcript is empty — re-run `yt2x subtitle transcribe-local`."],
+          retryCommand: `pnpm yt2x subtitle transcribe-local ${videoId}`,
         });
         return EXIT_INPUT_MISSING;
       }
@@ -418,23 +462,23 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       logger.info(
         {
           videoId,
-          srtPath,
-          cues: cues.length,
-          segments: segments.length,
+          wordsPath,
+          words: words.length,
+          utterances: utterances.length,
           model: llm.model,
           ...(hasTimeRange
             ? { startMs: timeRange.startMs ?? 0, endMs: timeRange.endMs }
             : {}),
         },
-        "yt2x dub: rewriting the dubbing script…",
+        "yt2x dub: translating the dubbing script…",
       );
 
       const generated = await generateDubScript({
         llm: llm.adapter,
         model: llm.model,
         videoId,
-        sourceSubtitle: path.relative(path.dirname(dubDir), srtPath),
-        segments,
+        sourceWords: path.relative(path.dirname(dubDir), wordsPath),
+        utterances,
       });
       for (const warning of generated.warnings) logger.warn({ videoId }, `dub script: ${warning}`);
       script = generated.script;
@@ -445,8 +489,8 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         {
           videoId,
           scriptPath,
-          rewrittenCount: generated.rewrittenCount,
-          fallbackCount: generated.fallbackCount,
+          translatedCount: generated.translatedCount,
+          droppedCount: generated.droppedCount,
         },
         "dub script written",
       );
@@ -494,13 +538,28 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     const synthDir = hasTimeRange ? path.join(dubDir, "work") : dubDir;
 
     // ── 3. 自然语速合成 + 时长报告（可复用；换引擎必须重跑） ──
-    let timing = reuseFullRunArtifacts
-      ? await readDubTimingReport(dubDir).catch(() => undefined)
-      : undefined;
+    // scriptFromCache 为 false 时 script 是本次重新生成的（旧缓存被拒或首次运行），
+    // 决不能再复用磁盘上的旧 dub-timing.json / dub/lines 音频——它们是配着被拒的旧
+    // script 合成的，按 index 硬配对到新 script 上会出现"新字幕、旧人声"的错位。
+    let timing =
+      reuseFullRunArtifacts && scriptFromCache
+        ? await readDubTimingReport(dubDir).catch(() => undefined)
+        : undefined;
     if (timing !== undefined && timing.engine !== tts.id) {
       logger.info(
         { videoId, cachedEngine: timing.engine, engine: tts.id },
         "dub-timing.json engine mismatch — re-synthesizing",
+      );
+      timing = undefined;
+    }
+    if (timing !== undefined && !timingMatchesScript(timing, script)) {
+      logger.warn(
+        {
+          videoId,
+          cachedLineCount: timing.lineCount,
+          scriptLineCount: script.lines.length,
+        },
+        "dub-timing.json does not match dub-script.json (line count/char count mismatch) — ignoring cached timing and re-synthesizing",
       );
       timing = undefined;
     }
@@ -571,7 +630,6 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         planPath,
         keep: plan.keepCount,
         speed: plan.speedCount,
-        shorten: plan.shortenCount,
         delay: plan.delayCount,
         extendMs: plan.extendMs,
       },
@@ -585,8 +643,6 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       voice,
       dubDir: synthDir,
       existingAudioByIndex: existingAudio,
-      llm: llm.adapter,
-      model: llm.model,
       ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
       ...(flags.ffmpegPath !== undefined ? { ffmpegPath: flags.ffmpegPath } : {}),
       onLineDone: (done, total) => {
@@ -603,7 +659,6 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         placementPath,
         extendMs: placement.extendMs,
         audioEndMs: placement.audioEndMs,
-        shorten: placement.shortenCount,
         delay: placement.delayCount,
       },
       "yt2x dub: placement ready",
@@ -653,7 +708,10 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     if (sourceVideo === undefined || pythonPath === undefined) {
       throw new Error("internal error: source video / demucs python missing for remix path");
     }
-    const demucsDir = dubDemucsDirFor(dubDir);
+    // 时间窗冒烟写到 dub/work/demucs，与 dubbedPath / dub-script.json / reverseSrtPath
+    // 的规则一致：否则 30 秒窗口的人声分离结果会落进全片共用的 dub/demucs/，下一次
+    // 不带 --force 的全片跑会因 skipIfExists 命中这份 30 秒的 no_vocals.wav。
+    const demucsDir = hasTimeRange ? path.join(dubDir, "work", "demucs") : dubDemucsDirFor(dubDir);
     logger.info({ videoId, demucsDir }, "yt2x dub: separating background audio with Demucs…");
     const separated = await separateDemucs({
       inputPath: sourceVideo.videoPath,
@@ -669,7 +727,15 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
 
     // ── 7. 反向 SRT + 混音重烧 ──
     const reverseSrt = formatReverseSrt(placement.lines);
-    const reverseSrtPath = dubReverseSrtPathFor(articleRoot, videoId);
+    // 时间窗冒烟写到 dub/work/，与 dubbedPath / dub-script.json 的规则一致，避免用
+    // 30 秒窗口的字幕覆盖全片的 video/full.zh-dub.srt。
+    const reverseSrtPath = hasTimeRange
+      ? path.join(
+          dubDir,
+          "work",
+          `window-${timeRange.startMs ?? 0}-${timeRange.endMs ?? "end"}.zh-dub.srt`,
+        )
+      : dubReverseSrtPathFor(articleRoot, videoId);
     logger.info({ videoId, dubbedPath }, "yt2x dub: remixing and muxing…");
     const remix = await remixDubbedVideo({
       videoPath: sourceVideo.videoPath,

@@ -96,12 +96,18 @@ export const requireTtsSpeechTiming = (
   return result.speechTiming;
 };
 
+/**
+ * 引擎字幕时间戳与 ffprobe 文件时长各自独立取整到毫秒，因此哪怕两者测的是同一段
+ * 音频，也可能相差 1ms。这个容差只吸收取整误差，不放过真实的时间戳越界。
+ */
+export const SPEECH_END_TOLERANCE_MS = 2;
+
 export const assertSpeechEndWithinFile = (input: {
   lineIndex: number;
   speechEndMs: number;
   fileDurationMs: number;
 }): void => {
-  if (input.speechEndMs > input.fileDurationMs) {
+  if (input.speechEndMs > input.fileDurationMs + SPEECH_END_TOLERANCE_MS) {
     throw new Error(
       `line ${input.lineIndex}: engine speech end ${input.speechEndMs}ms ` +
         `exceeds audio file duration ${input.fileDurationMs}ms`,

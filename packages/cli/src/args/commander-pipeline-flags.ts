@@ -43,6 +43,7 @@ export type CommanderPipelineFlags = {
   force?: boolean;
   dub?: boolean;
   dubEngine?: string;
+  pythonPath?: string;
   publishDryRun?: boolean;
   thread?: boolean;
   publishMaxChars?: string;
@@ -127,6 +128,7 @@ export const parseCommanderPipelineFlags = (flags: CommanderPipelineFlags): Pipe
       force: flags.force ?? false,
       dub: flags.dub ?? false,
       ...(flags.dubEngine !== undefined ? { dubEngine: flags.dubEngine } : {}),
+      ...(flags.pythonPath !== undefined ? { pythonPath: flags.pythonPath } : {}),
     },
     llm: {
       provider,

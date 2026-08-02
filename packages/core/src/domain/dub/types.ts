@@ -174,8 +174,16 @@ export type DubPlacedLine = {
 };
 
 export type DubPlacementReport = {
-  /** 2：新增 `stretch` 落点动作与 `stretchCount` 统计字段，见 DubNegotiatePlan。 */
-  version: 2;
+  /**
+   * 3：新增 `runId`（本次运行的唯一标识）与 `generatedAt`（生成时间，ISO 字符串）——
+   * 让报告能自证属于哪一次运行，而不必靠比对文件系统修改时间推断。见 issue #110。
+   * 2：新增 `stretch` 落点动作与 `stretchCount` 统计字段，见 DubNegotiatePlan。
+   */
+  version: 3;
+  /** 本次协商执行的唯一标识，每次调用 applyDubNegotiation 都会生成新值。 */
+  runId: string;
+  /** 报告构造时刻，ISO 8601 字符串。 */
+  generatedAt: string;
   videoId: string;
   engine: string;
   voice: string;

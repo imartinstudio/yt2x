@@ -228,7 +228,9 @@ scene_manifest.json → available_visuals → LLM visual_plan → 图片渲染 �
 | `dub-placement.json` | 最终落点（反向 SRT / 混音的输入）           |
 | `dub-report.json`    | 质量门禁报告                                |
 
-`dub-plan.json` 的 `version` 为 **3**：时长协商的第三档「事后 LLM 改短」（旧版 1 的 `shorten` 动作与 `shortenCount` 字段）已删除，冗余改在生成配音稿阶段由长度受限翻译挤掉，见 `docs/DUB-TASK.md`。version 3（PR4）新增 `stretch` 动作与 `stretchCount` 字段：合成音明显短于目标时长时反向放慢语速填充，减少句尾死寂，取代此前"富余时间只能变成死寂"的行为；放慢幅度受 `TtsPort.rateRange` 下限约束。它是中间产物，重跑 `yt2x dub` 即可重新生成，不提供旧版本兼容读取。`dub-placement.json` 同步新增 `stretchCount` 字段，`version` 随之升到 **2**。
+`dub-plan.json` 的 `version` 为 **3**：时长协商的第三档「事后 LLM 改短」（旧版 1 的 `shorten` 动作与 `shortenCount` 字段）已删除，冗余改在生成配音稿阶段由长度受限翻译挤掉，见 `docs/DUB-TASK.md`。version 3（PR4）新增 `stretch` 动作与 `stretchCount` 字段：合成音明显短于目标时长时反向放慢语速填充，减少句尾死寂，取代此前"富余时间只能变成死寂"的行为；放慢幅度受 `TtsPort.rateRange` 下限约束。它是中间产物，重跑 `yt2x dub` 即可重新生成，不提供旧版本兼容读取。`dub-placement.json` 同步新增 `stretchCount` 字段（它自己的 `version` 见下一段）。
+
+`dub-placement.json` 的 `version` 现为 **3**：新增 `runId`（本次协商执行的唯一标识，`crypto.randomUUID()`）与 `generatedAt`（生成时刻，ISO 8601 字符串）——这份报告此前只写不读，也没有任何机制表明它属于哪一次运行；被流程外的手工命令覆写成残缺内容时，只能靠比对文件系统修改时间去猜测，猜错就会把工具问题误判成协商逻辑缺陷（issue #110 的真实事故）。`readDubPlacementReport`（`packages/adapters-node/src/dub/file-store.ts`）新增，用 zod 校验整体形状与 `version` 字面量，口径与 `readDubTimingReport` 一致：残缺或版本不匹配直接拒绝、报错信息定位到具体字段，不返回裸 JSON。目前唯一的读取方是 `yt2x dub-replay` 的协商核对——比对结果会带上盘上报告的 `runId`/`generatedAt`，无论核对通过还是不通过。它同样是中间产物，重跑 `yt2x dub` 即可重新生成，不提供旧版本兼容读取。写入逻辑本身未变——仍由协商执行阶段一次性写盘；本次改动只新增来源标记与读回校验，不加文件锁或只读权限，因为覆写来自流程外操作，用权限对抗它只会给正常调试添堵。
 
 `dub-script.json` 的 `version` 为 **2**：切到本地转录通道后 schema 实质变了——`sourceWords`（词级时间戳文件相对路径）取代了旧版 1 的 `sourceSubtitle`（中文字幕文件路径），`sourceText` 从中文原文变成英文原文，`cueIndices` 的语义从「字幕条 index」变成「话语单元 index」，并新增 `droppedCount`（翻译失败、未进入 `lines` 的话语单元数——门禁据此拦截静默丢句，见下）。`readDubScript`（`packages/adapters-node/src/dub/file-store.ts`）用 zod 校验 `version` 与整体形状，版本不匹配或字段缺失时直接拒绝、不返回裸 JSON；`yt2x dub` 全片模式下读到这类拒绝会当作缓存未命中，记一条 warning 后重新生成，不会静默复用旧链路产物。
 

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
   FIT_SLACK_MS,
@@ -159,7 +160,11 @@ export const applyDubNegotiation = async (
 
   const audioEndMs = placed.length > 0 ? placed[placed.length - 1]!.endMs : 0;
   const report: DubPlacementReport = {
-    version: 2,
+    version: 3,
+    // 每次调用都生成新值，让落点报告能自证属于哪一次协商执行——不必靠比对文件
+    // 系统修改时间推断新鲜度（见 issue #110 的事故记录）。
+    runId: randomUUID(),
+    generatedAt: new Date().toISOString(),
     videoId: input.plan.videoId,
     engine: input.tts.id,
     voice: input.voice,

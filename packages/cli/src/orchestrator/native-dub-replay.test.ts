@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { NATIVE_EXIT } from "./native-stage-common.js";
 import { executeDubReplay } from "./native-dub-replay.js";
 
@@ -59,9 +59,74 @@ const seedArtifacts = async (): Promise<{ articleRoot: string; videoId: string }
   return { articleRoot, videoId };
 };
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("executeDubReplay", () => {
   it("refuses to run without a video id instead of guessing one", async () => {
     expect(await executeDubReplay({})).toBe(NATIVE_EXIT.NO_INPUT);
+  });
+
+  it("surfaces the persisted placement report's run identifier when reconciling", async () => {
+    // issue #110：dub-replay 是落点报告读回校验最方便的真实验证入口——
+    // 一份有效的（version 3、带 runId/generatedAt）落点报告应当被读出，
+    // 且它的来源标记应出现在核对输出里。
+    const { articleRoot, videoId } = await seedArtifacts();
+    await writeFile(
+      path.join(articleRoot, videoId, "dub", "dub-placement.json"),
+      JSON.stringify({
+        version: 3,
+        runId: "seeded-run-id",
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        videoId,
+        engine: "edge-tts",
+        voice: "v",
+        lines: [1, 2].map((index) => ({
+          index,
+          action: "stretch",
+          rate: 0.9,
+          text: "这是一句用来测试重放的中文，长度足够构成一条显示单元。",
+          startMs: (index - 1) * 6_000,
+          endMs: index * 6_000,
+          durationMs: 6_000,
+          audioFile: `lines/000${index}.mp3`,
+        })),
+        extendMs: 0,
+        audioEndMs: 12_000,
+        speedCount: 0,
+        stretchCount: 2,
+        delayCount: 0,
+        keepCount: 0,
+      }),
+      "utf8",
+    );
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    expect(await executeDubReplay({ videoId, articleOutDir: articleRoot })).toBe(0);
+
+    const output = stdout.mock.calls.map((call) => String(call[0])).join("");
+    // 只认 runId：原先写成 /seeded-run-id|盘上/，而「盘上」在所有失败文案里都出现，
+    // 把来源标记整个删掉这条断言照样绿——等于没有钉住它声称要钉的行为。
+    expect(output).toMatch(/seeded-run-id/);
+  });
+
+  it("flags a truncated placement report instead of silently skipping the reconciliation", async () => {
+    // 复现真实事故的残缺形态：文件被覆写成只剩总时长字段。校验拒绝它，
+    // dub-replay 应把这标记为不可用，而不是假装没有落点报告可核对。
+    const { articleRoot, videoId } = await seedArtifacts();
+    await writeFile(
+      path.join(articleRoot, videoId, "dub", "dub-placement.json"),
+      JSON.stringify({ audioEndMs: 12_000 }),
+      "utf8",
+    );
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    expect(await executeDubReplay({ videoId, articleOutDir: articleRoot })).toBe(0);
+
+    const output = stdout.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toMatch(/盘上没有可用的落点报告/);
+    expect(output).toMatch(/Invalid dub-placement\.json/);
   });
 
   it("reports missing artifacts as an input problem, pointing at the run that produces them", async () => {

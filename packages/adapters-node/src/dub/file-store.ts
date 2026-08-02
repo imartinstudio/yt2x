@@ -35,6 +35,8 @@ export const DUB_SCRIPT_FILE = "dub-script.json";
 export const DUB_TIMING_FILE = "dub-timing.json";
 export const DUB_PLAN_FILE = "dub-plan.json";
 export const DUB_PLACEMENT_FILE = "dub-placement.json";
+/** 落点报告的当前 schema 版本；schema 与两条错误信息共用，避免三处各写一个字面量。 */
+export const DUB_PLACEMENT_VERSION = 3;
 export const DUB_REPORT_FILE = "dub-report.json";
 export const DUB_LINES_DIR = "lines";
 export const DUB_DEMUCS_DIR = "demucs";
@@ -252,6 +254,67 @@ export const writeDubPlacement = async (
   const filePath = path.join(dubDir, DUB_PLACEMENT_FILE);
   await atomicWrite(filePath, `${JSON.stringify(report, null, 2)}\n`);
   return filePath;
+};
+
+const DubPlacedLineSchema = z.object({
+  index: z.number().int(),
+  action: z.enum(["keep", "speed", "stretch", "delay"]),
+  rate: z.number().positive(),
+  text: z.string(),
+  startMs: z.number().nonnegative(),
+  endMs: z.number().nonnegative(),
+  durationMs: z.number().nonnegative(),
+  audioFile: z.string().min(1),
+});
+
+/**
+ * 磁盘上的落点报告必须通过 runtime 校验，口径与 DubTimingReportSchema 一致——
+ * 残缺内容（例如被手工命令覆写成只剩 audioEndMs 的对象）必须报错，而不是被当作
+ * 有效产物静默消费。version 锁死在 3：runId/generatedAt 是本次改动新增的来源
+ * 标记（见 issue #110），旧版本没有这两个字段，不提供兼容读取。
+ */
+export const DubPlacementReportSchema = z.object({
+  version: z.literal(DUB_PLACEMENT_VERSION),
+  runId: z.string().min(1),
+  generatedAt: z.string().min(1),
+  videoId: z.string().min(1),
+  engine: z.string().min(1),
+  voice: z.string().min(1),
+  lines: z.array(DubPlacedLineSchema).min(1),
+  extendMs: z.number(),
+  audioEndMs: z.number().nonnegative(),
+  speedCount: z.number().int().nonnegative(),
+  stretchCount: z.number().int().nonnegative(),
+  delayCount: z.number().int().nonnegative(),
+  keepCount: z.number().int().nonnegative(),
+});
+
+/**
+ * 校验失败（含旧版本号、残缺字段）时抛出可定位的错误，而不是把裸 JSON 当
+ * DubPlacementReport 塞回去——目前唯一的读取方是 dub-replay 的协商核对，读回
+ * 出错时它会把这份报告当作不可用，而不是拿残缺数据继续对账。
+ */
+export const readDubPlacementReport = async (dubDir: string): Promise<DubPlacementReport> => {
+  const raw: unknown = JSON.parse(await readFile(path.join(dubDir, DUB_PLACEMENT_FILE), "utf8"));
+  const parsed = DubPlacementReportSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+
+  // 「版本过期」与「内容残缺」要分开说。前者重跑一次就有，后者才是本文件存在的理由
+  // （issue #110 的事故：报告被覆写成只剩总时长，分析者拿残缺数据得出错误结论）。
+  // 把两者压成同一条 `Invalid ...` 会让人对着一份内容完好、只是版本旧的文件去查代码
+  // ——正是这道校验本该消除的那类误判。
+  const version = (raw as { version?: unknown } | null)?.version;
+  if (typeof version === "number" && version !== DUB_PLACEMENT_VERSION) {
+    throw new Error(
+      `${DUB_PLACEMENT_FILE} in ${dubDir} is from an older schema (found version ${version}, ` +
+        `expected ${DUB_PLACEMENT_VERSION}). It is a regenerable intermediate — re-run \`yt2x dub\` ` +
+        "for this video. The file itself is not damaged.",
+    );
+  }
+  throw new Error(
+    `Invalid ${DUB_PLACEMENT_FILE} in ${dubDir} (expected schema version ${DUB_PLACEMENT_VERSION}): ` +
+      `${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+  );
 };
 
 export const writeDubGateReport = async (

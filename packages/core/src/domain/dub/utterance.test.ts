@@ -84,3 +84,60 @@ describe("segmentUtterances", () => {
     expect(u[0]).toMatchObject({ text: "one two.", startMs: 0, endMs: 460, wordCount: 2 });
   });
 });
+
+describe("segmentUtterances · 最小时长合并", () => {
+  it("merges an utterance shorter than the floor into its neighbour", () => {
+    const words: TimedWord[] = [
+      { word: "long", startMs: 0, endMs: 2_000 },
+      { word: "enough.", startMs: 2_000, endMs: 4_000 },
+      // 只有 300ms，单独合成时固定开销就装不下
+      { word: "Right.", startMs: 4_100, endMs: 4_400 },
+    ];
+    const u = segmentUtterances(words, { minDurationMs: 2_000 });
+    expect(u).toHaveLength(1);
+    expect(u[0]?.text).toBe("long enough. Right.");
+    expect(u[0]).toMatchObject({ startMs: 0, endMs: 4_400 });
+  });
+
+  it("prefers the neighbour separated by the smaller gap", () => {
+    const words: TimedWord[] = [
+      { word: "first.", startMs: 0, endMs: 2_500 },
+      // 距前一句 900ms、距后一句 100ms —— 应并入后一句
+      { word: "Ok.", startMs: 3_400, endMs: 3_700 },
+      { word: "second", startMs: 3_800, endMs: 6_000 },
+      { word: "sentence.", startMs: 6_000, endMs: 8_000 },
+    ];
+    const u = segmentUtterances(words, { minDurationMs: 2_000 });
+    expect(u).toHaveLength(2);
+    expect(u[0]?.text).toBe("first.");
+    expect(u[1]?.text).toBe("Ok. second sentence.");
+  });
+
+  it("leaves a short utterance alone when merging would breach the duration cap", () => {
+    const words: TimedWord[] = [
+      { word: "a", startMs: 0, endMs: 5_000 },
+      { word: "b.", startMs: 5_000, endMs: 9_500 },
+      // 并入前一句会跨到 10.4s，超过 10s 上限，因此不能并
+      { word: "c.", startMs: 10_100, endMs: 10_400 },
+    ];
+    const u = segmentUtterances(words, { minDurationMs: 2_000, maxDurationMs: 10_000 });
+    expect(u).toHaveLength(2);
+    expect(u[1]?.text).toBe("c.");
+  });
+
+  it("does not merge when no floor is configured", () => {
+    const words: TimedWord[] = [
+      { word: "one.", startMs: 0, endMs: 3_000 },
+      { word: "two.", startMs: 3_100, endMs: 3_400 },
+    ];
+    expect(segmentUtterances(words)).toHaveLength(2);
+  });
+
+  it("keeps a lone short utterance rather than dropping it", () => {
+    const u = segmentUtterances([{ word: "Hi.", startMs: 0, endMs: 400 }], {
+      minDurationMs: 2_000,
+    });
+    expect(u).toHaveLength(1);
+    expect(u[0]?.text).toBe("Hi.");
+  });
+});

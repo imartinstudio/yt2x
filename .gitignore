@@ -58,6 +58,13 @@ files/_bench-*/
 # ── Python (skills / scripts) ───────────────────────────────────────────────
 **/__pycache__/
 *.py[cod]
+# 可选重型依赖装在独立 venv 里（见 docs/USAGE.md 的「可选 Python 依赖」）。
+# `.venv-demucs/` 有 700MB+ 的 torch，目前没进 git 只是因为 `python -m venv`
+# 会在自己目录里写一个 `.gitignore`——换个 venv 名字或删掉那个文件，一次
+# `git add -A` 就能把它推上去。这里显式兜住。
+.venv/
+.venv-*/
+venv/
 
 # ── Agent MCP temp files ─────────────────────────────────────────────────────
 .playwright-mcp/

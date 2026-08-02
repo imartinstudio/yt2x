@@ -7,3 +7,15 @@ pnpm-lock.yaml
 NOTICE
 .hermes/
 .superpowers/
+
+# Python virtualenvs for the optional heavy deps. Prettier walks these
+# otherwise — 35 of the 38 files `pnpm run ci` used to report were inside
+# torch. Nothing here is ours to format.
+.venv/
+.venv-*/
+venv/
+
+# Agent-generated plans, specs and scratch output. Same class as
+# `.superpowers/` above: documents a session wrote, not source we style.
+docs/superpowers/
+outputs/

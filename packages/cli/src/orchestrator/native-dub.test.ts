@@ -127,6 +127,10 @@ describe("parseOriginalVoiceVolume", () => {
   it("rejects a non-numeric value", () => {
     expect(() => parseOriginalVoiceVolume("loud")).toThrow(/non-negative/);
   });
+
+  it("rejects a partially numeric value instead of silently truncating it", () => {
+    expect(() => parseOriginalVoiceVolume("0.35oops")).toThrow(/non-negative/);
+  });
 });
 
 describe("executeNativeDub hard-subtitle guard", () => {

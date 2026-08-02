@@ -154,7 +154,7 @@ const parseDubTimeRange = (
  */
 export const parseOriginalVoiceVolume = (raw: string | undefined): number | undefined => {
   if (raw === undefined) return undefined;
-  const n = Number.parseFloat(raw);
+  const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) {
     throw new Error(
       `Invalid --original-voice-volume: expected a non-negative number, got ${JSON.stringify(raw)}`,

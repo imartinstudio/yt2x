@@ -35,6 +35,8 @@ export const DUB_SCRIPT_FILE = "dub-script.json";
 export const DUB_TIMING_FILE = "dub-timing.json";
 export const DUB_PLAN_FILE = "dub-plan.json";
 export const DUB_PLACEMENT_FILE = "dub-placement.json";
+/** 落点报告的当前 schema 版本；schema 与两条错误信息共用，避免三处各写一个字面量。 */
+export const DUB_PLACEMENT_VERSION = 3;
 export const DUB_REPORT_FILE = "dub-report.json";
 export const DUB_LINES_DIR = "lines";
 export const DUB_DEMUCS_DIR = "demucs";
@@ -272,7 +274,7 @@ const DubPlacedLineSchema = z.object({
  * 标记（见 issue #110），旧版本没有这两个字段，不提供兼容读取。
  */
 export const DubPlacementReportSchema = z.object({
-  version: z.literal(3),
+  version: z.literal(DUB_PLACEMENT_VERSION),
   runId: z.string().min(1),
   generatedAt: z.string().min(1),
   videoId: z.string().min(1),
@@ -295,13 +297,24 @@ export const DubPlacementReportSchema = z.object({
 export const readDubPlacementReport = async (dubDir: string): Promise<DubPlacementReport> => {
   const raw: unknown = JSON.parse(await readFile(path.join(dubDir, DUB_PLACEMENT_FILE), "utf8"));
   const parsed = DubPlacementReportSchema.safeParse(raw);
-  if (!parsed.success) {
+  if (parsed.success) return parsed.data;
+
+  // 「版本过期」与「内容残缺」要分开说。前者重跑一次就有，后者才是本文件存在的理由
+  // （issue #110 的事故：报告被覆写成只剩总时长，分析者拿残缺数据得出错误结论）。
+  // 把两者压成同一条 `Invalid ...` 会让人对着一份内容完好、只是版本旧的文件去查代码
+  // ——正是这道校验本该消除的那类误判。
+  const version = (raw as { version?: unknown } | null)?.version;
+  if (typeof version === "number" && version !== DUB_PLACEMENT_VERSION) {
     throw new Error(
-      `Invalid ${DUB_PLACEMENT_FILE} in ${dubDir} (expected schema version 3): ` +
-        `${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+      `${DUB_PLACEMENT_FILE} in ${dubDir} is from an older schema (found version ${version}, ` +
+        `expected ${DUB_PLACEMENT_VERSION}). It is a regenerable intermediate — re-run \`yt2x dub\` ` +
+        "for this video. The file itself is not damaged.",
     );
   }
-  return parsed.data;
+  throw new Error(
+    `Invalid ${DUB_PLACEMENT_FILE} in ${dubDir} (expected schema version ${DUB_PLACEMENT_VERSION}): ` +
+      `${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+  );
 };
 
 export const writeDubGateReport = async (

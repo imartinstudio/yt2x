@@ -318,7 +318,10 @@ describe("writers", () => {
     await expect(readDubPlacementReport(dubDir)).rejects.toThrow(/videoId/);
   });
 
-  it("rejects a pre-#110 (version 2) placement report that has no runId/generatedAt", async () => {
+  it("tells an out-of-date placement report apart from a damaged one", async () => {
+    // 两类失败的处置完全不同：版本旧的文件内容完好，重跑一次就有；被覆写成残缺的
+    // 才是 #110 事故本身。压成同一条 "Invalid ..." 会让人对着一份好文件去查代码——
+    // 正是这道校验本该消除的那类误判。
     const dubDir = path.join(await tmpRoot(), "dub");
     await mkdir(dubDir, { recursive: true });
     await writeFile(
@@ -326,8 +329,12 @@ describe("writers", () => {
       JSON.stringify({ ...placement, version: 2, runId: undefined, generatedAt: undefined }),
       "utf8",
     );
-    await expect(readDubPlacementReport(dubDir)).rejects.toThrow(
-      /Invalid dub-placement\.json/,
+    await expect(readDubPlacementReport(dubDir)).rejects.toThrow(/older schema/u);
+    await expect(readDubPlacementReport(dubDir)).rejects.toThrow(/re-run/u);
+    await expect(readDubPlacementReport(dubDir)).rejects.toThrow(/not damaged/u);
+    // 而残缺的那条仍然报 Invalid，两者措辞不重叠
+    await expect(readDubPlacementReport(dubDir)).rejects.not.toThrow(
+      /Invalid dub-placement\.json/u,
     );
   });
 

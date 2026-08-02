@@ -106,7 +106,9 @@ describe("executeDubReplay", () => {
     expect(await executeDubReplay({ videoId, articleOutDir: articleRoot })).toBe(0);
 
     const output = stdout.mock.calls.map((call) => String(call[0])).join("");
-    expect(output).toMatch(/seeded-run-id|盘上/);
+    // 只认 runId：原先写成 /seeded-run-id|盘上/，而「盘上」在所有失败文案里都出现，
+    // 把来源标记整个删掉这条断言照样绿——等于没有钉住它声称要钉的行为。
+    expect(output).toMatch(/seeded-run-id/);
   });
 
   it("flags a truncated placement report instead of silently skipping the reconciliation", async () => {

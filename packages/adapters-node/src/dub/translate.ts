@@ -360,11 +360,20 @@ export const translateUtterances = async (
         jsonMode: true,
         ...(input.signal !== undefined ? { signal: input.signal } : {}),
       });
+      const telegraphicByIndex = new Map(
+        telegraphic.map(({ utterance }) => [utterance.index, utterance] as const),
+      );
       let speakable = 0;
       for (const line of parseResponse(resp.content.trim())) {
         // 只在改写确实不再是电报体时才替换——否则留着原译文，别拿一个同样难读的
-        // 版本盖掉一个已知难读的版本。
-        if (translated.has(line.index) && !isTelegraphicChinese(line.text)) {
+        // 版本盖掉一个已知难读的版本；同时再次校验保护术语，避免口语化改写把英文
+        // 专名掏掉。
+        const utterance = telegraphicByIndex.get(line.index);
+        if (
+          utterance !== undefined &&
+          !isTelegraphicChinese(line.text) &&
+          findMissingProtectedTerms(utterance.text, line.text).length === 0
+        ) {
           translated.set(line.index, line.text);
           speakable += 1;
         }

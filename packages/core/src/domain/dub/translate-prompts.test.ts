@@ -312,11 +312,24 @@ describe("isTelegraphicChinese", () => {
     expect(isTelegraphicChinese("答问者即你用Grill Me技能需善规划懂范围")).toBe(true);
   });
 
+  it("flags a bookish need-plus-ability construction even when punctuation is present", () => {
+    expect(isTelegraphicChinese("回答问题的人，也就是你，用这个技能需擅长规划，理解范围。")).toBe(true);
+    // The real 121-line artifact uses the modern modal "要" but keeps the same compressed
+    // predicate chain; it must be covered by the same detector.
+    expect(isTelegraphicChinese("回答问题的人，也就是你，用这个技能要擅长规划，理解范围。")).toBe(true);
+  });
+
   it("accepts natural spoken Chinese of the same length", () => {
     expect(isTelegraphicChinese("所以我做了这个视频，帮你掌握这些技能")).toBe(false);
     expect(
       isTelegraphicChinese("刚开始追问时，上下文窗口几乎是空的，但你一直问下去"),
     ).toBe(false);
+  });
+
+  it("does not flag isolated formal-looking words that are natural in context", () => {
+    expect(isTelegraphicChinese("在此之前，我们先看一个例子。")).toBe(false);
+    expect(isTelegraphicChinese("这里有若干个例子，我们先看一个。")).toBe(false);
+    expect(isTelegraphicChinese("这里有若干个例子，另一个若干个例子也很常见。")).toBe(false);
   });
 
   it("leaves short lines alone — a brief phrase legitimately has no pause", () => {

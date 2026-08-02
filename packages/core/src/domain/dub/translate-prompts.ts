@@ -286,20 +286,78 @@ export const buildDubTranslateExpandPrompt = (
  * 大多**还没用满预算**（14字/预算21、11字/预算15），说明不是字数逼的，是整套
  * 提示词的预算话术把模型带进了「压缩语域」：最省字的写法就是切换到文言。
  *
- * 判据只用标点密度，不查词表——文言虚词逐个列举会误伤（「在此之前」「若干」都
- * 是正常口语），而「一句话十几个字不带停顿」在现代汉语口语里几乎不可能出现。
+ * 判据不能退化成文言虚词词表：文言虚词逐个列举会误伤（「在此之前」「若干」都
+ * 是正常口语）。因此保留原来的「长句零标点」信号，再加一个保守的双信号：有标点的
+ * 长句必须同时出现至少两个书面语特征，并且口语功能词密度偏低。真实稿里还出现过
+ * 「要擅长规划，理解范围」这种现代模态词包着压缩谓语链的写法；它用结构信号补上，
+ * 但要求逗号后的分句也没有口语连接词，避免把普通的「要……，还得……」误报进去。
  */
 export const TELEGRAPHIC_MIN_CHARS = 12;
 
 const CJK_PUNCT = /[，。？！、：；…—]/u;
 
-/** 该行是否读起来像电报体（够长却完全没有停顿）。 */
+/** 多个特征共现才有意义；单独的「若干」或「在此之前」不应触发重写。 */
+const FORMAL_REGISTER_FEATURES: readonly RegExp[] = [
+  /(?:需|须)(?!要)/gu,
+  /(?:擅长|善于)/gu,
+  /基于/gu,
+  /因此/gu,
+  /从而/gu,
+  /其中/gu,
+];
+
+/** 这些字在正常口语里承担连接、指代和语气功能，用来估算而非逐词判罪。 */
+const SPOKEN_FUNCTION_CHARACTERS = new Set(
+  [..."的了是在就也会能要还都让给把跟很我你这那们和但为不没又才"],
+);
+
+/** 书面特征共现时，口语功能词低于这个占比才算可疑。 */
+const FORMAL_SPOKEN_DENSITY_MAX = 0.27;
+
+const countMatches = (text: string, pattern: RegExp): number => {
+  pattern.lastIndex = 0;
+  return [...text.matchAll(pattern)].length;
+};
+
+const spokenFunctionDensity = (text: string): number => {
+  const chars = [...text];
+  if (chars.length === 0) return 1;
+  return chars.filter((char) => SPOKEN_FUNCTION_CHARACTERS.has(char)).length / chars.length;
+};
+
+/** 检测带标点但仍然像压缩语域的现代句式。 */
+const hasCompressedNeedAbilityChain = (text: string): boolean => {
+  const match = text.match(
+    /(?<!需)(?<!不)要(?:擅长|善于)[^，。！？]{1,12}[，、]([^。！？]{2,})(?:[。！？]|$)/u,
+  );
+  if (match === null) return false;
+  // 「要……，还得……」「要……，才能……」等是正常口语；裸谓语并列才可疑。
+  return spokenFunctionDensity(match[1]!) <= 0.15;
+};
+
+const isBookishChinese = (text: string, minChars: number): boolean => {
+  const trimmed = text.trim();
+  if ([...trimmed].length < minChars || !CJK_PUNCT.test(trimmed)) return false;
+
+  const formalFeatureCount = FORMAL_REGISTER_FEATURES.filter(
+    (pattern) => countMatches(trimmed, pattern) > 0,
+  ).length;
+  const hasCooccurringFormalFeatures =
+    formalFeatureCount >= 2 && spokenFunctionDensity(trimmed) <= FORMAL_SPOKEN_DENSITY_MAX;
+
+  return hasCooccurringFormalFeatures || hasCompressedNeedAbilityChain(trimmed);
+};
+
+/** 该行是否需要口语化重写；保留旧名称以兼容已有调用方。 */
 export const isTelegraphicChinese = (
   text: string,
   minChars: number = TELEGRAPHIC_MIN_CHARS,
 ): boolean => {
   const trimmed = text.trim();
-  return [...trimmed].length >= minChars && !CJK_PUNCT.test(trimmed);
+  return (
+    ([...trimmed].length >= minChars && !CJK_PUNCT.test(trimmed)) ||
+    isBookishChinese(trimmed, minChars)
+  );
 };
 
 /**
@@ -313,7 +371,7 @@ export const buildDubTranslateSpeakablePrompt = (
   items: readonly { index: number }[],
 ): string =>
   [
-    "You are rewriting Chinese dubbing subtitles that came out unspeakable. Each item below is written in a compressed, telegraphic register — classical function words, dropped particles, no punctuation — which cannot be understood when read aloud.",
+    "You are rewriting Chinese dubbing subtitles that came out unspeakable. Each item below is written in a compressed or bookish register — dropped particles, classical constructions, or punctuation that still does not make the sentence sound spoken — which cannot be understood easily when read aloud.",
     ...items.map((i) => `  index ${i.index}`),
     "",
     "Rewrite each into modern spoken Mandarin:",

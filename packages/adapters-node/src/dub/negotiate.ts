@@ -13,8 +13,9 @@ import { materializeLineAudio } from "./synthesize.js";
 /**
  * 执行时长协商计划：按需调速重合成，其余顺延，产出最终落点。
  *
- * keep 行直接复用 PR1 的 lines/*.mp3；speed 会覆盖同名文件。调速后仍明显溢出时
- * 降为 delay，保证整条链总能跑完。落点同样遵守最小句间停顿（与 plan 层一致）。
+ * keep 行直接复用 PR1 的 lines/*.mp3；speed / stretch 都要按协商的 rate 重新
+ * 合成，覆盖同名文件。调速（无论加速还是放慢）后仍明显溢出目标区间时降为
+ * delay，保证整条链总能跑完。落点同样遵守最小句间停顿（与 plan 层一致）。
  *
  * 原第三档 shorten（LLM 事后改短）已删除：冗余现在由长度受限翻译在生成配音稿
  * 阶段挤掉，见 docs/DUB-TASK.md。因此本函数不再需要 LLM。
@@ -76,6 +77,7 @@ export const applyDubNegotiation = async (
   let drift = 0;
   let keepCount = 0;
   let speedCount = 0;
+  let stretchCount = 0;
   let delayCount = 0;
   const total = input.plan.lines.length;
   const minInterSentencePauseMs =
@@ -105,17 +107,20 @@ export const applyDubNegotiation = async (
       if (action === "keep") keepCount += 1;
       else delayCount += 1;
     } else {
-      // speed
+      // speed（加速）或 stretch（反向放慢填充富余），都要按协商的 rate 重合成
       const synth = await synthesizeLine(input, text, rate, plan.index);
       durationMs = synth.durationMs;
       audioFile = synth.audioFile;
-      // 调速后仍明显溢出 → 当 delay 处理漂移
+      // 调速后仍明显溢出目标区间 → 当 delay 处理漂移（stretch 理论上不该溢出，
+      // 但引擎的调速不总是线性，保留同一道安全网）
       if (durationMs > plan.targetDurationMs + FIT_SLACK_MS) {
         warnings.push(
-          `line ${plan.index}: speed rate ${rate.toFixed(3)} still overflowed (${durationMs}ms > ${plan.targetDurationMs}ms)`,
+          `line ${plan.index}: ${action} rate ${rate.toFixed(3)} still overflowed (${durationMs}ms > ${plan.targetDurationMs}ms)`,
         );
         action = "delay";
         delayCount += 1;
+      } else if (action === "stretch") {
+        stretchCount += 1;
       } else {
         speedCount += 1;
       }
@@ -154,7 +159,7 @@ export const applyDubNegotiation = async (
 
   const audioEndMs = placed.length > 0 ? placed[placed.length - 1]!.endMs : 0;
   const report: DubPlacementReport = {
-    version: 1,
+    version: 2,
     videoId: input.plan.videoId,
     engine: input.tts.id,
     voice: input.voice,
@@ -162,6 +167,7 @@ export const applyDubNegotiation = async (
     extendMs: Math.round(drift),
     audioEndMs,
     speedCount,
+    stretchCount,
     delayCount,
     keepCount,
   };

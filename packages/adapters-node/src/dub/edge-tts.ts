@@ -19,7 +19,7 @@ import { parseEdgeTtsSubtitles } from "./edge-tts-subtitles.js";
  * edge-tts 是一个本地 CLI（微软 Edge 朗读服务的非官方客户端），没有 HTTP SDK，
  * 只能把音频写到文件再读回来：
  *
- *   edge-tts -t "文本" -v zh-CN-YunxiNeural --rate=+10% \
+ *   edge-tts -t "文本" -v zh-CN-YunjianNeural --rate=+10% \
  *     --write-media out.mp3 --write-subtitles out.vtt
  *
  * `--write-subtitles` 给出短语级时间戳；第一条 cue 起点即前置 padding。
@@ -31,7 +31,15 @@ export const EDGE_TTS_ENGINE_ID = "edge-tts";
 /** edge-tts 的 `--rate` 理论上无上限，但超出这个区间音质会崩，按可用范围声明。 */
 export const EDGE_TTS_RATE_RANGE: TtsRateRange = { min: 0.5, max: 2.0 };
 
-export const DEFAULT_EDGE_TTS_VOICE = "zh-CN-YunxiNeural";
+/**
+ * 默认音色：云健（Sports, Novel / Passion）。此前默认云希（Novel / Lively, Sunshine）
+ * 年轻明亮，与技术讲解的调性不符；用同一段真实台词横向试听后改选云健，实际听感比
+ * 引擎标签更沉稳。见 docs/DUB-TASK.md PR4「默认音色改为云健」。
+ *
+ * 换音色的时长影响：同一段台词实测云希 12.8s、云健 13.3s——云健慢约 4%，
+ * `packages/core/src/domain/dub/gate.ts` 的门禁阈值须以此重新标定，见该文件注释。
+ */
+export const DEFAULT_EDGE_TTS_VOICE = "zh-CN-YunjianNeural";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 

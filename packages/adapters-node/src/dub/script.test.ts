@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { ChatRequest, ChatResponse, LlmPort, Utterance } from "@yt2x/core";
 import { generateDubScript } from "./script.js";
 
-// 每句给足 8s 时长：让默认时长模型算出的字符预算（约 53 字）远大于测试用的
-// 短译文，避免 translateUtterances 的超预算收紧通道意外发起额外一轮请求。
+// 每句给足 8s 时长，字符预算约 53 字。测试用的译文长度需要落在 [0.6, 1.0] 倍预算
+// 区间内（约 32-53 字），否则会意外触发 translateUtterances 的超预算收紧或
+// 低于预算反向重译通道，多发一轮请求。
 const utterance = (index: number, text: string): Utterance => ({
   index,
   startMs: (index - 1) * 10_000,
@@ -45,8 +46,8 @@ describe("generateDubScript", () => {
     ];
     const { llm, requests } = stubLlm(() =>
       jsonLines([
-        { index: 1, text: "所以我们需要一个新方案" },
-        { index: 2, text: "另外还要看成本" },
+        { index: 1, text: "所以我们现在真的需要重新制定一个全新的完整方案，必须尽快落地执行到位" },
+        { index: 2, text: "另外我们还得认真考虑一下这件事情背后的实际成本问题，千万不要忽略了它" },
       ]),
     );
 
@@ -69,7 +70,7 @@ describe("generateDubScript", () => {
       startMs: 0,
       endMs: 8_000,
       targetDurationMs: 8_000,
-      text: "所以我们需要一个新方案",
+      text: "所以我们现在真的需要重新制定一个全新的完整方案，必须尽快落地执行到位",
       sourceText: "so we need a new plan",
       cueIndices: [1],
     });
@@ -77,9 +78,16 @@ describe("generateDubScript", () => {
 
   it("batches long inputs at 20 utterances per request", async () => {
     const utterances = Array.from({ length: 45 }, (_, i) => utterance(i + 1, `sentence ${i + 1}`));
+    // 35 字左右的占位译文，落在 [32, 53] 预算区间内，避免触发额外的收紧/扩写请求。
+    // 必须带标点：零标点的长句会被判为电报体，触发第四道「口语化重写」请求，
+    // 让这条数批次的断言失真。
+    const longTranslation = (index: number): string =>
+      `这是用于批处理测试的中文配音译文，占位内容示例文字，用于凑够预算长度，第${index}句`;
     const { llm, requests } = stubLlm((req) => {
       const payload = JSON.parse(req.messages[1]!.content) as { index: number }[];
-      return jsonLines(payload.map((item) => ({ index: item.index, text: `译${item.index}` })));
+      return jsonLines(
+        payload.map((item) => ({ index: item.index, text: longTranslation(item.index) })),
+      );
     });
 
     const result = await generateDubScript(baseInput(utterances, llm));
@@ -87,7 +95,7 @@ describe("generateDubScript", () => {
     expect(requests).toHaveLength(3);
     expect(result.script.lines).toHaveLength(45);
     expect(result.droppedCount).toBe(0);
-    expect(result.script.lines.at(-1)?.text).toBe("译45");
+    expect(result.script.lines.at(-1)?.text).toBe(longTranslation(45));
   });
 
   it("drops an utterance that never gets a translation, without a fabricated fallback", async () => {

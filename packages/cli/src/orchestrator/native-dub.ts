@@ -1,29 +1,34 @@
-import { access } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   DEFAULT_EDGE_TTS_VOICE,
   DEFAULT_OUT_DIR,
   ELEVENLABS_API_KEY_ENV,
   applyDubNegotiation,
+  burnBilingualSubtitles,
   createEdgeTtsAdapter,
   createElevenLabsAdapter,
   defaultProcessRunner,
   dubDemucsDirFor,
   dubDirFor,
   dubbedVideoPathFor,
+  dubEnSrtPathFor,
   dubReverseSrtPathFor,
+  dubZhSrtPathFor,
+  evaluateDubBilingualGate,
   extractDubSourceWindow,
   generateDubScript,
   guardDubSourceAgainstHardSubtitles,
   isDemucsError,
   isDubHardSubtitleError,
+  muxDubbedVideo,
   probeDemucs,
   readDubWords,
   readDubScript,
   readDubTimingReport,
   readElevenLabsApiKeyFromEnv,
   readElevenLabsVoiceFromEnv,
-  remixDubbedVideo,
+  remixDubbedAudio,
   resolveDubSourceVideo,
   resolveDubWordsPath,
   sanitizeVideoId,
@@ -40,7 +45,9 @@ import {
   buildNegotiateInputs,
   evaluateDubGate,
   filterUtterancesByTimeRange,
+  formatReverseEnSrt,
   formatReverseSrt,
+  formatReverseZhSrt,
   isTtsError,
   planDubNegotiation,
   resolveMaxExtendMs,
@@ -55,10 +62,17 @@ import { printCliErrorBlock } from "../diagnostics/error-format.js";
 import { NATIVE_EXIT, resolveNativeLlm, type NativeLlmCliFlags } from "./native-stage-common.js";
 
 /**
- * `yt2x dub` 编排（PR3）：
+ * `yt2x dub` 编排（PR3 起步，PR4「统一交付」改造）：
  *
- *   Demucs 探测 → 配音稿 → 自然语速 TTS → 时长协商 → 门禁 → 分离 BGM →
- *   反向 SRT → 混音 + 可选重烧 → full.zh-dubbed.mp4
+ *   Demucs 探测 → 配音稿 → 自然语速 TTS → 时长协商 → 配音门禁（gate.ts）→
+ *   分离 BGM → 反向双语 SRT（中/英/双语三份）→ 双语质量门（readyForBurn）→
+ *   混音 + 按需冻结帧 → 双语烧录一次完成换音轨 + 烧字幕 → full.zh-dubbed.mp4
+ *
+ * 两道门都得过才烧（见 docs/DUB-TASK.md「统一交付」）：配音门禁管时长/间隔/丢句/译文
+ * 预算占用，双语质量门管字幕布局/字体回退/三份 SRT 一致性/术语保护，两者维度不同、
+ * 缺一不可。配音自 PR4 起不再自建烧录——混音与冻结帧仍在这里做，但最终的字幕烧录
+ * 统一交给 `burnBilingualSubtitles`（双语字幕交付路径本身也在用的同一个函数），
+ * 用它的「替换音轨」参数在同一次 ffmpeg 调用里换音轨 + 烧字幕，不再多编码一次。
  *
  * 引擎默认 edge-tts（调试）；成片用 `--dub-engine elevenlabs`。
  * pipeline `--dub` 默认走 elevenlabs。
@@ -83,6 +97,7 @@ export type DubFlags = NativeLlmCliFlags & {
   demucsModel?: string;
   pythonPath?: string;
   maxDurationMs?: string;
+  minDurationMs?: string;
   scriptOnly?: boolean;
   timingOnly?: boolean;
   skipBurn?: boolean;
@@ -136,10 +151,34 @@ const parsePositiveInt = (raw: string | undefined): number | undefined => {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 };
 
-const segmentOptionsFrom = (flags: DubFlags): SegmentUtterancesOptions => {
+/**
+ * `--min-duration-ms` 默认值推导。
+ *
+ * `dubTranslateCharBudget`（core/dub/translate-prompts.ts）把可用时长换算成字符预算：
+ * `budget = floor((availableMs - fixedOverheadMs) / msPerChar)`，clamp 到最低 1 字。任何
+ * 目标时长不超过固定开销的话语单元，预算都会被 clamp 到 1-2 字——这正是真实全片里
+ * 17/149（11.4%，`zh-CN-YunxiNeural` 时代的观测）译文被压成单字的根因（例如
+ * "You need to understand things like scope." → 「懂」）。
+ *
+ * 只把默认值抬到刚好越过固定开销不够：那样预算仍只有 1-2 字，塞不下一个完整分句。
+ * 反推需要多少字才够表达完整意思——取约 10 个汉字（如"你需要理解范围这个概念"）作为
+ * 「一个简短但完整的分句」的下限。
+ *
+ * **2026-08-01 随 `zh-CN-YunjianNeural` 重新标定后复核**：`TTS_FIXED_OVERHEAD_MS`
+ * 1873→1132、`TTS_MS_PER_CHINESE_CHAR` 114.5→175.2，代入 `1132 + 175.2 × 10 ≈ 2884ms`，
+ * 仍取整 3000ms——不变，因为它在新模型下留出的余量反而更大：`floor((3000-1132)/175.2)
+ * = 10` 个字（旧模型下 `floor((3000-1873)/114.5) = 9` 个字），3000ms 仍然覆盖「10 个字
+ * 的简短完整分句」这条判据，无需调整。低于此时长的话语单元在切分阶段就并入相邻单元，
+ * 而不是把必然溢出的预算交给后续的翻译/时长协商去救。
+ */
+export const DEFAULT_MIN_DURATION_MS = 3_000;
+
+/** 导出给单测直接验证 `--min-duration-ms` / `--max-duration-ms` 的解析与默认值。 */
+export const segmentOptionsFrom = (flags: DubFlags): SegmentUtterancesOptions => {
   const options: SegmentUtterancesOptions = {};
   const maxDurationMs = parsePositiveInt(flags.maxDurationMs);
   if (maxDurationMs !== undefined) options.maxDurationMs = maxDurationMs;
+  options.minDurationMs = parsePositiveInt(flags.minDurationMs) ?? DEFAULT_MIN_DURATION_MS;
   return options;
 };
 
@@ -630,6 +669,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         planPath,
         keep: plan.keepCount,
         speed: plan.speedCount,
+        stretch: plan.stretchCount,
         delay: plan.delayCount,
         extendMs: plan.extendMs,
       },
@@ -659,6 +699,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
         placementPath,
         extendMs: placement.extendMs,
         audioEndMs: placement.audioEndMs,
+        stretch: placement.stretchCount,
         delay: placement.delayCount,
       },
       "yt2x dub: placement ready",
@@ -725,38 +766,141 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       "yt2x dub: Demucs ready",
     );
 
-    // ── 7. 反向 SRT + 混音重烧 ──
-    const reverseSrt = formatReverseSrt(placement.lines);
+    // ── 7. 反向双语 SRT：中文、英文、双语三份，共用同一批 cue（同一个 index/时间戳空间）──
+    const bilingualSrt = formatReverseSrt(placement.lines, script.lines);
+    const zhSrt = formatReverseZhSrt(placement.lines, script.lines);
+    const enSrt = formatReverseEnSrt(placement.lines, script.lines);
     // 时间窗冒烟写到 dub/work/，与 dubbedPath / dub-script.json 的规则一致，避免用
-    // 30 秒窗口的字幕覆盖全片的 video/full.zh-dub.srt。
-    const reverseSrtPath = hasTimeRange
-      ? path.join(
-          dubDir,
-          "work",
-          `window-${timeRange.startMs ?? 0}-${timeRange.endMs ?? "end"}.zh-dub.srt`,
-        )
+    // 短窗口的字幕覆盖全片的 video/full.zh-dub*.srt。
+    const windowSuffix = `window-${timeRange.startMs ?? 0}-${timeRange.endMs ?? "end"}`;
+    const bilingualSrtPath = hasTimeRange
+      ? path.join(dubDir, "work", `${windowSuffix}.zh-dub.srt`)
       : dubReverseSrtPathFor(articleRoot, videoId);
-    logger.info({ videoId, dubbedPath }, "yt2x dub: remixing and muxing…");
-    const remix = await remixDubbedVideo({
+    const zhSrtPath = hasTimeRange
+      ? path.join(dubDir, "work", `${windowSuffix}.zh-dub.zh.srt`)
+      : dubZhSrtPathFor(articleRoot, videoId);
+    const enSrtPath = hasTimeRange
+      ? path.join(dubDir, "work", `${windowSuffix}.zh-dub.en.srt`)
+      : dubEnSrtPathFor(articleRoot, videoId);
+
+    await mkdir(path.dirname(bilingualSrtPath), { recursive: true });
+    const writeSrt = async (filePath: string, content: string): Promise<void> =>
+      writeFile(filePath, content.endsWith("\n") || content.length === 0 ? content : `${content}\n`, "utf8");
+    await Promise.all([
+      writeSrt(bilingualSrtPath, bilingualSrt),
+      writeSrt(zhSrtPath, zhSrt),
+      writeSrt(enSrtPath, enSrt),
+    ]);
+
+    // ── 8. 双语质量门：与第 5 步的配音门禁相互独立，管字幕布局/字体回退/三份 SRT
+    // 一致性/术语保护（见 docs/DUB-TASK.md「统一交付」）。两个门都得过才烧。 ──
+    const bilingualGate = await evaluateDubBilingualGate({
+      bilingualSrt,
+      zhSrt,
+      enSrt,
+      videoWidth: 1280,
+      videoHeight: 720,
+      runner: defaultProcessRunner,
+      // 每个话语单元的实测终点，供术语保护校验按话语单元分组比对（见 bilingual-gate.ts）。
+      utteranceBoundariesMs: placement.lines.map((line) => line.endMs),
+    });
+    for (const issue of bilingualGate.issues) {
+      logger.warn(
+        { videoId, code: issue.code, severity: issue.severity },
+        `dub bilingual gate: ${issue.message}`,
+      );
+    }
+    logger.info(
+      {
+        videoId,
+        readyForBurn: bilingualGate.readyForBurn,
+        issueCount: bilingualGate.issues.length,
+        issueCodes: bilingualGate.issues.map((issue) => issue.code),
+      },
+      "yt2x dub: bilingual delivery gate evaluated",
+    );
+    if (!bilingualGate.readyForBurn && flags.skipGate !== true) {
+      printCliErrorBlock({
+        command: "dub",
+        subject: videoId,
+        reason: `Bilingual subtitle quality gate blocked delivery (${bilingualGate.issues.length} issue(s)). See the "dub bilingual gate" log lines above.`,
+        hints: [
+          "字幕布局 / 字体回退 / 三份 SRT 一致性 / 术语保护未通过，检查上方 dub bilingual gate 日志。",
+          "Use --skip-gate only for debugging; it does not write a separate report file.",
+        ],
+        retryCommand: `pnpm yt2x dub --video-id ${videoId} --force`,
+      });
+      return EXIT_GATE_BLOCKED;
+    }
+
+    // ── 9. 混音 + 按需冻结帧：交出中文音轨与（必要时）冻结延长后的画面，不再自建烧录 ──
+    logger.info({ videoId, dubbedPath }, "yt2x dub: mixing the Chinese voice track…");
+    const remix = await remixDubbedAudio({
       videoPath: sourceVideo.videoPath,
       noVocalsPath: separated.noVocalsPath,
+      // 原声压低垫在成片里，不是整条替换掉——观众仍能听见讲者本人的语气。
+      vocalsPath: separated.vocalsPath,
       placedLines: placement.lines,
       dubDir: synthDir,
-      reverseSrt,
-      reverseSrtPath,
-      outputPath: dubbedPath,
       extendMs: placement.extendMs,
       ...(flags.ffmpegPath !== undefined ? { ffmpegPath: flags.ffmpegPath } : {}),
       ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
-      ...(flags.skipBurn === true ? { skipBurn: true } : {}),
     });
+
+    if (flags.skipBurn === true) {
+      // 调试用途：只换音轨，不烧字幕。冻结帧分支下 videoForBurnPath 已经是带正确
+      // 音轨的完整成片；非冻结帧分支下还需要一次单独的 mux 才能落地最终文件。
+      if (remix.replaceAudioPath !== undefined) {
+        await muxDubbedVideo({
+          videoPath: remix.videoForBurnPath,
+          audioPath: remix.replaceAudioPath,
+          outputPath: dubbedPath,
+          videoPadMs: 0,
+          outputDurationMs: remix.outputDurationMs,
+          runner: defaultProcessRunner,
+          ffmpegPath: flags.ffmpegPath ?? "ffmpeg",
+          ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
+        });
+      } else {
+        await mkdir(path.dirname(dubbedPath), { recursive: true });
+        await muxDubbedVideo({
+          videoPath: remix.videoForBurnPath,
+          audioPath: remix.mixedAudioPath,
+          outputPath: dubbedPath,
+          videoPadMs: 0,
+          outputDurationMs: remix.outputDurationMs,
+          runner: defaultProcessRunner,
+          ffmpegPath: flags.ffmpegPath ?? "ffmpeg",
+          ...(flags.ffprobePath !== undefined ? { ffprobePath: flags.ffprobePath } : {}),
+        });
+      }
+      logger.info(
+        { videoId, outputPath: dubbedPath, extendMs: remix.extendMs },
+        "yt2x dub: done (--skip-burn, audio replaced only)",
+      );
+      return 0;
+    }
+
+    // ── 10. 双语烧录：同一次 ffmpeg 调用换音轨 + 烧字幕，只编码一次 ──
+    logger.info({ videoId, dubbedPath }, "yt2x dub: burning bilingual subtitles…");
+    const burn = await burnBilingualSubtitles({
+      srtPath: bilingualSrtPath,
+      enSrtPath,
+      zhSrtPath,
+      videoPath: remix.videoForBurnPath,
+      outputPath: dubbedPath,
+      runner: defaultProcessRunner,
+      force: flags.force === true,
+      ...(remix.replaceAudioPath !== undefined ? { replaceAudioPath: remix.replaceAudioPath } : {}),
+    });
+    for (const warning of burn.warnings) logger.warn({ videoId }, `dub burn: ${warning}`);
 
     logger.info(
       {
         videoId,
-        outputPath: remix.outputPath,
-        burned: remix.burned,
-        skippedBurnReason: remix.skippedBurnReason,
+        outputPath: dubbedPath,
+        burned: burn.burned,
+        skipped: burn.skipped,
         extendMs: remix.extendMs,
       },
       "yt2x dub: done",

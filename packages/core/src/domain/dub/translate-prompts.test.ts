@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDubTranslateExpandPrompt,
+  buildDubGlossaryRepairUserPrompt,
+  buildDubSpeakableRepairUserPrompt,
+  isTelegraphicChinese,
+  buildDubTranslateGlossaryRepairPrompt,
   buildDubTranslatePayload,
   buildDubTranslateRepairPrompt,
+  buildDubTranslateTightenPrompt,
   buildDubTranslateUserPrompt,
+  DEFAULT_SPEECH_RATE,
   dubTranslateCharBudget,
   estimateSpokenMs,
   getDubTranslateSystemPrompt,
+  TTS_FIXED_OVERHEAD_MS,
+  TTS_MS_PER_CHINESE_CHAR,
 } from "./translate-prompts.js";
 import type { Utterance } from "./types.js";
 
@@ -47,6 +56,20 @@ describe("dubTranslateCharBudget", () => {
   });
 });
 
+describe("TTS_FIXED_OVERHEAD_MS / TTS_MS_PER_CHINESE_CHAR", () => {
+  it("matches the zh-CN-YunjianNeural calibration, not the stale zh-CN-YunxiNeural values", () => {
+    // 回归哨兵：这两个常数曾经按旧音色（云希）标定却从未随默认音色改成云健而重新
+    // 校准，导致字符预算系统性偏松、全片被硬门禁拦下。防止未来又出现同样的漂移——
+    // 换音色时这个测试会因为常数不匹配而失败，逼开发者显式更新并写清楚标定依据。
+    expect(TTS_FIXED_OVERHEAD_MS).toBe(1_132);
+    expect(TTS_MS_PER_CHINESE_CHAR).toBe(175.2);
+    expect(DEFAULT_SPEECH_RATE).toEqual({
+      fixedOverheadMs: 1_132,
+      msPerChar: 175.2,
+    });
+  });
+});
+
 describe("getDubTranslateSystemPrompt", () => {
   const prompt = getDubTranslateSystemPrompt();
 
@@ -55,14 +78,97 @@ describe("getDubTranslateSystemPrompt", () => {
     expect(prompt).toMatch(/maxChars/);
   });
 
+  it("tells the model to fill the budget (85-100%), not just avoid exceeding it", () => {
+    expect(prompt).toMatch(/FILL the budget/i);
+    expect(prompt).toMatch(/85-100%/);
+  });
+
+  it("warns that landing far under budget leaves dead air with no voice or subtitle", () => {
+    expect(prompt).toMatch(/60%/);
+    expect(prompt).toMatch(/no dubbed audio and no subtitle/i);
+  });
+
+  it("directs freed-up budget toward completeness, not padding", () => {
+    expect(prompt).toMatch(/restore details/i);
+    expect(prompt).toMatch(/not merely to consume characters|not padding/i);
+  });
+
   it("requires proper nouns and identifiers to survive verbatim", () => {
     expect(prompt).toMatch(/Proper nouns/i);
     expect(prompt).toMatch(/verbatim|EXACTLY/i);
   });
 
+  it("lists the glossary skill names and names that must never be translated", () => {
+    // grill me / grill with docs 是本仓库真实存在的技能名，之前被当成普通短语翻译掉了
+    expect(prompt).toMatch(/Grill Me/);
+    expect(prompt).toMatch(/Grill with Docs/);
+    expect(prompt).toMatch(/Ryan Singer/);
+  });
+
+  it("tells the model the glossary match is case-insensitive against the lower-cased transcript", () => {
+    // ASR 转写稿几乎总是纯小写，术语表本身是首字母大写拼写
+    expect(prompt).toMatch(/case-insensitiv/i);
+  });
+
+  it("locks the grill-family derived forms to one consistent Chinese rendering each", () => {
+    // 真实成片曾把同一个 grill 译成"提问环节""评审会""可评审""带文档的评审"四种
+    // 不同的东西；提示词必须把每个派生形式的译法写死，不能留给模型逐句现场决定
+    expect(prompt).toMatch(/grilling session.*追问环节/);
+    expect(prompt).toMatch(/grillable.*可追问/);
+    expect(prompt).toMatch(/ungrillable.*不可追问/);
+    expect(prompt).not.toMatch(/评审/);
+  });
+
+  it("locks fidelity to one rendering instead of letting it drift across 保真/精确/精度", () => {
+    expect(prompt).toMatch(/fidelity.*保真度/);
+  });
+
+  it("tells the model rule 9's skill names win over rule 10's generic grill/fidelity mapping", () => {
+    // 真实运行中 LLM 把 "grill me"/"grill with docs" 当成了裸词 "grill" 的派生用法，
+    // 套用了追问译法，把技能名也翻译掉了。两条规则必须明确谁优先。
+    expect(prompt).toMatch(/does NOT apply to.*grill me.*grill with docs/is);
+  });
+
+  it("gives a worked example translating the actual skill-name sentence", () => {
+    // 用真实的第一句台词做少样本示例，直接锚定"grill me"/"grill with docs" 保留英文、
+    // 其余部分翻译——比抽象规则更能防止模型把整个短语当成普通动词短语处理
+    expect(prompt).toMatch(/grill me skills and grill with docs/i);
+    expect(prompt).toMatch(/Example/i);
+  });
+
+  it("gives a worked example where the protected skill name and a rule-10 derived word share one sentence", () => {
+    // 真实全片第 25 句复现过的形态："grill me skills"（专有名词，应保留英文）和
+    // "grilling session"（普通派生词，应译成"追问环节"）同句出现，模型把两者混为
+    // 一谈，连专名也一起译掉了。这条少样本示例直接锚定同句内两种词的正确处理方式。
+    expect(prompt).toMatch(
+      /the grill me skills is trying to answer high fidelity questions during a grilling session/i,
+    );
+    expect(prompt).toMatch(/Grill Me 技能/);
+    expect(prompt).toMatch(/追问环节回答高保真问题/);
+  });
+
+  it("tells the model not to drop a protected term split across two adjacent items by sentence segmentation", () => {
+    // 真实全片复现过："2PRD" 被 ASR 切断在两个话语单元的分界上（"...just run two" /
+    // "PRD in there. ..."），模型翻译第二个单元时把 "PRD" 直接漏译，理由大概是
+    // "已经在上一句体现过了"——但每个 item 是独立打分的，必须各自完整。
+    expect(prompt).toMatch(/split across two adjacent items/i);
+    expect(prompt).toMatch(/just run two/i);
+    expect(prompt).toMatch(/PRD in there/i);
+    expect(prompt).toMatch(/never drop it from an item/i);
+  });
+
   it("tells the model to spend the budget on redundancy, not on content", () => {
     expect(prompt).toMatch(/filler|redundan/i);
     expect(prompt).toMatch(/fact|number|name/i);
+  });
+
+  it("forbids paying for the budget by switching to a classical register", () => {
+    // 真实全片 121 句里 36 句零标点、写成文言（「故我做此视频助你精通这些技能」），
+    // 而且多数**还没用满预算**——不是字数逼的，是整套预算话术把模型带进了压缩语域。
+    expect(prompt).toMatch(/MODERN SPOKEN MANDARIN ONLY/i);
+    expect(prompt).toMatch(/never be paid for by\s+switching register/i);
+    expect(prompt).toMatch(/故我做此视频助你精通这些技能/);
+    expect(prompt).toMatch(/所以我做了这个视频/);
   });
 
   it("forbids truncation markers, which are the signature of post-hoc cutting", () => {
@@ -107,5 +213,129 @@ describe("buildDubTranslateRepairPrompt", () => {
     expect(prompt).toContain("3");
     expect(prompt).toContain("7");
     expect(prompt).toMatch(/EXACTLY|exactly/);
+  });
+});
+
+describe("buildDubTranslateTightenPrompt", () => {
+  const prompt = buildDubTranslateTightenPrompt([{ index: 4, actualChars: 90, maxChars: 76 }]);
+
+  it("pins the previous length and the budget into the instruction", () => {
+    expect(prompt).toContain("index 4");
+    expect(prompt).toContain("90");
+    expect(prompt).toContain("76");
+  });
+
+  it("asks for a tighter retranslation, not a cut of the previous attempt", () => {
+    expect(prompt).toMatch(/tighter/i);
+    expect(prompt).toMatch(/NOT an instruction to cut/i);
+  });
+});
+
+describe("buildDubTranslateGlossaryRepairPrompt", () => {
+  const prompt = buildDubTranslateGlossaryRepairPrompt([
+    { index: 25, terms: ["Grill Me"] },
+  ]);
+
+  it("pins the index and the exact missing term into the instruction", () => {
+    expect(prompt).toContain("index 25");
+    expect(prompt).toContain('"Grill Me"');
+  });
+
+  it("demands the term reappear with the exact spelling shown", () => {
+    expect(prompt).toMatch(/exact spelling and capitalization/i);
+  });
+
+  it("frames the work as editing the existing Chinese, not translating afresh", () => {
+    // 让模型「从英文重译一遍」等于把它刚失败的那道题再出一次——真实素材上连续失败过。
+    // 改成编辑已有译文后才修得动，所以这条框定必须钉住。
+    expect(prompt).toMatch(/editing task, not a translation task/i);
+    expect(prompt).not.toMatch(/translate each item again/i);
+  });
+
+  it("forbids repurposing an existing rendering of a neighbouring ordinary word", () => {
+    // 观察到的失败形态：补 "Grill Me" 时把已有的「追问环节」(grilling session) 顶掉，
+    // 检查放行而译文更错。
+    expect(prompt).toMatch(/proper noun/i);
+    expect(prompt).toMatch(/leave the ordinary word/i);
+  });
+
+  it("keeps the character budget in play so the repair cannot overflow the slot", () => {
+    expect(prompt).toMatch(/maxChars/);
+  });
+});
+
+describe("buildDubGlossaryRepairUserPrompt", () => {
+  it("sends the current Chinese and its budget, not the English source", () => {
+    // 裸数组，与其余各 pass 的载荷格式一致——parseResponse 只认数组，包一层
+    // {lines:[…]} 会让整个补漏轮解析失败。
+    const payload = JSON.parse(
+      buildDubGlossaryRepairUserPrompt([
+        { index: 25, text: "第一个失败模式：在追问环节试图回答高保真问题。", maxChars: 33 },
+      ]),
+    ) as { index: number; text: string; maxChars: number }[];
+
+    expect(payload).toEqual([
+      {
+        index: 25,
+        text: "第一个失败模式：在追问环节试图回答高保真问题。",
+        maxChars: 33,
+      },
+    ]);
+  });
+});
+
+describe("buildDubTranslateExpandPrompt", () => {
+  const prompt = buildDubTranslateExpandPrompt([{ index: 4, actualChars: 27, maxChars: 76 }]);
+
+  it("pins the previous length and the budget into the instruction", () => {
+    expect(prompt).toContain("index 4");
+    expect(prompt).toContain("27");
+    expect(prompt).toContain("76");
+  });
+
+  it("explains the consequence: dead air with no voice and no subtitle", () => {
+    expect(prompt).toMatch(/dead air/i);
+    expect(prompt).toMatch(/no voice and no subtitle/i);
+  });
+
+  it("asks for a fuller retranslation, not padding of the previous attempt", () => {
+    expect(prompt).toMatch(/use most of the budget/i);
+    expect(prompt).toMatch(/NOT an instruction to pad/i);
+  });
+});
+
+describe("isTelegraphicChinese", () => {
+  it("flags a long run with no pause, the shape produced under budget pressure", () => {
+    // 真实全片产出的原句，念出来听不懂
+    expect(isTelegraphicChinese("故我做此视频助你精通这些技能")).toBe(true);
+    expect(isTelegraphicChinese("追问始时上下文窗近空但持续进行")).toBe(true);
+    expect(isTelegraphicChinese("答问者即你用Grill Me技能需善规划懂范围")).toBe(true);
+  });
+
+  it("accepts natural spoken Chinese of the same length", () => {
+    expect(isTelegraphicChinese("所以我做了这个视频，帮你掌握这些技能")).toBe(false);
+    expect(
+      isTelegraphicChinese("刚开始追问时，上下文窗口几乎是空的，但你一直问下去"),
+    ).toBe(false);
+  });
+
+  it("leaves short lines alone — a brief phrase legitimately has no pause", () => {
+    // 判据只对够长的句子成立：口语里短句本来就不需要标点
+    expect(isTelegraphicChinese("我列了九项常见错误")).toBe(false);
+    expect(isTelegraphicChinese("开始吧")).toBe(false);
+  });
+});
+
+describe("buildDubSpeakableRepairUserPrompt", () => {
+  it("carries the English source too, since the compressed line may have lost meaning", () => {
+    const payload = JSON.parse(
+      buildDubSpeakableRepairUserPrompt([
+        { index: 43, en: "you might start with a nearly empty context window", zh: "追问始时上下文窗近空", maxChars: 23 },
+      ]),
+    ) as { index: number; en: string; zh: string; maxChars: number }[];
+
+    expect(payload[0]?.en).toContain("context window");
+    expect(payload[0]?.zh).toBe("追问始时上下文窗近空");
+    expect(payload[0]?.maxChars).toBe(23);
   });
 });

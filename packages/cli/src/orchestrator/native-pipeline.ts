@@ -645,7 +645,8 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
     }
 
     // subtitle burn stage (deferred from acquire — after article, before publish)
-    // --dub 时跳过：成片由 dub 的 reverse SRT + remix 产出 full.zh-dubbed.mp4
+    // --dub 时跳过：成片由 dub 自己的双语反向 SRT + 统一烧录（burnBilingualSubtitles）
+    // 产出 full.zh-dubbed.mp4，不经过这条纯字幕烧录路径。
     if (deferredBurn) {
       for (const id of videoIds) {
         progress.setActive(`subtitle-burn · ${id}`);

@@ -33,7 +33,7 @@ const timing = (overrides?: Partial<DubTimingReport>): DubTimingReport => ({
 });
 
 const placement = (overrides?: Partial<DubPlacementReport>): DubPlacementReport => ({
-  version: 1,
+  version: 2,
   videoId: "vid",
   engine: "edge-tts",
   voice: "v",
@@ -41,6 +41,7 @@ const placement = (overrides?: Partial<DubPlacementReport>): DubPlacementReport 
   audioEndMs: 2000,
   keepCount: 2,
   speedCount: 0,
+  stretchCount: 0,
   delayCount: 0,
   lines: [
     {
@@ -94,6 +95,15 @@ const script = (overrides?: Partial<DubScript>): DubScript => ({
     },
   ],
   ...overrides,
+});
+
+describe("DEFAULT_DUB_GATE_THRESHOLDS", () => {
+  it("keeps advisoryTextBudgetRetainFraction as an advisory-only signal, raised to 0.7", () => {
+    // 0.3 曾经形同虚设——真实素材证明它连预算只用 42% 的行都不拦。0.7 逼门禁真正
+    // 开始起作用，但仍是 advisory：这个指标结构性分辨不出"忠实压缩掉口水话"与
+    // "翻译退化砍掉内容"，升 hard 需要更多真实全片验证（见 gate.ts 顶部注释）。
+    expect(DEFAULT_DUB_GATE_THRESHOLDS.advisoryTextBudgetRetainFraction).toBe(0.7);
+  });
 });
 
 describe("evaluateDubGate", () => {
@@ -217,8 +227,50 @@ describe("evaluateDubGate", () => {
   });
 
   it("does not flag translations that use most of their time budget", () => {
-    // targetDurationMs=8340 → budget ≈ 56 chars；32 字译文占用比 ≈ 0.57，
-    // 与真实素材（0.42–1.08）同量级，不应触发 advisory。
+    // targetDurationMs=8340 → budget ≈ 56 chars；44 字译文占用比 ≈ 0.79，高于收紧后的
+    // advisory 阈值 0.7（见 gate.ts 2026-08-01 的"嘴动无声"根治：阈值从 0.3 提到 0.7，
+    // 逼译文真正用满预算而不是"能短则短"）。
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "但有时我确实会听到有用户反馈说，这个功能一连问了差不多两百个问题，让我多少有点尴尬和意外",
+            startMs: 0,
+            endMs: 8000,
+            durationMs: 8000,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      }),
+      script: {
+        ...script(),
+        lines: [
+          {
+            index: 1,
+            startMs: 0,
+            endMs: 8340,
+            targetDurationMs: 8340,
+            text: "但有时我确实会听到有用户反馈说，这个功能一连问了差不多两百个问题，让我多少有点尴尬和意外",
+            sourceText:
+              "However, I sometimes hear from people using them like, this issue just asks me 200 questions and I kind of wince a little bit.",
+            cueIndices: [1],
+          },
+        ],
+      },
+    });
+    expect(report.blocked).toBe(false);
+    expect(report.issues.some((i) => i.code === "info-loss")).toBe(false);
+  });
+
+  it("flags moderate under-use of the time budget too, now that the advisory line is raised to 0.7", () => {
+    // targetDurationMs=9000（云健标定后 budget≈44 字）→ 29 字译文占用比 ≈ 0.66，
+    // 低于收紧后的 advisory 阈值 0.7，应该报——这正是本轮要解决的
+    // "预算严重没花完"问题的中间地带。
     const report = evaluateDubGate({
       videoId: "vid",
       timing: timing(),
@@ -242,8 +294,8 @@ describe("evaluateDubGate", () => {
           {
             index: 1,
             startMs: 0,
-            endMs: 8340,
-            targetDurationMs: 8340,
+            endMs: 9000,
+            targetDurationMs: 9000,
             text: "但有时我听到用户反馈，说这个功能问了两百个问题，我有点尴尬",
             sourceText:
               "However, I sometimes hear from people using them like, this issue just asks me 200 questions and I kind of wince a little bit.",
@@ -253,12 +305,16 @@ describe("evaluateDubGate", () => {
       },
     });
     expect(report.blocked).toBe(false);
-    expect(report.issues.some((i) => i.code === "info-loss")).toBe(false);
+    expect(report.passed).toBe(true);
+    const issue = report.issues.find((i) => i.code === "info-loss");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("advisory");
   });
 
   it("skips info-loss evaluation entirely when the time budget itself is unusable, instead of scoring against a clamped budget of 1", () => {
     // dubTranslateCharBudget clamps its return value to >=1 even when the raw available
-    // duration is below the fixed TTS overhead (1873ms) — a structurally unusable budget.
+    // duration is below the fixed TTS overhead (currently calibrated to 1132ms) — a
+    // structurally unusable budget.
     // Before the fix, the guard compared against that clamped value (always >0) and never
     // skipped, so an empty translation on one of these short lines picked up a spurious
     // "info-loss" advisory on top of the (correct) hard empty-text issue. The budget being
@@ -403,5 +459,83 @@ describe("evaluateDubGate", () => {
     expect(report.metrics.lowGapCount).toBe(1);
     expect(report.metrics.minObservedGapMs).toBe(50);
     expect(report.issues.some((i) => i.code === "low-inter-sentence-pause")).toBe(true);
+  });
+
+  it("hard-blocks a translation that degenerates into punctuation only", () => {
+    // 真实案例：第 76 句被翻译成孤立的全角问号「？」，长度为 1，旧判据
+    // `text.trim().length === 0` 直接放行；edge-tts 对纯标点文本 100% 确定性失败
+    // （手测 5/5 复现），会让整趟合成从这一行开始中止，必须在门禁层拦住。
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "？",
+            startMs: 0,
+            endMs: 900,
+            durationMs: 900,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      }),
+    });
+    expect(report.blocked).toBe(true);
+    expect(report.metrics.emptyTextCount).toBe(1);
+    const issue = report.issues.find((i) => i.code === "empty-text");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("hard");
+  });
+
+  it("does not flag ordinary text that happens to contain punctuation", () => {
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing(),
+      placement: placement({
+        lines: [
+          {
+            index: 1,
+            action: "keep",
+            rate: 1,
+            text: "真的吗？",
+            startMs: 0,
+            endMs: 900,
+            durationMs: 900,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      }),
+    });
+    expect(report.issues.some((i) => i.code === "empty-text")).toBe(false);
+    expect(report.metrics.emptyTextCount).toBe(0);
+  });
+
+  it("keeps maxDelayFraction at 0.35, not the over-tightened 0.3", () => {
+    // 复审用滑窗统计证明 0.3 是纯粹的误拦（见 DEFAULT_DUB_GATE_THRESHOLDS 注释）：
+    // 一个 delayFraction=0.32 的样本必须放行，而不是被 0.3 拦下。
+    expect(DEFAULT_DUB_GATE_THRESHOLDS.maxDelayFraction).toBe(0.35);
+    const report = evaluateDubGate({
+      videoId: "vid",
+      timing: timing({ lineCount: 25 }),
+      placement: placement({
+        delayCount: 8,
+        lines: Array.from({ length: 25 }, (_, i) => ({
+          index: i + 1,
+          action: "keep" as const,
+          rate: 1,
+          text: "有字",
+          startMs: i * 1000,
+          endMs: i * 1000 + 700,
+          durationMs: 700,
+          audioFile: `lines/${i + 1}.mp3`,
+        })),
+      }),
+    });
+    expect(report.metrics.delayFraction).toBeCloseTo(0.32, 5);
+    expect(report.blocked).toBe(false);
+    expect(report.issues.some((i) => i.code === "high-delay-fraction")).toBe(false);
   });
 });

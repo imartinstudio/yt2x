@@ -21,7 +21,7 @@ export const registerDubCommand = (program: Command): void => {
       .option("--dub-engine <id>", "TTS engine: edge-tts (default) | elevenlabs")
       .option(
         "--voice <id>",
-        "TTS voice id (edge-tts default zh-CN-YunxiNeural; ElevenLabs requires --voice or ELEVENLABS_VOICE_ID)",
+        "TTS voice id (edge-tts default zh-CN-YunjianNeural; ElevenLabs requires --voice or ELEVENLABS_VOICE_ID)",
       )
       .option("--tts-command <path>", "Path to the edge-tts executable (default: edge-tts on PATH)")
       .option("--elevenlabs-base-url <url>", "ElevenLabs API base URL override")
@@ -30,7 +30,11 @@ export const registerDubCommand = (program: Command): void => {
       .option("--ffmpeg-path <path>", "Path to ffmpeg (default: ffmpeg on PATH)")
       .option("--python-path <path>", "Python with demucs installed (default: python3)")
       .option("--demucs-model <name>", "Demucs model name (default: htdemucs)")
-      .option("--max-duration-ms <ms>", "Max duration per utterance before a hard split (default 12000)")
+      .option("--max-duration-ms <ms>", "Max duration per utterance before a hard split (default 8000)")
+      .option(
+        "--min-duration-ms <ms>",
+        "Min duration per utterance before merging into a neighbor (default 3000)",
+      )
       .option("--script-only", "Write dub-script.json and stop before synthesis")
       .option("--timing-only", "Stop after natural-rate synthesis and dub-timing.json")
       .option("--skip-burn", "Replace audio only; do not burn the reverse SRT")

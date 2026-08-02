@@ -2,13 +2,16 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type * as AdaptersNode from "@yt2x/adapters-node";
+import { dubTranslateCharBudget } from "@yt2x/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const probeDemucsMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/python3"));
 const generateDubScriptMock = vi.hoisted(() => vi.fn());
 const synthesizeDubLinesMock = vi.hoisted(() => vi.fn());
 const separateDemucsMock = vi.hoisted(() => vi.fn());
-const remixDubbedVideoMock = vi.hoisted(() => vi.fn());
+const remixDubbedAudioMock = vi.hoisted(() => vi.fn());
+const evaluateDubBilingualGateMock = vi.hoisted(() => vi.fn());
+const burnBilingualSubtitlesMock = vi.hoisted(() => vi.fn());
 // Real window extraction shells out to ffmpeg; mocked here since these tests exercise
 // reverse-SRT path routing, not ffmpeg trimming.
 const extractDubSourceWindowMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -30,20 +33,35 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
     generateDubScript: generateDubScriptMock,
     synthesizeDubLines: synthesizeDubLinesMock,
     separateDemucs: separateDemucsMock,
-    remixDubbedVideo: remixDubbedVideoMock,
+    remixDubbedAudio: remixDubbedAudioMock,
+    evaluateDubBilingualGate: evaluateDubBilingualGateMock,
+    burnBilingualSubtitles: burnBilingualSubtitlesMock,
     guardDubSourceAgainstHardSubtitles: guardMock,
     extractDubSourceWindow: extractDubSourceWindowMock,
   };
 });
 
-import { executeNativeDub } from "./native-dub.js";
+import { DEFAULT_MIN_DURATION_MS, executeNativeDub, segmentOptionsFrom } from "./native-dub.js";
 
 beforeEach(() => {
   probeDemucsMock.mockClear();
   generateDubScriptMock.mockClear();
   synthesizeDubLinesMock.mockClear();
   separateDemucsMock.mockClear();
-  remixDubbedVideoMock.mockClear();
+  remixDubbedAudioMock.mockClear();
+  remixDubbedAudioMock.mockResolvedValue({
+    videoForBurnPath: "/downloads/full.mp4",
+    replaceAudioPath: "/tmp/mixed.m4a",
+    voiceTrackPath: "/tmp/voice.wav",
+    mixedAudioPath: "/tmp/mixed.m4a",
+    outputDurationMs: 5_000,
+    videoPadMs: 0,
+    extendMs: 0,
+  });
+  evaluateDubBilingualGateMock.mockClear();
+  evaluateDubBilingualGateMock.mockResolvedValue({ readyForBurn: true, issues: [] });
+  burnBilingualSubtitlesMock.mockClear();
+  burnBilingualSubtitlesMock.mockResolvedValue({ burned: true, skipped: false, warnings: [] });
   extractDubSourceWindowMock.mockClear();
   extractDubSourceWindowMock.mockImplementation(async () => undefined);
   guardMock.mockClear();
@@ -57,6 +75,31 @@ beforeEach(() => {
   });
   vi.stubEnv("OPENAI_API_KEY", "test-key");
   vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+});
+
+describe("segmentOptionsFrom", () => {
+  it("defaults minDurationMs to 3000ms so sub-overhead utterances stop clamping to a single char", () => {
+    expect(segmentOptionsFrom({})).toEqual({ minDurationMs: DEFAULT_MIN_DURATION_MS });
+  });
+
+  it("still leaves room for a full short sentence (>=10 chars) under the calibrated speech rate", () => {
+    // 回归哨兵：TTS_FIXED_OVERHEAD_MS / TTS_MS_PER_CHINESE_CHAR 换音色重新标定时，
+    // DEFAULT_MIN_DURATION_MS 的推导依据（见其上方注释）必须跟着复核。这条测试
+    // 不校验具体常数，只校验派生结果——3000ms 换算出的预算仍要够写一个"简短但
+    // 完整的分句"（约 10 个汉字），换算结果比这更紧就说明该重新审视 3000 这个默认值了。
+    expect(dubTranslateCharBudget(DEFAULT_MIN_DURATION_MS)).toBeGreaterThanOrEqual(10);
+  });
+
+  it("honors --min-duration-ms when provided", () => {
+    expect(segmentOptionsFrom({ minDurationMs: "5000" })).toEqual({ minDurationMs: 5_000 });
+  });
+
+  it("still passes through --max-duration-ms alongside the min-duration default", () => {
+    expect(segmentOptionsFrom({ maxDurationMs: "8000" })).toEqual({
+      maxDurationMs: 8_000,
+      minDurationMs: DEFAULT_MIN_DURATION_MS,
+    });
+  });
 });
 
 describe("executeNativeDub hard-subtitle guard", () => {
@@ -81,7 +124,7 @@ describe("executeNativeDub hard-subtitle guard", () => {
     expect(generateDubScriptMock).not.toHaveBeenCalled();
     expect(synthesizeDubLinesMock).not.toHaveBeenCalled();
     expect(separateDemucsMock).not.toHaveBeenCalled();
-    expect(remixDubbedVideoMock).not.toHaveBeenCalled();
+    expect(remixDubbedAudioMock).not.toHaveBeenCalled();
   });
 });
 
@@ -251,12 +294,6 @@ describe("executeNativeDub time range", () => {
       noVocalsPath: "/tmp/no_vocals.wav",
       skipped: false,
     });
-    remixDubbedVideoMock.mockResolvedValue({
-      outputPath: "/tmp/full.zh-dubbed.mp4",
-      burned: true,
-      skippedBurnReason: undefined,
-      extendMs: 0,
-    });
 
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-window-srt-"));
     const outRoot = path.join(root, "downloads");
@@ -286,12 +323,12 @@ describe("executeNativeDub time range", () => {
     });
 
     expect(code).toBe(0);
-    expect(remixDubbedVideoMock).toHaveBeenCalledOnce();
-    const remixCall = remixDubbedVideoMock.mock.calls[0]![0] as { reverseSrtPath: string };
+    expect(burnBilingualSubtitlesMock).toHaveBeenCalledOnce();
+    const burnCall = burnBilingualSubtitlesMock.mock.calls[0]![0] as { srtPath: string };
     const expectedWorkPath = path.join(dubDir, "work", "window-0-5000.zh-dub.srt");
     const fullRunPath = path.join(articleRoot, videoId, "video", "full.zh-dub.srt");
-    expect(remixCall.reverseSrtPath).toBe(expectedWorkPath);
-    expect(remixCall.reverseSrtPath).not.toBe(fullRunPath);
+    expect(burnCall.srtPath).toBe(expectedWorkPath);
+    expect(burnCall.srtPath).not.toBe(fullRunPath);
   });
 
   it("separates Demucs into dub/work/demucs for a time window, not the full-run dub/demucs dir", async () => {
@@ -352,12 +389,6 @@ describe("executeNativeDub time range", () => {
     separateDemucsMock.mockResolvedValue({
       noVocalsPath: "/tmp/no_vocals.wav",
       skipped: false,
-    });
-    remixDubbedVideoMock.mockResolvedValue({
-      outputPath: "/tmp/full.zh-dubbed.mp4",
-      burned: true,
-      skippedBurnReason: undefined,
-      extendMs: 0,
     });
 
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-window-demucs-"));

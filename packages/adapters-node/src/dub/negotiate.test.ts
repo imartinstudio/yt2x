@@ -57,12 +57,13 @@ const probeRunner = (durationSec: string): ProcessRunner => ({
 });
 
 const planFixture = (overrides?: Partial<DubNegotiatePlan["lines"][number]>): DubNegotiatePlan => ({
-  version: 2,
+  version: 3,
   videoId: "vid",
   extendMs: 0,
   plannedDriftMs: 0,
   keepCount: 1,
   speedCount: 0,
+  stretchCount: 0,
   delayCount: 0,
   lines: [
     {
@@ -116,5 +117,54 @@ describe("applyDubNegotiation", () => {
     expect(report.lines[0]!.audioFile).toBe("lines/0001.mp3");
     const bytes = await readFile(path.join(dubDir, "lines", "0001.mp3"));
     expect(bytes.byteLength).toBeGreaterThan(0);
+  });
+
+  it("re-synthesizes stretch lines and records the new audio", async () => {
+    // target 5000ms，自然合成 2000ms，规划器把它放慢到 0.95 填进目标区间
+    const dubDir = await makeTmp();
+    const { report } = await applyDubNegotiation({
+      plan: planFixture({
+        action: "stretch",
+        rate: 0.95,
+        naturalMs: 2000,
+        targetDurationMs: 5000,
+        originalEndMs: 5000,
+        plannedEndMs: 2105,
+      }),
+      tts: fakeTts({ "0.95": 2105 }),
+      voice: "v",
+      dubDir,
+      existingAudioByIndex: new Map(),
+      runner: probeRunner("2.105"),
+    });
+    expect(report.stretchCount).toBe(1);
+    expect(report.delayCount).toBe(0);
+    expect(report.lines[0]).toMatchObject({ action: "stretch", audioFile: "lines/0001.mp3" });
+  });
+
+  it("demotes a stretch line to delay when the slowed-down synthesis still overflows", async () => {
+    // 引擎的调速不总是线性——即使按规划的 rate 放慢，实测仍可能超出目标区间；
+    // 与 speed 分支共用同一道安全网，超出时降级为 delay 而不是假装装得下
+    const dubDir = await makeTmp();
+    const { report, warnings } = await applyDubNegotiation({
+      plan: planFixture({
+        action: "stretch",
+        rate: 0.95,
+        naturalMs: 900,
+        targetDurationMs: 1000,
+        originalEndMs: 1000,
+        plannedEndMs: 947,
+      }),
+      // fakeTts 在 rate 0.95 下实际吐出 1200ms，远超 1000ms 目标 + FIT_SLACK_MS
+      tts: fakeTts({ "0.95": 1200 }),
+      voice: "v",
+      dubDir,
+      existingAudioByIndex: new Map(),
+      runner: probeRunner("1.2"),
+    });
+    expect(report.stretchCount).toBe(0);
+    expect(report.delayCount).toBe(1);
+    expect(report.lines[0]!.action).toBe("delay");
+    expect(warnings[0]).toMatch(/still overflowed/);
   });
 });

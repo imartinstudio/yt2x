@@ -349,4 +349,84 @@ describe("burnBilingualSubtitles", () => {
     expect(result.skipped).toBe(true);
     expect(result.skipReason).toBe("missing_srt");
   });
+
+  describe("replaceAudioPath", () => {
+    it("keeps mapping the source video's own audio (0:a) when omitted — unchanged default behaviour", async () => {
+      const opts = defaultOpts();
+      await burnBilingualSubtitles(opts);
+
+      const calls = vi.mocked(runner.run).mock.calls;
+      const ffmpegCall = calls.find((c) => c[0]?.command === "ffmpeg");
+      const args = ffmpegCall![0]!.args ?? [];
+      const mapIndices = args.reduce<number[]>((acc, a, i) => (a === "-map" ? [...acc, i] : acc), []);
+      const mappedValues = mapIndices.map((i) => args[i + 1]);
+      expect(mappedValues).toContain("0:a");
+      // No extra input beyond video/zh-frames/en-frames was added.
+      expect(args.filter((a) => a === "-i")).toHaveLength(3);
+    });
+
+    it("adds the replacement track as the last input and maps its audio instead of 0:a", async () => {
+      const audioPath = path.join(tmpDir, "video", "dubbed-mix.m4a");
+      await writeFile(audioPath, "fake-audio");
+
+      const opts = { ...defaultOpts(), replaceAudioPath: audioPath };
+      await burnBilingualSubtitles(opts);
+
+      const calls = vi.mocked(runner.run).mock.calls;
+      const ffmpegCall = calls.find((c) => c[0]?.command === "ffmpeg");
+      const args = ffmpegCall![0]!.args ?? [];
+
+      // video(0) + zh-frames(1) + en-frames(2) + replacement audio(3) = 4 "-i" inputs.
+      expect(args.filter((a) => a === "-i")).toHaveLength(4);
+      expect(args).toContain(audioPath);
+      const mapIndices = args.reduce<number[]>((acc, a, i) => (a === "-map" ? [...acc, i] : acc), []);
+      const mappedValues = mapIndices.map((i) => args[i + 1]);
+      expect(mappedValues).toContain("3:a");
+      expect(mappedValues).not.toContain("0:a");
+      // The video overlay filter graph indices are untouched by the extra audio input.
+      const filter = args[args.indexOf("-filter_complex") + 1] ?? "";
+      expect(filter).toContain("[0:v][1:v]overlay");
+      expect(filter).toContain("[withzh][2:v]overlay");
+    });
+
+    it("keeps the watermark at input index 3 and maps the replacement audio at 4 when both are present", async () => {
+      const audioPath = path.join(tmpDir, "video", "dubbed-mix.m4a");
+      await writeFile(audioPath, "fake-audio");
+
+      const opts = {
+        ...defaultOpts(),
+        replaceAudioPath: audioPath,
+        watermarkVideo: "@channel",
+        watermarkXlate: "@translator",
+      };
+      await burnBilingualSubtitles(opts);
+
+      const calls = vi.mocked(runner.run).mock.calls;
+      const ffmpegCall = calls.find((c) => c[0]?.command === "ffmpeg");
+      const args = ffmpegCall![0]!.args ?? [];
+      const filter = args[args.indexOf("-filter_complex") + 1] ?? "";
+      expect(filter).toContain("[withen][3:v]overlay");
+
+      const mapIndices = args.reduce<number[]>((acc, a, i) => (a === "-map" ? [...acc, i] : acc), []);
+      const mappedValues = mapIndices.map((i) => args[i + 1]);
+      expect(mappedValues).toContain("4:a");
+    });
+
+    it("also treats a newer replacement audio track as a reason to re-burn (mtime check)", async () => {
+      const audioPath = path.join(tmpDir, "video", "dubbed-mix.m4a");
+      await writeFile(audioPath, "fake-audio");
+      const opts = { ...defaultOpts(), replaceAudioPath: audioPath };
+      await writeFile(opts.outputPath, "stale-burned");
+
+      const { utimes } = await import("node:fs/promises");
+      const future = new Date(Date.now() + 60_000);
+      await utimes(audioPath, future, future);
+
+      vi.mocked(runner.run).mockClear();
+      const result = await burnBilingualSubtitles({ ...opts, force: false });
+
+      expect(result.skipped).toBe(false);
+      expect(result.burned).toBe(true);
+    });
+  });
 });

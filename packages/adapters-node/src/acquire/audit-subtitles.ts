@@ -73,6 +73,16 @@ export type SubtitleAuditInput = {
   bilingualSrt: string;
   manifest: SubtitleAuditManifest;
   measurements?: readonly SubtitleAuditMeasurement[];
+  /**
+   * 话语单元边界（毫秒，升序，每个话语单元的实测终点）。只有配音链路提供——它知道
+   * 显示单元（cue）从属于哪个话语单元（`dub/cue-split.ts` 的细分结果）。提供时，术语
+   * 保护校验（glossary-violation）按话语单元分组比对，而不是逐条显示单元比对：同一个
+   * 话语单元切成显示单元时，中文按视觉宽度切、英文按词数占比切，切分边界不同，术语可能
+   * 落在相邻的显示单元里——真实全片跑出过这个假阳性（"PRD" 完整保留在译文中，却因为
+   * 中英文显示单元切分点不同被逐条比对误报）。不提供时（纯字幕交付路径，没有话语单元
+   * 概念）保持逐条显示单元比对，行为与之前完全一致。
+   */
+  utteranceBoundariesMs?: readonly number[];
 };
 
 export type SubtitleAuditResult = {
@@ -168,6 +178,37 @@ const lcsLength = (left: readonly string[], right: readonly string[]): number =>
     previous = current;
   }
   return previous[right.length]!;
+};
+
+/**
+ * 把按时间顺序排列的 `cues` 按 `boundariesMs`（每个话语单元的实测终点，升序）分组：
+ * 起点落在同一个话语单元区间内的显示单元归为一组。`boundariesMs` 为空时每条显示单元
+ * 单独成组——与调用方不提供话语单元边界时的旧行为（逐条比对）完全等价。
+ */
+const groupCuesByUtterance = (
+  cues: readonly ParsedCue[],
+  boundariesMs: readonly number[],
+): ParsedCue[][] => {
+  // 没有话语单元边界时，每条显示单元单独成组——与不提供该参数时的逐条比对旧行为一致。
+  if (boundariesMs.length === 0) return cues.map((cue) => [cue]);
+  const groups: ParsedCue[][] = [];
+  let boundaryIndex = 0;
+  let current: ParsedCue[] = [];
+  for (const cue of cues) {
+    while (
+      boundaryIndex < boundariesMs.length &&
+      cue.startSeconds * 1000 >= boundariesMs[boundaryIndex]!
+    ) {
+      if (current.length > 0) {
+        groups.push(current);
+        current = [];
+      }
+      boundaryIndex++;
+    }
+    current.push(cue);
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
 };
 
 const resultFromIssues = (issues: SubtitleAuditIssue[]): SubtitleAuditResult => ({
@@ -365,9 +406,17 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
   // docs/superpowers/plans/2026-07-29-subtitle-audit-and-self-calibration.md
   // for the earlier (wrong) version of this rule and why it was removed.
   const protectedTerms = [...PROTECTED_GLOSSARY_TERMS, ...PROTECTED_NAMES];
-  for (let index = 0; index < Math.min(enCues.length, zhCues.length); index++) {
-    const enText = enCues[index]!.lines.join(" ");
-    const zhText = zhCues[index]!.lines.join(" ");
+  // 术语保护的语义是"同一个话语单元里，英文出现的保护词，中文也要出现"——不是"同一条
+  // 显示单元里"。显示单元是话语单元的细分，中英文切分边界不保证对齐（中文按视觉宽度
+  // 切、英文按词数占比切），逐条比对会把落在相邻显示单元的术语误判为丢失。有话语单元
+  // 边界时按边界分组比对；没有时退化为逐条比对（见 `groupCuesByUtterance`）。
+  const enGroups = groupCuesByUtterance(enCues, input.utteranceBoundariesMs ?? []);
+  const zhGroups = groupCuesByUtterance(zhCues, input.utteranceBoundariesMs ?? []);
+  for (let index = 0; index < Math.min(enGroups.length, zhGroups.length); index++) {
+    const enGroup = enGroups[index]!;
+    const enText = enGroup.map((cue) => cue.lines.join(" ")).join(" ");
+    const zhText = zhGroups[index]!.map((cue) => cue.lines.join(" ")).join(" ");
+    const firstEnCue = enGroup[0]!;
     for (const term of protectedTerms) {
       if (
         enText.toLocaleLowerCase("en").includes(term.toLocaleLowerCase("en")) &&
@@ -376,8 +425,8 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
         issues.push({
           code: "glossary-violation",
           severity: "content",
-          cueIndex: enCues[index]!.index,
-          timestamp: enCues[index]!.startRaw,
+          cueIndex: firstEnCue.index,
+          timestamp: firstEnCue.startRaw,
           text: enText,
           message: `protected term "${term}" is missing from the aligned Chinese cue`,
         });

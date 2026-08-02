@@ -1,7 +1,20 @@
 import { createHash } from "node:crypto";
-import type { LlmPort } from "@yt2x/core";
+import {
+  findProtectedSpans,
+  PROTECTED_GLOSSARY_TERMS,
+  PROTECTED_NAMES,
+  PROTECTED_TERMS,
+  type LlmPort,
+} from "@yt2x/core";
 import type { SubtitleAuditIssue } from "./audit-subtitles.js";
 import { parseSubtitleBlocks, serializeSrtBlocks } from "./video-subtitles.js";
+
+// Re-exported for `audit-subtitles.ts` and this module's own tests, which
+// import these from here rather than `@yt2x/core` directly. The definitions
+// themselves now live in core (`packages/core/src/domain/dub/glossary.ts`)
+// so the dub translation prompt can share the same table — see that file's
+// header comment for why.
+export { findProtectedSpans, PROTECTED_GLOSSARY_TERMS, PROTECTED_NAMES };
 
 export type SemanticSubtitleGroup = {
   groupId: string;
@@ -396,57 +409,12 @@ const MAX_CPS_BEFORE_MERGE = 9;
 const CJK_PATTERN = /[一-鿿㐀-䶿\u{f900}-\u{faff}]/u;
 const LATIN_ALNUM_PATTERN = /[A-Za-z0-9]/u;
 
-// Glossary terms the translator is told to keep untranslated (see the
-// translation prompt below). These survive verbatim inside the Chinese
-// output, so a split point must never land inside one — matching BaoCut's
-// "pt" (protected term) concept: "indivisible, no selectable seam exists
-// inside it".
-export const PROTECTED_GLOSSARY_TERMS = [
-  "Grill Me", "Grill with Docs", "2PRD", "Codex", "Plan Mode", "Agents", "PRD",
-  "Air Coding Cohort", "Shape Up", "YouTube", "Discord",
-];
-export const PROTECTED_NAMES = ["Matt Pocock", "Ryan Singer", "Gary Tan", "G Stack"];
-const PROTECTED_TERMS: readonly string[] = [...PROTECTED_GLOSSARY_TERMS, ...PROTECTED_NAMES];
-
-/**
- * Finds every span in `text` that a split must not land inside: every
- * occurrence of a known glossary term (may contain spaces, e.g. "Grill with
- * Docs"), plus every bare run of Latin/digit characters (covers embedded
- * English words like "Agents" even when they aren't in the glossary at all).
- */
-// Chinese has no spaces between words, so a raw character-position split can
-// (and in real DeepSeek output did) land inside an ordinary multi-character
-// word like "范围" or "可能". Intl.Segmenter's dictionary-based word
-// segmentation is built into Node (ICU) — no new dependency needed.
-const CJK_WORD_SEGMENTER = new Intl.Segmenter("zh", { granularity: "word" });
-
-export const findProtectedSpans = (
-  text: string,
-  terms: readonly string[] = PROTECTED_TERMS,
-): [number, number][] => {
-  const spans: [number, number][] = [];
-  for (const term of terms) {
-    let fromIndex = 0;
-    let idx: number;
-    while ((idx = text.indexOf(term, fromIndex)) !== -1) {
-      spans.push([idx, idx + term.length]);
-      fromIndex = idx + term.length;
-    }
-  }
-  const latinRun = /[A-Za-z0-9]+/gu;
-  let match: RegExpExecArray | null;
-  while ((match = latinRun.exec(text)) !== null) {
-    spans.push([match.index, match.index + match[0].length]);
-  }
-  // Protect multi-character Chinese words; a single character has no
-  // internal boundary to protect, and punctuation is never word-like.
-  for (const seg of CJK_WORD_SEGMENTER.segment(text)) {
-    if (seg.isWordLike && seg.segment.length > 1) {
-      spans.push([seg.index, seg.index + seg.segment.length]);
-    }
-  }
-  return spans;
-};
+// PROTECTED_GLOSSARY_TERMS, PROTECTED_NAMES, PROTECTED_TERMS, and
+// findProtectedSpans now live in `packages/core/src/domain/dub/glossary.ts`
+// (imported above, re-exported near the top of this file) so the dub
+// translation prompt can share the same table instead of maintaining its
+// own — see that file's header comment for why. findProtectedSpans is still
+// used below to keep a split point from landing inside a glossary term.
 
 /**
  * Nudges a proposed split index to the nearest edge of any protected span it

@@ -48,8 +48,11 @@ describe("effectiveRateMax", () => {
 });
 
 describe("stretch defaults", () => {
-  it("keeps the 0.95 floor pending human confirmation of the slower audition", () => {
-    expect(PREFERRED_RATE_MIN).toBe(0.95);
+  it("holds the 0.85 floor chosen by ear, with the trigger aligned to it", () => {
+    // 两版成片只差这一个变量：0.85 把总静默从 67.7s 压到 40.0s，>2s 的停顿从 6 处
+    // 降到 1 处，代价是约 58 行慢一成半——试听后判定可接受。触发阈值必须与地板同值，
+    // 否则严于地板的那一侧会让参数恒被地板支配（历史上 0.85 vs 0.95 就是这么失效的）。
+    expect(PREFERRED_RATE_MIN).toBe(0.85);
     expect(DEFAULT_STRETCH_MAX_OCCUPANCY).toBe(0.95);
   });
 });
@@ -267,7 +270,8 @@ describe("planDubNegotiation", () => {
       expect(plan.stretchCount).toBe(1);
       expect(plan.lines[0]!.action).toBe("stretch");
       expect(plan.lines[0]!.rate).toBeLessThan(1);
-      expect(plan.lines[0]!.rate).toBeGreaterThanOrEqual(0.95); // 偏好下限
+      // 引用常量而不是字面量：默认地板是人耳试听后定的，改它不该让这条断言假失败
+      expect(plan.lines[0]!.rate).toBeGreaterThanOrEqual(PREFERRED_RATE_MIN);
       // 放慢后时长变长（naturalMs / rate），但仍不超过目标区间
       expect(plan.lines[0]!.plannedEndMs).toBeGreaterThan(2000);
       expect(plan.lines[0]!.plannedEndMs).toBeLessThanOrEqual(5000);

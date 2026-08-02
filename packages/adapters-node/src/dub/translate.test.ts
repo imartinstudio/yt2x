@@ -311,4 +311,88 @@ describe("translateUtterances", () => {
     });
     expect(systems.some((s) => /dropped one or more protected terms/i.test(s))).toBe(false);
   });
+
+  it("routes punctuation-bearing bookish Chinese through the existing speakable repair pass", async () => {
+    let call = 0;
+    const systems: string[] = [];
+    const llm: LlmPort = {
+      chat: async (req) => {
+        call += 1;
+        const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        systems.push(system);
+        const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
+        const items = JSON.parse(user) as { index: number }[];
+        if (call === 1) {
+          return {
+            content: JSON.stringify(
+              items.map((i) => ({
+                index: i.index,
+                text: "回答问题的人，也就是你，用这个技能需擅长规划，理解范围。",
+              })),
+            ),
+            model: req.model,
+            finishReason: "stop" as const,
+          };
+        }
+
+        expect(system).toMatch(/rewriting Chinese dubbing subtitles/i);
+        expect(system).toMatch(/modern spoken Mandarin/i);
+        return {
+          content: JSON.stringify(
+            items.map((i) => ({
+              index: i.index,
+              text: "回答问题的人，也就是你，用这个技能要做好规划，也要理解范围。",
+            })),
+          ),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+
+    const { lines, warnings } = await translateUtterances({
+      llm,
+      model: "m",
+      utterances: [utt(1, 9_000, "the person answering questions needs to plan well")],
+    });
+
+    expect(call).toBe(2);
+    expect(systems[1]).toMatch(/bookish register/i);
+    expect(lines[0]?.text).toBe("回答问题的人，也就是你，用这个技能要做好规划，也要理解范围。");
+    expect(warnings.join(" ")).toMatch(/speakable-repaired 1\/1/);
+  });
+
+  it("keeps the original bookish line when a speakable repair drops a protected term", async () => {
+    let call = 0;
+    const llm: LlmPort = {
+      chat: async (req) => {
+        call += 1;
+        const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
+        const items = JSON.parse(user) as { index: number }[];
+        return {
+          content: JSON.stringify(
+            items.map((i) => ({
+              index: i.index,
+              text:
+                call === 1
+                  ? "回答问题的人，用Grill Me技能需擅长规划，理解范围。"
+                  : "回答问题的人，需要擅长规划，理解范围。",
+            })),
+          ),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+
+    const { lines, warnings } = await translateUtterances({
+      llm,
+      model: "m",
+      utterances: [utt(1, 9_000, "the grill me skill needs good planning")],
+    });
+
+    expect(call).toBe(2);
+    expect(lines[0]?.text).toContain("Grill Me");
+    expect(warnings.join(" ")).toMatch(/speakable-repaired 0\/1/);
+  });
 });

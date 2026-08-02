@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type * as AdaptersNode from "@yt2x/adapters-node";
-import { dubTranslateCharBudget } from "@yt2x/core";
+import {
+  DEFAULT_STRETCH_MAX_OCCUPANCY,
+  PREFERRED_RATE_MIN,
+  dubTranslateCharBudget,
+} from "@yt2x/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const probeDemucsMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/python3"));
@@ -471,8 +475,9 @@ describe("executeNativeDub time range", () => {
       gates: { dub: { passed: boolean }; bilingual: { readyForBurn: boolean } };
     };
     expect(manifest.outputPath).toBe(auditionPath);
-    expect(manifest.preferredRateMin).toBe(0.95);
-    expect(manifest.stretchMaxOccupancy).toBe(0.95);
+    // 断言清单如实记录了当次使用的默认值，而不是钉死某个具体数字
+    expect(manifest.preferredRateMin).toBe(PREFERRED_RATE_MIN);
+    expect(manifest.stretchMaxOccupancy).toBe(DEFAULT_STRETCH_MAX_OCCUPANCY);
     expect(manifest.flags.skipGate).toBe(false);
     expect(manifest.gates.dub.passed).toBe(true);
     expect(manifest.gates.bilingual.readyForBurn).toBe(true);

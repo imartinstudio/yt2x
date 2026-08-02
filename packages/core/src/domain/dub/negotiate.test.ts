@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   PREFERRED_RATE_MAX,
+  PREFERRED_RATE_MIN,
+  DEFAULT_STRETCH_MAX_OCCUPANCY,
   DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
   DEFAULT_STRETCH_MIN_UNDERRUN_MS,
   buildNegotiateInputs,
@@ -42,6 +44,13 @@ describe("effectiveRateMax", () => {
   it("takes the lower of preferred and engine max", () => {
     expect(effectiveRateMax({ min: 0.5, max: 2.0 })).toBe(PREFERRED_RATE_MAX);
     expect(effectiveRateMax({ min: 0.5, max: 1.1 })).toBe(1.1);
+  });
+});
+
+describe("stretch defaults", () => {
+  it("keeps the 0.95 floor pending human confirmation of the slower audition", () => {
+    expect(PREFERRED_RATE_MIN).toBe(0.95);
+    expect(DEFAULT_STRETCH_MAX_OCCUPANCY).toBe(0.95);
   });
 });
 
@@ -234,6 +243,20 @@ describe("planDubNegotiation", () => {
   });
 
   describe("stretch (反向放慢填充富余)", () => {
+    it("lets a candidate floor use the measured occupancy between the trigger ceiling and floor", () => {
+      // target 5000ms，自然合成 4500ms，占用比 0.9：候选地板 0.85 应采用实际
+      // 0.9，而不是因为触发阈值仍停在 0.85 而完全不触发。
+      expect(DEFAULT_STRETCH_MAX_OCCUPANCY).toBeGreaterThan(0.9);
+      const plan = planDubNegotiation({
+        videoId: "vid",
+        rateRange: { min: 0.5, max: 2.0 },
+        preferredRateMin: 0.85,
+        lines: [line(1, 0, 5000, 4500)],
+      });
+      expect(plan.lines[0]!.action).toBe("stretch");
+      expect(plan.lines[0]!.rate).toBeCloseTo(0.9);
+    });
+
     it("slows down when there is meaningful slack", () => {
       // target 5000ms，自然合成只用 2000ms，占用比 0.4 远低于阈值，富余 3000ms 远超阈值
       const plan = planDubNegotiation({
@@ -266,11 +289,11 @@ describe("planDubNegotiation", () => {
     });
 
     it("does not slow down when the occupancy ratio is already high enough", () => {
-      // target 6000ms，自然合成 5580ms：占用比 0.93（中位水平），不该被 stretch 碰到
+      // target 6000ms，自然合成 5700ms：占用比正好 0.95，达到触发阈值边界，不该被 stretch 碰到
       const plan = planDubNegotiation({
         videoId: "vid",
         rateRange: { min: 0.5, max: 2.0 },
-        lines: [line(1, 0, 6000, 5580)],
+        lines: [line(1, 0, 6000, 5700)],
       });
       expect(plan.lines[0]!.action).toBe("keep");
       expect(plan.stretchCount).toBe(0);

@@ -40,6 +40,24 @@ pnpm install
 里的全部话语单元。`--preferred-rate-min` / `--stretch-max-occupancy` 用于反事实对比不同协商参数
 对句间静默的影响；注意它算出的时间是协商阶段的**预估**，适合横向比较，绝对值以真实跑为准。
 
+需要制作试听成片时，`dub` 也接受 `--preferred-rate-min <n>`，只覆盖本次时长协商，不改变默认值。
+两次运行使用同一视频 `article` 目录下不同的 `--output-path`，这样会保留两份绝对路径不同的成片，同时复用同一份配音稿、
+自然语速时长报告和其余中间产物：
+
+```bash
+pnpm yt2x dub \
+  --video-id <videoId> \
+  --preferred-rate-min 0.95 \
+  --output-path ./files/articles/<videoId>/video/full.zh-dubbed-rate-095.mp4
+pnpm yt2x dub \
+  --video-id <videoId> \
+  --preferred-rate-min 0.85 \
+  --output-path ./files/articles/<videoId>/video/full.zh-dubbed-rate-085.mp4
+```
+
+请按顺序运行且不要加 `--force`；`--force` 会重新生成脚本和自然语速音频，使比较不再只改变协商地板。
+每个成片旁还会写入同名的 `.audition.json`，记录语速地板、协商摘要和两道门结果；输出文件名不同只是为了避免覆盖，不是试听变量。默认语速下限须在人耳确认试听代价后再调整。
+
 `pipeline` 安全默认：`--publish review` 只预览发布内容并写 `publish-preview.json` / `process-status.json`，不会真实调用 X API；真实发帖必须显式传 **`--publish auto`**。只想跑到内容生成产物时继续使用 **`--publish skip`**。
 
 ## CLI 参数说明
@@ -246,6 +264,10 @@ pnpm yt2x dub --video-id <videoId> --original-voice-volume 0
 ```
 
 不传 `--original-voice-volume` 时行为与此前完全一致（垫底音量 0.2）。
+
+`--preferred-rate-min <n>` 是句间静默实验参数：它覆盖本次协商的反向放慢地板，默认仍为 `0.95`。
+例如 `0.85` 版本会以更慢的语速填充较长句间空档；配合 `--output-path` 可保存两份成片，
+请先与默认版本试听对比，再决定是否改变默认值。
 
 ### Pipeline 阶段控制参数
 

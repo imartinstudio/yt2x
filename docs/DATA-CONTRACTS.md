@@ -235,3 +235,12 @@ scene_manifest.json → available_visuals → LLM visual_plan → 图片渲染 �
 `dub-report.json`（门禁）中的 `info-loss` 是 advisory（不阻断）：把某行译文的字符数与该行**时长预算**（`dubTranslateCharBudget(targetDurationMs)`）相比，标注明显低于预算、疑似过度精简的行，供人工复核；不再拿英文 `sourceText` 与译文的码点数直接相除——跨语言下那个比例天生偏低，会对忠实翻译系统性误判。`droppedCount`（见上）在门禁里是独立的 hard 指标：只要 `dub-script.json` 里 `droppedCount > 0` 即阻断，因为被丢弃的话语单元在成片里只有 BGM、没有配音也没有字幕，必须显式暴露而不是被 `lineCount` 悄悄吸收。
 
 `--start-ms` / `--end-ms` 时间窗按话语单元过滤（`filterUtterancesByTimeRange`），不再按字幕 cue 过滤；窗口内产物写在 `dub/work/`，不复用或覆盖全片缓存。
+
+最终成片默认写入 `<articleRoot>/<videoId>/video/full.zh-dubbed.mp4`。`--output-path` 可为语速试听
+指定另一个 MP4 文件名，但路径必须位于同一视频的 `article` `video/` 目录内；这样可以保留多份
+试听成片，同时禁止把配音成片写入只读的 `files/downloads/` 或其他越界路径。试听使用的
+`<outputPath>.audition.json` 会记录该成片的语速地板、触发阈值、运行 flags、协商摘要和两道门结果，
+用于证明两版试听的变量边界。`dub-plan.json`、`dub-placement.json`、`dub-report.json` 等高频中间
+产物仍位于 `dub/`，可由下一次运行重建；稳定交付物是 `video/` 下的成片、字幕与试听 manifest。
+如果指定的成片已经存在而本次未加 `--force`，manifest 会标记 `status: reused-existing-output`、
+`gates: null`，明确表示本次没有重新评估门禁。

@@ -48,19 +48,16 @@ export const DEFAULT_STRETCH_MIN_UNDERRUN_MS = 400;
 
 /**
  * 触发反向放慢的占用比上限：naturalMs / fitTargetMs 低于此值才触发。
- * 中位行占用预算约 93%，留在这个阈值之上不会被 stretch 碰到；真正造成长尾停顿的
- * 是占用比明显更低（部分行不足 50%）的那一批。
+ * 当前阈值为 0.95，中位行占用预算约 93% 会进入 stretch；占用比达到阈值的行不被
+ * 触碰，真正需要重点压缩的仍是占用比明显更低（部分行不足 50%）的长尾。
  *
- * 已知事实：这个阈值（0.85）比 `effectiveRateMin`（默认 `PREFERRED_RATE_MIN` 0.95）严格
- * 更松，意味着一旦触发 stretch，`Math.max(rateMin, rate)`（见 `decideLine` 内 stretchRate
- * 计算）里 `rateMin` 恒大于 `rate`（因为触发条件已经要求 occupancy < 0.85 < 0.95），于是
- * `stretchRate` 恒等于 `rateMin` 地板值，`rate` 这个分支实际从未被 `Math.max` 选中——
- * 真实全片 149 句里触发 stretch 的 54 句全部落在 0.95 地板，`Math.max` 在默认参数下是
- * 死代码。要让占用比真正影响 stretchRate（而不是全部拍平成同一个速率），需要把
- * `PREFERRED_RATE_MIN` 下探到 0.85 或更低——这正是第二个试听版本（rateMin=0.85）
- * 验证的方向，见 docs/DUB-TASK.md。
+ * 这个阈值必须高于试听候选的执行地板：若阈值低于地板，触发条件已经保证
+ * `occupancy < rateMin`，`Math.max(rateMin, rate)`（见 `decideLine` 内 stretchRate 计算）
+ * 就会把每一行都夹到同一个速率，占用比落在两者之间的行也完全不会受益。当前把阈值
+ * 提到 0.95，使候选地板 0.85 能覆盖 0.85–0.95 的中间区间；默认地板仍保留 0.95，
+ * 等待真实成片试听后再决定是否切换，见 issue #134。
  */
-export const DEFAULT_STRETCH_MAX_OCCUPANCY = 0.85;
+export const DEFAULT_STRETCH_MAX_OCCUPANCY = 0.95;
 
 /** 吸收漂移时每个原片自然停顿至少留这么多（与「最小句间停顿」不同：这是吸收上限保护）。 */
 export const MIN_GAP_KEEP_MS = 80;

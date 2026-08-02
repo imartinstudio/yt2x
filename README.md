@@ -178,6 +178,23 @@ YouTube URL 用引号包住即可，不需要转义 `?` 或 `=`。例如使用 `
 
 注意：`pipeline --download-video` 只是采集阶段的附加视频片段产物，后续 `notes` / `article` 仍依赖字幕转写产物。如果视频没有手动字幕或自动字幕，pipeline 会停在 acquire；只测试视频下载时使用 `yt2x acquire --video-only`。
 
+### 配音语速试听
+
+`--preferred-rate-min <n>` 只覆盖本次配音的时长协商，默认仍为 `0.95`。为了保留两份可供人耳对比的全片成片，按顺序运行以下命令并使用同一 `article` 目录下不同的 `--output-path`：
+
+```bash
+pnpm yt2x dub \
+  --video-id <videoId> \
+  --preferred-rate-min 0.95 \
+  --output-path ./files/articles/<videoId>/video/full.zh-dubbed-rate-095.mp4
+pnpm yt2x dub \
+  --video-id <videoId> \
+  --preferred-rate-min 0.85 \
+  --output-path ./files/articles/<videoId>/video/full.zh-dubbed-rate-085.mp4
+```
+
+试听比较时不要加 `--force`，以便复用同一份配音稿和自然语速时长报告；每个成片旁会保存同名的 `.audition.json` 门禁摘要。默认语速下限须在人耳确认较慢语速的代价后再调整。
+
 ## 发布到 X
 
 真实发布前需要先配置 X OAuth 2.0：

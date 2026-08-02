@@ -18,6 +18,10 @@ export const registerDubCommand = (program: Command): void => {
       .option("--video-id <id>", "Video ID under --out-dir / --article-out-dir")
       .option("--out-dir <path>", "Downloaded source root")
       .option("--article-out-dir <path>", "Article artifact root (default: files/articles)")
+      .option(
+        "--output-path <path>",
+        "Final video output path under article/<videoId>/video (default: full.zh-dubbed.mp4)",
+      )
       .option("--dub-engine <id>", "TTS engine: edge-tts (default) | elevenlabs")
       .option(
         "--voice <id>",
@@ -48,6 +52,10 @@ export const registerDubCommand = (program: Command): void => {
         "--original-voice-volume <value>",
         "Original speaker's voice volume under the Chinese dub, relative to the dub's 1.0 (default 0.2); " +
           "0 drops the original voice entirely and falls back to a two-input mix",
+      )
+      .option(
+        "--preferred-rate-min <n>",
+        "Counterfactual: override the negotiation speech-rate floor for a listening comparison (default 0.95)",
       )
       .option("--force", "Re-run even when dubbed video / intermediate artifacts already exist"),
   ).action(async (flags: DubFlags) => {

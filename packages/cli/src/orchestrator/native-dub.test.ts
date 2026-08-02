@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type * as AdaptersNode from "@yt2x/adapters-node";
@@ -44,7 +44,9 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
 import {
   DEFAULT_MIN_DURATION_MS,
   executeNativeDub,
+  negotiationOptionsFrom,
   parseOriginalVoiceVolume,
+  resolveDubOutputPath,
   segmentOptionsFrom,
 } from "./native-dub.js";
 
@@ -133,6 +135,73 @@ describe("parseOriginalVoiceVolume", () => {
   });
 });
 
+describe("negotiationOptionsFrom", () => {
+  it("parses the counterfactual speech-rate floor for a dub run", () => {
+    expect(negotiationOptionsFrom({ preferredRateMin: "0.85" })).toEqual({
+      preferredRateMin: 0.85,
+    });
+  });
+
+  it("leaves the default negotiation floor untouched when the flag is omitted", () => {
+    expect(negotiationOptionsFrom({})).toEqual({});
+  });
+
+  it("rejects an invalid speech-rate floor before the dub starts", () => {
+    expect(() => negotiationOptionsFrom({ preferredRateMin: "0.85oops" })).toThrow(
+      /positive number/,
+    );
+  });
+});
+
+describe("resolveDubOutputPath", () => {
+  const articleRoot = path.resolve("files/articles");
+  const videoId = "abc12345678";
+
+  it("resolves an explicit path so separate auditions do not overwrite each other", () => {
+    expect(
+      resolveDubOutputPath(
+        { outputPath: "./files/articles/abc12345678/video/rate-085.mp4" },
+        { articleRoot, videoId, timeRange: {} },
+      ),
+    ).toBe(path.resolve("./files/articles/abc12345678/video/rate-085.mp4"));
+  });
+
+  it("keeps the default full-run output when no path is supplied", () => {
+    expect(resolveDubOutputPath({}, { articleRoot, videoId, timeRange: {} })).toBe(
+      path.join(articleRoot, videoId, "video", "full.zh-dubbed.mp4"),
+    );
+  });
+
+  it("keeps time-window output isolated under dub/work", () => {
+    expect(
+      resolveDubOutputPath({}, { articleRoot, videoId, timeRange: { startMs: 0, endMs: 5_000 } }),
+    ).toBe(
+      path.join(
+        articleRoot,
+        videoId,
+        "dub",
+        "work",
+        "window-0-5000.zh-dubbed.mp4",
+      ),
+    );
+  });
+
+  it("rejects an explicitly empty output path", () => {
+    expect(() =>
+      resolveDubOutputPath({ outputPath: "   " }, { articleRoot, videoId, timeRange: {} }),
+    ).toThrow(/non-empty path/);
+  });
+
+  it("rejects paths outside the article video directory", () => {
+    expect(() =>
+      resolveDubOutputPath(
+        { outputPath: path.join(articleRoot, "..", "downloads", videoId, "video", "bad.mp4") },
+        { articleRoot, videoId, timeRange: {} },
+      ),
+    ).toThrow(/files\/downloads is read-only/);
+  });
+});
+
 describe("executeNativeDub hard-subtitle guard", () => {
   it("refuses before Demucs, LLM translation, or TTS when the source has Chinese hard subs", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-guard-"));
@@ -156,6 +225,34 @@ describe("executeNativeDub hard-subtitle guard", () => {
     expect(synthesizeDubLinesMock).not.toHaveBeenCalled();
     expect(separateDemucsMock).not.toHaveBeenCalled();
     expect(remixDubbedAudioMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeNativeDub audition output reuse", () => {
+  it("records that an existing audition was reused when its manifest is missing", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-audition-reuse-"));
+    const articleRoot = path.join(root, "articles");
+    const videoId = "abc12345678";
+    const outputPath = path.join(articleRoot, videoId, "video", "rate-085.mp4");
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, "existing");
+
+    const code = await executeNativeDub({
+      videoId,
+      articleOutDir: articleRoot,
+      outputPath,
+      preferredRateMin: "0.85",
+    });
+
+    expect(code).toBe(0);
+    const manifest = JSON.parse(await readFile(`${outputPath}.audition.json`, "utf8")) as {
+      status: string;
+      preferredRateMin: number;
+      gates: null;
+    };
+    expect(manifest.status).toBe("reused-existing-output");
+    expect(manifest.preferredRateMin).toBe(0.85);
+    expect(manifest.gates).toBeNull();
   });
 });
 
@@ -331,6 +428,7 @@ describe("executeNativeDub time range", () => {
     const articleRoot = path.join(root, "articles");
     const videoId = "abc12345678";
     const dubDir = path.join(articleRoot, videoId, "dub");
+    const auditionPath = path.join(articleRoot, videoId, "video", "window-audition.mp4");
     await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
     await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
     await mkdir(dubDir, { recursive: true });
@@ -351,15 +449,33 @@ describe("executeNativeDub time range", () => {
       articleOutDir: articleRoot,
       startMs: "0",
       endMs: "5000",
+      outputPath: auditionPath,
     });
 
     expect(code).toBe(0);
     expect(burnBilingualSubtitlesMock).toHaveBeenCalledOnce();
-    const burnCall = burnBilingualSubtitlesMock.mock.calls[0]![0] as { srtPath: string };
+    const burnCall = burnBilingualSubtitlesMock.mock.calls[0]![0] as {
+      outputPath: string;
+      srtPath: string;
+    };
     const expectedWorkPath = path.join(dubDir, "work", "window-0-5000.zh-dub.srt");
     const fullRunPath = path.join(articleRoot, videoId, "video", "full.zh-dub.srt");
     expect(burnCall.srtPath).toBe(expectedWorkPath);
     expect(burnCall.srtPath).not.toBe(fullRunPath);
+    expect(burnCall.outputPath).toBe(auditionPath);
+    const manifest = JSON.parse(await readFile(`${auditionPath}.audition.json`, "utf8")) as {
+      outputPath: string;
+      preferredRateMin: number;
+      stretchMaxOccupancy: number;
+      flags: { skipGate: boolean };
+      gates: { dub: { passed: boolean }; bilingual: { readyForBurn: boolean } };
+    };
+    expect(manifest.outputPath).toBe(auditionPath);
+    expect(manifest.preferredRateMin).toBe(0.95);
+    expect(manifest.stretchMaxOccupancy).toBe(0.95);
+    expect(manifest.flags.skipGate).toBe(false);
+    expect(manifest.gates.dub.passed).toBe(true);
+    expect(manifest.gates.bilingual.readyForBurn).toBe(true);
   });
 
   it("separates Demucs into dub/work/demucs for a time window, not the full-run dub/demucs dir", async () => {

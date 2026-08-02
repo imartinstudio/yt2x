@@ -6,7 +6,7 @@
 - 改动前先阅读相关代码和文档，遵循仓库现有分层与风格。
 - 不要提交真实 API key、OAuth token、cookies、浏览器凭证、下载产物或真实示例视频 ID。
 - 文档示例中的 YouTube URL / videoId 必须使用占位符，例如 `<YOUTUBE_URL>`、`<videoId>`。
-- **`files/downloads/` 是只读原始素材区**：除 `acquire` 外，任何流程、脚本、测试夹具都不得向其中写入或覆盖；二创一律从 downloads 取材，articles 只写产物。短样本用临时目录或 `dub --start-ms/--end-ms`，禁止把裁片冒充原片放进 downloads。用 `pnpm check:downloads` 巡检（须跟随 `files/` 符号链接）。
+- **`files/downloads/` 是只读原始素材区**：除 `acquire` 外，任何流程、脚本、测试夹具都不得向其中写入或覆盖；二创一律从 downloads 取材，articles 只写产物。**唯一例外**：本地转写产出的同语言旁挂文件（`full.local.<lang>.srt` / `full.local.<lang>.words.json`）允许写入——它们是对原始音轨的转录，属于素材而非二创产物，且不覆盖任何已有文件。短样本用临时目录或 `dub --start-ms/--end-ms`，禁止把裁片冒充原片放进 downloads。用 `pnpm check:downloads` 巡检（须跟随 `files/` 符号链接）。
 
 ## Token / 上下文节省规则
 

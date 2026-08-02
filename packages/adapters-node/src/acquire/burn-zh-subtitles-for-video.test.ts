@@ -122,12 +122,12 @@ describe("burnZhSubtitlesForVideo", () => {
       runner,
       skipIfChineseBurned: false,
       watermarkVideo: "@channel",
-      watermarkXlate: "@php_martin",
+      watermarkSubtitler: "@php_martin",
     });
 
     expect(burnSubtitles).toHaveBeenCalledWith(expect.objectContaining({
       watermarkVideo: "@channel",
-      watermarkXlate: "@php_martin",
+      watermarkSubtitler: "@php_martin",
     }));
   });
 });

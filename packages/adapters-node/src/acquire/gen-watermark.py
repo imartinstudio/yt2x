@@ -28,16 +28,16 @@ def find_font(size: int) -> ImageFont.FreeTypeFont:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate bilingual-burn watermark PNG")
     parser.add_argument("output", help="Output PNG path")
-    parser.add_argument("--watermark-video", default="", help="Source channel handle")
-    parser.add_argument("--watermark-xlate", default="", help="Translator handle")
+    parser.add_argument("--watermark-video", default="", help="Source channel handle, rendered as 视频：")
+    parser.add_argument("--watermark-subtitler", default="", help="Subtitle author handle, rendered as 字幕：")
     parser.add_argument("--font-size", type=int, default=28)
     args = parser.parse_args()
 
     lines: list[str] = []
     if args.watermark_video:
         lines.append(f"视频：{args.watermark_video}")
-    if args.watermark_xlate:
-        lines.append(f"字幕：{args.watermark_xlate}")
+    if args.watermark_subtitler:
+        lines.append(f"字幕：{args.watermark_subtitler}")
     if not lines:
         print("ERROR: at least one watermark line is required", file=sys.stderr)
         sys.exit(1)

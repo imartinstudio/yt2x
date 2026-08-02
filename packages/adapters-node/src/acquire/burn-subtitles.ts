@@ -14,7 +14,7 @@ export type BurnSubtitlesOptions = {
   /** YouTube channel handle for watermark (e.g. @nateherk) */
   watermarkVideo?: string;
   /** Subtitle author handle for watermark (e.g. @php_martin) */
-  watermarkXlate?: string;
+  watermarkSubtitler?: string;
   /** Progress callback for the long-running render/frames/encode phases */
   onProgress?: BurnProgressCallback;
 };
@@ -535,14 +535,14 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
 
   // 5. Optional static watermark PNG (same generator and placement as bilingual burn).
   let watermarkPath: string | null = null;
-  if (opts.watermarkVideo || opts.watermarkXlate) {
+  if (opts.watermarkVideo || opts.watermarkSubtitler) {
     const wmPath = path.join(renderDir, "watermark.png");
     const wmArgs = [WATERMARK_SCRIPT, wmPath];
     if (opts.watermarkVideo) {
       wmArgs.push("--watermark-video", opts.watermarkVideo);
     }
-    if (opts.watermarkXlate) {
-      wmArgs.push("--watermark-xlate", opts.watermarkXlate);
+    if (opts.watermarkSubtitler) {
+      wmArgs.push("--watermark-subtitler", opts.watermarkSubtitler);
     }
     try {
       const wmResult = await opts.runner.run({

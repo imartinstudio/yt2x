@@ -866,7 +866,25 @@ export const mergeShortPieces = (
   return result;
 };
 
-type MergeableBlock = { start: string; end: string; zhText: string; enText: string };
+type MergeableBlock = {
+  start: string;
+  end: string;
+  zhText: string;
+  enText: string;
+  /**
+   * Which run of Chinese text this block belongs to. Blocks sharing an id
+   * carry the *same* sentence copied across several cues (the width budget
+   * split the English, not the Chinese); blocks with different ids carry
+   * genuinely different content.
+   *
+   * Text equality cannot stand in for this: `splitLongZh` can hand two
+   * adjacent cues character-identical fragments of one longer sentence, and
+   * collapsing those would silently drop content. Carried through the
+   * transforms by their `{ ...b }` spreads; only `splitWideBlocks` mints new
+   * ids, because only it turns one run into several distinct fragments.
+   */
+  zhSpanId?: number;
+};
 
 /**
  * Global counterpart to `mergeShortPieces`, run once over the whole file's
@@ -984,6 +1002,11 @@ export const splitWideBlocks = <T extends MergeableBlock>(
   hardLimit: number,
 ): T[] => {
   const result = blocks.map((b) => ({ ...b }));
+  // Each part carved out below is distinct content, even when two of them
+  // read identically (a run of repeated characters splits that way). Give
+  // every part its own id so the mono-Chinese artifact can tell "copied
+  // across cues" from "different fragment that happens to match".
+  let nextSpanId = 1 + result.reduce((max, b) => Math.max(max, b.zhSpanId ?? 0), 0);
 
   for (const span of buildIdenticalTextSpans(result)) {
     const width = visualWidth(span.zhText);
@@ -998,9 +1021,10 @@ export const splitWideBlocks = <T extends MergeableBlock>(
     const counts = allocateCuesByWeight(parts.map((part) => visualWidth(part)), span.indices.length);
     let cursor = 0;
     for (let p = 0; p < parts.length; p++) {
+      const partSpanId = nextSpanId++;
       for (let c = 0; c < counts[p]!; c++) {
         const index = span.indices[cursor]!;
-        result[index] = { ...result[index]!, zhText: parts[p]! };
+        result[index] = { ...result[index]!, zhText: parts[p]!, zhSpanId: partSpanId };
         cursor++;
       }
     }
@@ -1484,6 +1508,46 @@ export const requestContentAlignedSplit = async (
   }
 };
 
+/**
+ * Collapses each run of blocks that carry one copied Chinese sentence into a
+ * single cue spanning the whole run.
+ *
+ * The width budget splits one English sentence across several cues, and each
+ * of those carries the *entire* Chinese sentence — on screen that reads
+ * correctly (the Chinese holds still while the English advances), so the
+ * bilingual and English artifacts keep the per-cue form. But the mono-Chinese
+ * artifact is consumed as standalone text, and there the repeat is a stutter:
+ * dubbing synthesised the same sentence several times over (issue #109).
+ *
+ * Keyed on `zhSpanId`, never on the text. Two adjacent cues can hold
+ * character-identical fragments of one longer sentence — a run of repeated
+ * characters splits exactly that way — and merging those would drop content.
+ * Blocks without an id are left alone, so a caller assembling blocks by hand
+ * gets no surprise collapsing.
+ *
+ * Applied at serialization of the mono artifact only, never to `finalBlocks`
+ * itself: `repairSubtitleArtifacts` (the `yt2x subtitle` repair pass) bails
+ * out silently when the en and zh cue counts disagree, so collapsing upstream
+ * would turn that command into a no-op without reporting anything.
+ */
+const mergeAdjacentDuplicateZh = <T extends MergeableBlock>(
+  blocks: readonly T[],
+): { start: string; end: string; zhText: string }[] => {
+  const merged: { start: string; end: string; zhText: string }[] = [];
+  let previousSpanId: number | undefined;
+  for (const block of blocks) {
+    const previous = merged[merged.length - 1];
+    if (previous !== undefined && block.zhSpanId !== undefined && block.zhSpanId === previousSpanId) {
+      // Extend rather than replace: the run's span is [first.start, last.end].
+      previous.end = block.end;
+      continue;
+    }
+    merged.push({ start: block.start, end: block.end, zhText: block.zhText });
+    previousSpanId = block.zhSpanId;
+  }
+  return merged;
+};
+
 export const projectSemanticBilingualSubtitles = async (
   opts: SemanticProjectionOptions,
 ): Promise<SemanticBilingualProjection> => {
@@ -1586,7 +1650,9 @@ export const projectSemanticBilingualSubtitles = async (
     end: string;
     zhText: string;
     enText: string;
+    zhSpanId: number;
   }[] = [];
+  let nextZhSpanId = 1;
 
   for (let s = 0; s < sentenceCues.length; s++) {
     const zhFull = sentenceTranslations[s]!;
@@ -1594,7 +1660,9 @@ export const projectSemanticBilingualSubtitles = async (
     const zhWeight = visualWidth(zhFull);
 
     if (zhWeight <= FIT_CJK) {
-      // Short sentence: show full Chinese on every cue.
+      // Short sentence: show full Chinese on every cue. One id for the whole
+      // sentence — these cues are copies, not separate content.
+      const zhSpanId = nextZhSpanId++;
       for (const cue of cues) {
         translatedBlocks.push({
           index: translatedBlocks.length + 1,
@@ -1602,6 +1670,7 @@ export const projectSemanticBilingualSubtitles = async (
           end: cue.end,
           zhText: zhFull,
           enText: normalizeText(cue.text),
+          zhSpanId,
         });
       }
     } else {
@@ -1681,6 +1750,9 @@ export const projectSemanticBilingualSubtitles = async (
 
       let cueCursor = 0;
       for (const piece of mergedPieces) {
+        // One id per piece: every cue in this run shows the same Chinese, so
+        // the mono artifact states it once (see mergeAdjacentDuplicateZh).
+        const zhSpanId = nextZhSpanId++;
         for (let c = cueCursor; c < piece.throughCue; c++) {
           translatedBlocks.push({
             index: translatedBlocks.length + 1,
@@ -1688,6 +1760,7 @@ export const projectSemanticBilingualSubtitles = async (
             end: workingCues[c]!.end,
             zhText: piece.zhText,
             enText: normalizeText(workingCues[c]!.text),
+            zhSpanId,
           });
         }
         cueCursor = piece.throughCue;
@@ -1744,7 +1817,7 @@ export const projectSemanticBilingualSubtitles = async (
   );
 
   const zhSrt = serializeSrtBlocks(
-    finalBlocks.map((b, i) => ({
+    mergeAdjacentDuplicateZh(finalBlocks).map((b, i) => ({
       index: i + 1,
       start: b.start,
       end: b.end,

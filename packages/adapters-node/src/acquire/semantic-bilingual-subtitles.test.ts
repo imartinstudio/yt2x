@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatRequest, LlmPort } from "@yt2x/core";
+import { auditSubtitleArtifacts } from "./audit-subtitles.js";
 import { parseSubtitleBlocks } from "./video-subtitles.js";
 import {
   allocateCuesByWeight,
@@ -59,7 +60,7 @@ const makePipelineLlm = (translations: Record<string, string>): LlmPort => ({
 });
 
 describe("projectSemanticBilingualSubtitles", () => {
-  it("translates a single-sentence source and repeats the Chinese across every cue", async () => {
+  it("translates a single-sentence source and states the Chinese once in the mono artifact", async () => {
     const sourceSrt = `1
 00:00:00,000 --> 00:00:01,500
 First half
@@ -79,10 +80,10 @@ second half.
       measureLayout: fitMeasurement,
     });
 
-    expect(parseSubtitleBlocks(result.zhSrt).map((b) => b.text.join(""))).toEqual([
-      "简短翻译。",
-      "简短翻译。",
-    ]);
+    // The Chinese sentence spans both English cues on screen, but the
+    // mono-Chinese artifact states it once — it is consumed as standalone
+    // text (issue #109), where a repeat reads as a stutter.
+    expect(parseSubtitleBlocks(result.zhSrt).map((b) => b.text.join(""))).toEqual(["简短翻译。"]);
     expect(parseSubtitleBlocks(result.enSrt).map((b) => b.text.join(""))).toEqual([
       "First half",
       "second half.",
@@ -90,6 +91,126 @@ second half.
     // Projection is not a delivery verdict; the artifact audit owns quality.
     expect(result.groups).toEqual([]);
     expect(result).not.toHaveProperty("quality");
+  });
+
+  it("keeps the merged Chinese cue spanning the full time range it was split across", async () => {
+    // issue #109：合并不能丢时间。中文原本被复制进两片英文，合并后这一条
+    // 必须覆盖 [第一片起点, 最后一片终点] 的完整跨度，否则句子会提前消失。
+    const sourceSrt = `1
+00:00:00,000 --> 00:00:01,500
+First half
+
+2
+00:00:01,500 --> 00:00:03,000
+second half.
+`;
+    const llm = makePipelineLlm({ "First half second half.": "简短翻译。" });
+
+    const result = await projectSemanticBilingualSubtitles({
+      sourceSrt,
+      llm,
+      model: "test-model",
+      measureLayout: fitMeasurement,
+    });
+
+    const zh = parseSubtitleBlocks(result.zhSrt);
+    expect(zh).toHaveLength(1);
+    expect(zh[0]?.start).toBe("00:00:00,000");
+    expect(zh[0]?.end).toBe("00:00:03,000");
+  });
+
+  it("leaves the bilingual artifact repeating the Chinese across each English cue", async () => {
+    // issue #109 只改中文单语产物。双语观感必须原样：中文在英文分片期间
+    // 持续显示，是期望行为，不是缺陷。
+    const sourceSrt = `1
+00:00:00,000 --> 00:00:01,500
+First half
+
+2
+00:00:01,500 --> 00:00:03,000
+second half.
+`;
+    const llm = makePipelineLlm({ "First half second half.": "简短翻译。" });
+
+    const result = await projectSemanticBilingualSubtitles({
+      sourceSrt,
+      llm,
+      model: "test-model",
+      measureLayout: fitMeasurement,
+    });
+
+    expect(parseSubtitleBlocks(result.bilingualSrt).map((b) => b.text)).toEqual([
+      ["简短翻译。", "First half"],
+      ["简短翻译。", "second half."],
+    ]);
+  });
+
+  it("produces three artifacts the audit accepts together", async () => {
+    // 这条覆盖的是投影与审计之间的缝：两边单测各自全绿，拼起来却不成立。
+    // issue #109 的第一版修复就栽在这里——中文单语合并后，审计按「三份逐下标
+    // 时间窗全等」判定，每个下标都报 content 级 bilingual-timing，整条交付被
+    // 判失败，而两侧的单测一个都没红。
+    const sourceSrt = `1
+00:00:00,000 --> 00:00:01,500
+First half
+
+2
+00:00:01,500 --> 00:00:03,000
+second half.
+`;
+    const llm = makePipelineLlm({ "First half second half.": "简短翻译。" });
+
+    const result = await projectSemanticBilingualSubtitles({
+      sourceSrt,
+      llm,
+      model: "test-model",
+      measureLayout: fitMeasurement,
+    });
+
+    const audit = auditSubtitleArtifacts({
+      sourceSrt,
+      enSrt: result.enSrt,
+      zhSrt: result.zhSrt,
+      bilingualSrt: result.bilingualSrt,
+      manifest: { sourceSha256: result.sourceSha256 },
+      measurements: await fitMeasurement(result.bilingualSrt),
+    });
+
+    expect(audit.issues).toEqual([]);
+    expect(audit.verdict).toBe("pass");
+  });
+
+  it("does not merge the same sentence when another sentence separates the two runs", async () => {
+    // 只折叠「紧邻」重复。同一句话在片子里再次出现是正常的，不该被吞掉。
+    const sourceSrt = `1
+00:00:00,000 --> 00:00:01,500
+Right.
+
+2
+00:00:01,500 --> 00:00:03,000
+Something else entirely.
+
+3
+00:00:03,000 --> 00:00:04,500
+Right.
+`;
+    const llm = makePipelineLlm({
+      "Right.": "对。",
+      "Something else entirely.": "完全是另一回事。",
+    });
+
+    const result = await projectSemanticBilingualSubtitles({
+      sourceSrt,
+      llm,
+      model: "test-model",
+      measureLayout: fitMeasurement,
+    });
+
+    expect(parseSubtitleBlocks(result.zhSrt).map((b) => b.text.join(""))).toEqual([
+      "对。",
+      "完全是另一回事。",
+      "对。",
+    ]);
   });
 
   it("starts a new sentence after sentence-ending punctuation", async () => {
@@ -121,10 +242,9 @@ complete thought.
       measureLayout: fitMeasurement,
     });
 
+    // One entry per sentence: each spans its two English cues (issue #109).
     expect(parseSubtitleBlocks(result.zhSrt).map((b) => b.text.join(""))).toEqual([
       "第一句翻译。",
-      "第一句翻译。",
-      "第二句翻译。",
       "第二句翻译。",
     ]);
   });
@@ -160,9 +280,14 @@ four.
     });
 
     const zhTexts = parseSubtitleBlocks(result.zhSrt).map((b) => b.text.join(""));
-    expect(zhTexts).toHaveLength(4);
+    // Three punctuation-delimited fragments over four English cues — the
+    // mono artifact lists each fragment once (issue #109), so a fragment
+    // that spanned two cues is still one entry here.
+    expect(zhTexts).toHaveLength(3);
     // Not every cue repeats the identical full sentence — it was split.
     expect(new Set(zhTexts).size).toBeGreaterThan(1);
+    // Splitting must not lose text: the fragments still rebuild the sentence.
+    expect(zhTexts.join("")).toBe(longZh);
     // Each part stays under a generous bound; no single cue keeps the whole 36-char sentence.
     for (const text of zhTexts) {
       expect(text.length).toBeLessThan(longZh.length);
@@ -364,7 +489,10 @@ thirteen fourteen.
       measureLayout: fitMeasurement,
     });
 
-    const zhTexts = parseSubtitleBlocks(result.zhSrt).map((b) => b.text.join(""));
+    // How many cues each fragment occupies is a per-cue display property, so
+    // it is read off the bilingual artifact — the mono artifact deliberately
+    // states each fragment once regardless of how many cues it spans (#109).
+    const zhTexts = parseSubtitleBlocks(result.bilingualSrt).map((b) => b.text[0]!);
     expect(zhTexts).toHaveLength(7);
     const uniqueTexts = [...new Set(zhTexts)];
     expect(uniqueTexts).toHaveLength(2);

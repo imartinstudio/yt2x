@@ -375,9 +375,11 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
     parseSrt(input.zhSrt),
     parseSrt(input.bilingualSrt),
   ] as const;
-  const alignedCount = Math.max(...aligned.map((cues) => cues.length));
+  // English and bilingual share one display timeline, cue for cue.
+  const displayAligned = [aligned[0], aligned[2]] as const;
+  const alignedCount = Math.max(...displayAligned.map((cues) => cues.length));
   for (let index = 0; index < alignedCount; index++) {
-    const windows = aligned.map((cues) => {
+    const windows = displayAligned.map((cues) => {
       const cue = cues[index];
       return cue === undefined ? undefined : `${cue.startRaw} --> ${cue.endRaw}`;
     });
@@ -398,6 +400,64 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
   }
   const enCues = aligned[0];
   const zhCues = aligned[1];
+  /**
+   * The Chinese *as displayed*: one entry per bilingual cue, carrying that
+   * cue's Chinese line. Layout and reading-speed findings are about what is
+   * on screen, so they are measured here rather than on the mono artifact.
+   *
+   * The two used to be the same list. They stopped being the same when the
+   * mono artifact started stating each sentence once (issue #109) — it is a
+   * text artifact now, and one of its cues can cover several display cues.
+   */
+  const zhDisplayCues: ParsedCue[] = bilingualCues.map((cue) => ({
+    ...cue,
+    lines: cue.lines.slice(0, 1),
+  }));
+  // The mono Chinese track is a *coarsening* of the display timeline: each of
+  // its cues must span an exact, contiguous run of display cues, and the runs
+  // must cover every display cue. That is what lets one Chinese sentence
+  // cover several English cues without the artifacts drifting apart — and it
+  // still catches a mono track that lost, gained, or re-timed content.
+  let displayCursor = 0;
+  for (const cue of zhCues) {
+    if (
+      bilingualCues[displayCursor] === undefined ||
+      bilingualCues[displayCursor]!.startRaw !== cue.startRaw
+    ) {
+      issues.push({
+        code: "bilingual-timing",
+        severity: "content",
+        cueIndex: cue.index,
+        timestamp: cue.startRaw,
+        message: `Chinese cue ${cue.index} does not start where a display cue starts`,
+      });
+      break;
+    }
+    while (
+      displayCursor < bilingualCues.length &&
+      bilingualCues[displayCursor]!.endSeconds <= cue.endSeconds
+    ) {
+      displayCursor++;
+    }
+    if (bilingualCues[displayCursor - 1]?.endRaw !== cue.endRaw) {
+      issues.push({
+        code: "bilingual-timing",
+        severity: "content",
+        cueIndex: cue.index,
+        timestamp: cue.startRaw,
+        message: `Chinese cue ${cue.index} does not end where a display cue ends`,
+      });
+      break;
+    }
+  }
+  if (displayCursor !== bilingualCues.length && zhCues.length > 0) {
+    issues.push({
+      code: "bilingual-timing",
+      severity: "content",
+      message:
+        `the Chinese track covers ${displayCursor} of ${bilingualCues.length} display cues`,
+    });
+  }
   const sourceCues = parseSrt(input.sourceSrt);
   // NOTE: identical Chinese text repeated across consecutive cues with
   // different English is NOT flagged here. It's the expected shape whenever
@@ -442,7 +502,7 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
   // five cues measured clean — one cps finding, no hard-layout, no line-count
   // — because the line still fit the frame. It was simply far too much text
   // for one caption, and nothing reported it.
-  for (const cue of zhCues) {
+  for (const cue of zhDisplayCues) {
     const width = visualWidth(cue.lines.join(" "));
     if (width > SUBTITLE_AUDIT_THRESHOLDS.maxCueWidth) {
       issues.push({
@@ -457,7 +517,7 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
   }
   for (const measurement of input.measurements ?? []) {
     if (measurement.severity === "hard") {
-      const cue = zhCues[measurement.cueIndex - 1];
+      const cue = zhDisplayCues[measurement.cueIndex - 1];
       issues.push({
         code: "hard-layout",
         severity: "presentation",
@@ -489,7 +549,7 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
       }
     }
     if (measurement.lineCount > SUBTITLE_AUDIT_THRESHOLDS.maxLines) {
-      const cue = zhCues[measurement.cueIndex - 1];
+      const cue = zhDisplayCues[measurement.cueIndex - 1];
       issues.push({
         code: "line-count",
         severity: "presentation",
@@ -509,7 +569,7 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
   // Scoring the same unchanged text against each individual cue's short
   // duration manufactures cps/flash findings that don't reflect what a
   // viewer actually experiences.
-  for (const span of groupConsecutiveIdenticalText(zhCues)) {
+  for (const span of groupConsecutiveIdenticalText(zhDisplayCues)) {
     const duration = span.endSeconds - span.startSeconds;
     if (!Number.isFinite(duration) || duration <= 0) continue;
     const cps = visualWidth(span.text) / duration;

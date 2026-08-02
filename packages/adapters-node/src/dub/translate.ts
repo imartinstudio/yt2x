@@ -1,14 +1,17 @@
 import {
   buildDubGlossaryRepairUserPrompt,
+  buildDubSpeakableRepairUserPrompt,
   buildDubTranslateExpandPrompt,
   buildDubTranslateGlossaryRepairPrompt,
   buildDubTranslateRepairPrompt,
+  buildDubTranslateSpeakablePrompt,
   buildDubTranslateTightenPrompt,
   buildDubTranslateUserPrompt,
   DEFAULT_SPEECH_RATE,
   dubTranslateCharBudget,
   findMissingProtectedTerms,
   getDubTranslateSystemPrompt,
+  isTelegraphicChinese,
   type LlmPort,
   type SpeechRateModel,
   type Utterance,
@@ -312,6 +315,64 @@ export const translateUtterances = async (
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       warnings.push(`glossary repair pass failed: ${message}`);
+    }
+  }
+
+  // 电报体补救：预算话术会把模型带进"压缩语域"——最省字的写法就是切换到文言。
+  // 真实全片 121 句里 36 句零标点（「故我做此视频助你精通这些技能」这种），念出来
+  // 听不懂，而且大多**还没用满预算**，说明不是字数逼的。放在最后一道：前面的
+  // tighten/expand 都可能把一行重新压成电报体，这里兜底。
+  const telegraphic = input.utterances
+    .map((u) => {
+      const text = translated.get(u.index);
+      return text !== undefined && isTelegraphicChinese(text) ? { utterance: u, text } : undefined;
+    })
+    .filter((e): e is { utterance: Utterance; text: string } => e !== undefined);
+
+  if (telegraphic.length > 0) {
+    try {
+      const resp = await input.llm.chat({
+        model: input.model,
+        messages: [
+          {
+            role: "system",
+            content: buildDubTranslateSpeakablePrompt(
+              telegraphic.map((t) => ({ index: t.utterance.index })),
+            ),
+          },
+          {
+            role: "user",
+            content: buildDubSpeakableRepairUserPrompt(
+              telegraphic.map((t) => ({
+                index: t.utterance.index,
+                en: t.utterance.text,
+                zh: t.text,
+                maxChars: dubTranslateCharBudget(
+                  t.utterance.endMs - t.utterance.startMs,
+                  rate,
+                ),
+              })),
+            ),
+          },
+        ],
+        temperature: 0.2,
+        maxTokens: input.maxTokens ?? 8192,
+        jsonMode: true,
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+      let speakable = 0;
+      for (const line of parseResponse(resp.content.trim())) {
+        // 只在改写确实不再是电报体时才替换——否则留着原译文，别拿一个同样难读的
+        // 版本盖掉一个已知难读的版本。
+        if (translated.has(line.index) && !isTelegraphicChinese(line.text)) {
+          translated.set(line.index, line.text);
+          speakable += 1;
+        }
+      }
+      warnings.push(`speakable-repaired ${speakable}/${telegraphic.length} lines`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      warnings.push(`speakable repair pass failed: ${message}`);
     }
   }
 

@@ -79,8 +79,10 @@ describe("generateDubScript", () => {
   it("batches long inputs at 20 utterances per request", async () => {
     const utterances = Array.from({ length: 45 }, (_, i) => utterance(i + 1, `sentence ${i + 1}`));
     // 35 字左右的占位译文，落在 [32, 53] 预算区间内，避免触发额外的收紧/扩写请求。
+    // 必须带标点：零标点的长句会被判为电报体，触发第四道「口语化重写」请求，
+    // 让这条数批次的断言失真。
     const longTranslation = (index: number): string =>
-      `这是用于批处理测试的中文配音译文占位内容示例文字用于凑够预算长度第${index}句`;
+      `这是用于批处理测试的中文配音译文，占位内容示例文字，用于凑够预算长度，第${index}句`;
     const { llm, requests } = stubLlm((req) => {
       const payload = JSON.parse(req.messages[1]!.content) as { index: number }[];
       return jsonLines(

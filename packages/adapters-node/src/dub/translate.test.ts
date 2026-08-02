@@ -246,7 +246,7 @@ describe("translateUtterances", () => {
         expect(repairItems[0]?.maxChars).toBeGreaterThan(0);
         return {
           content: JSON.stringify(
-            items.map((i) => ({ index: i.index, text: "我的 Grill Me 技能很棒" })),
+            items.map((i) => ({ index: i.index, text: "我的 Grill Me 技能，真的很棒" })),
           ),
           model: req.model,
           finishReason: "stop" as const,

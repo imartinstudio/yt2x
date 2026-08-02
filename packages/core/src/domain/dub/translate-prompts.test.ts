@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildDubTranslateExpandPrompt,
   buildDubGlossaryRepairUserPrompt,
+  buildDubSpeakableRepairUserPrompt,
+  isTelegraphicChinese,
   buildDubTranslateGlossaryRepairPrompt,
   buildDubTranslatePayload,
   buildDubTranslateRepairPrompt,
@@ -160,6 +162,15 @@ describe("getDubTranslateSystemPrompt", () => {
     expect(prompt).toMatch(/fact|number|name/i);
   });
 
+  it("forbids paying for the budget by switching to a classical register", () => {
+    // 真实全片 121 句里 36 句零标点、写成文言（「故我做此视频助你精通这些技能」），
+    // 而且多数**还没用满预算**——不是字数逼的，是整套预算话术把模型带进了压缩语域。
+    expect(prompt).toMatch(/MODERN SPOKEN MANDARIN ONLY/i);
+    expect(prompt).toMatch(/never be paid for by\s+switching register/i);
+    expect(prompt).toMatch(/故我做此视频助你精通这些技能/);
+    expect(prompt).toMatch(/所以我做了这个视频/);
+  });
+
   it("forbids truncation markers, which are the signature of post-hoc cutting", () => {
     expect(prompt).toMatch(/等等|ellips|truncat/i);
   });
@@ -290,5 +301,41 @@ describe("buildDubTranslateExpandPrompt", () => {
   it("asks for a fuller retranslation, not padding of the previous attempt", () => {
     expect(prompt).toMatch(/use most of the budget/i);
     expect(prompt).toMatch(/NOT an instruction to pad/i);
+  });
+});
+
+describe("isTelegraphicChinese", () => {
+  it("flags a long run with no pause, the shape produced under budget pressure", () => {
+    // 真实全片产出的原句，念出来听不懂
+    expect(isTelegraphicChinese("故我做此视频助你精通这些技能")).toBe(true);
+    expect(isTelegraphicChinese("追问始时上下文窗近空但持续进行")).toBe(true);
+    expect(isTelegraphicChinese("答问者即你用Grill Me技能需善规划懂范围")).toBe(true);
+  });
+
+  it("accepts natural spoken Chinese of the same length", () => {
+    expect(isTelegraphicChinese("所以我做了这个视频，帮你掌握这些技能")).toBe(false);
+    expect(
+      isTelegraphicChinese("刚开始追问时，上下文窗口几乎是空的，但你一直问下去"),
+    ).toBe(false);
+  });
+
+  it("leaves short lines alone — a brief phrase legitimately has no pause", () => {
+    // 判据只对够长的句子成立：口语里短句本来就不需要标点
+    expect(isTelegraphicChinese("我列了九项常见错误")).toBe(false);
+    expect(isTelegraphicChinese("开始吧")).toBe(false);
+  });
+});
+
+describe("buildDubSpeakableRepairUserPrompt", () => {
+  it("carries the English source too, since the compressed line may have lost meaning", () => {
+    const payload = JSON.parse(
+      buildDubSpeakableRepairUserPrompt([
+        { index: 43, en: "you might start with a nearly empty context window", zh: "追问始时上下文窗近空", maxChars: 23 },
+      ]),
+    ) as { index: number; en: string; zh: string; maxChars: number }[];
+
+    expect(payload[0]?.en).toContain("context window");
+    expect(payload[0]?.zh).toBe("追问始时上下文窗近空");
+    expect(payload[0]?.maxChars).toBe(23);
   });
 });

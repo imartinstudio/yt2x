@@ -85,6 +85,21 @@ export const DUB_TRANSLATE_RULES: readonly string[] = [
   "2. Spend the budget on completeness and natural phrasing, not padding. Spoken English is padded with filler and restatement — cut those first. Then use the room you freed up to restore details, qualifiers, examples, and causal links that a tight literal translation would drop, and to phrase the sentence the way a person would actually say it in Chinese. Do not add filler words, hedges, or repetition merely to consume characters — every character you add must carry meaning. Every fact, number, name, and causal link in the source must survive.",
   "3. Proper nouns, brand names, product names, shell commands, API names, and code identifiers stay EXACTLY as written. Never translate or transliterate them.",
   '4. Write for the EAR. Convert percentages, multipliers, and units into spoken Chinese ("30%" -> "百分之三十", "2x" -> "两倍"). Version numbers and model names (GPT-4, Claude 3.5, o3) stay verbatim.',
+  "4b. " +
+    "MODERN SPOKEN MANDARIN ONLY. Fitting the budget must never be paid for by " +
+    "switching register. Compression comes from cutting redundancy, never from " +
+    "dropping the particles and connectives that make a sentence sound like speech. " +
+    "Specifically forbidden: literary/classical function words (之, 乎, 者, 也, 故, " +
+    "此, 需, 望, 即, 依, 若 used the classical way), dropping 的/了/是/在, and " +
+    "telegraphic noun-stacking. Punctuate normally — a spoken Chinese sentence " +
+    "essentially never runs past about a dozen characters without a comma. " +
+    'BAD: "故我做此视频助你精通这些技能" / "答问者即你用Grill Me技能需善规划懂范围" / ' +
+    '"追问始时上下文窗近空但持续进行" — these are unreadable aloud and were produced ' +
+    "under budget pressure even though budget was left over. " +
+    'GOOD: "所以我做了这个视频，帮你掌握这些技能" / "回答问题的人，也就是你，在用 Grill Me ' +
+    '技能时要擅长规划、理解范围" / "刚开始追问时，上下文窗口几乎是空的，但你一直问下去". ' +
+    "If the natural spoken version genuinely will not fit, cut a whole clause and " +
+    "keep the rest speakable — never compress every clause into classical shorthand.",
   '5. NEVER signal omission. No ellipses, no "等等", no "以此类推", no trailing dashes. A line that reads as truncated is a failure even when it fits.',
   "6. Each item is one spoken sentence. Keep it self-contained so it can be understood by ear without the neighbouring lines.",
   '7. Return ONLY a JSON array of objects with "index" (number) and "text" (string). One object per input index, same indices, same order. No commentary, no code fences.',
@@ -262,3 +277,64 @@ export const buildDubTranslateExpandPrompt = (
     "Rules:",
     ...DUB_TRANSLATE_RULES,
   ].join("\n");
+
+/**
+ * 电报体检测：口语中文写不出「连续十几个字不喘气」的句子。
+ *
+ * 真实全片里 121 句有 36 句零标点、17 句带文言虚词，念出来听不懂——例如
+ * 「故我做此视频助你精通这些技能」「追问始时上下文窗近空但持续进行」。这些行
+ * 大多**还没用满预算**（14字/预算21、11字/预算15），说明不是字数逼的，是整套
+ * 提示词的预算话术把模型带进了「压缩语域」：最省字的写法就是切换到文言。
+ *
+ * 判据只用标点密度，不查词表——文言虚词逐个列举会误伤（「在此之前」「若干」都
+ * 是正常口语），而「一句话十几个字不带停顿」在现代汉语口语里几乎不可能出现。
+ */
+export const TELEGRAPHIC_MIN_CHARS = 12;
+
+const CJK_PUNCT = /[，。？！、：；…—]/u;
+
+/** 该行是否读起来像电报体（够长却完全没有停顿）。 */
+export const isTelegraphicChinese = (
+  text: string,
+  minChars: number = TELEGRAPHIC_MIN_CHARS,
+): boolean => {
+  const trimmed = text.trim();
+  return [...trimmed].length >= minChars && !CJK_PUNCT.test(trimmed);
+};
+
+/**
+ * 电报体重译 prompt：**改写任务**，不是重新翻译。
+ *
+ * 与术语补漏同一个教训——把已经写好的句子交给模型去改，比让它从英文重来一遍
+ * 更容易得到想要的那一版。这里连英文原文一起给，因为电报体经常已经把意思压没了，
+ * 只看中文无法还原。
+ */
+export const buildDubTranslateSpeakablePrompt = (
+  items: readonly { index: number }[],
+): string =>
+  [
+    "You are rewriting Chinese dubbing subtitles that came out unspeakable. Each item below is written in a compressed, telegraphic register — classical function words, dropped particles, no punctuation — which cannot be understood when read aloud.",
+    ...items.map((i) => `  index ${i.index}`),
+    "",
+    "Rewrite each into modern spoken Mandarin:",
+    "- Restore the particles and connectives a person would actually say (的, 了, 是, 在, 就, 也, 所以, 但是…).",
+    "- Punctuate normally. A spoken sentence essentially never runs a dozen characters without a comma.",
+    "- No classical function words (之, 乎, 者, 也, 故, 此, 需, 望, 即, 依 used the classical way).",
+    "- Use `en` to recover meaning the compressed version lost.",
+    "- Stay within `maxChars`. If the speakable version will not fit, drop a whole clause and keep the rest natural — never re-compress every clause.",
+    "",
+    'Return a JSON array: [{"index":<number>,"text":"<rewritten Chinese>"}]',
+  ].join("\n");
+
+export type DubSpeakableRepairItem = {
+  index: number;
+  /** 英文原文——电报体常已丢信息，只给中文改不回来。 */
+  en: string;
+  /** 当前（电报体）译文。 */
+  zh: string;
+  maxChars: number;
+};
+
+export const buildDubSpeakableRepairUserPrompt = (
+  items: readonly DubSpeakableRepairItem[],
+): string => JSON.stringify(items);

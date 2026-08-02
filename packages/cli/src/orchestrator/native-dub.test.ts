@@ -41,7 +41,12 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
   };
 });
 
-import { DEFAULT_MIN_DURATION_MS, executeNativeDub, segmentOptionsFrom } from "./native-dub.js";
+import {
+  DEFAULT_MIN_DURATION_MS,
+  executeNativeDub,
+  parseOriginalVoiceVolume,
+  segmentOptionsFrom,
+} from "./native-dub.js";
 
 beforeEach(() => {
   probeDemucsMock.mockClear();
@@ -99,6 +104,32 @@ describe("segmentOptionsFrom", () => {
       maxDurationMs: 8_000,
       minDurationMs: DEFAULT_MIN_DURATION_MS,
     });
+  });
+});
+
+describe("parseOriginalVoiceVolume", () => {
+  it("returns undefined when --original-voice-volume is not passed (unchanged default behavior)", () => {
+    expect(parseOriginalVoiceVolume(undefined)).toBeUndefined();
+  });
+
+  it("parses a fractional volume", () => {
+    expect(parseOriginalVoiceVolume("0.35")).toBe(0.35);
+  });
+
+  it("accepts 0 as a valid value (caller falls back to a two-input mix)", () => {
+    expect(parseOriginalVoiceVolume("0")).toBe(0);
+  });
+
+  it("rejects a negative value", () => {
+    expect(() => parseOriginalVoiceVolume("-0.1")).toThrow(/non-negative/);
+  });
+
+  it("rejects a non-numeric value", () => {
+    expect(() => parseOriginalVoiceVolume("loud")).toThrow(/non-negative/);
+  });
+
+  it("rejects a partially numeric value instead of silently truncating it", () => {
+    expect(() => parseOriginalVoiceVolume("0.35oops")).toThrow(/non-negative/);
   });
 });
 
@@ -649,5 +680,131 @@ describe("executeNativeDub time range", () => {
     expect(synthesizeDubLinesMock).toHaveBeenCalledOnce();
     const synthArgs = synthesizeDubLinesMock.mock.calls[0]?.[0] as { script: { lines: Array<{ text: string }> } };
     expect(synthArgs.script.lines[0]?.text).toBe("新链路生成的句子");
+  });
+});
+
+describe("executeNativeDub --original-voice-volume", () => {
+  const setupHappyPath = (): void => {
+    guardMock.mockResolvedValue({
+      hasBurnedSubtitles: false,
+      hasChineseBurnedSubtitles: false,
+      shouldSkipBurn: false,
+    });
+    generateDubScriptMock.mockResolvedValue({
+      script: {
+        version: 2,
+        videoId: "abc12345678",
+        sourceWords: "video/full.local.en.words.json",
+        rewriteModel: "test-model",
+        droppedCount: 0,
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "窗内句",
+            sourceText: "Inside the window.",
+            cueIndices: [1],
+          },
+        ],
+      },
+      warnings: [],
+      translatedCount: 1,
+      droppedCount: 0,
+    });
+    // ratio 1.0 so the negotiation plan keeps the line as-is and the (unmocked, real) TTS
+    // adapter is never called.
+    synthesizeDubLinesMock.mockResolvedValue({
+      report: {
+        version: 1,
+        videoId: "abc12345678",
+        engine: "edge-tts",
+        voice: "test-voice",
+        lineCount: 1,
+        medianRatio: 1,
+        overflowCount: 0,
+        totalDriftMs: 0,
+        lines: [
+          {
+            index: 1,
+            targetDurationMs: 1_000,
+            synthesizedMs: 1_000,
+            ratio: 1,
+            charCount: 3,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      },
+      warnings: [],
+    });
+    separateDemucsMock.mockResolvedValue({
+      noVocalsPath: "/tmp/no_vocals.wav",
+      vocalsPath: "/tmp/vocals.wav",
+      skipped: false,
+    });
+  };
+
+  const runDub = async (
+    extra: Pick<Parameters<typeof executeNativeDub>[0], "originalVoiceVolume">,
+  ): Promise<{ code: number }> => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-voice-volume-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "abc12345678";
+    await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
+    await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
+    await writeFile(path.join(outRoot, videoId, "video", "full.mp4"), "original");
+    await writeFile(
+      path.join(outRoot, videoId, "video", "full.local.en.words.json"),
+      JSON.stringify([
+        { word: "Inside", start: 1.0, end: 1.3 },
+        { word: "the", start: 1.3, end: 1.5 },
+        { word: "window.", start: 1.5, end: 2.0 },
+      ]),
+      "utf8",
+    );
+
+    // --start-ms/--end-ms 走窗口路径，避免真去 ffprobe 一个假的 full.mp4（时长探测
+    // 直接用窗口长度算，不落到真实 ffprobe 调用）——与既有 "executeNativeDub time
+    // range" 测试组一致的规避方式。
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      startMs: "0",
+      endMs: "5000",
+      ...extra,
+    });
+    return { code };
+  };
+
+  it("threads --original-voice-volume through to the remix filter-chain call", async () => {
+    setupHappyPath();
+    const { code } = await runDub({ originalVoiceVolume: "0.5" });
+
+    expect(code).toBe(0);
+    expect(remixDubbedAudioMock).toHaveBeenCalledOnce();
+    const remixCall = remixDubbedAudioMock.mock.calls[0]![0] as { originalVoiceVolume?: number };
+    expect(remixCall.originalVoiceVolume).toBe(0.5);
+  });
+
+  it("does not pass originalVoiceVolume when the flag is omitted (unchanged default behavior)", async () => {
+    setupHappyPath();
+    const { code } = await runDub({});
+
+    expect(code).toBe(0);
+    expect(remixDubbedAudioMock).toHaveBeenCalledOnce();
+    const remixCall = remixDubbedAudioMock.mock.calls[0]![0] as { originalVoiceVolume?: number };
+    expect(remixCall.originalVoiceVolume).toBeUndefined();
+  });
+
+  it("rejects a negative --original-voice-volume before doing any work", async () => {
+    setupHappyPath();
+    const { code } = await runDub({ originalVoiceVolume: "-1" });
+
+    expect(code).toBeGreaterThan(0);
+    expect(guardMock).not.toHaveBeenCalled();
+    expect(remixDubbedAudioMock).not.toHaveBeenCalled();
   });
 });

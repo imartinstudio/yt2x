@@ -30,8 +30,15 @@ pnpm install
 | `pnpm yt2x publish …`       | 发布到 X（OAuth 2.0 + v2）                                                                            |
 | `pnpm yt2x auth …`          | OAuth 2.0 PKCE 登录 / 登出 / 状态                                                                     |
 | `pnpm yt2x pipeline …`      | **native acquire** + orchestrator 内 `notes`→`article`→`publish`                                      |
+| `pnpm yt2x dub …`           | 生成中文配音成片：切分话语单元 → 带时长预算翻译 → 合成 → 协商时长 → 门禁 → 双语烧录一次               |
+| `pnpm yt2x dub-replay …`    | 从上一次 `dub` 留下的产物重放协商与字幕生成并打印指标；纯计算、秒级，用于调切分与协商参数             |
 | `pnpm yt2x llm …`           | LLM 连通性诊断                                                                                        |
 | `pnpm run ci`               | typecheck + lint + format:check + test                                                                |
+
+`dub-replay` 只读产物、不写盘、不改变 `dub` 的行为，也不调 LLM / 合成 / 人声分离 / 烧录，因此
+在真实素材上一两秒就能跑完。它**刻意没有时间窗参数**：短窗正是漏测的来源，重放始终覆盖产物
+里的全部话语单元。`--preferred-rate-min` / `--stretch-max-occupancy` 用于反事实对比不同协商参数
+对句间静默的影响；注意它算出的时间是协商阶段的**预估**，适合横向比较，绝对值以真实跑为准。
 
 `pipeline` 安全默认：`--publish review` 只预览发布内容并写 `publish-preview.json` / `process-status.json`，不会真实调用 X API；真实发帖必须显式传 **`--publish auto`**。只想跑到内容生成产物时继续使用 **`--publish skip`**。
 

@@ -108,6 +108,7 @@ manifest、烧录视频或本地转写临时文件。双语模式只读取已经
 
 - **读**：二次创作（字幕烧录、配音）一律从 downloads 取源视频；`files/articles/` 只作为产物写入目标，不得作为素材来源。
 - **写**：除 `acquire` 采集步骤外，任何流程、脚本、测试夹具都不得向 downloads 写入或覆盖文件。
+- **写的唯一例外**：本地转写产出的同语言旁挂文件 `full.local.<lang>.srt` / `full.local.<lang>.words.json` 允许写入，无论由哪个阶段触发（`yt2x subtitle transcribe-local` 或 `pipeline --dub` 的前置转写）。判据是「素材 vs 二创」而非「哪个阶段」：转写是对原始音轨的机器读取，与原片同语言、同内容，属于素材；烧录版、配音版、水印版是二创产物，一律只进 `files/articles/`。该例外不允许覆盖任何已有文件。
 - 冒烟/测试若需要短片段，必须从原始素材裁切且放在 downloads **之外**的临时/夹具目录；或使用 `yt2x dub --start-ms/--end-ms` 限定处理时间窗（临时窗写在 article `dub/work/`，不进 downloads）。
 - 可执行检查：`pnpm check:downloads`（跟随 `files/` 符号链接；干净基线应零报警）。
 

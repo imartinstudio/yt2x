@@ -83,16 +83,16 @@
 
 ### 保留
 
-| 模块                                                                           | 说明                             |
-| ------------------------------------------------------------------------------ | -------------------------------- |
-| `dub/demucs.ts`                                                                | 人声分离                         |
-| `dub/edge-tts.ts`、`dub/edge-tts-subtitles.ts`                                 | TTS + 词级时间戳                 |
-| `dub/elevenlabs.ts`                                                            | 维持当前「未验证即失败关闭」状态 |
-| `dub/synthesize.ts`                                                            | 合成与时间戳落地                 |
-| `dub/source-guard.ts`、`dub/file-store.ts`                                     | 素材契约、产物读写               |
-| `core/dub/gate.ts`                                                             | 质量门禁（指标随新链路调整）     |
-| `acquire/render-bilingual-subtitles.py`、`acquire/burn-bilingual-subtitles.ts` | 双语渲染与烧录，成为唯一烧录路径 |
-| `acquire/transcribe-local.py`                                                  | 已能产出词级时间戳               |
+| 模块                                                                           | 说明                               |
+| ------------------------------------------------------------------------------ | ---------------------------------- |
+| `dub/demucs.ts`                                                                | 人声分离                           |
+| `dub/edge-tts.ts`、`dub/edge-tts-subtitles.ts`                                 | TTS + 词级时间戳                   |
+| `dub/elevenlabs.ts`                                                            | **失败关闭，不接入**（见下方决策） |
+| `dub/synthesize.ts`                                                            | 合成与时间戳落地                   |
+| `dub/source-guard.ts`、`dub/file-store.ts`                                     | 素材契约、产物读写                 |
+| `core/dub/gate.ts`                                                             | 质量门禁（指标随新链路调整）       |
+| `acquire/render-bilingual-subtitles.py`、`acquire/burn-bilingual-subtitles.ts` | 双语渲染与烧录，成为唯一烧录路径   |
+| `acquire/transcribe-local.py`                                                  | 已能产出词级时间戳                 |
 
 ### 改造
 
@@ -168,13 +168,30 @@
 
 **单测全绿不构成验收通过**：必须用 30 秒窗口跑真实素材并按四维度实测，最终由人耳确认听感。
 
+## ElevenLabs 决策（2026-07-31）
+
+**不接入。TTS 只走 edge-tts。**
+
+原方案把「ElevenLabs 时间戳能力未经真实调用验证」列为未决项。该验证必须打真实 API——
+现有 `elevenlabs.test.ts` 全是 mock，正因如此才不构成验证。但本项目无 ElevenLabs 账号且
+暂不付费，验证无法进行，故这条未决项**关闭为「不做」**，不再继续挂着。
+
+连带结论：
+
+- `dub/elevenlabs.ts` 维持失败关闭，不再计划启用。其 mock 单测只保证代码不腐化，不代表能力可用。
+- **音色克隆不做**。克隆能力依赖 ElevenLabs，edge-tts 无此能力，因此该需求随本决策一并关闭。
+- `TtsPort` 的多引擎抽象保留。`rateRange`、`speechTiming` 等设计本身是对的，日后若接入付费
+  引擎可直接复用，无需推倒重来。
+
+重新开启此决策的条件：有了 ElevenLabs 账号，且完成一次真实调用验证其词/短语级时间戳能填满
+`TtsSpeechTiming`（当前 `elevenlabs.ts` 的返回值里根本没有 `speechTiming`）。
+
 ## 未决
 
 - 最小句间停顿默认值（当前 150ms）需在新链路上重新试听确定
 - **门禁阈值需在新链路跑通后以真实正片重新标定**——`advisoryTextBudgetRetainFraction = 0.3`
   和 `maxDroppedCount = 0` 目前都只用一次 30 秒窗口的运行标过，不能因为某次 `issues: []`
   就当作已经标定完成
-- ElevenLabs 时间戳能力仍未经真实调用验证，接入前必须先验证
 - **"译文回来了却被掏空"这一档目前没有任何 hard 兜底，advisory 阈值 0.3 也抓不到**：
   `advisoryTextBudgetRetainFraction` 衡量的是译文占用了多少时长预算，但分辨不出"挤掉口水话"
   与"砍掉内容"——一段填充词密集的发言忠实压缩后占用比天然很低，因此这个指标只能设成较低的

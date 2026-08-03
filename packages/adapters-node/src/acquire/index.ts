@@ -68,6 +68,11 @@ export {
   type BurnBilingualSubtitlesResult,
 } from "./burn-bilingual-subtitles.js";
 export {
+  overlayWatermarkOnVideo,
+  type OverlayWatermarkOptions,
+  type OverlayWatermarkResult,
+} from "./watermark-video.js";
+export {
   auditSubtitleArtifacts,
   isSubtitleAuditReadyForDelivery,
   SUBTITLE_AUDIT_THRESHOLDS,

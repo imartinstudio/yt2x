@@ -389,6 +389,16 @@ export const resolveWatermarkUploaderId = async (videoDir: string): Promise<stri
   }
 };
 
+/**
+ * Falls back to the shared default subtitler handle, same as dub's
+ * resolveDubWatermark. An explicit empty string suppresses the 「字幕：」
+ * line entirely rather than falling back.
+ */
+const resolveWatermarkSubtitler = (override: string | undefined): string | undefined => {
+  const subtitler = override ?? DEFAULT_WATERMARK_SUBTITLER;
+  return subtitler.trim().length > 0 ? subtitler : undefined;
+};
+
 const subtitleLanguagePriority = (name: string, requestedLang: string): number => {
   const lang = inferSubtitleLanguageFromName(name, requestedLang);
   if (/^zh[-_]CN$/iu.test(lang)) return 0;
@@ -618,6 +628,8 @@ export type RunSubtitlePipelineOptions = {
   subtitleBilingual?: "off" | "srt" | "ass" | "burned" | "all";
   /** 硬字幕烧制样式：zh-default / bilingual-explainer */
   subtitleBurnStyle?: "zh-default" | "bilingual-explainer";
+  /** Override the 「字幕：」 watermark attribution (default DEFAULT_WATERMARK_SUBTITLER); empty string drops that line. */
+  watermarkSubtitler?: string;
   /** 烧录等长耗时子阶段的进度回调（detail 为人类可读描述，fraction ∈ [0,1]）。 */
   onProgress?: (detail: string, fraction: number) => void;
   /**
@@ -1555,7 +1567,10 @@ export const runSubtitlePipeline = async (
       ...(opts.force !== undefined ? { force: opts.force } : {}),
       ...(opts.videoLanguage !== undefined ? { videoLanguage: opts.videoLanguage } : {}),
       ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
-      watermarkSubtitler: DEFAULT_WATERMARK_SUBTITLER,
+      ...(() => {
+        const watermarkSubtitler = resolveWatermarkSubtitler(opts.watermarkSubtitler);
+        return watermarkSubtitler !== undefined ? { watermarkSubtitler } : {};
+      })(),
       ...(() => {
         const onProgress = reportBurnProgress(opts.onProgress, "中文");
         return onProgress !== undefined ? { onProgress } : {};
@@ -1680,7 +1695,10 @@ export const runSubtitlePipeline = async (
             ...(opts.force !== undefined ? { force: opts.force } : {}),
             ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
             ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
-            watermarkSubtitler: DEFAULT_WATERMARK_SUBTITLER,
+            ...(() => {
+              const watermarkSubtitler = resolveWatermarkSubtitler(opts.watermarkSubtitler);
+              return watermarkSubtitler !== undefined ? { watermarkSubtitler } : {};
+            })(),
             ...(() => {
               const onProgress = reportBurnProgress(opts.onProgress, "双语");
               return onProgress !== undefined ? { onProgress } : {};

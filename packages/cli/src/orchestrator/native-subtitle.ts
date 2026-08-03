@@ -26,6 +26,7 @@ export type SubtitleFlags = NativeLlmCliFlags & {
   verbose?: boolean;
   force?: boolean;
   alignAudio?: boolean;
+  watermarkSubtitler?: string;
 };
 
 /** 退出码常亮 */
@@ -90,6 +91,7 @@ export const executeNativeSubtitle = async (flags: SubtitleFlags): Promise<numbe
       subtitleBilingual: (flags.subtitleBilingual as "off" | "srt" | "ass" | "burned" | "all") ?? "off",
       subtitleBurnStyle: (flags.subtitleBurnStyle as "zh-default" | "bilingual-explainer") ?? "zh-default",
       ...(flags.alignAudio === true ? { enableForcedAlignment: true } : {}),
+      ...(flags.watermarkSubtitler !== undefined ? { watermarkSubtitler: flags.watermarkSubtitler } : {}),
     });
 
     for (const w of warnings) {

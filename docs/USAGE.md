@@ -321,8 +321,8 @@ pnpm yt2x watermark --input files/articles/<videoId>/video/full.zh-dubbed.mp4
 视频轨，音轨 `-c:a copy`，所以给配音成片补水印不会二次损伤音质；但它终究是第二次视频编码，
 画质略降——能在烧录时一并叠上就不要走这条路。
 
-改署名用 `--watermark-subtitler <handle>`（`dub` 和 `watermark` 都支持），传空字符串则
-不写「字幕：」那一行。`watermark` 还接受 `--watermark-video <handle>` 覆盖频道署名。
+改署名用 `--watermark-subtitler <handle>`（`dub`、`subtitle`、`watermark` 都支持），传空
+字符串则不写「字幕：」那一行。`watermark` 还接受 `--watermark-video <handle>` 覆盖频道署名。
 
 ### Pipeline 阶段控制参数
 

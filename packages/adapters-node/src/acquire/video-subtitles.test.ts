@@ -30,6 +30,7 @@ import {
   transcribeLocal,
 } from "./video-subtitles.js";
 import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
+import { DEFAULT_WATERMARK_SUBTITLER } from "./burn-bilingual-subtitles.js";
 import { resolvePythonWithFasterWhisper, resolvePythonWithTorchaudio } from "./resolve-python.js";
 
 /** Shared runner helper: satisfies burn-bilingual-subtitles.ts's --measure calls with a trivial "fit" verdict. */
@@ -1219,6 +1220,52 @@ Second sentence.
     expect(burnZhSubtitlesForVideo).toHaveBeenCalledWith(expect.objectContaining({
       srtPath: articleSrt,
     }));
+  });
+
+  describe("watermark subtitler override", () => {
+    const setupBurnRun = async (): Promise<{ root: string; sourceSrt: string }> => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-watermark-"));
+      const sourceSrt = path.join(root, "source.srt");
+      await mkdir(path.join(root, "video"), { recursive: true });
+      await writeFile(path.join(root, "video", "full.mp4"), "fake video");
+      await writeFile(sourceSrt, "1\n00:00:00,000 --> 00:00:01,000\n字幕\n");
+      vi.mocked(burnZhSubtitlesForVideo).mockClear();
+      return { root, sourceSrt };
+    };
+
+    const runBurn = (root: string, sourceSrt: string, watermarkSubtitler?: string) =>
+      runSubtitlePipeline({
+        videoDir: root,
+        subtitle: { mode: "burned", sourceLang: "zh-CN", targetLang: "zh-CN", source: "file", file: sourceSrt },
+        llm: { chat: async () => ({ content: "", model: "test", finishReason: "stop" }) },
+        llmModel: "test",
+        runner: { run: async (spec) => ({ exitCode: 0, signal: null, stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false, durationMs: 0, command: spec.command, args: spec.args ?? [] }) },
+        skipBurnIfChineseBurned: false,
+        ...(watermarkSubtitler !== undefined ? { watermarkSubtitler } : {}),
+      });
+
+    it("defaults to the shared watermark subtitler handle when not overridden", async () => {
+      const { root, sourceSrt } = await setupBurnRun();
+      await runBurn(root, sourceSrt);
+      expect(burnZhSubtitlesForVideo).toHaveBeenCalledWith(
+        expect.objectContaining({ watermarkSubtitler: DEFAULT_WATERMARK_SUBTITLER }),
+      );
+    });
+
+    it("overrides the watermark subtitler handle from opts.watermarkSubtitler", async () => {
+      const { root, sourceSrt } = await setupBurnRun();
+      await runBurn(root, sourceSrt, "@someone_else");
+      expect(burnZhSubtitlesForVideo).toHaveBeenCalledWith(
+        expect.objectContaining({ watermarkSubtitler: "@someone_else" }),
+      );
+    });
+
+    it("drops the watermark subtitler line when opts.watermarkSubtitler is empty", async () => {
+      const { root, sourceSrt } = await setupBurnRun();
+      await runBurn(root, sourceSrt, "");
+      const call = vi.mocked(burnZhSubtitlesForVideo).mock.calls[0]?.[0] as { watermarkSubtitler?: string };
+      expect(call.watermarkSubtitler).toBeUndefined();
+    });
   });
 
   it("translates Traditional Chinese subtitles to Simplified Chinese before marking full.zh.srt ready", async () => {

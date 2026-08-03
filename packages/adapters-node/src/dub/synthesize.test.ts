@@ -4,12 +4,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DubScript, DubScriptLine, TtsPort, TtsRequest } from "@yt2x/core";
 import {
+  MAX_LINE_SYNTHESIS_ATTEMPTS,
   SPEECH_END_TOLERANCE_MS,
   SYNTHESIS_RATE,
   assertSpeechEndWithinFile,
   median,
   probeAudioDurationMs,
   synthesizeDubLines,
+  synthesizeOneLine,
 } from "./synthesize.js";
 import type { ProcessResult, ProcessRunner, ProcessSpec } from "../process/index.js";
 
@@ -513,5 +515,117 @@ describe("synthesizeDubLines", () => {
     await expect(
       synthesizeDubLines({ tts: failing, script: scriptOf([line(1, 2_000, "一")]), voice: "v", dubDir, runner }),
     ).rejects.toThrow(/engine down/u);
+  });
+});
+
+/**
+ * edge-tts occasionally returns a few hundred ms of audio while still reporting
+ * full-length speech timing — `assertSpeechEndWithinFile` catches it. Re-requesting
+ * the same line almost always comes back whole, so a line retries on its own rather
+ * than costing the caller a whole dub run (148 lines on a 15-minute video).
+ */
+describe("synthesizeOneLine retry", () => {
+  const flakyTts = (failures: number): { tts: TtsPort; calls: () => number } => {
+    let calls = 0;
+    const tts: TtsPort = {
+      id: "stub-tts",
+      rateRange: { min: 0.5, max: 2 },
+      synthesize: async (req) => {
+        calls += 1;
+        if (calls <= failures) throw new Error("truncated audio");
+        return {
+          audio: new Uint8Array([1, 2, 3]),
+          format: "mp3",
+          voice: req.voice,
+          rate: req.rate ?? 1,
+          speechTiming: { speechStartMs: 0, speechEndMs: 1_000, speechDurationMs: 1_000 },
+        };
+      },
+    };
+    return { tts, calls: () => calls };
+  };
+
+  it("returns the line once a retry succeeds", async () => {
+    const dubDir = await tmpDubDir();
+    const { tts, calls } = flakyTts(1);
+    const { runner } = probeRunner(["1.0", "1.0", "1.0"]);
+
+    const result = await synthesizeOneLine({
+      tts,
+      text: "一",
+      voice: "v",
+      rate: SYNTHESIS_RATE,
+      lineIndex: 1,
+      dubDir,
+      runner,
+    });
+
+    expect(calls()).toBe(2);
+    expect(result.synthesizedMs).toBeGreaterThan(0);
+  });
+
+  it("gives up after the attempt budget and surfaces the last failure", async () => {
+    const dubDir = await tmpDubDir();
+    const { tts, calls } = flakyTts(Number.MAX_SAFE_INTEGER);
+    const { runner } = probeRunner(["1.0", "1.0", "1.0"]);
+
+    await expect(
+      synthesizeOneLine({
+        tts,
+        text: "一",
+        voice: "v",
+        rate: SYNTHESIS_RATE,
+        lineIndex: 1,
+        dubDir,
+        runner,
+      }),
+    ).rejects.toThrow(/truncated audio/u);
+    expect(calls()).toBe(MAX_LINE_SYNTHESIS_ATTEMPTS);
+  });
+
+  it("stops retrying once the caller aborts, instead of burning the budget", async () => {
+    const dubDir = await tmpDubDir();
+    const controller = new AbortController();
+    let calls = 0;
+    const tts: TtsPort = {
+      id: "stub-tts",
+      rateRange: { min: 0.5, max: 2 },
+      synthesize: async () => {
+        calls += 1;
+        controller.abort();
+        throw new Error("aborted");
+      },
+    };
+    const { runner } = probeRunner(["1.0"]);
+
+    await expect(
+      synthesizeOneLine({
+        tts,
+        text: "一",
+        voice: "v",
+        rate: SYNTHESIS_RATE,
+        lineIndex: 1,
+        dubDir,
+        runner,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    expect(calls).toBe(1);
+  });
+
+  it("records the retry so a silent recovery still shows up in the run's warnings", async () => {
+    const dubDir = await tmpDubDir();
+    const { tts } = flakyTts(1);
+    const { runner } = probeRunner(["1.0", "1.0", "1.0"]);
+
+    const { warnings } = await synthesizeDubLines({
+      tts,
+      script: scriptOf([line(1, 2_000, "一")]),
+      voice: "v",
+      dubDir,
+      runner,
+    });
+
+    expect(warnings.some((w) => /line 1/u.test(w) && /retr/iu.test(w))).toBe(true);
   });
 });

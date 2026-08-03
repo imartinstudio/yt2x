@@ -279,6 +279,67 @@ export type SynthesizeDubLinesResult = {
   warnings: string[];
 };
 
+/**
+ * edge-tts 偶发只返回几百毫秒的截断音频，字幕时间戳却仍报完整时长
+ * （`assertSpeechEndWithinFile` 抓的就是这种情况）——这是引擎侧的偶发问题，
+ * 不是这句话本身有问题，同一句话重新请求几乎总能拿到完整音频。因此这里按行
+ * 重试，而不是把整条流水线的失败留给调用方重跑一遍配音脚本。
+ */
+export const MAX_LINE_SYNTHESIS_ATTEMPTS = 3;
+
+export type SynthesizeOneLineInput = {
+  tts: TtsPort;
+  text: string;
+  voice: string;
+  rate: number;
+  lineIndex: number;
+  dubDir: string;
+  runner?: ProcessRunner;
+  ffprobePath?: string;
+  ffmpegPath?: string;
+  signal?: AbortSignal;
+};
+
+export type SynthesizeOneLineResult = MaterializeLineAudioResult & {
+  engineRate: number;
+  /** 失败并重试的次数；0 表示一次就成。留痕用，不影响时长计算。 */
+  retries: number;
+};
+
+/** 合成单句并落盘，透明重试引擎侧的截断/坏响应，直到用尽重试次数才把最后一次错误抛出去。 */
+export const synthesizeOneLine = async (
+  input: SynthesizeOneLineInput,
+): Promise<SynthesizeOneLineResult> => {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_LINE_SYNTHESIS_ATTEMPTS; attempt += 1) {
+    // 取消不是「引擎又抽风了」，重试只会拖慢退出并继续打 TTS。
+    if (input.signal?.aborted === true) throw lastErr ?? input.signal.reason;
+    try {
+      const result = await input.tts.synthesize({
+        text: input.text,
+        voice: input.voice,
+        rate: input.rate,
+        format: "mp3",
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+      const measured = await materializeLineAudio({
+        result,
+        lineIndex: input.lineIndex,
+        engine: input.tts.id,
+        dubDir: input.dubDir,
+        ...(input.runner !== undefined ? { runner: input.runner } : {}),
+        ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
+        ...(input.ffmpegPath !== undefined ? { ffmpegPath: input.ffmpegPath } : {}),
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+      return { ...measured, engineRate: result.rate, retries: attempt - 1 };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+};
+
 export const synthesizeDubLines = async (
   input: SynthesizeDubLinesInput,
 ): Promise<SynthesizeDubLinesResult> => {
@@ -288,30 +349,31 @@ export const synthesizeDubLines = async (
   let done = 0;
 
   for (const line of input.script.lines) {
-    const result = await input.tts.synthesize({
+    const measured = await synthesizeOneLine({
+      tts: input.tts,
       text: line.text,
       voice: input.voice,
       rate: SYNTHESIS_RATE,
-      format: "mp3",
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
-    });
-    if (result.rate !== SYNTHESIS_RATE) {
-      // rateRange 把 1.0 裁掉说明适配器配置有问题，样本已经不可比，必须留痕
-      warnings.push(
-        `line ${line.index}: engine used rate ${result.rate} instead of ${SYNTHESIS_RATE}; timing sample is not comparable`,
-      );
-    }
-
-    const measured = await materializeLineAudio({
-      result,
       lineIndex: line.index,
-      engine: input.tts.id,
       dubDir: input.dubDir,
       ...(input.runner !== undefined ? { runner: input.runner } : {}),
       ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),
       ...(input.ffmpegPath !== undefined ? { ffmpegPath: input.ffmpegPath } : {}),
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
+    if (measured.engineRate !== SYNTHESIS_RATE) {
+      // rateRange 把 1.0 裁掉说明适配器配置有问题，样本已经不可比，必须留痕
+      warnings.push(
+        `line ${line.index}: engine used rate ${measured.engineRate} instead of ${SYNTHESIS_RATE}; timing sample is not comparable`,
+      );
+    }
+    if (measured.retries > 0) {
+      // 重试成功了也要留痕：否则「引擎偶尔抽风」这件事永远没有证据，
+      // 也就无从判断这条重试路径还值不值得留着。
+      warnings.push(
+        `line ${line.index}: synthesis needed ${measured.retries} retry/retries before returning usable audio`,
+      );
+    }
 
     timings.push({
       index: line.index,

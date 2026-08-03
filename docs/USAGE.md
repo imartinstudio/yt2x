@@ -57,6 +57,7 @@ pnpm install
 | `pnpm yt2x pipeline …`      | **native acquire** + orchestrator 内 `notes`→`article`→`publish`                                      |
 | `pnpm yt2x dub …`           | 生成中文配音成片：切分话语单元 → 带时长预算翻译 → 合成 → 协商时长 → 门禁 → 双语烧录一次               |
 | `pnpm yt2x dub-replay …`    | 从上一次 `dub` 留下的产物重放协商与字幕生成并打印指标；纯计算、秒级，用于调切分与协商参数             |
+| `pnpm yt2x watermark …`     | 只叠加左上角署名水印，不烧字幕；视频轨重编码，音轨 `-c:a copy`                                        |
 | `pnpm yt2x llm …`           | LLM 连通性诊断                                                                                        |
 | `pnpm run ci`               | typecheck + lint + format:check + test                                                                |
 
@@ -295,6 +296,33 @@ pnpm yt2x dub --video-id <videoId> --original-voice-volume 0
 的静默明显偏长（全片总静默 77.1s，5.0% 的句间空档超过 2 秒），`0.85` 降到 40.0s / 0.8%，慢下来
 的语速听感上可接受。调低还能进一步压静默，但会开始像在拖。改这个值请配合 `--output-path`
 保存两份成片实际试听，不要只看数字。
+
+### 水印
+
+左上角署名水印是一张 PNG（`gen-watermark.py` 渲染，需要基础环境的 Pillow），由 ffmpeg
+叠在 `overlay=24:16`，黑色 24% 不透明度——远看不打扰，凑近才看得清。两行分别是
+「视频：@频道」和「字幕：@署名」。频道 handle 自动从 `metadata.json` 的 `uploader_id` 读。
+
+水印在两个地方出现：
+
+- **跟着烧录走**（推荐）：`subtitle --subtitle-bilingual burned|all` 和 `dub` 都会在
+  自己那次烧录里一并叠上，只编码一次。
+- **单独叠加**：`yt2x watermark`，用于给已有成片补水印，不烧字幕。
+
+```bash
+# 用 videoId：取 downloads/<id>/video/full.mp4，频道署名自动读
+pnpm yt2x watermark --video-id <videoId>
+
+# 任意文件；路径形如 <root>/<videoId>/video/<file> 时会自动反推 videoId 拿频道署名
+pnpm yt2x watermark --input files/articles/<videoId>/video/full.zh-dubbed.mp4
+```
+
+默认输出是源文件旁加 `.watermarked` 后缀，已存在则跳过，`--force` 覆盖。这条路只重编码
+视频轨，音轨 `-c:a copy`，所以给配音成片补水印不会二次损伤音质；但它终究是第二次视频编码，
+画质略降——能在烧录时一并叠上就不要走这条路。
+
+改署名用 `--watermark-subtitler <handle>`（`dub` 和 `watermark` 都支持），传空字符串则
+不写「字幕：」那一行。`watermark` 还接受 `--watermark-video <handle>` 覆盖频道署名。
 
 ### Pipeline 阶段控制参数
 

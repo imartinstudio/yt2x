@@ -66,8 +66,10 @@ const buildEnv = (spec: ProcessSpec): { env?: Record<string, string>; extendEnv:
   return { env: { ...spec.env }, extendEnv };
 };
 
+type SubprocessStreams = Pick<ResultPromise, "stdout" | "stderr">;
+
 const wireStreams = (
-  subprocess: ResultPromise,
+  subprocess: SubprocessStreams,
   spec: ProcessSpec,
   stdoutBuf: TruncatingBuffer,
   stderrBuf: TruncatingBuffer,
@@ -169,7 +171,7 @@ export const createProcessRunner = (): ProcessRunner => {
     let result: Result | ExecaError;
     try {
       // execa 的 options 在 exactOptionalPropertyTypes 下需要一次受控 cast
-      const subprocess: ResultPromise = execa(
+      const subprocess = execa(
         spec.command,
         [...(spec.args ?? [])],
         execaOptions as Options,

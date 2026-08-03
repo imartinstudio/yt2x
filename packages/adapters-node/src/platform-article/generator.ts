@@ -6,6 +6,7 @@ import {
   type PlatformArticleTarget,
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
+import { parseJsonWithRepairs } from "../llm/parse-json.js";
 
 export type GeneratePlatformArticleInput = {
   llm: LlmPort;
@@ -77,11 +78,12 @@ const GeneratedPlatformArticleSchema = z.discriminatedUnion("target", [
 
 export type GeneratedPlatformArticle = z.infer<typeof GeneratedPlatformArticleSchema>;
 
-const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
-const stripJsonFenceWrapper = (s: string): string => {
-  const m = s.match(JSON_FENCE_RE);
-  return m !== null && m[1] !== undefined ? m[1].trim() : s;
-};
+/**
+ * Thrown when the response is not parseable JSON at all — as opposed to parsing
+ * fine but failing the schema. Only the former is worth asking the model again:
+ * a malformed brace is a slip, a wrong shape is a misread prompt.
+ */
+export class PlatformArticleJsonError extends Error {}
 
 export const parseGeneratedPlatformArticleJson = (
   raw: string,
@@ -89,10 +91,10 @@ export const parseGeneratedPlatformArticleJson = (
 ): GeneratedPlatformArticle => {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(stripJsonFenceWrapper(raw.trim()));
+    parsed = parseJsonWithRepairs(raw.trim());
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Platform article LLM response is not valid JSON: ${message}`);
+    throw new PlatformArticleJsonError(`Platform article LLM response is not valid JSON: ${message}`);
   }
 
   const result = GeneratedPlatformArticleSchema.safeParse(parsed);
@@ -119,19 +121,30 @@ export const generatePlatformArticleContent = async (
     { target: input.target },
   );
 
-  const t0 = Date.now();
-  const resp = await input.llm.chat({
+  const request = {
     model: input.model,
     messages: [
-      { role: "system", content: getPlatformArticleSystemPrompt(input.target) },
-      { role: "user", content: userPrompt },
+      { role: "system" as const, content: getPlatformArticleSystemPrompt(input.target) },
+      { role: "user" as const, content: userPrompt },
     ],
     temperature: input.temperature ?? 0.5,
     maxTokens: input.maxTokens ?? 8192,
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
-  });
+  };
 
-  const platformArticle = parseGeneratedPlatformArticleJson(resp.content, input.target);
+  const t0 = Date.now();
+  let resp = await input.llm.chat(request);
+  let platformArticle: GeneratedPlatformArticle;
+  try {
+    platformArticle = parseGeneratedPlatformArticleJson(resp.content, input.target);
+  } catch (err: unknown) {
+    if (!(err instanceof PlatformArticleJsonError)) throw err;
+    // Malformed JSON is a one-off slip (a dropped comma between two fields is the
+    // one seen in the wild). Repairs are not safe on article text that gets
+    // published verbatim, so ask once more and let a second failure stand.
+    resp = await input.llm.chat(request);
+    platformArticle = parseGeneratedPlatformArticleJson(resp.content, input.target);
+  }
 
   // Post-process: fix common LLM CJK homoglyph errors (e.g. 幺→么) in text fields
   try {

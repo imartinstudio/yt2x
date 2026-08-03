@@ -9,7 +9,7 @@ import {
   type TtsPort,
 } from "@yt2x/core";
 import type { ProcessRunner } from "../process/index.js";
-import { materializeLineAudio } from "./synthesize.js";
+import { synthesizeOneLine } from "./synthesize.js";
 
 /**
  * 执行时长协商计划：按需调速重合成，其余顺延，产出最终落点。
@@ -49,17 +49,12 @@ const synthesizeLine = async (
   rate: number,
   index: number,
 ): Promise<{ durationMs: number; audioFile: string }> => {
-  const result = await input.tts.synthesize({
+  const measured = await synthesizeOneLine({
+    tts: input.tts,
     text,
     voice: input.voice,
     rate,
-    format: "mp3",
-    ...(input.signal !== undefined ? { signal: input.signal } : {}),
-  });
-  const measured = await materializeLineAudio({
-    result,
     lineIndex: index,
-    engine: input.tts.id,
     dubDir: input.dubDir,
     ...(input.runner !== undefined ? { runner: input.runner } : {}),
     ...(input.ffprobePath !== undefined ? { ffprobePath: input.ffprobePath } : {}),

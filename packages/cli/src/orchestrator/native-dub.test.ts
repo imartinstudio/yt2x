@@ -47,10 +47,12 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
 
 import {
   DEFAULT_MIN_DURATION_MS,
+  DEFAULT_WATERMARK_SUBTITLER,
   executeNativeDub,
   negotiationOptionsFrom,
   parseOriginalVoiceVolume,
   resolveDubOutputPath,
+  resolveDubWatermark,
   segmentOptionsFrom,
 } from "./native-dub.js";
 
@@ -154,6 +156,71 @@ describe("negotiationOptionsFrom", () => {
     expect(() => negotiationOptionsFrom({ preferredRateMin: "0.85oops" })).toThrow(
       /positive number/,
     );
+  });
+});
+
+/**
+ * The dub burn goes through the same `burnBilingualSubtitles` as the subtitle
+ * delivery path, but never passed the watermark options, so dubbed videos came
+ * out unattributed while `subtitle --subtitle-bilingual all` did not.
+ */
+describe("resolveDubWatermark", () => {
+  const withVideoDir = async (
+    metadata: Record<string, unknown> | null,
+  ): Promise<string> => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "yt2x-watermark-"));
+    if (metadata !== null) {
+      await writeFile(path.join(dir, "metadata.json"), JSON.stringify(metadata));
+    }
+    return dir;
+  };
+
+  it("attributes the subtitler to the project default when the flag is omitted", async () => {
+    const dir = await withVideoDir(null);
+    await expect(resolveDubWatermark(dir, {})).resolves.toEqual({
+      watermarkSubtitler: DEFAULT_WATERMARK_SUBTITLER,
+    });
+  });
+
+  it("overrides the subtitler handle from --watermark-subtitler", async () => {
+    const dir = await withVideoDir(null);
+    await expect(
+      resolveDubWatermark(dir, { watermarkSubtitler: "@someone_else" }),
+    ).resolves.toEqual({ watermarkSubtitler: "@someone_else" });
+  });
+
+  it("credits the source channel from metadata.json uploader_id", async () => {
+    const dir = await withVideoDir({ uploader_id: "@nateherk" });
+    await expect(resolveDubWatermark(dir, {})).resolves.toEqual({
+      watermarkVideo: "@nateherk",
+      watermarkSubtitler: DEFAULT_WATERMARK_SUBTITLER,
+    });
+  });
+
+  it("adds the missing @ to a bare uploader_id", async () => {
+    const dir = await withVideoDir({ uploader_id: "nateherk" });
+    await expect(resolveDubWatermark(dir, {})).resolves.toMatchObject({
+      watermarkVideo: "@nateherk",
+    });
+  });
+
+  it("omits the channel line when metadata.json has no uploader_id", async () => {
+    const dir = await withVideoDir({ title: "no uploader here" });
+    await expect(resolveDubWatermark(dir, {})).resolves.toEqual({
+      watermarkSubtitler: DEFAULT_WATERMARK_SUBTITLER,
+    });
+  });
+
+  it("drops the watermark entirely when --watermark-subtitler is empty and no uploader is known", async () => {
+    const dir = await withVideoDir(null);
+    await expect(resolveDubWatermark(dir, { watermarkSubtitler: "" })).resolves.toEqual({});
+  });
+
+  it("still credits the channel when only the subtitler is suppressed", async () => {
+    const dir = await withVideoDir({ uploader_id: "@nateherk" });
+    await expect(
+      resolveDubWatermark(dir, { watermarkSubtitler: "" }),
+    ).resolves.toEqual({ watermarkVideo: "@nateherk" });
   });
 });
 
@@ -481,6 +548,100 @@ describe("executeNativeDub time range", () => {
     expect(manifest.flags.skipGate).toBe(false);
     expect(manifest.gates.dub.passed).toBe(true);
     expect(manifest.gates.bilingual.readyForBurn).toBe(true);
+  });
+
+  it("hands the burn the same watermark attribution the subtitle delivery path uses", async () => {
+    guardMock.mockResolvedValue({
+      hasBurnedSubtitles: false,
+      hasChineseBurnedSubtitles: false,
+      shouldSkipBurn: false,
+    });
+    generateDubScriptMock.mockResolvedValue({
+      script: {
+        version: 2,
+        videoId: "abc12345678",
+        sourceWords: "video/full.local.en.words.json",
+        rewriteModel: "test-model",
+        droppedCount: 0,
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "窗内句",
+            sourceText: "Inside the window.",
+            cueIndices: [1],
+          },
+        ],
+      },
+      warnings: [],
+      translatedCount: 1,
+      droppedCount: 0,
+    });
+    synthesizeDubLinesMock.mockResolvedValue({
+      report: {
+        version: 1,
+        videoId: "abc12345678",
+        engine: "edge-tts",
+        voice: "test-voice",
+        lineCount: 1,
+        medianRatio: 1,
+        overflowCount: 0,
+        totalDriftMs: 0,
+        lines: [
+          {
+            index: 1,
+            targetDurationMs: 1_000,
+            synthesizedMs: 1_000,
+            ratio: 1,
+            charCount: 3,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      },
+      warnings: [],
+    });
+    separateDemucsMock.mockResolvedValue({ noVocalsPath: "/tmp/no_vocals.wav", skipped: false });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-watermark-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "abc12345678";
+    await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
+    await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
+    await writeFile(path.join(outRoot, videoId, "video", "full.mp4"), "original");
+    await writeFile(
+      path.join(outRoot, videoId, "metadata.json"),
+      JSON.stringify({ uploader_id: "@nateherk" }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(outRoot, videoId, "video", "full.local.en.words.json"),
+      JSON.stringify([
+        { word: "Inside", start: 1.0, end: 1.3 },
+        { word: "the", start: 1.3, end: 1.5 },
+        { word: "window.", start: 1.5, end: 2.0 },
+      ]),
+      "utf8",
+    );
+
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      startMs: "0",
+      endMs: "5000",
+      outputPath: path.join(articleRoot, videoId, "video", "window-audition.mp4"),
+    });
+
+    expect(code).toBe(0);
+    const burnCall = burnBilingualSubtitlesMock.mock.calls[0]![0] as {
+      watermarkVideo?: string;
+      watermarkSubtitler?: string;
+    };
+    expect(burnCall.watermarkVideo).toBe("@nateherk");
+    expect(burnCall.watermarkSubtitler).toBe(DEFAULT_WATERMARK_SUBTITLER);
   });
 
   it("separates Demucs into dub/work/demucs for a time window, not the full-run dub/demucs dir", async () => {

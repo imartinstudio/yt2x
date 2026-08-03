@@ -75,10 +75,16 @@ const PYTHON_SCRIPT = path.resolve(
   "..", "..", "src", "acquire", "render-bilingual-subtitles.py",
 );
 
-const WATERMARK_SCRIPT = path.resolve(
+export const WATERMARK_SCRIPT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..", "..", "src", "acquire", "gen-watermark.py",
 );
+
+/**
+ * Default 「字幕：」 attribution. Every burn path shares it so a change of handle
+ * is one edit, and CLI flags override it per run rather than forcing a code change.
+ */
+export const DEFAULT_WATERMARK_SUBTITLER = "@php_martin";
 
 /**
  * Overlay frame rate for subtitle strip sequence.
@@ -88,8 +94,8 @@ const WATERMARK_SCRIPT = path.resolve(
 const OVERLAY_FPS = 4;
 
 /** Watermark placement (top-left), matching generate-overlay-frames.py. */
-const WATERMARK_X = 24;
-const WATERMARK_Y = 16;
+export const WATERMARK_X = 24;
+export const WATERMARK_Y = 16;
 
 /**
  * Vertical gap (720p reference px, scaled with video height) between the ZH
@@ -517,7 +523,7 @@ export const burnBilingualSubtitles = async (
 };
 
 /** Format ProcessError / generic errors with stderr when available. */
-const formatProcessFailure = (err: unknown): string => {
+export const formatProcessFailure = (err: unknown): string => {
   if (isProcessError(err)) {
     const excerpt = err.context.stderrExcerpt?.trim();
     return excerpt && excerpt.length > 0 ? `${err.message}\n${excerpt}` : err.message;

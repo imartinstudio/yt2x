@@ -57,6 +57,10 @@ export const registerDubCommand = (program: Command): void => {
         "--preferred-rate-min <n>",
         "Counterfactual: override the negotiation speech-rate floor for a listening comparison (default 0.85)",
       )
+      .option(
+        "--watermark-subtitler <handle>",
+        "Override the 「字幕：」 watermark attribution (default @php_martin); pass an empty string to drop that line",
+      )
       .option("--force", "Re-run even when dubbed video / intermediate artifacts already exist"),
   ).action(async (flags: DubFlags) => {
     process.exitCode = await executeNativeDub(flags);

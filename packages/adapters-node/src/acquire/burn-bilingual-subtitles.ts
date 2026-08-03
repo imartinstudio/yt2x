@@ -81,6 +81,12 @@ const WATERMARK_SCRIPT = path.resolve(
 );
 
 /**
+ * Default 「字幕：」 attribution. Every burn path shares it so a change of handle
+ * is one edit, and CLI flags override it per run rather than forcing a code change.
+ */
+export const DEFAULT_WATERMARK_SUBTITLER = "@php_martin";
+
+/**
  * Overlay frame rate for subtitle strip sequence.
  * 4 fps = 250 ms granularity — matches the Chinese burn path and avoids the
  * multi-hour cost of writing full-frame PNGs at source video FPS.

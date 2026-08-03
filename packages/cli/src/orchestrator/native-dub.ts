@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   DEFAULT_EDGE_TTS_VOICE,
   DEFAULT_OUT_DIR,
+  DEFAULT_WATERMARK_SUBTITLER,
   ELEVENLABS_API_KEY_ENV,
   applyDubNegotiation,
   burnBilingualSubtitles,
@@ -31,6 +32,7 @@ import {
   remixDubbedAudio,
   resolveDubSourceVideo,
   resolveDubWordsPath,
+  resolveWatermarkUploaderId,
   sanitizeVideoId,
   separateDemucs,
   synthesizeDubLines,
@@ -115,6 +117,8 @@ export type DubFlags = NativeLlmCliFlags & {
   originalVoiceVolume?: string;
   /** 反事实试听：覆盖协商阶段的语速下限；不传则使用当前默认值。 */
   preferredRateMin?: string;
+  /** 覆盖水印的「字幕：」署名；传空字符串则不写这一行。不传用默认署名。 */
+  watermarkSubtitler?: string;
 };
 
 const EXIT_INPUT_MISSING = NATIVE_EXIT.NO_INPUT;
@@ -185,6 +189,26 @@ export const negotiationOptionsFrom = (
     );
   }
   return { preferredRateMin: value };
+};
+
+export { DEFAULT_WATERMARK_SUBTITLER };
+
+/**
+ * Watermark attribution for the dub burn, resolved the same way the subtitle delivery
+ * path resolves it: source channel from `metadata.json`, subtitler from the shared
+ * default. `--watermark-subtitler ""` suppresses only the 「字幕：」 line, so a run can
+ * credit the channel alone; with no channel either, the overlay is skipped entirely.
+ */
+export const resolveDubWatermark = async (
+  videoDir: string,
+  flags: Pick<DubFlags, "watermarkSubtitler">,
+): Promise<{ watermarkVideo?: string; watermarkSubtitler?: string }> => {
+  const watermarkVideo = await resolveWatermarkUploaderId(videoDir);
+  const subtitler = flags.watermarkSubtitler ?? DEFAULT_WATERMARK_SUBTITLER;
+  return {
+    ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
+    ...(subtitler.trim().length > 0 ? { watermarkSubtitler: subtitler } : {}),
+  };
 };
 
 /**
@@ -1146,6 +1170,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       outputPath: dubbedPath,
       runner: defaultProcessRunner,
       force: flags.force === true,
+      ...(await resolveDubWatermark(path.join(outRoot, videoId), flags)),
       ...(remix.replaceAudioPath !== undefined ? { replaceAudioPath: remix.replaceAudioPath } : {}),
     });
     for (const warning of burn.warnings) logger.warn({ videoId }, `dub burn: ${warning}`);

@@ -9,6 +9,7 @@ import { buildBilingualAss, mergeBilingualSrt } from "./bilingual-subtitles.js";
 import {
   burnBilingualSubtitles,
   measureBilingualSubtitleLayout,
+  DEFAULT_WATERMARK_SUBTITLER,
 } from "./burn-bilingual-subtitles.js";
 import type { BurnProgressCallback } from "./burn-subtitles.js";
 import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
@@ -378,7 +379,7 @@ const normalizeUploaderHandle = (raw: string | undefined): string | undefined =>
 };
 
 /** Read uploader_id from metadata.json for watermark attribution. */
-const resolveWatermarkUploaderId = async (videoDir: string): Promise<string | undefined> => {
+export const resolveWatermarkUploaderId = async (videoDir: string): Promise<string | undefined> => {
   try {
     const metaRaw = await readFile(path.join(videoDir, "metadata.json"), "utf8");
     const meta = JSON.parse(metaRaw) as { uploader_id?: string };
@@ -1554,7 +1555,7 @@ export const runSubtitlePipeline = async (
       ...(opts.force !== undefined ? { force: opts.force } : {}),
       ...(opts.videoLanguage !== undefined ? { videoLanguage: opts.videoLanguage } : {}),
       ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
-      watermarkSubtitler: "@php_martin",
+      watermarkSubtitler: DEFAULT_WATERMARK_SUBTITLER,
       ...(() => {
         const onProgress = reportBurnProgress(opts.onProgress, "中文");
         return onProgress !== undefined ? { onProgress } : {};
@@ -1679,7 +1680,7 @@ export const runSubtitlePipeline = async (
             ...(opts.force !== undefined ? { force: opts.force } : {}),
             ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
             ...(watermarkVideo !== undefined ? { watermarkVideo } : {}),
-            watermarkSubtitler: "@php_martin",
+            watermarkSubtitler: DEFAULT_WATERMARK_SUBTITLER,
             ...(() => {
               const onProgress = reportBurnProgress(opts.onProgress, "双语");
               return onProgress !== undefined ? { onProgress } : {};

@@ -27,6 +27,7 @@ export {
   transcribeLocal,
   resolveSourceVideo,
   resolveBurnSourceVideo,
+  resolveWatermarkUploaderId,
   type RunSubtitlePipelineOptions,
   type RunSubtitlePipelineResult,
   type VideoSubtitleOptions,
@@ -62,6 +63,7 @@ export {
 export {
   burnBilingualSubtitles,
   measureBilingualSubtitleLayout,
+  DEFAULT_WATERMARK_SUBTITLER,
   type BurnBilingualSubtitlesOptions,
   type BurnBilingualSubtitlesResult,
 } from "./burn-bilingual-subtitles.js";

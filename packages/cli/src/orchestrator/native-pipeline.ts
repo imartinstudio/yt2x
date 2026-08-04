@@ -12,6 +12,7 @@ import {
   extractVideoId,
   listBatchVideosFromOutRoot,
   probeDemucs,
+  resolvePythonWithDemucs,
   readProcessStatusMerged,
   readYoutubePageUrl,
   resolveBurnSourceVideo,
@@ -523,8 +524,14 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         }
 
         try {
+          const autoPythonPath =
+            args.control.pythonPath === undefined ? await resolvePythonWithDemucs() : undefined;
           await probeDemucs({
-            ...(args.control.pythonPath !== undefined ? { pythonPath: args.control.pythonPath } : {}),
+            ...(args.control.pythonPath !== undefined
+              ? { pythonPath: args.control.pythonPath }
+              : autoPythonPath !== undefined
+                ? { pythonPath: autoPythonPath }
+                : {}),
           });
         } catch (err: unknown) {
           logger.error(

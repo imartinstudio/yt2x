@@ -56,6 +56,9 @@ const transcribeLocalMock = vi.hoisted(() =>
 // pipeline --dub 的前置块会先探测 demucs 才跑转写/notes/article；默认让它成功，
 // 单独的 fail-fast 测试再覆盖成拒绝。
 const probeDemucsMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/python3"));
+const resolvePythonWithDemucsMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<string | undefined> => undefined),
+);
 
 vi.mock("@yt2x/adapters-node", async (importOriginal) => {
   const actual = await importOriginal();
@@ -65,6 +68,7 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
     burnZhSubtitlesForVideo: burnZhSubtitlesForVideoMock,
     transcribeLocal: transcribeLocalMock,
     probeDemucs: probeDemucsMock,
+    resolvePythonWithDemucs: resolvePythonWithDemucsMock,
   };
 });
 
@@ -98,6 +102,8 @@ beforeEach(() => {
   }));
   probeDemucsMock.mockClear();
   probeDemucsMock.mockImplementation(async () => "/usr/bin/python3");
+  resolvePythonWithDemucsMock.mockClear();
+  resolvePythonWithDemucsMock.mockResolvedValue(undefined);
   vi.stubEnv("ELEVENLABS_API_KEY", "test-elevenlabs-key");
   vi.stubEnv("ELEVENLABS_VOICE_ID", "test-voice-id");
 });
@@ -463,6 +469,51 @@ describe("runNativePipeline", () => {
     expect(executeNativeNotesMock).not.toHaveBeenCalled();
     expect(executeNativeArticleMock).not.toHaveBeenCalled();
     expect(executeNativeDubMock).not.toHaveBeenCalled();
+  });
+
+  it("auto-detects a demucs-capable Python for the preflight probe when --python-path is not given", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-demucs-autodetect-"));
+    const vid = "dubVid8";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    resolvePythonWithDemucsMock.mockResolvedValueOnce(".venv-demucs/bin/python3");
+
+    const args = buildArgs({
+      control: { outDir: outRoot, dub: true, dubEngine: "edge-tts" },
+      stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(resolvePythonWithDemucsMock).toHaveBeenCalledOnce();
+    expect(probeDemucsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pythonPath: ".venv-demucs/bin/python3" }),
+    );
+  });
+
+  it("does not auto-detect the preflight probe's Python when --python-path is explicitly given", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "yt2x-np-dub-demucs-explicit-path-"));
+    const vid = "dubVid9";
+    await mkdir(path.join(outRoot, vid), { recursive: true });
+    await writeFile(path.join(outRoot, vid, "metadata.json"), JSON.stringify({ id: vid, title: "a" }));
+    resolvePythonWithDemucsMock.mockClear();
+
+    const args = buildArgs({
+      control: {
+        outDir: outRoot,
+        dub: true,
+        dubEngine: "edge-tts",
+        pythonPath: "/explicit/python3",
+      },
+      stages: { acquire: "skip", notes: "auto", article: "auto", publish: "skip" },
+    });
+
+    const code = await runNativePipeline({ args, monorepoRoot: "/tmp/yt2x-monorepo" });
+    expect(code).toBe(0);
+    expect(resolvePythonWithDemucsMock).not.toHaveBeenCalled();
+    expect(probeDemucsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pythonPath: "/explicit/python3" }),
+    );
   });
 
   it("fails fast before notes/article/transcription when ElevenLabs credentials are missing", async () => {

@@ -10,6 +10,9 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const probeDemucsMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/python3"));
+const resolvePythonWithDemucsMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<string | undefined> => undefined),
+);
 const generateDubScriptMock = vi.hoisted(() => vi.fn());
 const synthesizeDubLinesMock = vi.hoisted(() => vi.fn());
 const separateDemucsMock = vi.hoisted(() => vi.fn());
@@ -34,6 +37,7 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
     ...actual,
     createLlmAdapter: vi.fn(() => ({ chat: vi.fn() })),
     probeDemucs: probeDemucsMock,
+    resolvePythonWithDemucs: resolvePythonWithDemucsMock,
     generateDubScript: generateDubScriptMock,
     synthesizeDubLines: synthesizeDubLinesMock,
     separateDemucs: separateDemucsMock,
@@ -58,6 +62,8 @@ import {
 
 beforeEach(() => {
   probeDemucsMock.mockClear();
+  resolvePythonWithDemucsMock.mockClear();
+  resolvePythonWithDemucsMock.mockResolvedValue(undefined);
   generateDubScriptMock.mockClear();
   synthesizeDubLinesMock.mockClear();
   separateDemucsMock.mockClear();
@@ -1088,5 +1094,127 @@ describe("executeNativeDub --original-voice-volume", () => {
     expect(code).toBeGreaterThan(0);
     expect(guardMock).not.toHaveBeenCalled();
     expect(remixDubbedAudioMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeNativeDub demucs python auto-detection", () => {
+  const setupDemucsFixture = async (): Promise<{
+    outRoot: string;
+    articleRoot: string;
+    videoId: string;
+  }> => {
+    guardMock.mockResolvedValue({
+      hasBurnedSubtitles: false,
+      hasChineseBurnedSubtitles: false,
+      shouldSkipBurn: false,
+    });
+    generateDubScriptMock.mockResolvedValue({
+      script: {
+        version: 2,
+        videoId: "abc12345678",
+        sourceWords: "video/full.local.en.words.json",
+        rewriteModel: "test-model",
+        droppedCount: 0,
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "窗内句",
+            sourceText: "Inside the window.",
+            cueIndices: [1],
+          },
+        ],
+      },
+      warnings: [],
+      translatedCount: 1,
+      droppedCount: 0,
+    });
+    synthesizeDubLinesMock.mockResolvedValue({
+      report: {
+        version: 1,
+        videoId: "abc12345678",
+        engine: "edge-tts",
+        voice: "test-voice",
+        lineCount: 1,
+        medianRatio: 1,
+        overflowCount: 0,
+        totalDriftMs: 0,
+        lines: [
+          {
+            index: 1,
+            targetDurationMs: 1_000,
+            synthesizedMs: 1_000,
+            ratio: 1,
+            charCount: 3,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      },
+      warnings: [],
+    });
+    separateDemucsMock.mockResolvedValue({ noVocalsPath: "/tmp/no_vocals.wav", skipped: false });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-demucs-python-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "abc12345678";
+    const dubDir = path.join(articleRoot, videoId, "dub");
+    await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
+    await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
+    await mkdir(dubDir, { recursive: true });
+    await writeFile(path.join(outRoot, videoId, "video", "full.mp4"), "original");
+    await writeFile(
+      path.join(outRoot, videoId, "video", "full.local.en.words.json"),
+      JSON.stringify([
+        { word: "Inside", start: 1.0, end: 1.3 },
+        { word: "the", start: 1.3, end: 1.5 },
+        { word: "window.", start: 1.5, end: 2.0 },
+      ]),
+      "utf8",
+    );
+    return { outRoot, articleRoot, videoId };
+  };
+
+  it("passes the auto-detected demucs Python path to probeDemucs when --python-path is omitted", async () => {
+    const { outRoot, articleRoot, videoId } = await setupDemucsFixture();
+    resolvePythonWithDemucsMock.mockResolvedValueOnce(".venv-demucs/bin/python3");
+    probeDemucsMock.mockClear();
+
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      startMs: "0",
+      endMs: "5000",
+    });
+
+    expect(code).toBe(0);
+    expect(resolvePythonWithDemucsMock).toHaveBeenCalledOnce();
+    expect(probeDemucsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pythonPath: ".venv-demucs/bin/python3" }),
+    );
+  });
+
+  it("does not auto-detect when --python-path is explicitly given", async () => {
+    const { outRoot, articleRoot, videoId } = await setupDemucsFixture();
+    resolvePythonWithDemucsMock.mockClear();
+    probeDemucsMock.mockClear();
+
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      startMs: "0",
+      endMs: "5000",
+      pythonPath: "/explicit/python3",
+    });
+
+    expect(code).toBe(0);
+    expect(resolvePythonWithDemucsMock).not.toHaveBeenCalled();
+    expect(probeDemucsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pythonPath: "/explicit/python3" }),
+    );
   });
 });

@@ -37,6 +37,8 @@ export type EnsureDubPreflightInput = {
   force?: boolean;
   pythonPath?: string;
   runner?: ProcessRunner;
+  /** 日志前缀里的调用方命令名；不传维持既有的 "yt2x pipeline --dub"（向后兼容）。 */
+  commandLabel?: string;
 };
 
 export type EnsureDubPreflightResult = { ok: true } | { ok: false; exitCode: number };
@@ -51,6 +53,8 @@ export type EnsureDubPreflightResult = { ok: true } | { ok: false; exitCode: num
 export const ensureDubPreflight = async (
   input: EnsureDubPreflightInput,
 ): Promise<EnsureDubPreflightResult> => {
+  const label = input.commandLabel ?? "yt2x pipeline --dub";
+
   // 每个目标视频都已有 full.zh-dubbed.mp4 且未 --force 时，preflight 探测的都是这次
   // 重跑根本用不到的东西——例如只想重跑 article 的机器可能压根没装 demucs。这类
   // 空跑必须仍然退出码 0，不能被 preflight 拖成 CONFIG_MISSING。
@@ -60,7 +64,7 @@ export const ensureDubPreflight = async (
   if (skipDubPreflight) {
     logger.info(
       { videos: input.videoIds.length },
-      "yt2x pipeline --dub: all target videos already have a dubbed output — " +
+      `${label}: all target videos already have a dubbed output — ` +
         "skipping demucs/TTS preflight (use --force to redo)",
     );
     return { ok: true };
@@ -72,7 +76,7 @@ export const ensureDubPreflight = async (
   } catch (err: unknown) {
     logger.error(
       { err: err instanceof Error ? err.message : String(err) },
-      "yt2x pipeline --dub: invalid --dub-engine",
+      `${label}: invalid --dub-engine`,
     );
     return { ok: false, exitCode: NATIVE_EXIT.CONFIG_MISSING };
   }
@@ -81,7 +85,7 @@ export const ensureDubPreflight = async (
   if (!resolvedTts.ok) {
     logger.error(
       { reason: resolvedTts.reason },
-      "yt2x pipeline --dub: TTS credentials unavailable — checked before notes/article " +
+      `${label}: TTS credentials unavailable — checked before notes/article ` +
         "so a missing ElevenLabs key doesn't waste an already-paid-for translation pass",
     );
     return { ok: false, exitCode: resolvedTts.exitCode };
@@ -95,12 +99,12 @@ export const ensureDubPreflight = async (
     // 自动探测（含 .venv-demucs/bin/python3），CONTRIBUTING.md 要求默认值的选用要留痕。
     logger.info(
       { pythonPath: resolvedPythonPath },
-      "yt2x pipeline --dub: resolved python interpreter for demucs",
+      `${label}: resolved python interpreter for demucs`,
     );
   } catch (err: unknown) {
     logger.error(
       { err: err instanceof Error ? err.message : String(err) },
-      "yt2x pipeline --dub: demucs unavailable — install demucs, or pass --python-path " +
+      `${label}: demucs unavailable — install demucs, or pass --python-path ` +
         "to a Python that has it (e.g. `--python-path .venv-demucs/bin/python3`); checked " +
         "before notes/article to avoid wasted LLM cost",
     );
@@ -115,7 +119,7 @@ export const ensureDubPreflight = async (
 
     logger.info(
       { videoId: id },
-      "yt2x pipeline --dub: no local transcript found, transcribing now…",
+      `${label}: no local transcript found, transcribing now…`,
     );
     const result = await transcribeLocal({
       videoDir: path.join(input.outRoot, id),
@@ -125,7 +129,7 @@ export const ensureDubPreflight = async (
     if (result === undefined) {
       logger.error(
         { videoId: id },
-        "yt2x pipeline --dub: local transcription unavailable (faster-whisper not installed, " +
+        `${label}: local transcription unavailable (faster-whisper not installed, ` +
           "or no downloaded source video found). Install faster-whisper, or run " +
           "`yt2x subtitle transcribe-local <videoId>` manually, then retry.",
       );
@@ -133,7 +137,7 @@ export const ensureDubPreflight = async (
     }
     logger.info(
       { videoId: id, wordsPath: result.wordsPath, cueCount: result.cueCount },
-      "yt2x pipeline --dub: local transcript ready",
+      `${label}: local transcript ready`,
     );
   }
 

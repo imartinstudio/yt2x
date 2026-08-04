@@ -21,6 +21,7 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
   };
 });
 
+import { logger } from "../logger.js";
 import { allVideosAlreadyDubbed, ensureDubPreflight } from "./dub-preflight.js";
 
 beforeEach(() => {
@@ -166,5 +167,51 @@ describe("ensureDubPreflight", () => {
     expect(probeDemucsMock).toHaveBeenCalledWith(
       expect.objectContaining({ pythonPath: "/explicit/python3" }),
     );
+  });
+
+  describe("commandLabel", () => {
+    it("defaults the log message prefix to 'yt2x pipeline --dub' when not provided", async () => {
+      const infoSpy = vi.spyOn(logger, "info");
+      const root = await mkdtemp(path.join(os.tmpdir(), "dub-preflight-label-default-"));
+      const articleOutRoot = path.join(root, "articles");
+      await mkdir(path.join(articleOutRoot, "vid1", "video"), { recursive: true });
+      await writeFile(path.join(articleOutRoot, "vid1", "video", "full.zh-dubbed.mp4"), "x");
+
+      await ensureDubPreflight({
+        videoIds: ["vid1"],
+        outRoot: path.join(root, "downloads"),
+        articleOutRoot,
+        dubEngineFlag: "edge-tts",
+      });
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining("yt2x pipeline --dub: all target videos already have a dubbed output"),
+      );
+      infoSpy.mockRestore();
+    });
+
+    it("uses a custom commandLabel as the log message prefix instead", async () => {
+      const infoSpy = vi.spyOn(logger, "info");
+      const errorSpy = vi.spyOn(logger, "error");
+      const root = await mkdtemp(path.join(os.tmpdir(), "dub-preflight-label-custom-"));
+
+      const result = await ensureDubPreflight({
+        videoIds: ["vid1"],
+        outRoot: path.join(root, "downloads"),
+        articleOutRoot: path.join(root, "articles"),
+        dubEngineFlag: "not-a-real-engine",
+        commandLabel: "yt2x video",
+      });
+
+      expect(result).toEqual({ ok: false, exitCode: expect.any(Number) });
+      expect(errorSpy).toHaveBeenCalledWith(expect.anything(), "yt2x video: invalid --dub-engine");
+      expect(infoSpy).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining("yt2x pipeline --dub"),
+      );
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
   });
 });

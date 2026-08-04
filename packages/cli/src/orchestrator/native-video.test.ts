@@ -25,20 +25,20 @@ vi.mock("./native-dub.js", async (importOriginal) => {
 const ensureDubPreflightMock = vi.hoisted(() => vi.fn(async () => ({ ok: true as const })));
 vi.mock("./dub-preflight.js", () => ({ ensureDubPreflight: ensureDubPreflightMock }));
 
-// 无翻译时用不到真实 LLM 凭据；本文件里唯一需要翻译的场景
-// （bilingual-burned acquire wiring）用这个 stub 避免依赖开发机/CI 上是否配置了真实 API key，
-// 与 native-pipeline.test.ts 对 "./native-stage-common.js" 的 mock 手法一致。
+// 无翻译时用不到真实 LLM 凭据；本文件里需要翻译的场景（bilingual-burned/zh-srt acquire wiring）
+// 用这个 stub 避免依赖开发机/CI 上是否配置了真实 API key，与 native-pipeline.test.ts 对
+// "./native-stage-common.js" 的 mock 手法一致。可用 mockReturnValueOnce 覆写单个测试里的失败路径。
+const resolveNativeLlmMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    ok: true as const,
+    adapter: { chat: async () => ({ content: "", model: "test", finishReason: "stop" as const }) },
+    provider: "openai" as const,
+    model: "test",
+  })),
+);
 vi.mock("./native-stage-common.js", async (importOriginal) => {
   const actual = await importOriginal<object>();
-  return {
-    ...actual,
-    resolveNativeLlm: () => ({
-      ok: true,
-      adapter: { chat: async () => ({ content: "", model: "test", finishReason: "stop" }) },
-      provider: "openai",
-      model: "test",
-    }),
-  };
+  return { ...actual, resolveNativeLlm: resolveNativeLlmMock };
 });
 
 import { executeNativeVideo } from "./native-video.js";
@@ -48,6 +48,7 @@ beforeEach(() => {
   executeNativeDubMock.mockClear();
   ensureDubPreflightMock.mockClear();
   ensureDubPreflightMock.mockResolvedValue({ ok: true });
+  resolveNativeLlmMock.mockClear();
 });
 
 describe("executeNativeVideo — --deliver validation", () => {
@@ -81,6 +82,16 @@ describe("executeNativeVideo — --deliver validation", () => {
     expect(code).not.toBe(0);
     expect(executeNativeAcquireMock).not.toHaveBeenCalled();
   });
+
+  it("rejects when both --urls and --video-id are given, before doing any work", async () => {
+    const code = await executeNativeVideo({
+      urls: ["https://www.youtube.com/watch?v=abc123def45"],
+      videoId: ["existingVid1"],
+      deliver: "none",
+    });
+    expect(code).not.toBe(0);
+    expect(executeNativeAcquireMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("executeNativeVideo — acquire wiring", () => {
@@ -98,11 +109,34 @@ describe("executeNativeVideo — acquire wiring", () => {
     expect(executeNativeAcquireMock).toHaveBeenCalledOnce();
     const acquireOpts = executeNativeAcquireMock.mock.calls[0]![0] as {
       acquire: { subtitleZh?: string; subtitleBilingual?: string };
+      llm?: unknown;
+      llmModel?: string;
     };
     expect(acquireOpts.acquire.subtitleZh).toBe("off");
     expect(acquireOpts.acquire.subtitleBilingual).toBe("burned");
+    expect(acquireOpts.llm).toBeDefined();
+    expect(acquireOpts.llmModel).toBe("test");
     expect(ensureDubPreflightMock).not.toHaveBeenCalled();
     expect(executeNativeDubMock).not.toHaveBeenCalled();
+  });
+
+  it("returns the LLM resolution failure's exit code and never calls executeNativeAcquire when a --deliver tier needing translation has no usable LLM config", async () => {
+    resolveNativeLlmMock.mockReturnValueOnce({
+      ok: false,
+      exitCode: 5,
+      reason: "no LLM API key configured",
+    });
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-llm-fail-"));
+    const articleOutRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-llm-fail-articles-"));
+    const code = await executeNativeVideo({
+      urls: ["https://www.youtube.com/watch?v=abc123def45"],
+      deliver: "bilingual-burned",
+      outDir: outRoot,
+      articleOutDir: articleOutRoot,
+      llmProvider: "openai",
+    });
+    expect(code).toBe(5);
+    expect(executeNativeAcquireMock).not.toHaveBeenCalled();
   });
 
   it("skips acquire entirely when --video-id is given without --urls", async () => {

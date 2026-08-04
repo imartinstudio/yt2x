@@ -30,7 +30,7 @@ import {
   createPipelineProgress,
   estimatePipelineVideoCount,
 } from "../progress/pipeline-progress.js";
-import { resolveNativeLlm } from "./native-stage-common.js";
+import { mergePipelineExitCode, resolveNativeLlm } from "./native-stage-common.js";
 
 export type NativePipelineOptions = {
   args: PipelineArgs;
@@ -38,12 +38,7 @@ export type NativePipelineOptions = {
   runner?: ProcessRunner;
 };
 
-/** 合并子阶段退出码：保留最严重的非零码（如 partial=4 优先于 generic=1）。 */
-export const mergePipelineExitCode = (current: number, next: number): number => {
-  if (next === 0) return current;
-  if (current === 0) return next;
-  return Math.max(current, next);
-};
+export { mergePipelineExitCode };
 
 const resolveOutRoot = (monorepoRoot: string, outDir: string | undefined): string =>
   outDir !== undefined ? path.resolve(outDir) : path.resolve(monorepoRoot, DEFAULT_OUT_DIR);

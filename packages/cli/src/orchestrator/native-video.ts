@@ -22,8 +22,7 @@ import { defaultMonorepoRoot } from "../config/monorepo-root.js";
 import { logger } from "../logger.js";
 import { ensureDubPreflight } from "./dub-preflight.js";
 import { executeNativeDub } from "./native-dub.js";
-import { mergePipelineExitCode } from "./native-pipeline.js";
-import { NATIVE_EXIT, resolveNativeLlm } from "./native-stage-common.js";
+import { mergePipelineExitCode, NATIVE_EXIT, resolveNativeLlm } from "./native-stage-common.js";
 
 export type VideoFlags = {
   urls?: string[];
@@ -137,6 +136,14 @@ export const executeNativeVideo = async (flags: VideoFlags): Promise<number> => 
       {},
       "yt2x video needs --urls/--url-file/--search (to acquire), or --video-id " +
         "(to reuse already-acquired material).",
+    );
+    return NATIVE_EXIT.CONFIG_MISSING;
+  }
+  if (hasUrlSources && explicitVideoIds.length > 0) {
+    logger.error(
+      {},
+      "yt2x video got both --urls/--url-file/--search and --video-id. Pick one: " +
+        "--urls/--url-file/--search to acquire new material, or --video-id to reuse already-acquired material.",
     );
     return NATIVE_EXIT.CONFIG_MISSING;
   }

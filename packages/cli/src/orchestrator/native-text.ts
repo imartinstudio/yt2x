@@ -1,8 +1,7 @@
 import { logger } from "../logger.js";
 import { executeNativeArticle } from "./native-article.js";
 import { executeNativeNotes } from "./native-notes.js";
-import { mergePipelineExitCode } from "./native-pipeline.js";
-import { NATIVE_EXIT } from "./native-stage-common.js";
+import { mergePipelineExitCode, NATIVE_EXIT } from "./native-stage-common.js";
 
 export type TextFlags = {
   videoId?: string[];

@@ -16,6 +16,7 @@ import { registerNotesCommand } from "./commands/notes.js";
 import { registerPipelineCommand } from "./commands/pipeline.js";
 import { registerPublishCommand } from "./commands/publish.js";
 import { registerSubtitleCommand } from "./commands/subtitle.js";
+import { registerVideoCommand } from "./commands/video.js";
 import { registerWatermarkCommand } from "./commands/watermark.js";
 import { registerWechatFormatCommand } from "./commands/wechat-format.js";
 import { logger } from "./logger.js";
@@ -48,6 +49,7 @@ registerDubCommand(program);
 registerLlmCommand(program);
 registerWatermarkCommand(program);
 registerWechatFormatCommand(program);
+registerVideoCommand(program);
 
 program.parseAsync().catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);

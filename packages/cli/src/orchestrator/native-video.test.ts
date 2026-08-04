@@ -163,4 +163,68 @@ describe("executeNativeVideo — dub wiring", () => {
     expect(code).toBe(4);
     expect(executeNativeDubMock).not.toHaveBeenCalled();
   });
+
+  it("continues past a failed dub under --error-strategy skip, but still returns a non-zero exit code overall", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-dub-skip-"));
+    const articleOutRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-dub-skip-articles-"));
+    await mkdir(path.join(outRoot, "vidA"), { recursive: true });
+    await writeFile(path.join(outRoot, "vidA", "metadata.json"), JSON.stringify({ id: "vidA" }));
+    await mkdir(path.join(outRoot, "vidB"), { recursive: true });
+    await writeFile(path.join(outRoot, "vidB", "metadata.json"), JSON.stringify({ id: "vidB" }));
+
+    // vidA's dub fails; vidB's dub succeeds. --error-strategy skip must still process vidB
+    // and the final exit code must reflect vidA's failure — not silently report success.
+    executeNativeDubMock.mockImplementationOnce(async () => 7);
+    executeNativeDubMock.mockImplementationOnce(async () => 0);
+
+    const code = await executeNativeVideo({
+      videoId: ["vidA", "vidB"],
+      deliver: "dubbed",
+      outDir: outRoot,
+      articleOutDir: articleOutRoot,
+      errorStrategy: "skip",
+      llmProvider: "openai",
+    });
+
+    expect(executeNativeDubMock).toHaveBeenCalledTimes(2);
+    expect(executeNativeDubMock.mock.calls[0]![0]).toMatchObject({ videoId: "vidA" });
+    expect(executeNativeDubMock.mock.calls[1]![0]).toMatchObject({ videoId: "vidB" });
+    expect(code).not.toBe(0);
+    expect(code).toBe(7);
+  });
+});
+
+describe("executeNativeVideo — video-id scoping after acquire", () => {
+  it("does not sweep in unrelated pre-existing videos under --out-dir when acquiring via --search", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-scoping-"));
+    const articleOutRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-scoping-articles-"));
+
+    // Simulates a video left over under --out-dir from a completely unrelated earlier run —
+    // its metadata.json exists *before* executeNativeVideo is ever called, and it is not one
+    // of the videos this run's --search is meant to acquire.
+    await mkdir(path.join(outRoot, "preExisting99"), { recursive: true });
+    await writeFile(
+      path.join(outRoot, "preExisting99", "metadata.json"),
+      JSON.stringify({ id: "preExisting99" }),
+    );
+
+    // --search (not --urls) means sourceVideoIdsFromUrls() has nothing to fall back on, so the
+    // only thing that can correctly scope videoIds down to just the newly-acquired video is the
+    // initialVideoIds/newlyDiscoveredVideoIds snapshot taken before acquire runs.
+    const code = await executeNativeVideo({
+      search: "some query",
+      deliver: "dubbed",
+      outDir: outRoot,
+      articleOutDir: articleOutRoot,
+      llmProvider: "openai",
+    });
+
+    expect(code).toBe(0);
+    expect(ensureDubPreflightMock).toHaveBeenCalledOnce();
+    const preflightOpts = ensureDubPreflightMock.mock.calls[0]![0] as { videoIds: readonly string[] };
+    expect(preflightOpts.videoIds).toEqual(["abc123def45"]);
+    expect(preflightOpts.videoIds).not.toContain("preExisting99");
+    expect(executeNativeDubMock).toHaveBeenCalledOnce();
+    expect(executeNativeDubMock.mock.calls[0]![0]).toMatchObject({ videoId: "abc123def45" });
+  });
 });

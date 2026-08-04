@@ -22,6 +22,7 @@ import { defaultMonorepoRoot } from "../config/monorepo-root.js";
 import { logger } from "../logger.js";
 import { ensureDubPreflight } from "./dub-preflight.js";
 import { executeNativeDub } from "./native-dub.js";
+import { mergePipelineExitCode } from "./native-pipeline.js";
 import { NATIVE_EXIT, resolveNativeLlm } from "./native-stage-common.js";
 
 export type VideoFlags = {
@@ -241,6 +242,7 @@ export const executeNativeVideo = async (flags: VideoFlags): Promise<number> => 
     }
   }
 
+  let videoExitCode = 0;
   const internalForDub = internalSubtitleParamsFor(deliver);
   if (internalForDub.needsDub) {
     const preflight = await ensureDubPreflight({
@@ -269,6 +271,7 @@ export const executeNativeVideo = async (flags: VideoFlags): Promise<number> => 
       });
       if (code !== 0) {
         if ((flags.errorStrategy ?? "stop") === "stop") return code;
+        videoExitCode = mergePipelineExitCode(videoExitCode, code);
       }
     }
   }
@@ -279,5 +282,5 @@ export const executeNativeVideo = async (flags: VideoFlags): Promise<number> => 
       `yt2x video: done — continue with: yt2x text --video-id ${id} --out-dir ${outRoot} --article-out-dir ${articleOutRoot}`,
     );
   }
-  return 0;
+  return videoExitCode;
 };

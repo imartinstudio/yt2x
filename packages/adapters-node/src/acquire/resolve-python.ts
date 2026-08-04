@@ -14,6 +14,9 @@ let resolvePromise: Promise<string> | undefined;
 
 const CANDIDATES = [
   process.env.YT2X_PYTHON,
+  // .venv-demucs 是 docs/USAGE.md 引导用户创建的专用 venv（demucs + faster-whisper），
+  // 应该比裸系统 Python 优先命中这两项能力探测。
+  ".venv-demucs/bin/python3",
   // Prefer Homebrew /opt paths before bare "python3" so agent shells whose
   // PATH puts /usr/bin first still find a Pillow-capable interpreter.
   "/opt/homebrew/bin/python3",
@@ -182,4 +185,51 @@ export const resolvePythonWithFasterWhisper = async (): Promise<string | undefin
 export const resetResolvedFasterWhisperPythonCache = (): void => {
   cachedFasterWhisperPython = undefined;
   resolveFasterWhisperPromise = undefined;
+};
+
+/**
+ * demucs（配音背景音分离）同样是可选、重依赖——探测不到必须优雅降级，不能让整条流水线崩溃。
+ */
+export const hasDemucs = async (bin: string): Promise<boolean> => {
+  try {
+    const { stdout } = await execFileAsync(
+      bin,
+      ["-c", "import demucs; print('ok')"],
+      { timeout: 10_000, env: process.env },
+    );
+    return stdout.includes("ok");
+  } catch {
+    return false;
+  }
+};
+
+let cachedDemucsPython: string | undefined;
+let resolveDemucsPromise: Promise<string | undefined> | undefined;
+
+export const resolvePythonWithDemucs = async (): Promise<string | undefined> => {
+  if (cachedDemucsPython !== undefined) return cachedDemucsPython;
+  if (resolveDemucsPromise !== undefined) return resolveDemucsPromise;
+
+  resolveDemucsPromise = (async () => {
+    for (const bin of CANDIDATES) {
+      if (!(await isExecutable(bin))) continue;
+      if (await hasDemucs(bin)) {
+        cachedDemucsPython = bin;
+        return bin;
+      }
+    }
+    return undefined;
+  })();
+
+  try {
+    return await resolveDemucsPromise;
+  } finally {
+    resolveDemucsPromise = undefined;
+  }
+};
+
+/** Test helper: clear the cache between cases. */
+export const resetResolvedDemucsPythonCache = (): void => {
+  cachedDemucsPython = undefined;
+  resolveDemucsPromise = undefined;
 };

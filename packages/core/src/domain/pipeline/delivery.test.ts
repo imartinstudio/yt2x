@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   assertFromCompatibleWithDeliver,
+  type DeliverMode,
   DeliverModeSchema,
   DeliveryConflictError,
   FromModeSchema,
+  internalSubtitleParamsFor,
   resolveFrom,
 } from "./delivery.js";
 
@@ -87,5 +89,62 @@ describe("DeliverModeSchema / FromModeSchema", () => {
     const valid = ["youtube", "transcribe", "local", "local-words", "file"];
     for (const v of valid) expect(FromModeSchema.parse(v)).toBe(v);
     expect(() => FromModeSchema.parse("auto")).toThrow();
+  });
+});
+
+describe("internalSubtitleParamsFor", () => {
+  it("maps none to no subtitle work and no dub", () => {
+    expect(internalSubtitleParamsFor("none")).toEqual({
+      subtitleZh: "off",
+      subtitleBilingual: "off",
+      needsDub: false,
+    });
+  });
+
+  it("maps zh-srt to a plain zh srt, no burn, no bilingual", () => {
+    expect(internalSubtitleParamsFor("zh-srt")).toEqual({
+      subtitleZh: "srt",
+      subtitleBilingual: "off",
+      needsDub: false,
+    });
+  });
+
+  it("maps zh-burned to a zh-only burn, no bilingual", () => {
+    expect(internalSubtitleParamsFor("zh-burned")).toEqual({
+      subtitleZh: "burned",
+      subtitleBilingual: "off",
+      needsDub: false,
+    });
+  });
+
+  it("maps bilingual-srt to bilingual srt with subtitleZh off (avoids the zh-only burn side effect)", () => {
+    expect(internalSubtitleParamsFor("bilingual-srt")).toEqual({
+      subtitleZh: "off",
+      subtitleBilingual: "srt",
+      needsDub: false,
+    });
+  });
+
+  it("maps bilingual-burned to bilingual burn with subtitleZh off", () => {
+    expect(internalSubtitleParamsFor("bilingual-burned")).toEqual({
+      subtitleZh: "off",
+      subtitleBilingual: "burned",
+      needsDub: false,
+    });
+  });
+
+  it("maps dubbed to no acquire-side subtitle work at all, needsDub true", () => {
+    expect(internalSubtitleParamsFor("dubbed")).toEqual({
+      subtitleZh: "off",
+      subtitleBilingual: "off",
+      needsDub: true,
+    });
+  });
+
+  it("covers all six DeliverMode values exhaustively (compile-time + runtime cross-check)", () => {
+    const allModes: DeliverMode[] = ["none", "zh-srt", "zh-burned", "bilingual-srt", "bilingual-burned", "dubbed"];
+    for (const mode of allModes) {
+      expect(() => internalSubtitleParamsFor(mode)).not.toThrow();
+    }
   });
 });

@@ -61,4 +61,32 @@ describe("executeNativeText", () => {
       platformTargets: "xiaohongshu,wechat",
     });
   });
+
+  it("continues past a failed notes call under --error-strategy skip, but still returns a non-zero exit code overall", async () => {
+    executeNativeNotesMock.mockResolvedValueOnce(7);
+    executeNativeNotesMock.mockResolvedValueOnce(0);
+
+    const code = await executeNativeText({
+      videoId: ["vidA", "vidB"],
+      errorStrategy: "skip",
+      llmProvider: "openai",
+    });
+
+    expect(executeNativeNotesMock).toHaveBeenCalledTimes(2);
+    expect(executeNativeArticleMock).toHaveBeenCalledTimes(2);
+    expect(code).not.toBe(0);
+    expect(code).toBe(7);
+  });
+
+  it("is a no-op returning 0 when both --notes skip and --article skip are passed", async () => {
+    const code = await executeNativeText({
+      videoId: ["vidA"],
+      notes: "skip",
+      article: "skip",
+      llmProvider: "openai",
+    });
+    expect(code).toBe(0);
+    expect(executeNativeNotesMock).not.toHaveBeenCalled();
+    expect(executeNativeArticleMock).not.toHaveBeenCalled();
+  });
 });

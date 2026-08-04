@@ -1,6 +1,7 @@
 import { logger } from "../logger.js";
 import { executeNativeArticle } from "./native-article.js";
 import { executeNativeNotes } from "./native-notes.js";
+import { mergePipelineExitCode } from "./native-pipeline.js";
 import { NATIVE_EXIT } from "./native-stage-common.js";
 
 export type TextFlags = {
@@ -22,12 +23,7 @@ export type TextFlags = {
   verbose?: boolean;
 };
 
-/**
- * `yt2x text`：单条文本交付编排（Plan 2 Task 4）——notes → article，围绕已获取的
- * `--video-id` 跑完整条链路，与既有的 `pipeline`/`notes`/`article` 命令并存，互不影响
- * （纯新增命令，不改动任何既有命令的行为）。没有 publish 阶段、没有 deconstruct 阶段——
- * 这是本 plan 的既定范围决策（ADR-0005「两条命令由 shell 串接」）。
- */
+/** 没有 publish 阶段、没有 deconstruct 阶段——本 plan 的既定范围决策（ADR-0005「两条命令由 shell 串接」）。 */
 export const executeNativeText = async (flags: TextFlags): Promise<number> => {
   const videoIds = flags.videoId ?? [];
   if (videoIds.length === 0) {
@@ -63,19 +59,27 @@ export const executeNativeText = async (flags: TextFlags): Promise<number> => {
       platformTargets: flags.platformTargets,
     }) as Parameters<typeof executeNativeArticle>[0];
 
+  let textExitCode = 0;
+
   if (notesMode !== "skip") {
     for (const id of videoIds) {
       const code = await executeNativeNotes(notesForId(id));
-      if (code !== 0 && errorStrategy === "stop") return code;
+      if (code !== 0) {
+        if (errorStrategy === "stop") return code;
+        textExitCode = mergePipelineExitCode(textExitCode, code);
+      }
     }
   }
 
   if (articleMode !== "skip") {
     for (const id of videoIds) {
       const code = await executeNativeArticle(articleForId(id));
-      if (code !== 0 && errorStrategy === "stop") return code;
+      if (code !== 0) {
+        if (errorStrategy === "stop") return code;
+        textExitCode = mergePipelineExitCode(textExitCode, code);
+      }
     }
   }
 
-  return 0;
+  return textExitCode;
 };

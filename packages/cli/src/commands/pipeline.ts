@@ -60,7 +60,7 @@ export const registerPipelineCommand = (program: Command): void => {
     )
     .option(
       "--dub-engine <id>",
-      "With --dub: TTS engine edge-tts|elevenlabs (default elevenlabs for pipeline deliverables)",
+      "With --dub: TTS engine edge-tts (default) | elevenlabs",
     )
     .option("--python-path <path>", "With --dub: Python with demucs installed (default: python3)")
     .option("--publish-dry-run", "Preview publish output without posting to X")

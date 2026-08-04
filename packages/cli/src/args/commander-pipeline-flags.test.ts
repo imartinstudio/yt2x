@@ -97,13 +97,13 @@ describe("parseCommanderPipelineFlags", () => {
     expect(args.acquire.downloadVideo).toBe(false);
   });
 
-  it("maps --dub and defaults dubEngine to elevenlabs", () => {
+  it("maps --dub and defaults dubEngine to edge-tts", () => {
     const args = parseCommanderPipelineFlags({
       urls: ["https://example.com/video"],
       dub: true,
     });
     expect(args.control.dub).toBe(true);
-    expect(args.control.dubEngine).toBe("elevenlabs");
+    expect(args.control.dubEngine).toBe("edge-tts");
   });
 
   it("maps --dub-engine edge-tts", () => {

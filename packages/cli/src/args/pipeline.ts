@@ -144,8 +144,8 @@ export const ControlOptionsSchema = z.object({
    * srt 避免 acquire 自己烧出第二份视频——成片由 dub 反向 SRT 负责。
    */
   dub: z.boolean().default(false),
-  /** 配音引擎；pipeline --dub 默认 elevenlabs（成片），可改 edge-tts。 */
-  dubEngine: z.enum(["edge-tts", "elevenlabs"]).default("elevenlabs"),
+  /** 配音引擎；与独立 dub 命令一致，默认 edge-tts（免费、无需凭据）；有 ElevenLabs 账号时可改。 */
+  dubEngine: z.enum(["edge-tts", "elevenlabs"]).default("edge-tts"),
   /**
    * 配音 Demucs 探测/分离用的 Python 解释器；`dub` 单命令已支持同名 flag，pipeline 此前
    * 一直没有透传，本机 demucs 只装在虚拟环境时 `pipeline --dub` 永远探测不到。

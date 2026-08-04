@@ -1414,3 +1414,10 @@ All green, no new warnings. At this point `yt2x video --deliver <tier> --urls <u
 - Decide whether `command-flags.ts`'s `SingleStageFlags` type survives as a shared base for
   `NotesFlags`/`ArticleFlags`/`PublishFlags`, or gets split now that `acquire` (its original reason for
   existing) is gone.
+- **Precondition surfaced by Plan 2's final review:** `yt2x video --deliver <non-dubbed tier>
+  --video-id <already-acquired id>` is currently a silent no-op — the skip-acquire path only does real
+  work for `--deliver dubbed`; every other tier just validates the video exists and returns 0 without
+  generating or re-burning any subtitles. This is fine today because `yt2x subtitle` still exists as the
+  way to (re)generate subtitles for an already-acquired video. Once Plan 3 deletes `yt2x subtitle`,
+  this becomes a real functionality gap — `yt2x video` must gain a real "generate/burn subtitles for an
+  already-acquired video" path before (or as part of) that deletion, not after.

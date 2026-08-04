@@ -4,12 +4,14 @@
 
 ## 索引
 
-| 编号                                                | 标题                        | 状态     | 日期       |
-| --------------------------------------------------- | --------------------------- | -------- | ---------- |
-| [0001](./0001-multi-target-architecture.md)         | 多端架构与 Monorepo         | Accepted | 2026-05-14 |
-| [0002](./0002-llm-provider-abstraction.md)          | LLM Provider 抽象与国内兼容 | Accepted | 2026-05-14 |
-| [0003](./0003-publish-safety-and-process-status.md) | 发布安全与每视频状态契约    | Accepted | 2026-05-16 |
-| [0004](./0004-article-browser-draft-publish.md)     | Article 浏览器草稿发布通道  | Accepted | 2026-05-23 |
+| 编号                                                | 标题                                 | 状态     | 日期       |
+| --------------------------------------------------- | ------------------------------------ | -------- | ---------- |
+| [0001](./0001-multi-target-architecture.md)         | 多端架构与 Monorepo                  | Accepted | 2026-05-14 |
+| [0002](./0002-llm-provider-abstraction.md)          | LLM Provider 抽象与国内兼容          | Accepted | 2026-05-14 |
+| [0003](./0003-publish-safety-and-process-status.md) | 发布安全与每视频状态契约             | Accepted | 2026-05-16 |
+| [0004](./0004-article-browser-draft-publish.md)     | Article 浏览器草稿发布通道           | Accepted | 2026-05-23 |
+| [0005](./0005-commands-split-by-deliverable.md)     | 命令按交付物切分，而非按阶段         | Accepted | 2026-08-03 |
+| [0006](./0006-delivery-as-single-enum.md)           | 交付物是单一互斥枚举，配音是最高一档 | Accepted | 2026-08-03 |
 
 ## 格式约定
 

@@ -27,15 +27,19 @@ export class DeliveryConflictError extends Error {
 }
 
 /**
- * `dubbed` 是唯一需要词级时间戳的交付档（CONTEXT.md「字幕通道」），因此是唯一强制通道的档位；
- * `local-words` 反过来也只服务 `dubbed`——非 dubbed 场景选它没有意义，报错而不是静默退化成
- * `local`（ADR-0006 Decision #3：显式矛盾一律报错，绝不静默改写）。
+ * `dubbed` 是唯一需要词级时间戳的交付档（CONTEXT.md「字幕通道」），因此是唯一强制通道的档位。
+ *
+ * `local-words` 反过来也只服务 `dubbed`——非 dubbed 场景选它没有意义，报错而不是静默退化成 `local`。
+ * 注：ADR-0006 只给出了 `dubbed+youtube` 一个反例，未明说非 dubbed 场景下选 `local-words` 如何处理。
+ * 禁止非 dubbed 模式配合 local-words 是本实现的推断：既然 local-words 只有在配音时才有用，
+ * 允许它在非 dubbed 场景下静默退化为 local 只会制造「参数传了但没生效」的混淆。
+ * 选择报错延续 ADR-0006 Decision #3「显式矛盾一律报错，绝不静默改写」的精神。
  */
 export const assertFromCompatibleWithDeliver = (deliver: DeliverMode, from: FromMode): void => {
   if (deliver === "dubbed" && from !== "local-words") {
     throw new DeliveryConflictError(
       `--deliver dubbed --from ${from} 无法配音：该通道没有词级时间戳。` +
-        `改用 --from local-words（先跑 yt2x subtitle-tools transcribe-local）。`,
+        `改用 --from local-words（先跑 yt2x subtitle transcribe-local）。`,
     );
   }
   if (deliver !== "dubbed" && from === "local-words") {

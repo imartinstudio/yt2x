@@ -7,33 +7,30 @@ import {
   DEFAULT_ARTICLE_OUT_DIR,
   DEFAULT_OUT_DIR,
   defaultProcessRunner,
-  dubbedVideoPathFor,
   executeNativeAcquire,
   extractVideoId,
   listBatchVideosFromOutRoot,
-  probeDemucs,
   readProcessStatusMerged,
   readYoutubePageUrl,
   resolveBurnSourceVideo,
-  resolveDubWordsPath,
-  transcribeLocal,
   type ProcessRunner,
 } from "@yt2x/adapters-node";
 import type { PipelineArgs } from "../args/pipeline.js";
 import { executeNativeArticle } from "./native-article.js";
-import { executeNativeDub, resolveDubEngine, resolveDubTts } from "./native-dub.js";
+import { executeNativeDub } from "./native-dub.js";
 import { executeNativeNotes } from "./native-notes.js";
 import { executeNativePublish } from "./native-publish.js";
 import { runDeconstructCommand } from "../commands/deconstruct.js";
 import { logger } from "../logger.js";
 import { createAcquireReviewPrompt } from "./acquire-review-prompt.js";
+import { ensureDubPreflight } from "./dub-preflight.js";
 import { nativeAcquireOptionsFromPipelineArgs } from "./native-acquire-from-pipeline-args.js";
 import {
   acquireSubStepProgressFromHandle,
   createPipelineProgress,
   estimatePipelineVideoCount,
 } from "../progress/pipeline-progress.js";
-import { NATIVE_EXIT, resolveNativeLlm } from "./native-stage-common.js";
+import { resolveNativeLlm } from "./native-stage-common.js";
 
 export type NativePipelineOptions = {
   args: PipelineArgs;
@@ -77,23 +74,6 @@ const hasMetadata = async (outRoot: string, id: string): Promise<boolean> =>
   access(path.join(outRoot, id, "metadata.json"))
     .then(() => true)
     .catch(() => false);
-
-const hasDubbedVideo = async (articleOutRoot: string, id: string): Promise<boolean> =>
-  access(dubbedVideoPathFor(articleOutRoot, id))
-    .then(() => true)
-    .catch(() => false);
-
-/** 每个目标视频都已有 full.zh-dubbed.mp4 时，preflight（凭据/Demucs 探测）没有必要再跑。 */
-const allVideosAlreadyDubbed = async (
-  articleOutRoot: string,
-  ids: readonly string[],
-): Promise<boolean> => {
-  if (ids.length === 0) return false;
-  for (const id of ids) {
-    if (!(await hasDubbedVideo(articleOutRoot, id))) return false;
-  }
-  return true;
-};
 
 const filterMaterializedVideoIds = async (outRoot: string, ids: string[]): Promise<string[]> => {
   const materialized: string[] = [];
@@ -486,93 +466,18 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
     // LLM 翻译费用已经花完了（demucs 缺失、ElevenLabs 凭据缺失，此前都只在 dub 阶段内部
     // 才被发现）。
     if (dubRequested) {
-      // 每个目标视频都已有 full.zh-dubbed.mp4 且未 --force 时，preflight 探测的都是这次
-      // 重跑根本用不到的东西——例如只想重跑 article 的机器可能压根没装 demucs。这类
-      // 空跑必须仍然退出码 0，不能被 preflight 拖成 CONFIG_MISSING。
-      const skipDubPreflight =
-        args.control.force !== true && (await allVideosAlreadyDubbed(articleOutRoot, videoIds));
-
-      if (skipDubPreflight) {
-        logger.info(
-          { videos: videoIds.length },
-          "yt2x pipeline --dub: all target videos already have a dubbed output — " +
-            "skipping demucs/TTS preflight (use --force to redo)",
-        );
-      } else {
-        let dubEngine;
-        try {
-          dubEngine = resolveDubEngine(args.control.dubEngine);
-        } catch (err: unknown) {
-          logger.error(
-            { err: err instanceof Error ? err.message : String(err) },
-            "yt2x pipeline --dub: invalid --dub-engine",
-          );
-          finalExitCode = NATIVE_EXIT.CONFIG_MISSING;
-          return finalExitCode;
-        }
-
-        const resolvedTts = resolveDubTts({ dubEngine: args.control.dubEngine }, dubEngine);
-        if (!resolvedTts.ok) {
-          logger.error(
-            { reason: resolvedTts.reason },
-            "yt2x pipeline --dub: TTS credentials unavailable — checked before notes/article " +
-              "so a missing ElevenLabs key doesn't waste an already-paid-for translation pass",
-          );
-          finalExitCode = resolvedTts.exitCode;
-          return finalExitCode;
-        }
-
-        try {
-          const resolvedPythonPath = await probeDemucs({
-            ...(args.control.pythonPath !== undefined ? { pythonPath: args.control.pythonPath } : {}),
-          });
-          // 记录实际用的 Python 解释器——未显式传 --python-path 时它来自 probeDemucs 内部的
-          // 自动探测（含 .venv-demucs/bin/python3），CONTRIBUTING.md 要求默认值的选用要留痕。
-          logger.info(
-            { pythonPath: resolvedPythonPath },
-            "yt2x pipeline --dub: resolved python interpreter for demucs",
-          );
-        } catch (err: unknown) {
-          logger.error(
-            { err: err instanceof Error ? err.message : String(err) },
-            "yt2x pipeline --dub: demucs unavailable — install demucs, or pass --python-path " +
-              "to a Python that has it (e.g. `--python-path .venv-demucs/bin/python3`); checked " +
-              "before notes/article to avoid wasted LLM cost",
-          );
-          finalExitCode = NATIVE_EXIT.CONFIG_MISSING;
-          return finalExitCode;
-        }
-
-        for (const id of videoIds) {
-          const alreadyTranscribed = await resolveDubWordsPath({ outRoot, videoId: id })
-            .then(() => true)
-            .catch(() => false);
-          if (alreadyTranscribed) continue;
-
-          logger.info(
-            { videoId: id },
-            "yt2x pipeline --dub: no local transcript found, transcribing now…",
-          );
-          const result = await transcribeLocal({
-            videoDir: path.join(outRoot, id),
-            language: "en",
-            runner: runner ?? defaultProcessRunner,
-          });
-          if (result === undefined) {
-            logger.error(
-              { videoId: id },
-              "yt2x pipeline --dub: local transcription unavailable (faster-whisper not installed, " +
-                "or no downloaded source video found). Install faster-whisper, or run " +
-                "`yt2x subtitle transcribe-local <videoId>` manually, then retry.",
-            );
-            finalExitCode = NATIVE_EXIT.CONFIG_MISSING;
-            return finalExitCode;
-          }
-          logger.info(
-            { videoId: id, wordsPath: result.wordsPath, cueCount: result.cueCount },
-            "yt2x pipeline --dub: local transcript ready",
-          );
-        }
+      const preflight = await ensureDubPreflight({
+        videoIds,
+        outRoot,
+        articleOutRoot,
+        dubEngineFlag: args.control.dubEngine,
+        force: args.control.force,
+        ...(args.control.pythonPath !== undefined ? { pythonPath: args.control.pythonPath } : {}),
+        ...(runner !== undefined ? { runner } : {}),
+      });
+      if (!preflight.ok) {
+        finalExitCode = preflight.exitCode;
+        return finalExitCode;
       }
     }
 

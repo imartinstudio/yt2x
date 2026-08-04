@@ -10,9 +10,6 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const probeDemucsMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/python3"));
-const resolvePythonWithDemucsMock = vi.hoisted(() =>
-  vi.fn(async (): Promise<string | undefined> => undefined),
-);
 const generateDubScriptMock = vi.hoisted(() => vi.fn());
 const synthesizeDubLinesMock = vi.hoisted(() => vi.fn());
 const separateDemucsMock = vi.hoisted(() => vi.fn());
@@ -37,7 +34,6 @@ vi.mock("@yt2x/adapters-node", async (importOriginal) => {
     ...actual,
     createLlmAdapter: vi.fn(() => ({ chat: vi.fn() })),
     probeDemucs: probeDemucsMock,
-    resolvePythonWithDemucs: resolvePythonWithDemucsMock,
     generateDubScript: generateDubScriptMock,
     synthesizeDubLines: synthesizeDubLinesMock,
     separateDemucs: separateDemucsMock,
@@ -62,8 +58,6 @@ import {
 
 beforeEach(() => {
   probeDemucsMock.mockClear();
-  resolvePythonWithDemucsMock.mockClear();
-  resolvePythonWithDemucsMock.mockResolvedValue(undefined);
   generateDubScriptMock.mockClear();
   synthesizeDubLinesMock.mockClear();
   separateDemucsMock.mockClear();
@@ -1097,7 +1091,7 @@ describe("executeNativeDub --original-voice-volume", () => {
   });
 });
 
-describe("executeNativeDub demucs python auto-detection", () => {
+describe("executeNativeDub demucs python path", () => {
   const setupDemucsFixture = async (): Promise<{
     outRoot: string;
     articleRoot: string;
@@ -1177,9 +1171,8 @@ describe("executeNativeDub demucs python auto-detection", () => {
     return { outRoot, articleRoot, videoId };
   };
 
-  it("passes the auto-detected demucs Python path to probeDemucs when --python-path is omitted", async () => {
+  it("passes no pythonPath to probeDemucs when --python-path is omitted", async () => {
     const { outRoot, articleRoot, videoId } = await setupDemucsFixture();
-    resolvePythonWithDemucsMock.mockResolvedValueOnce(".venv-demucs/bin/python3");
     probeDemucsMock.mockClear();
 
     const code = await executeNativeDub({
@@ -1191,15 +1184,13 @@ describe("executeNativeDub demucs python auto-detection", () => {
     });
 
     expect(code).toBe(0);
-    expect(resolvePythonWithDemucsMock).toHaveBeenCalledOnce();
-    expect(probeDemucsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ pythonPath: ".venv-demucs/bin/python3" }),
-    );
+    // 自动探测现在是 probeDemucs 内部的事（见 demucs.test.ts）——这一层只负责
+    // 不传 --python-path 时不塞任何 pythonPath 键。
+    expect(probeDemucsMock).toHaveBeenCalledWith({});
   });
 
-  it("does not auto-detect when --python-path is explicitly given", async () => {
+  it("passes the explicit --python-path through to probeDemucs unchanged", async () => {
     const { outRoot, articleRoot, videoId } = await setupDemucsFixture();
-    resolvePythonWithDemucsMock.mockClear();
     probeDemucsMock.mockClear();
 
     const code = await executeNativeDub({
@@ -1212,7 +1203,6 @@ describe("executeNativeDub demucs python auto-detection", () => {
     });
 
     expect(code).toBe(0);
-    expect(resolvePythonWithDemucsMock).not.toHaveBeenCalled();
     expect(probeDemucsMock).toHaveBeenCalledWith(
       expect.objectContaining({ pythonPath: "/explicit/python3" }),
     );

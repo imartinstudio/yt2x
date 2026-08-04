@@ -26,10 +26,10 @@ python3 -m venv .venv-demucs
 .venv-demucs/bin/pip install demucs faster-whisper
 ```
 
-这样装的话，运行时要用 **`--python-path`** 指过去，否则 yt2x 找的是基础环境的 `python3`：
+按上面的方式装进 `.venv-demucs` 的话，yt2x 会自动探测到它，不需要每次都传 `--python-path`。只有 demucs 装在候选列表之外的非常规路径时，才需要手动指过去：
 
 ```bash
-pnpm yt2x dub --video-id <videoId> --python-path .venv-demucs/bin/python3
+pnpm yt2x dub --video-id <videoId> --python-path /path/to/your/python3
 ```
 
 配音链路在**任何计费调用之前**先探测 demucs，缺了直接失败并提示上面这条命令——不会静默降级交出一个背景音被抹掉的成片。

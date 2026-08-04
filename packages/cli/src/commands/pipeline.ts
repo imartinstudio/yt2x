@@ -62,7 +62,10 @@ export const registerPipelineCommand = (program: Command): void => {
       "--dub-engine <id>",
       "With --dub: TTS engine edge-tts (default) | elevenlabs",
     )
-    .option("--python-path <path>", "With --dub: Python with demucs installed (default: python3)")
+    .option(
+      "--python-path <path>",
+      "With --dub: Python with demucs installed (auto-detected; override only if needed)",
+    )
     .option("--publish-dry-run", "Preview publish output without posting to X")
     .option("--deconstruct <n>", "After article generation, auto-deconstruct into top N clips with posts (e.g. 5)")
     .option("--llm-provider <id>", "LLM provider: openai|anthropic|deepseek|moonshot", defaultCliLlmProvider())

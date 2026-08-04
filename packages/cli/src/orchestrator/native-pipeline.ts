@@ -12,7 +12,6 @@ import {
   extractVideoId,
   listBatchVideosFromOutRoot,
   probeDemucs,
-  resolvePythonWithDemucs,
   readProcessStatusMerged,
   readYoutubePageUrl,
   resolveBurnSourceVideo,
@@ -524,15 +523,15 @@ export const runNativePipeline = async (opts: NativePipelineOptions): Promise<nu
         }
 
         try {
-          const autoPythonPath =
-            args.control.pythonPath === undefined ? await resolvePythonWithDemucs() : undefined;
-          await probeDemucs({
-            ...(args.control.pythonPath !== undefined
-              ? { pythonPath: args.control.pythonPath }
-              : autoPythonPath !== undefined
-                ? { pythonPath: autoPythonPath }
-                : {}),
+          const resolvedPythonPath = await probeDemucs({
+            ...(args.control.pythonPath !== undefined ? { pythonPath: args.control.pythonPath } : {}),
           });
+          // 记录实际用的 Python 解释器——未显式传 --python-path 时它来自 probeDemucs 内部的
+          // 自动探测（含 .venv-demucs/bin/python3），CONTRIBUTING.md 要求默认值的选用要留痕。
+          logger.info(
+            { pythonPath: resolvedPythonPath },
+            "yt2x pipeline --dub: resolved python interpreter for demucs",
+          );
         } catch (err: unknown) {
           logger.error(
             { err: err instanceof Error ? err.message : String(err) },

@@ -32,7 +32,6 @@ import {
   remixDubbedAudio,
   resolveDubSourceVideo,
   resolveDubWordsPath,
-  resolvePythonWithDemucs,
   resolveWatermarkUploaderId,
   sanitizeVideoId,
   separateDemucs,
@@ -628,15 +627,12 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
   if (needsVideo) {
     // Demucs 探测前置于后续计费调用（翻译 LLM / 调速 TTS）和分离本身
     try {
-      const autoPythonPath =
-        flags.pythonPath === undefined ? await resolvePythonWithDemucs() : undefined;
       pythonPath = await probeDemucs({
-        ...(flags.pythonPath !== undefined
-          ? { pythonPath: flags.pythonPath }
-          : autoPythonPath !== undefined
-            ? { pythonPath: autoPythonPath }
-            : {}),
+        ...(flags.pythonPath !== undefined ? { pythonPath: flags.pythonPath } : {}),
       });
+      // 记录实际用的 Python 解释器——未显式传 --python-path 时它来自 probeDemucs 内部的
+      // 自动探测（含 .venv-demucs/bin/python3），CONTRIBUTING.md 要求默认值的选用要留痕。
+      logger.info({ videoId, pythonPath }, "dub: resolved python interpreter for demucs");
     } catch (err: unknown) {
       printCliErrorBlock({
         command: "dub",

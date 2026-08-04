@@ -17,7 +17,7 @@ import {
   type DeliverMode,
   type FromMode,
 } from "@yt2x/core";
-import { hasVideoSources, VideoSourcesFieldsSchema } from "../args/pipeline.js";
+import { hasVideoSources, VideoSourcesFieldsSchema } from "../args/video-sources.js";
 import { defaultMonorepoRoot } from "../config/monorepo-root.js";
 import { logger } from "../logger.js";
 import { ensureDubPreflight } from "./dub-preflight.js";

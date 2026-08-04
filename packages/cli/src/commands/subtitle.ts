@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   auditSubtitleArtifacts,
   DEFAULT_OUT_DIR,
+  DEFAULT_WATERMARK_SUBTITLER,
   defaultProcessRunner,
   isSubtitleAuditReadyForDelivery,
   measureBilingualSubtitleLayout,
@@ -375,6 +376,10 @@ export const registerSubtitleCommand = (program: Command): void => {
         "Use forced word-level audio alignment (torchaudio) for cue splitting instead of guessing from text length. " +
           "Off by default: needs torchaudio installed and adds real per-video alignment time; silently skipped if unavailable.",
         false,
+      )
+      .option(
+        "--watermark-subtitler <handle>",
+        `Override the 「字幕：」 attribution (default ${DEFAULT_WATERMARK_SUBTITLER}); empty string drops that line`,
       ),
   ).action(async (flags: SubtitleFlags) => {
     await runSubtitle(flags);

@@ -23,6 +23,7 @@ import { logger } from "../logger.js";
 import { ensureDubPreflight } from "./dub-preflight.js";
 import { executeNativeDub } from "./native-dub.js";
 import { mergePipelineExitCode, NATIVE_EXIT, resolveNativeLlm } from "./native-stage-common.js";
+import { executeNativeSubtitle } from "./native-subtitle.js";
 
 export type VideoFlags = {
   urls?: string[];
@@ -251,6 +252,36 @@ export const executeNativeVideo = async (flags: VideoFlags): Promise<number> => 
 
   let videoExitCode = 0;
   const internalForDub = internalSubtitleParamsFor(deliver);
+
+  // --video-id 复用已有素材时，字幕生成/烧录不会像新采集那样搭在 prepareYoutubeVideo 里
+  // 自动发生——必须自己触发一遍，否则非 dubbed 档位在这条路径下什么都不产出。dubbed 不需要：
+  // dub 自己生成并烧录双语字幕，从不经过 executeNativeSubtitle/runSubtitlePipeline。
+  if (!hasUrlSources && deliver !== "none" && !internalForDub.needsDub) {
+    const subtitleSource: "auto" | "youtube" | "transcribe" | "local" | "file" =
+      resolvedFrom === "local-words" || resolvedFrom === "auto" ? "auto" : resolvedFrom;
+    for (const id of videoIds) {
+      const code = await executeNativeSubtitle({
+        outDir: outRoot,
+        articleOutDir: articleOutRoot,
+        videoId: id,
+        subtitleZh: internalForDub.subtitleZh,
+        subtitleBilingual: internalForDub.subtitleBilingual,
+        subtitleSourceLang: "en",
+        subtitleTargetLang: "zh-CN",
+        subtitleSource,
+        force: flags.force ?? false,
+        ...(flags.subtitleFile !== undefined ? { subtitleFile: flags.subtitleFile } : {}),
+        ...(flags.llmProvider !== undefined ? { llmProvider: flags.llmProvider } : {}),
+        ...(flags.llmModel !== undefined ? { llmModel: flags.llmModel } : {}),
+        ...(flags.llmBaseUrl !== undefined ? { llmBaseUrl: flags.llmBaseUrl } : {}),
+      });
+      if (code !== 0) {
+        if ((flags.errorStrategy ?? "stop") === "stop") return code;
+        videoExitCode = mergePipelineExitCode(videoExitCode, code);
+      }
+    }
+  }
+
   if (internalForDub.needsDub) {
     const preflight = await ensureDubPreflight({
       videoIds,

@@ -25,6 +25,9 @@ vi.mock("./native-dub.js", async (importOriginal) => {
 const ensureDubPreflightMock = vi.hoisted(() => vi.fn(async () => ({ ok: true as const })));
 vi.mock("./dub-preflight.js", () => ({ ensureDubPreflight: ensureDubPreflightMock }));
 
+const executeNativeSubtitleMock = vi.hoisted(() => vi.fn(async () => 0));
+vi.mock("./native-subtitle.js", () => ({ executeNativeSubtitle: executeNativeSubtitleMock }));
+
 // 无翻译时用不到真实 LLM 凭据；本文件里需要翻译的场景（bilingual-burned/zh-srt acquire wiring）
 // 用这个 stub 避免依赖开发机/CI 上是否配置了真实 API key，与 native-pipeline.test.ts 对
 // "./native-stage-common.js" 的 mock 手法一致。可用 mockReturnValueOnce 覆写单个测试里的失败路径。
@@ -49,6 +52,8 @@ beforeEach(() => {
   ensureDubPreflightMock.mockClear();
   ensureDubPreflightMock.mockResolvedValue({ ok: true });
   resolveNativeLlmMock.mockClear();
+  executeNativeSubtitleMock.mockClear();
+  executeNativeSubtitleMock.mockResolvedValue(0);
 });
 
 describe("executeNativeVideo — --deliver validation", () => {
@@ -225,6 +230,131 @@ describe("executeNativeVideo — dub wiring", () => {
     expect(executeNativeDubMock.mock.calls[1]![0]).toMatchObject({ videoId: "vidB" });
     expect(code).not.toBe(0);
     expect(code).toBe(7);
+  });
+});
+
+describe("executeNativeVideo — --video-id-only subtitle generation for non-dubbed tiers", () => {
+  it("calls executeNativeSubtitle once per video for a non-dubbed --deliver tier on the --video-id-only path", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-subonly-"));
+    await mkdir(path.join(outRoot, "existingVid1"), { recursive: true });
+    await writeFile(path.join(outRoot, "existingVid1", "metadata.json"), JSON.stringify({ id: "existingVid1" }));
+
+    const code = await executeNativeVideo({
+      videoId: ["existingVid1"],
+      deliver: "zh-burned",
+      outDir: outRoot,
+      llmProvider: "openai",
+    });
+
+    expect(code).toBe(0);
+    expect(executeNativeSubtitleMock).toHaveBeenCalledOnce();
+    expect(executeNativeSubtitleMock.mock.calls[0]![0]).toMatchObject({
+      videoId: "existingVid1",
+      outDir: outRoot,
+      subtitleZh: "burned",
+      subtitleBilingual: "off",
+    });
+    expect(executeNativeDubMock).not.toHaveBeenCalled();
+  });
+
+  it("maps bilingual-burned correctly on the --video-id-only path", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-subonly-bilingual-"));
+    await mkdir(path.join(outRoot, "existingVid1"), { recursive: true });
+    await writeFile(path.join(outRoot, "existingVid1", "metadata.json"), JSON.stringify({ id: "existingVid1" }));
+
+    await executeNativeVideo({
+      videoId: ["existingVid1"],
+      deliver: "bilingual-burned",
+      outDir: outRoot,
+      llmProvider: "openai",
+    });
+
+    expect(executeNativeSubtitleMock.mock.calls[0]![0]).toMatchObject({
+      subtitleZh: "off",
+      subtitleBilingual: "burned",
+    });
+  });
+
+  it("does not call executeNativeSubtitle for --deliver none (true no-op)", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-subonly-none-"));
+    await mkdir(path.join(outRoot, "existingVid1"), { recursive: true });
+    await writeFile(path.join(outRoot, "existingVid1", "metadata.json"), JSON.stringify({ id: "existingVid1" }));
+
+    const code = await executeNativeVideo({
+      videoId: ["existingVid1"],
+      deliver: "none",
+      outDir: outRoot,
+    });
+
+    expect(code).toBe(0);
+    expect(executeNativeSubtitleMock).not.toHaveBeenCalled();
+  });
+
+  it("does not call executeNativeSubtitle for --deliver dubbed (dub burns its own subtitles)", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-subonly-dubbed-"));
+    await mkdir(path.join(outRoot, "existingVid1", "video"), { recursive: true });
+    await writeFile(path.join(outRoot, "existingVid1", "metadata.json"), JSON.stringify({ id: "existingVid1" }));
+
+    await executeNativeVideo({
+      videoId: ["existingVid1"],
+      deliver: "dubbed",
+      outDir: outRoot,
+      llmProvider: "openai",
+    });
+
+    expect(executeNativeSubtitleMock).not.toHaveBeenCalled();
+    expect(executeNativeDubMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not call executeNativeSubtitle on the fresh-acquire (--urls) path — prepareYoutubeVideo already handles it", async () => {
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-subonly-freshacquire-"));
+    await executeNativeVideo({
+      urls: ["https://www.youtube.com/watch?v=abc123def45"],
+      deliver: "zh-burned",
+      outDir: outRoot,
+      llmProvider: "openai",
+    });
+    expect(executeNativeSubtitleMock).not.toHaveBeenCalled();
+    expect(executeNativeAcquireMock).toHaveBeenCalledOnce();
+  });
+
+  it("continues past a failed subtitle call under --error-strategy skip and returns a non-zero code", async () => {
+    executeNativeSubtitleMock.mockResolvedValueOnce(9).mockResolvedValueOnce(0);
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-subonly-skip-"));
+    for (const id of ["vidA", "vidB"]) {
+      await mkdir(path.join(outRoot, id), { recursive: true });
+      await writeFile(path.join(outRoot, id, "metadata.json"), JSON.stringify({ id }));
+    }
+
+    const code = await executeNativeVideo({
+      videoId: ["vidA", "vidB"],
+      deliver: "zh-srt",
+      outDir: outRoot,
+      llmProvider: "openai",
+      errorStrategy: "skip",
+    });
+
+    expect(executeNativeSubtitleMock).toHaveBeenCalledTimes(2);
+    expect(code).toBe(9);
+  });
+
+  it("stops at the first failure under the default --error-strategy stop", async () => {
+    executeNativeSubtitleMock.mockResolvedValueOnce(9);
+    const outRoot = await mkdtemp(path.join(os.tmpdir(), "native-video-subonly-stop-"));
+    for (const id of ["vidA", "vidB"]) {
+      await mkdir(path.join(outRoot, id), { recursive: true });
+      await writeFile(path.join(outRoot, id, "metadata.json"), JSON.stringify({ id }));
+    }
+
+    const code = await executeNativeVideo({
+      videoId: ["vidA", "vidB"],
+      deliver: "zh-srt",
+      outDir: outRoot,
+      llmProvider: "openai",
+    });
+
+    expect(code).toBe(9);
+    expect(executeNativeSubtitleMock).toHaveBeenCalledOnce();
   });
 });
 

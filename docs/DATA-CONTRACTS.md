@@ -4,14 +4,14 @@
 
 ## 1. 每视频目录 `<outDir>/<videoId>/`
 
-与 `yt2x acquire`（native）采集输出一致时的**常见文件**：
+与 `yt2x video`（native）采集输出一致时的**常见文件**：
 
 | 文件                              | 说明                                                        |
 | --------------------------------- | ----------------------------------------------------------- |
 | `metadata.json`                   | yt-dlp 风格元数据；含 `webpage_url`、`title` 等             |
 | `chunks.md`                       | 转写分块                                                    |
 | `timestamped-cues.md`             | 时间轴 cues                                                 |
-| `structured-notes.md`             | 笔记阶段产出（`yt2x notes` / pipeline notes 阶段）          |
+| `structured-notes.md`             | 笔记阶段产出（`yt2x notes` / `yt2x text` notes 阶段）       |
 | `screenshots/scene_manifest.json` | 可选；截图清单                                              |
 | `video/full.mp4`                  | 默认；完整视频下载产物，MP4，限制到 720p                    |
 | `video/clip.mp4`                  | 可选；手动 `--video-start` / `--video-end` 下载的视频片段   |
@@ -35,11 +35,11 @@
 }
 ```
 
-普通采集模式下，完整视频是默认 artifact；下载失败会写入 `prepare-result.json` 的 warnings，但不会让 acquire 主链路失败。`yt2x acquire --video-only` 模式下，`metadata.json`、`video/clip-manifest.json` 和 manifest 指向的视频文件是 acquire 成功条件，字幕和转写文件不再是必需产物。
+普通采集模式下，完整视频是默认 artifact；下载失败会写入 `prepare-result.json` 的 warnings，但不会让 acquire 主链路失败。`yt2x video --video-only` 模式下，`metadata.json`、`video/clip-manifest.json` 和 manifest 指向的视频文件是 acquire 成功条件，字幕和转写文件不再是必需产物。
 
 同一个视频目录下重新下载时，yt2x 会清理旧的 `video/full.*` / `video/clip.*` 并重写 `video/clip-manifest.json`，确保 manifest 与实际视频文件一致。默认不传时间段时下载完整视频；手动时间段变化（`--video-start` / `--video-end`）会下载片段，`--video-start` + `--video-duration` 会按开始时间和目标秒数计算 `end_seconds`。
 
-`pipeline` 默认下载完整 MP4 视频（720p 上限）；可用 `--no-download-video` 跳过。不改变 notes / article 的输入契约。只要不是 `--video-only`，acquire 成功仍要求 `metadata.json`、`chunks.md`、`timestamped-cues.md` 存在。
+`yt2x video` 默认下载完整 MP4 视频（720p 上限）；可用 `--no-download-video` 跳过。不改变 notes / article 的输入契约。只要不是 `--video-only`，acquire 成功仍要求 `metadata.json`、`chunks.md`、`timestamped-cues.md` 存在。
 
 ## 2. `ProcessStatusV1`（`process-status.json`）
 
@@ -108,7 +108,7 @@ manifest、烧录视频或本地转写临时文件。双语模式只读取已经
 
 - **读**：二次创作（字幕烧录、配音）一律从 downloads 取源视频；`files/articles/` 只作为产物写入目标，不得作为素材来源。
 - **写**：除 `acquire` 采集步骤外，任何流程、脚本、测试夹具都不得向 downloads 写入或覆盖文件。
-- **写的唯一例外**：本地转写产出的同语言旁挂文件 `full.local.<lang>.srt` / `full.local.<lang>.words.json` 允许写入，无论由哪个阶段触发（`yt2x subtitle transcribe-local` 或 `pipeline --dub` 的前置转写）。判据是「素材 vs 二创」而非「哪个阶段」：转写是对原始音轨的机器读取，与原片同语言、同内容，属于素材；烧录版、配音版、水印版是二创产物，一律只进 `files/articles/`。该例外不允许覆盖任何已有文件。
+- **写的唯一例外**：本地转写产出的同语言旁挂文件 `full.local.<lang>.srt` / `full.local.<lang>.words.json` 允许写入，无论由哪个阶段触发（`yt2x subtitle-tools transcribe-local` 或 `yt2x video --deliver dubbed` 的前置转写）。判据是「素材 vs 二创」而非「哪个阶段」：转写是对原始音轨的机器读取，与原片同语言、同内容，属于素材；烧录版、配音版、水印版是二创产物，一律只进 `files/articles/`。该例外不允许覆盖任何已有文件。
 - 冒烟/测试若需要短片段，必须从原始素材裁切且放在 downloads **之外**的临时/夹具目录；或使用 `yt2x dub --start-ms/--end-ms` 限定处理时间窗（临时窗写在 article `dub/work/`，不进 downloads）。
 - 可执行检查：`pnpm check:downloads`（跟随 `files/` 符号链接；干净基线应零报警）。
 
@@ -187,7 +187,7 @@ scene_manifest.json → available_visuals → LLM visual_plan → 图片渲染 �
 | 文件                   | 说明                                                             |
 | ---------------------- | ---------------------------------------------------------------- |
 | `publish-result.json`  | thread URL、各推 id、部分失败信息，或 article browser-draft 结果 |
-| `publish-preview.json` | dry-run / pipeline `--publish review` 的预览内容、长度与封面信息 |
+| `publish-preview.json` | `yt2x publish --dry-run` 的预览内容、长度与封面信息              |
 
 `publish-preview.json` 也会把 `<outDir>/<videoId>/process-status.json` 的 `publish` step 标记为 `done`，`resultFile` 指向 `publish-preview.json`；真实发帖或 article browser-draft 成功时仍写 `publish-result.json`。预览 JSON 会包含 `mode` 与 `source`，例如 `mode: "article"` / `source: "article.md"`、`source: "x-thread.md"`、`source: "x-short.md"` 或 `source: "x-short.md + x-thread.md"`；串推预览额外包含 `tweets`，短帖和 article 预览额外包含 `text`，`x-thread-short` 预览包含 `text`、`replies` 和完整 `tweets`。
 

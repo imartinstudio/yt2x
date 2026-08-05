@@ -34,6 +34,8 @@ program
   .helpOption("-h, --help", "show help");
 
 registerInfoCommand(program);
+registerVideoCommand(program);
+registerTextCommand(program);
 
 // `pipeline`/`acquire` are retired (ADR-0005) — replaced by `yt2x video`/`yt2x text`. Hidden from
 // `--help`, kept only so anyone still typing the old commands gets pointed at the replacement instead
@@ -81,8 +83,6 @@ registerDubCommand(program);
 registerLlmCommand(program);
 registerWatermarkCommand(program);
 registerWechatFormatCommand(program);
-registerVideoCommand(program);
-registerTextCommand(program);
 
 program.parseAsync().catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);

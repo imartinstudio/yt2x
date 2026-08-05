@@ -58,7 +58,10 @@ CLI 的参数规模已经失控：`.option(` 定义共 192 处，`pipeline` 一�
 ### 4. 诊断命令与交付入口分离
 
 `dub`、`dub-replay`、以及原 `subtitle` 下的 `audit` / `repair` / `transcribe-local`
-（移入 `subtitle-tools`）保留全部单步参数，但从主 `--help` 折叠，不作为交付入口。
+（移入 `subtitle-tools`）保留全部单步参数，正常出现在 `--help` 里（不折叠）——它们作为
+诊断/单步工具仍然有用。`yt2x video` / `yt2x text` 这两个交付入口的可发现性改由注册顺序
+保证：在 `index.ts` 里排在诊断命令之前，紧跟在 `info` 之后，使其在 `yt2x --help` 的命令
+列表里靠前出现。
 
 ## Consequences
 

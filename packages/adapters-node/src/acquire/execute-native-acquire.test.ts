@@ -283,7 +283,7 @@ describe("executeNativeAcquire", () => {
 
       expect(code).toBe(1);
       const output = errorSpy.mock.calls.flat().join("\n");
-      expect(output).toContain("ERROR yt2x acquire failed for failVideo");
+      expect(output).toContain("ERROR yt2x video failed for failVideo");
       expect(output).toContain("Reason:");
       expect(output).toContain("Sign in to confirm you are not a bot");
       expect(output).toContain("Details:");
@@ -292,10 +292,10 @@ describe("executeNativeAcquire", () => {
       expect(output).toContain("YouTube requires sign-in or bot verification");
       expect(output).toContain("--cookies-from-browser chrome");
       expect(output).toContain(
-        "pnpm yt2x acquire --urls 'https://youtu.be/failVideo' --cookies-from-browser chrome",
+        "pnpm yt2x video --urls 'https://youtu.be/failVideo' --cookies-from-browser chrome --deliver <tier>",
       );
       expect(output.indexOf("Hint:")).toBeGreaterThan(output.indexOf("Details:"));
-      expect(output.indexOf("pnpm yt2x acquire")).toBeGreaterThan(
+      expect(output.indexOf("pnpm yt2x video")).toBeGreaterThan(
         output.indexOf("Retry with --cookies-from-browser chrome"),
       );
     } finally {

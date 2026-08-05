@@ -41,12 +41,9 @@ const firstExistingPath = async (paths: readonly string[]): Promise<string> => {
  * audit/repair read the on-disk source SRT to check content fidelity, but
  * don't otherwise know which of the two coexisting source channels
  * generated the artifact under inspection — that choice lives only in the
- * original `subtitle` invocation's --subtitle-source flag. Auditing the
- * wrong channel's file produces bogus source-sha/coverage-loss findings, so
+ * original `yt2x video` invocation's --from flag. Auditing the wrong
+ * channel's file produces bogus source-sha/coverage-loss findings, so
  * callers must pass --source-channel matching what they generated with.
- * (Deliberately a different flag name than the parent `subtitle` command's
- * own --subtitle-source: Commander silently drops a subcommand option that
- * shares its parent's long flag name, defaulting to the parent's value.)
  */
 const sourceSrtCandidates = (downloadDir: string, source: string | undefined): string[] =>
   source === "local"
@@ -305,8 +302,9 @@ export type SubtitleTranscribeLocalFlags = {
  * Local transcription channel: runs faster-whisper on the already-downloaded
  * video and writes "full.local.<lang>.srt" + "full.local.<lang>.words.json"
  * next to the existing YouTube-caption "full.<lang>.srt" — a coexisting,
- * independent source, never overwriting it. Select it for burn/translate
- * with `--subtitle-source local`.
+ * independent source, never overwriting it. Select the sentence-level SRT
+ * for burn/translate with `yt2x video --from local`, or the word-level
+ * transcript for dubbing with `--from local-words`.
  */
 export const executeSubtitleTranscribeLocal = async (
   rawVideoId: string,
@@ -327,14 +325,14 @@ export const executeSubtitleTranscribeLocal = async (
   if (result === undefined) {
     logger.error(
       { videoId },
-      "yt2x subtitle transcribe-local: unavailable (faster-whisper not installed, or no downloaded video found)",
+      "yt2x subtitle-tools transcribe-local: unavailable (faster-whisper not installed, or no downloaded video found)",
     );
     return 1;
   }
 
   logger.info(
     { videoId, srtPath: result.srtPath, wordsPath: result.wordsPath, cueCount: result.cueCount },
-    "yt2x subtitle transcribe-local: done",
+    "yt2x subtitle-tools transcribe-local: done",
   );
   return 0;
 };
@@ -355,7 +353,7 @@ export const registerSubtitleToolsCommand = (program: Command): void => {
     .option("--strict", "Exit 2 when the audit verdict is fail", false)
     .option(
       "--source-channel <mode>",
-      "Which source channel generated this artifact (must match the original `subtitle --subtitle-source` run): auto|local",
+      "Which source channel generated this artifact (must match the --from value the original `yt2x video` run used): auto|local",
       "auto",
     )
     .action(async (videoId: string, flags: SubtitleAuditFlags) => {
@@ -375,7 +373,7 @@ export const registerSubtitleToolsCommand = (program: Command): void => {
       .option("--strict", "Exit 2 when the post-repair audit verdict is fail", false)
       .option(
         "--source-channel <mode>",
-        "Which source channel generated this artifact (must match the original `subtitle --subtitle-source` run): auto|local",
+        "Which source channel generated this artifact (must match the --from value the original `yt2x video` run used): auto|local",
         "auto",
       ),
   ).action(async (videoId: string, flags: SubtitleRepairFlags) => {
@@ -387,7 +385,7 @@ export const registerSubtitleToolsCommand = (program: Command): void => {
     .description(
       "Local transcription channel (faster-whisper): writes full.local.<lang>.srt + " +
         ".words.json next to the existing YouTube-caption source, without touching it. " +
-        "Select it for translate/burn with --subtitle-source local.",
+        "Select it for translate/burn with `yt2x video --from local`, or dub with `--from local-words`.",
     )
     .option("--out-dir <path>", "Downloaded source root", DEFAULT_OUT_DIR)
     .option("--source-lang <lang>", "Source language", "en")

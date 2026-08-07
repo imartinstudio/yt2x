@@ -838,12 +838,12 @@ const handleDashboardRequest = async (
         let wp = defaultCliLlmProvider();
         let wk = readLlmApiKeyFromEnv(wp);
         const wBaseUrlMap = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.deepseek.com/anthropic" };
-        const wModelMap = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-pro", moonshot: "moonshot-v1-8k", anthropic: "deepseek-v4-pro[1m]" };
+        const wModelMap = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "deepseek-v4-pro[1m]" };
         const wToken = process.env["ANTHROPIC_AUTH_TOKEN"];
         const wUrl = process.env["ANTHROPIC_BASE_URL"];
         if (wToken && wUrl?.includes("deepseek")) { wp = "anthropic"; wk = wToken; }
         if (wk !== undefined) {
-          const wCfg = { provider: wp, apiKey: wk, baseUrl: wBaseUrlMap[wp] ?? "https://api.openai.com/v1", defaultModel: wModelMap[wp] ?? "deepseek-v4-pro" };
+          const wCfg = { provider: wp, apiKey: wk, baseUrl: wBaseUrlMap[wp] ?? "https://api.openai.com/v1", defaultModel: wModelMap[wp] ?? "deepseek-v4-flash" };
           orchestratePlatformPrompts({ articleDir: wArticleDir, videoId, articleMd: wMd, platform: "wechat", llm: createLlmAdapter(wCfg), llmModel: wCfg.defaultModel! }).catch(function(){});
         }
       }
@@ -918,9 +918,9 @@ const handleDashboardRequest = async (
     const apiKey = readLlmApiKeyFromEnv(provider);
     if (apiKey === undefined) return "no-llm-key";
 
-    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-pro", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
     const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
-    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-pro" };
+    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
     const llm = createLlmAdapter(cfg);
     const model = cfg.defaultModel!;
 
@@ -1027,7 +1027,7 @@ const handleDashboardRequest = async (
         let provider = defaultCliLlmProvider();
         let apiKey = readLlmApiKeyFromEnv(provider);
         const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.deepseek.com/anthropic" };
-        const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-pro", moonshot: "moonshot-v1-8k", anthropic: "deepseek-v4-pro[1m]" };
+        const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "deepseek-v4-pro[1m]" };
 
         // If ANTHROPIC_AUTH_TOKEN is set and points to DeepSeek, use Anthropic protocol
         const anthropicToken = process.env["ANTHROPIC_AUTH_TOKEN"];
@@ -1039,7 +1039,7 @@ const handleDashboardRequest = async (
 
         if (apiKey !== undefined) {
           try {
-            const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-pro" };
+            const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
             const llm = createLlmAdapter(cfg);
             orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! }).catch(function(){});
           } catch (err: unknown) {
@@ -1061,7 +1061,7 @@ const handleDashboardRequest = async (
           let provider2 = defaultCliLlmProvider();
           let apiKey2 = readLlmApiKeyFromEnv(provider2);
           const baseUrlMap2: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.deepseek.com/anthropic" };
-          const modelMap2: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-pro", moonshot: "moonshot-v1-8k", anthropic: "deepseek-v4-pro[1m]" };
+          const modelMap2: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "deepseek-v4-pro[1m]" };
           const anthropicToken = process.env["ANTHROPIC_AUTH_TOKEN"];
           const anthropicUrl = process.env["ANTHROPIC_BASE_URL"];
           if (anthropicToken && anthropicUrl?.includes("deepseek")) {
@@ -1069,7 +1069,7 @@ const handleDashboardRequest = async (
             apiKey2 = anthropicToken;
           }
           if (apiKey2 !== undefined) {
-            const cfg: LlmFactoryConfig = { provider: provider2, apiKey: apiKey2, baseUrl: baseUrlMap2[provider2] ?? "https://api.openai.com/v1", defaultModel: modelMap2[provider2] ?? "deepseek-v4-pro" };
+            const cfg: LlmFactoryConfig = { provider: provider2, apiKey: apiKey2, baseUrl: baseUrlMap2[provider2] ?? "https://api.openai.com/v1", defaultModel: modelMap2[provider2] ?? "deepseek-v4-flash" };
             const llm = createLlmAdapter(cfg);
             orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform: "wechat", llm, llmModel: cfg.defaultModel! }).catch(function(){});
           }
@@ -1259,8 +1259,8 @@ const handleDashboardRequest = async (
       // Let the orchestrator fall back to an empty article.
     }
     const baseUrlMap: Record<string, string> = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", moonshot: "https://api.moonshot.cn/v1", anthropic: "https://api.anthropic.com/v1" };
-    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-pro", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
-    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-pro" };
+    const modelMap: Record<string, string> = { openai: "gpt-4o-mini", deepseek: "deepseek-v4-flash", moonshot: "moonshot-v1-8k", anthropic: "claude-sonnet-4-20250514" };
+    const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
     try {
       const llm = createLlmAdapter(cfg);
       const result = await orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! });

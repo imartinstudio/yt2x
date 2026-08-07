@@ -47,7 +47,7 @@ export const LLM_PROVIDER_DEFAULTS: Record<
     envKeys: ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "CLAUDE_KEY"] as const,
   },
   deepseek: {
-    model: "deepseek-v4-pro",
+    model: "deepseek-v4-flash",
     baseUrl: "https://api.deepseek.com/v1",
     envKeys: ["DEEPSEEK_API_KEY"] as const,
   },

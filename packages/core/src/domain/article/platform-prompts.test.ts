@@ -44,6 +44,19 @@ describe("getPlatformArticleSystemPrompt", () => {
       expect(prompt).toMatch(/不能泛化成/);
     }
   });
+
+  it("requires technical terms and Graph concepts to remain in their source spelling", () => {
+    for (const target of ["xiaohongshu", "wechat", "bilibili"] as const) {
+      const prompt = getPlatformArticleSystemPrompt(target);
+      expect(prompt).toMatch(/Prompt Engineering/);
+      expect(prompt).toMatch(/Context Engineering/);
+      expect(prompt).toMatch(/Graph Engineering/);
+      expect(prompt).toMatch(/Knowledge Graph/);
+      expect(prompt).toMatch(/Agent Graph/);
+      expect(prompt).toMatch(/Graph 的基本词汇/);
+      expect(prompt).toMatch(/不得只写/);
+    }
+  });
 });
 
 describe("buildPlatformArticleUserPrompt", () => {

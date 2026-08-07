@@ -19,6 +19,12 @@ describe("clip post prompt", () => {
     );
     expect(CLIP_POST_SYSTEM_PROMPT).toContain("写成中文 X 贴文");
     expect(CLIP_POST_SYSTEM_PROMPT).toContain("标题必须是中文纯文本，不要 emoji，不要「｜N/N」");
+    expect(CLIP_POST_SYSTEM_PROMPT).toContain("Prompt Engineering");
+    expect(CLIP_POST_SYSTEM_PROMPT).toContain("Context Engineering");
+    expect(CLIP_POST_SYSTEM_PROMPT).toContain("Graph Engineering");
+    expect(CLIP_POST_SYSTEM_PROMPT).toContain("Knowledge Graph");
+    expect(CLIP_POST_SYSTEM_PROMPT).toContain("Agent Graph");
+    expect(CLIP_POST_SYSTEM_PROMPT).toContain("Graph 的基本词汇");
   });
 
   it("uses fields for quote, leverage context, video suggestion, and CTA", () => {

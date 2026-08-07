@@ -38,6 +38,18 @@ describe("getNotesSystemPrompt", () => {
     expect(prompt).toMatch(/product names.*must remain unchanged/i);
   });
 
+  it("requires English technical terms to remain verbatim", () => {
+    const prompt = getNotesSystemPrompt();
+    expect(prompt).toMatch(/必须按原文逐字保留/);
+    expect(prompt).toMatch(/Prompt Engineering/);
+    expect(prompt).toMatch(/Context Engineering/);
+    expect(prompt).toMatch(/Graph Engineering/);
+    expect(prompt).toMatch(/Knowledge Graph/);
+    expect(prompt).toMatch(/Agent Graph/);
+    expect(prompt).toMatch(/Graph 的基本词汇/);
+    expect(prompt).toMatch(/不得翻译、音译或本地化/);
+  });
+
   it("requires conditional sections", () => {
     const prompt = getNotesSystemPrompt();
     expect(prompt).toMatch(/ONLY include this section if screenshots/);
@@ -150,6 +162,8 @@ describe("buildNotesUserPrompt", () => {
     expect(prompt).not.toMatch(/Output in English/);
     expect(prompt).toMatch(/Output in Simplified Chinese \(zh-CN\)/);
     expect(prompt).toMatch(/Translate Traditional Chinese/);
+    expect(prompt).toMatch(/Prompt Engineering/);
+    expect(prompt).toMatch(/必须按原文逐字保留/);
   });
 
   it("includes English output instruction when outputLanguage is 'en'", () => {

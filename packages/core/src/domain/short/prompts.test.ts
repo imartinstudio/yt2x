@@ -38,6 +38,11 @@ describe("SHORT_X_SYSTEM_PROMPT", () => {
     });
     expect(prompt).toMatch(/Simplified Chinese \(zh-CN\)/);
     expect(prompt).toMatch(/Translate Traditional Chinese/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/Prompt Engineering/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/Context Engineering/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/Graph Engineering/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/Knowledge Graph/);
+    expect(SHORT_X_SYSTEM_PROMPT).toMatch(/Agent Graph/);
   });
 
   it("requires plain-text post formatting shared with thread posts", () => {

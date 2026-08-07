@@ -1,6 +1,7 @@
 import {
   getNotesSystemPrompt,
   buildNotesUserPrompt,
+  restoreProtectedTechnicalTermsInContent,
   type LlmPort,
 } from "@yt2x/core";
 import type { VideoDirArtifacts } from "./file-store.js";
@@ -66,6 +67,11 @@ export const generateNotesContent = async (
   } catch {
     // Keep original content if import/processing fails
   }
+  content = restoreProtectedTechnicalTermsInContent(
+    content,
+    `${input.artifacts.chunksMd}\n${input.artifacts.timestampedCuesMd}`,
+    input.artifacts.metadata.title,
+  );
 
   const result: GenerateNotesResult = {
     content,

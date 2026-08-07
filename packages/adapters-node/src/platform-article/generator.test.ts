@@ -41,6 +41,44 @@ describe("generatePlatformArticleContent", () => {
     expect(result.platformArticle.target).toBe("xiaohongshu");
     expect(result.videoId).toBe("vid");
   });
+
+  it("preserves technical terms in every platform article text field", async () => {
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "图工程（Graph Engineering）\n知识图谱（Knowledge Graph）\n代理图谱（Agent Graph）",
+      metadata: { id: "vid", title: "Why Graph Engineering" },
+    };
+    const llm = makeLlm(() => ({
+      content: JSON.stringify({
+        target: "xiaohongshu",
+        title: "图工程入门",
+        body: "知识图谱和代理图谱的区别。",
+        tags: ["图工程", "知识图谱", "工作流"],
+        cover: { headline: "图工程", subhead: "代理图谱", visual_prompt: "展示图工程" },
+      }),
+      model: "m",
+      finishReason: "stop",
+    }));
+
+    const result = await generatePlatformArticleContent({
+      llm,
+      model: "m",
+      target: "xiaohongshu",
+      artifacts,
+      articleMd: "# Graph Engineering\n\n正文",
+    });
+
+    expect(result.platformArticle).toMatchObject({
+      title: "Graph Engineering 入门",
+      body: "Knowledge Graph 和 Agent Graph 的区别。",
+      tags: ["Graph Engineering", "Knowledge Graph", "工作流"],
+      cover: {
+        headline: "Graph Engineering",
+        subhead: "Agent Graph",
+        visual_prompt: "展示 Graph Engineering",
+      },
+    });
+  });
 });
 
 describe("parseGeneratedPlatformArticleJson", () => {

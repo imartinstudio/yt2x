@@ -92,6 +92,18 @@ describe("buildArticleUserPrompt", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/翻译或转写/);
   });
 
+  it("requires English technical terms to remain verbatim", () => {
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/必须按原文逐字保留/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Prompt Engineering/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Context Engineering/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Graph Engineering/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Graph 的基本词汇/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Knowledge Graph/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Agent Graph/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/第一个 Graph/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不得翻译、音译或本地化/);
+  });
+
   it("forbids trailing source attribution in generated articles", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不要在文末追加来源说明/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Source 行/);

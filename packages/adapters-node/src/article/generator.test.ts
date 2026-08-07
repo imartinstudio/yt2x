@@ -81,6 +81,79 @@ describe("generateXArticleContent", () => {
     expect(r.content).toMatch(/^# \*\*Claude Design 完整教程：从入门到精通\*\*/);
   });
 
+  it("restores an English technical term from the notes title when the source title contains it", async () => {
+    const llm = makeLlm(() => ({
+      content: "# 营销标题\n\nbody\n\n#AI #Codex #工作流",
+      model: "m",
+      finishReason: "stop",
+    }));
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "# 为什么图工程会让 Claude/Codex 效率提升十倍\n\n图工程（Graph Engineering）是一种工作流设计方法。",
+      metadata: { id: "vid", title: "Why Graph Engineering will 10x your Claude/Codex" },
+    };
+
+    const r = await generateXArticleContent({ llm, model: "m", artifacts });
+
+    expect(r.content).toMatch(/^# \*\*为什么 Graph Engineering 会让 Claude\/Codex 效率提升十倍\*\*/);
+  });
+
+  it("preserves Graph terminology throughout the article body", async () => {
+    const llm = makeLlm(() => ({
+      content: [
+        "# 营销标题",
+        "",
+        "## 图的基本词汇",
+        "",
+        "## 知识图谱 vs 代理图谱",
+        "",
+        "提示工程和上下文工程都必须保留原名。",
+        "",
+        "什么时候值得用图",
+        "",
+        "三个可直接套用的现成图",
+        "",
+        "更大的图不等于更好的产出",
+        "",
+        "构建你的第一个图",
+        "",
+        "图工程需要把工作拆成可检查的步骤。",
+        "截图、缩略图和图片应该保持原样。",
+        "",
+        "#AI #Graph #工作流",
+      ].join("\n"),
+      model: "m",
+      finishReason: "stop",
+    }));
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: [
+        "# 为什么图工程会让 Claude/Codex 效率提升十倍",
+        "",
+        "图工程（Graph Engineering）是一种工作流设计方法。",
+        "知识图谱（Knowledge Graph）帮助 AI 理解实体之间的关系。",
+        "代理图谱（Agent Graph）描述工作如何流动。",
+        "提示工程（Prompt Engineering）和上下文工程（Context Engineering）也属于技术术语。",
+      ].join("\n"),
+      metadata: { id: "vid", title: "Why Graph Engineering will 10x your Claude/Codex" },
+    };
+
+    const r = await generateXArticleContent({ llm, model: "m", artifacts });
+
+    expect(r.content).toContain("## Graph 的基本词汇");
+    expect(r.content).toContain("## Knowledge Graph vs Agent Graph");
+    expect(r.content).toContain("Prompt Engineering");
+    expect(r.content).toContain("Context Engineering");
+    expect(r.content).toContain("什么时候值得用 Graph");
+    expect(r.content).toContain("现成 Graph");
+    expect(r.content).toContain("更大的 Graph");
+    expect(r.content).toContain("第一个 Graph");
+    expect(r.content).toContain("Graph Engineering 需要");
+    expect(r.content).toContain("截图、缩略图和图片应该保持原样。");
+    expect(r.content).not.toContain("## 图的基本词汇");
+    expect(r.content).not.toContain("## 知识图谱 vs 代理图谱");
+  });
+
   it("strips trailing source attribution from generated article markdown", async () => {
     const llm = makeLlm(() => ({
       content: "# T\n\nbody\n\n#AI #Codex #工作流\n\n来源：<YOUTUBE_URL>",
@@ -135,6 +208,24 @@ describe("generateXArticleContent", () => {
 
     expect(llm.chat).toHaveBeenCalledTimes(2);
     expect(r.content).toBe("# **Notes**\n\nbody\n\n#AI #Codex #工作流");
+  });
+
+  it("uses a tag-only repair when the full article repair still omits hashtags", async () => {
+    const llm = makeLlm((req) => {
+      if (req.messages.length === 2) {
+        return { content: "# T\n\nbody", model: "m", finishReason: "stop" };
+      }
+      const repairPrompt = req.messages.at(-1)?.content ?? "";
+      if (repairPrompt.includes("只返回一行")) {
+        return { content: "#GraphEngineering #Claude #Codex", model: "m", finishReason: "stop" };
+      }
+      return { content: "# T\n\n修复后的正文仍然没有标签", model: "m", finishReason: "stop" };
+    });
+
+    const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
+
+    expect(llm.chat).toHaveBeenCalledTimes(3);
+    expect(r.content).toBe("# **Notes**\n\n修复后的正文仍然没有标签\n\n#GraphEngineering #Claude #Codex");
   });
 
   it("normalizes command-style topic hashtags into X-compatible tags", async () => {

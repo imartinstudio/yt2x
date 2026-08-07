@@ -38,6 +38,25 @@ describe("generateXVideoShortContent", () => {
 
     expect(result.videoShortPost.text).toBe("可直接发布的视频短帖");
   });
+
+  it("preserves technical terms in the video short caption", async () => {
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "图工程（Graph Engineering）\n知识图谱（Knowledge Graph）\n代理图谱（Agent Graph）",
+      metadata: { id: "vid", title: "Why Graph Engineering" },
+    };
+    const llm: LlmPort = {
+      chat: async () => ({
+        content: JSON.stringify({ text: "图工程把知识图谱和代理图谱连接起来。" }),
+        model: "m",
+        finishReason: "stop",
+      }),
+    };
+
+    const result = await generateXVideoShortContent({ llm, model: "m", artifacts });
+
+    expect(result.videoShortPost.text).toBe("Graph Engineering 把 Knowledge Graph 和 Agent Graph 连接起来。");
+  });
 });
 
 describe("parseGeneratedVideoShortPostJson", () => {

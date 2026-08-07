@@ -65,6 +65,48 @@ describe("generateXThreadContent", () => {
       /not valid JSON/,
     );
   });
+
+  it("preserves technical terms in planning, tweets, hooks, and title", async () => {
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "图工程（Graph Engineering）\n知识图谱（Knowledge Graph）\n代理图谱（Agent Graph）",
+      metadata: { id: "vid", title: "Why Graph Engineering" },
+    };
+    const llm = makeLlm(() => ({
+      content: JSON.stringify({
+        title: "为什么图工程值得使用",
+        planning: {
+          core_thesis: "图工程让工作流可检查",
+          conflict: "知识图谱和代理图谱经常被混淆",
+          key_points: ["图工程", "知识图谱", "代理图谱", "可检查"],
+          reader_gain: "学会构建图",
+          final_post: "从第一个图开始",
+        },
+        tweets: ["图工程", "知识图谱", "代理图谱", "什么时候值得用图", "更大的图", "第一个图"],
+        hooks: [
+          { text: "图工程不是画图", angle: "反直觉", risk: "low" },
+          { text: "知识图谱不是代理图谱", angle: "争议判断", risk: "low" },
+          { text: "第一个图应该很小", angle: "技术洞察", risk: "medium" },
+        ],
+      }),
+      model: "m",
+      finishReason: "stop",
+    }));
+
+    const result = await generateXThreadContent({ llm, model: "m", artifacts });
+
+    expect(result.thread.title).toContain("Graph Engineering");
+    expect(result.thread.planning.core_thesis).toContain("Graph Engineering");
+    expect(result.thread.tweets).toEqual([
+      "Graph Engineering",
+      "Knowledge Graph",
+      "Agent Graph",
+      "什么时候值得用 Graph",
+      "更大的 Graph",
+      "第一个 Graph",
+    ]);
+    expect(result.thread.hooks[0]?.text).toContain("Graph Engineering");
+  });
 });
 
 describe("parseGeneratedThreadJson", () => {

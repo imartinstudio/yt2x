@@ -6,6 +6,12 @@ describe("VIDEO_SHORT_X_SYSTEM_PROMPT", () => {
     expect(VIDEO_SHORT_X_SYSTEM_PROMPT).toMatch(/简体中文/);
     expect(VIDEO_SHORT_X_SYSTEM_PROMPT).toMatch(/zh-CN/);
     expect(VIDEO_SHORT_X_SYSTEM_PROMPT).toMatch(/繁体中文/);
+    expect(VIDEO_SHORT_X_SYSTEM_PROMPT).toMatch(/Prompt Engineering/);
+    expect(VIDEO_SHORT_X_SYSTEM_PROMPT).toMatch(/Context Engineering/);
+    expect(VIDEO_SHORT_X_SYSTEM_PROMPT).toMatch(/Graph Engineering/);
+    expect(VIDEO_SHORT_X_SYSTEM_PROMPT).toMatch(/Knowledge Graph/);
+    expect(VIDEO_SHORT_X_SYSTEM_PROMPT).toMatch(/Agent Graph/);
+    expect(VIDEO_SHORT_X_SYSTEM_PROMPT).toMatch(/Graph 的基本词汇/);
   });
 });
 

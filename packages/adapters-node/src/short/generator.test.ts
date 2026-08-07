@@ -41,6 +41,29 @@ describe("generateXShortContent", () => {
       /not valid JSON/,
     );
   });
+
+  it("preserves technical terms in the short post text", async () => {
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "图工程（Graph Engineering）\n知识图谱（Knowledge Graph）\n代理图谱（Agent Graph）",
+      metadata: { id: "vid", title: "Why Graph Engineering" },
+    };
+    const llm = makeLlm(() => ({
+      content: JSON.stringify({
+        text: "图工程的核心不是更大的图，而是知识图谱和代理图谱的分工。",
+        angle: "technical",
+        risk: "low",
+      }),
+      model: "m",
+      finishReason: "stop",
+    }));
+
+    const result = await generateXShortContent({ llm, model: "m", artifacts });
+
+    expect(result.shortPost.text).toBe(
+      "Graph Engineering 的核心不是更大的 Graph，而是 Knowledge Graph 和 Agent Graph 的分工。",
+    );
+  });
 });
 
 describe("parseGeneratedShortPostJson", () => {

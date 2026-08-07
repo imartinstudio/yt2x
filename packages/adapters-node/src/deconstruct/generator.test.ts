@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   filterValidSections,
@@ -9,8 +12,9 @@ import {
   validateClipEndings,
   splitOversizedSections,
   parseDeconstructLlmOutput,
+  runDeconstruct,
 } from "./generator.js";
-import { deriveSeriesName, formatClipPostSeriesTitle } from "@yt2x/core";
+import { deriveSeriesName, formatClipPostSeriesTitle, type LlmPort } from "@yt2x/core";
 
 describe("toSlug", () => {
   it("converts Chinese title to slug", () => {
@@ -257,6 +261,70 @@ describe("parseDeconstructLlmOutput null preprocessing", () => {
     expect(result.sections[0]!.title).toBe("未命名");
     expect(result.sections[0]!.summary).toBe("");
     expect(result.sections[0]!.article_section).toBe("");
+  });
+});
+
+describe("runDeconstruct technical term restoration", () => {
+  it("restores terms in candidate titles, summaries, quotes, and scripts", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-terms-"));
+    try {
+      const videoDir = path.join(articleDir, "video");
+      await mkdir(videoDir, { recursive: true });
+      await writeFile(
+        path.join(articleDir, "article.md"),
+        "# Graph Engineering（图工程）\n\n## Graph 的基本词汇\n\nKnowledge Graph 和 Agent Graph。",
+        "utf8",
+      );
+      await writeFile(path.join(videoDir, "full.mp4"), "", "utf8");
+      await writeFile(
+        path.join(videoDir, "full.zh.srt"),
+        "1\n00:00:00,000 --> 00:00:10,000\nGraph Engineering。\n",
+        "utf8",
+      );
+
+      const llm: LlmPort = {
+        chat: async () => ({
+          content: JSON.stringify({
+            sections: [{
+              id: "section-1",
+              title: "图工程",
+              summary: "图的基本词汇",
+              article_section: "知识图谱 vs 代理图谱",
+              angle: "tutorial",
+              risk: "low",
+              timecodes: {
+                start: "00:00:00",
+                end: "00:00:10",
+                startSec: 0,
+                endSec: 10,
+                durationSec: 10,
+              },
+              scores: {
+                counter_intuitiveness: 3,
+                shareability: 3,
+                practical_value: 3,
+                visual_appeal: 3,
+                composite: 3,
+              },
+              key_quote: "什么时候值得用图",
+              video_script: "构建你的第一个图",
+            }],
+          }),
+          model: "test-model",
+          finishReason: "stop",
+        }),
+      };
+
+      const result = await runDeconstruct({ llm, model: "test-model", articleDir });
+      const candidate = result.candidates.sections[0]!;
+      expect(candidate.title).toBe("Graph Engineering");
+      expect(candidate.summary).toBe("Graph 的基本词汇");
+      expect(candidate.article_section).toBe("Knowledge Graph vs Agent Graph");
+      expect(candidate.key_quote).toBe("什么时候值得用 Graph");
+      expect(candidate.video_script).toBe("构建你的第一个 Graph");
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
   });
 });
 

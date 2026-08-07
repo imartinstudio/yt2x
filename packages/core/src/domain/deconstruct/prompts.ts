@@ -1,3 +1,5 @@
+import { SHARED_TECHNICAL_TERMS } from "../shared-rules.js";
+
 export const DECONSTRUCT_SYSTEM_PROMPT = `你是专业的 AI 内容运营专家。你的任务是对一篇 YouTube 视频长文进行系统拆解，识别所有值得独立传播的章节候选。
 
 ## 输入材料
@@ -20,6 +22,7 @@ export const DECONSTRUCT_SYSTEM_PROMPT = `你是专业的 AI 内容运营专家�
 5. **提取金句**：从字幕索引中选一句最具传播力的原文作为 key_quote
 
 ## 规则
+- ${SHARED_TECHNICAL_TERMS}
 - durationSec 必须 > 0 且 ≤ 180 秒（3 分钟）。超过 180 秒的章节需要拆分为多个候选，每个 ≤ 180 秒
 - 时间码使用索引中已有的时间戳，取最接近章节边界的那一行时间码
 - 如果一个章节内容跨越多个视频段，选取最主要的一段

@@ -13,7 +13,7 @@ describe("generateClipsPosts", () => {
       await mkdir(clipsDir, { recursive: true });
       await writeFile(
         path.join(articleDir, "article.md"),
-        "# Claude Code 从 0 到 1 全攻略：90% 的用户只用了 10% 的功能\n\n正文",
+        "# Graph Engineering（图工程）从 0 到 1 全攻略\n\n知识图谱（Knowledge Graph）和代理图谱（Agent Graph）是正文术语。",
         "utf8",
       );
 
@@ -77,13 +77,13 @@ describe("generateClipsPosts", () => {
               {
                 title: "Loops 才是优势",
                 opening_quote: "「未来属于把 agents 变成 loops 的团队。」——输入素材中的 OpenAI 工程师",
-                core_description: "杠杆不是更大的模型，而是围绕它的 loop：评估、重试、上下文和部署反馈。这就是一个 agent 从好看的 demo 变成每天 20-40 个 PR 的方式。",
+                core_description: "图工程的杠杆不是更大的模型，而是围绕它的 loop：评估、重试、上下文和部署反馈。这就是一个 agent 从好看的 demo 变成每天 20-40 个 PR 的方式。",
                 video_suggestion: "视频里可以看到，agent 盯住 CI、修复失败，再打开下一个 PR。",
               },
               {
                 title: "边界决定可靠性",
                 opening_quote: "每个 loop 都有边界。知道哪里会断，比知道哪里能跑更重要。",
-                core_description: "第三方模型驱动 Codex 的风险不在概念，而在兼容性、API 稳定性和响应延迟。可靠的 agent loop 必须处理重试、降级和人工 review。",
+                core_description: "知识图谱和代理图谱的风险不在概念，而在兼容性、API 稳定性和响应延迟。可靠的 agent loop 必须处理重试、降级和人工 review。",
                 video_suggestion: "视频里可以看到，模型超时后 agent 自动重试、切到备用模型，并通知人工介入。",
               },
             ],
@@ -108,6 +108,9 @@ describe("generateClipsPosts", () => {
       // AnatoliKopadze-style structure — no hashtags, no teaser
       expect(postText).toContain("「未来属于把 agents 变成 loops 的团队。」");
       expect(postText).toContain("每天 20-40 个 PR");
+      expect(postText).toContain("Graph Engineering");
+      expect(secondPostText).toContain("Knowledge Graph");
+      expect(secondPostText).toContain("Agent Graph");
       expect(postText).toContain("视频里可以看到，agent 盯住 CI");
       expect(postText).not.toContain("建议附上");
       expect(postText).not.toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 agents 构建 loops。");

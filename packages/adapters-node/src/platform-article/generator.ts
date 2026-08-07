@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   buildPlatformArticleUserPrompt,
   getPlatformArticleSystemPrompt,
+  restoreProtectedTechnicalTermsInValue,
   type LlmPort,
   type PlatformArticleTarget,
 } from "@yt2x/core";
@@ -164,6 +165,11 @@ export const generatePlatformArticleContent = async (
   } catch {
     // Keep original if import/processing fails
   }
+  platformArticle = restoreProtectedTechnicalTermsInValue(
+    platformArticle,
+    input.artifacts.structuredNotesMd,
+    input.artifacts.metadata.title,
+  );
 
   const result: GeneratePlatformArticleResult = {
     platformArticle,

@@ -4,6 +4,7 @@ import {
   CLIP_POST_CALL_TO_ACTION,
   CLIP_POST_SYSTEM_PROMPT,
   deriveSeriesName,
+  restoreProtectedTechnicalTermsInValue,
   type ClipPostList,
   type DeconstructManifest,
   type GeneratePostsInput,
@@ -125,7 +126,11 @@ export const generateClipsPosts = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
 
-  const parsed = parseClipPosts(resp.content);
+  const parsed = restoreProtectedTechnicalTermsInValue(
+    parseClipPosts(resp.content),
+    articleMd,
+    articleTitle,
+  );
 
   // Write all candidates' copy into manifest JSON
   const total = parsed.posts.length;

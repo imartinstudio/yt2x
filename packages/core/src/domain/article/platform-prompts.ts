@@ -4,7 +4,11 @@ import {
   type PlatformArticleSpec,
   type PlatformArticleTarget,
 } from "./platforms.js";
-import { SHARED_NO_VIDEO_AUTHOR, SHARED_JSON_OUTPUT } from "../shared-rules.js";
+import {
+  SHARED_JSON_OUTPUT,
+  SHARED_NO_VIDEO_AUTHOR,
+  SHARED_TECHNICAL_TERMS,
+} from "../shared-rules.js";
 
 export type PlatformArticlePromptInput = {
   metadata: Record<string, unknown>;
@@ -60,7 +64,8 @@ const buildSharedRules = (spec: PlatformArticleSpec): string => `通用约束：
 - 目标平台：${spec.displayName}。
 - 只基于输入的 article.md、metadata.json 和可选 timestamped-cues.md 适配，不新增事实、数据、案例、价格、链接或承诺。
 - 可以改变表达方式、标题角度和内容顺序，但不能改变原文观点、结论和风险边界。
-- 全文必须使用简体中文（zh-CN）。禁止输出繁体中文。技术名词、命令、产品名可保留英文。这是硬性要求，不可违反。
+- 全文必须使用简体中文（zh-CN）。禁止输出繁体中文。这是硬性要求，不可违反。
+- ${SHARED_TECHNICAL_TERMS}
 - 每个二级标题前加 \`---\` 分割线（第一个二级标题除外）。
 - 多平台标题必须从同一个「统一主标题」派生。小红书标题是统一主标题的缩减版（≤20 字，2 个英文字母算 1 字），B站标题与统一主标题保持一致。任何平台标题都不得引入原文没有的产品名、品牌名或术语（如原文没提 V0 就不能加 V0）。
 - 如果原始标题、统一主标题或 metadata 中出现 Codex、Claude、ChatGPT、Gemini、DeepSeek、Cursor、GitHub Copilot 等特指名词，主标题必须保留对应名词，不能泛化成「AI 工具」「智能体」「编程助手」等宽泛说法。

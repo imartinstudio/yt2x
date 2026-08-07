@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   buildThreadUserPrompt,
   THREAD_X_SYSTEM_PROMPT,
+  restoreProtectedTechnicalTermsInValue,
   type AvailableVisual,
   type GeneratedThread,
   type LlmPort,
@@ -169,7 +170,7 @@ export const generateXThreadContent = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
 
-  const thread = parseGeneratedThreadJson(resp.content);
+  let thread = parseGeneratedThreadJson(resp.content);
 
   // Post-process: fix common LLM CJK homoglyph errors (e.g. 幺→么)
   try {
@@ -179,6 +180,11 @@ export const generateXThreadContent = async (
   } catch {
     // Keep original if import/processing fails
   }
+  thread = restoreProtectedTechnicalTermsInValue(
+    thread,
+    input.artifacts.structuredNotesMd,
+    input.artifacts.metadata.title,
+  );
 
   // 验证 visuals 只引用 available_visuals 中存在的截图
   if (thread.visuals !== undefined && thread.visuals.length > 0) {

@@ -1,4 +1,5 @@
 import { stripHeavyMetadata } from "../notes/prompts.js";
+import { SHARED_TECHNICAL_TERMS } from "../shared-rules.js";
 import type { VideoShortPromptInput, VideoShortPromptOptions } from "./types.js";
 
 export const VIDEO_SHORT_X_SYSTEM_PROMPT = `你是中文科技内容编辑，专门为 X（Twitter）视频帖生成短视频说明文字（caption）。
@@ -21,7 +22,8 @@ export const VIDEO_SHORT_X_SYSTEM_PROMPT = `你是中文科技内容编辑，专
 
 必须在总结部分之后空一行，再追加单独一行「完整视频+中文字幕：👇」，此行之后不要加任何链接或其他内容
 只基于提供的 metadata 和 structured notes，不要编造事实或链接
-全文必须使用简体中文（zh-CN）。禁止输出繁体中文。如果原始标题、字幕、笔记或引用材料是英文、繁体中文、日文等其他语言，必须翻译或转写为自然简体中文。技术词、品牌名和可复制英文 prompt 可保留英文。这是硬性要求，不可违反。
+全文必须使用简体中文（zh-CN）。禁止输出繁体中文。如果原始标题、字幕、笔记或引用材料是英文、繁体中文、日文等其他语言，必须翻译或转写为自然简体中文。这是硬性要求，不可违反。
+${SHARED_TECHNICAL_TERMS}
 禁止使用 emoji（除非必要语义）、禁止 Markdown、禁止列表、禁止多版本
 
 输出要求：

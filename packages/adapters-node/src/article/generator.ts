@@ -1,6 +1,8 @@
 import {
   ARTICLE_X_SYSTEM_PROMPT,
   buildArticleUserPrompt,
+  restoreProtectedTechnicalTermsInContent,
+  restoreProtectedTechnicalTermsInTitle,
   type AvailableVisual,
   type ArticleVisualPlanItem,
   type LlmPort,
@@ -62,7 +64,11 @@ const restoreFaithfulChineseTitle = (
     .trim();
   const fallbackTitle = typeof sourceTitle === "string" ? sourceTitle.trim() : "";
   const candidateTitle = notesTitle?.length ? notesTitle : fallbackTitle;
-  const title = restoreProtectedProductNames(candidateTitle, fallbackTitle);
+  const title = restoreProtectedTechnicalTermsInTitle(
+    restoreProtectedProductNames(candidateTitle, fallbackTitle),
+    structuredNotesMd,
+    fallbackTitle,
+  );
   if (title.length === 0) return content;
   return content.replace(ARTICLE_H1_RE, `# **${title}**`);
 };
@@ -95,6 +101,9 @@ const ARTICLE_TOPIC_TAG_REPAIR_PROMPT = `你刚才输出的 X 长文缺少合规
 最后一个非空行必须只包含 3-5 个从文章主题提取的 X 话题标签，格式如 \`#话题一 #话题二 #TopicThree\`。
 命令名必须转成可发布标签：\`/wayfinder\` 写成 \`#Wayfinder\`，\`/to-spec\` 写成 \`#ToSpec\`；标签中不能保留 \`/\` 或 \`-\`。
 标签行之后不要追加来源说明、链接、解释或固定尾注。`;
+const ARTICLE_TOPIC_TAG_ONLY_REPAIR_PROMPT = `完整文章修复仍未提供合规的话题标签。现在只返回一行 3-5 个从原视频主题和文章正文提取的 X 话题标签，不要返回文章正文。
+格式必须是：\`#话题一 #话题二 #TopicThree\`。
+不要添加「话题标签：」等前缀、标点、解释、代码围栏或其他文字；如果标签含有命令名，去掉 \`/\` 和 \`-\` 并转成 PascalCase。`;
 const ARTICLE_LIST_IMAGE_ERROR =
   "Article image references must be standalone blocks outside ordered or unordered lists.";
 const ARTICLE_LIST_IMAGE_REPAIR_PROMPT = `你刚才输出的 X 长文把截图引用放进了列表上下文。
@@ -268,7 +277,26 @@ export const generateXArticleContent = async (
     content = normalizeCommandStyleTopicHashtags(
       stripTrailingSourceAttribution(stripCodeFenceWrapper(resp.content.trim())),
     );
-    validateArticleTopicHashtags(content);
+    try {
+      validateArticleTopicHashtags(content);
+    } catch {
+      resp = await input.llm.chat({
+        model: input.model,
+        messages: [
+          ...messages,
+          { role: "assistant", content: resp.content },
+          { role: "user", content: ARTICLE_TOPIC_TAG_ONLY_REPAIR_PROMPT },
+        ],
+        temperature: 0.2,
+        maxTokens: 256,
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+      const tagLine = normalizeCommandStyleTopicHashtags(
+        stripCodeFenceWrapper(resp.content.trim()),
+      );
+      validateArticleTopicHashtags(tagLine);
+      content = `${content.trim()}\n\n${tagLine}`;
+    }
   }
 
   // 验证图片引用；列表内插图可用一次修复回合把图片移到列表边界外。
@@ -303,6 +331,11 @@ export const generateXArticleContent = async (
   } catch {
     // If conversion fails, keep original content
   }
+  content = restoreProtectedTechnicalTermsInContent(
+    content,
+    input.artifacts.structuredNotesMd,
+    input.artifacts.metadata.title,
+  );
   content = restoreFaithfulChineseTitle(
     content,
     input.artifacts.structuredNotesMd,

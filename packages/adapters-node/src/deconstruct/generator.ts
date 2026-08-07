@@ -10,6 +10,7 @@ import {
   type SectionCandidate,
   estimateTokenCount,
   checkTokenBudget,
+  restoreProtectedTechnicalTermsInValue,
 } from "@yt2x/core";
 
 export type RunDeconstructInput = {
@@ -196,7 +197,11 @@ export const runDeconstruct = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
 
-  const parsed = parseDeconstructLlmOutput(resp.content);
+  const parsed = restoreProtectedTechnicalTermsInValue(
+    parseDeconstructLlmOutput(resp.content),
+    artifacts.articleMd,
+    videoTitle ?? "",
+  );
   const result: RunDeconstructResult = {
     candidates: parsed,
     input: artifacts,

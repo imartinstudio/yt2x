@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   buildVideoShortUserPrompt,
   VIDEO_SHORT_X_SYSTEM_PROMPT,
+  restoreProtectedTechnicalTermsInValue,
   type GeneratedVideoShortPost,
   type LlmPort,
 } from "@yt2x/core";
@@ -121,6 +122,11 @@ export const generateXVideoShortContent = async (
   } catch {
     // Keep original if import/processing fails
   }
+  videoShortPost = restoreProtectedTechnicalTermsInValue(
+    videoShortPost,
+    input.artifacts.structuredNotesMd,
+    input.artifacts.metadata.title,
+  );
 
   const result: GenerateXVideoShortResult = {
     videoShortPost,

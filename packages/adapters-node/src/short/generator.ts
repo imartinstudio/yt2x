@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   buildShortUserPrompt,
   SHORT_X_SYSTEM_PROMPT,
+  restoreProtectedTechnicalTermsInValue,
   type AvailableVisual,
   type GeneratedShortPost,
   type LlmPort,
@@ -115,7 +116,7 @@ export const generateXShortContent = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
 
-  const shortPost = parseGeneratedShortPostJson(resp.content);
+  let shortPost = parseGeneratedShortPostJson(resp.content);
 
   // Post-process: fix common LLM CJK homoglyph errors (e.g. 幺→么)
   try {
@@ -124,6 +125,11 @@ export const generateXShortContent = async (
   } catch {
     // Keep original if import/processing fails
   }
+  shortPost = restoreProtectedTechnicalTermsInValue(
+    shortPost,
+    input.artifacts.structuredNotesMd,
+    input.artifacts.metadata.title,
+  );
 
   // 验证 visual 只引用 available_visuals 中存在的截图
   if (shortPost.visual !== undefined) {

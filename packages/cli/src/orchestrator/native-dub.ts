@@ -419,7 +419,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     printCliErrorBlock({
       command: "dub",
       reason: "Missing target. Dub requires --video-id <id>.",
-      hints: ["Run `yt2x subtitle transcribe-local <videoId>` first so full.local.en.words.json exists."],
+      hints: ["Run `yt2x subtitle-tools transcribe-local <videoId>` first so full.local.en.words.json exists."],
       retryCommand: "pnpm yt2x dub --video-id <videoId>",
     });
     return EXIT_INPUT_MISSING;
@@ -618,7 +618,7 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       command: "dub",
       subject: videoId,
       reason: err instanceof Error ? err.message : String(err),
-      hints: ["Run `yt2x subtitle transcribe-local <videoId>` to produce full.local.en.words.json."],
+      hints: ["Run `yt2x subtitle-tools transcribe-local <videoId>` to produce full.local.en.words.json."],
       retryCommand: `pnpm yt2x dub --video-id ${videoId}`,
     });
     return EXIT_INPUT_MISSING;
@@ -630,6 +630,9 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       pythonPath = await probeDemucs({
         ...(flags.pythonPath !== undefined ? { pythonPath: flags.pythonPath } : {}),
       });
+      // 记录实际用的 Python 解释器——未显式传 --python-path 时它来自 probeDemucs 内部的
+      // 自动探测（含 .venv-demucs/bin/python3），CONTRIBUTING.md 要求默认值的选用要留痕。
+      logger.info({ videoId, pythonPath }, "dub: resolved python interpreter for demucs");
     } catch (err: unknown) {
       printCliErrorBlock({
         command: "dub",
@@ -692,8 +695,8 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
             : `No usable speech in ${wordsPath}.`,
           hints: hasTimeRange
             ? ["Widen --start-ms/--end-ms, or check that the local transcript covers that window."]
-            : ["The local transcript is empty — re-run `yt2x subtitle transcribe-local`."],
-          retryCommand: `pnpm yt2x subtitle transcribe-local ${videoId}`,
+            : ["The local transcript is empty — re-run `yt2x subtitle-tools transcribe-local`."],
+          retryCommand: `pnpm yt2x subtitle-tools transcribe-local ${videoId}`,
         });
         return EXIT_INPUT_MISSING;
       }

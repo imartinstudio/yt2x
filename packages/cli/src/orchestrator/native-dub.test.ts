@@ -1090,3 +1090,121 @@ describe("executeNativeDub --original-voice-volume", () => {
     expect(remixDubbedAudioMock).not.toHaveBeenCalled();
   });
 });
+
+describe("executeNativeDub demucs python path", () => {
+  const setupDemucsFixture = async (): Promise<{
+    outRoot: string;
+    articleRoot: string;
+    videoId: string;
+  }> => {
+    guardMock.mockResolvedValue({
+      hasBurnedSubtitles: false,
+      hasChineseBurnedSubtitles: false,
+      shouldSkipBurn: false,
+    });
+    generateDubScriptMock.mockResolvedValue({
+      script: {
+        version: 2,
+        videoId: "abc12345678",
+        sourceWords: "video/full.local.en.words.json",
+        rewriteModel: "test-model",
+        droppedCount: 0,
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "窗内句",
+            sourceText: "Inside the window.",
+            cueIndices: [1],
+          },
+        ],
+      },
+      warnings: [],
+      translatedCount: 1,
+      droppedCount: 0,
+    });
+    synthesizeDubLinesMock.mockResolvedValue({
+      report: {
+        version: 1,
+        videoId: "abc12345678",
+        engine: "edge-tts",
+        voice: "test-voice",
+        lineCount: 1,
+        medianRatio: 1,
+        overflowCount: 0,
+        totalDriftMs: 0,
+        lines: [
+          {
+            index: 1,
+            targetDurationMs: 1_000,
+            synthesizedMs: 1_000,
+            ratio: 1,
+            charCount: 3,
+            audioFile: "lines/0001.mp3",
+          },
+        ],
+      },
+      warnings: [],
+    });
+    separateDemucsMock.mockResolvedValue({ noVocalsPath: "/tmp/no_vocals.wav", skipped: false });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-demucs-python-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "abc12345678";
+    const dubDir = path.join(articleRoot, videoId, "dub");
+    await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
+    await mkdir(path.join(articleRoot, videoId, "video"), { recursive: true });
+    await mkdir(dubDir, { recursive: true });
+    await writeFile(path.join(outRoot, videoId, "video", "full.mp4"), "original");
+    await writeFile(
+      path.join(outRoot, videoId, "video", "full.local.en.words.json"),
+      JSON.stringify([
+        { word: "Inside", start: 1.0, end: 1.3 },
+        { word: "the", start: 1.3, end: 1.5 },
+        { word: "window.", start: 1.5, end: 2.0 },
+      ]),
+      "utf8",
+    );
+    return { outRoot, articleRoot, videoId };
+  };
+
+  it("passes no pythonPath to probeDemucs when --python-path is omitted", async () => {
+    const { outRoot, articleRoot, videoId } = await setupDemucsFixture();
+    probeDemucsMock.mockClear();
+
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      startMs: "0",
+      endMs: "5000",
+    });
+
+    expect(code).toBe(0);
+    // 自动探测现在是 probeDemucs 内部的事（见 demucs.test.ts）——这一层只负责
+    // 不传 --python-path 时不塞任何 pythonPath 键。
+    expect(probeDemucsMock).toHaveBeenCalledWith({});
+  });
+
+  it("passes the explicit --python-path through to probeDemucs unchanged", async () => {
+    const { outRoot, articleRoot, videoId } = await setupDemucsFixture();
+    probeDemucsMock.mockClear();
+
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      startMs: "0",
+      endMs: "5000",
+      pythonPath: "/explicit/python3",
+    });
+
+    expect(code).toBe(0);
+    expect(probeDemucsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pythonPath: "/explicit/python3" }),
+    );
+  });
+});

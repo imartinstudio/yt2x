@@ -20,6 +20,7 @@ export {
 } from "./batch-queue.js";
 export { resolveVideoSources, extractVideoId, type VideoSourceRow } from "./resolve-sources.js";
 export { sanitizeVideoId } from "./video-id-from-url.js";
+export { resolvePythonWithDemucs } from "./resolve-python.js";
 export {
   runSubtitlePipeline,
   prepareSourceSubtitle,

@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvePythonWithDemucs } from "../acquire/resolve-python.js";
 import { defaultProcessRunner, isProcessError, type ProcessRunner } from "../process/index.js";
 
 /**
@@ -50,7 +51,7 @@ export type ProbeDemucsInput = {
  */
 export const probeDemucs = async (input: ProbeDemucsInput = {}): Promise<string> => {
   const runner = input.runner ?? defaultProcessRunner;
-  const pythonPath = input.pythonPath ?? "python3";
+  const pythonPath = input.pythonPath ?? (await resolvePythonWithDemucs()) ?? "python3";
   try {
     const result = await runner.run({
       command: pythonPath,

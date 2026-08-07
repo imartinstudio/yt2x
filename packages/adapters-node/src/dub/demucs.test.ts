@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProcessResult, ProcessRunner, ProcessSpec } from "../process/index.js";
+
+vi.mock("../acquire/resolve-python.js", () => ({
+  resolvePythonWithDemucs: vi.fn(async () => undefined),
+}));
+
+import { resolvePythonWithDemucs } from "../acquire/resolve-python.js";
 import { DemucsError, probeDemucs, separateDemucs } from "./demucs.js";
 
 const okResult = (spec: ProcessSpec, stdout = '{"ok":true}\n'): ProcessResult => ({
@@ -15,6 +21,11 @@ const okResult = (spec: ProcessSpec, stdout = '{"ok":true}\n'): ProcessResult =>
 });
 
 describe("probeDemucs", () => {
+  beforeEach(() => {
+    vi.mocked(resolvePythonWithDemucs).mockClear();
+    vi.mocked(resolvePythonWithDemucs).mockResolvedValue(undefined);
+  });
+
   it("returns the python path when probe exits 0", async () => {
     const runner: ProcessRunner = {
       run: async (spec) => okResult(spec),
@@ -22,6 +33,8 @@ describe("probeDemucs", () => {
     await expect(probeDemucs({ runner, pythonPath: "/usr/bin/python3" })).resolves.toBe(
       "/usr/bin/python3",
     );
+    // 显式传了 pythonPath，压根不该走自动探测。
+    expect(resolvePythonWithDemucs).not.toHaveBeenCalled();
   });
 
   it("throws UNAVAILABLE when the probe process fails", async () => {
@@ -34,6 +47,22 @@ describe("probeDemucs", () => {
       name: "DemucsError",
       kind: "UNAVAILABLE",
     });
+  });
+
+  it("uses the auto-detected python path when no explicit pythonPath is given", async () => {
+    vi.mocked(resolvePythonWithDemucs).mockResolvedValueOnce(".venv-demucs/bin/python3");
+    const runner: ProcessRunner = {
+      run: async (spec) => okResult(spec),
+    };
+    await expect(probeDemucs({ runner })).resolves.toBe(".venv-demucs/bin/python3");
+  });
+
+  it("falls back to python3 when auto-detection finds nothing and no explicit pythonPath is given", async () => {
+    vi.mocked(resolvePythonWithDemucs).mockResolvedValueOnce(undefined);
+    const runner: ProcessRunner = {
+      run: async (spec) => okResult(spec),
+    };
+    await expect(probeDemucs({ runner })).resolves.toBe("python3");
   });
 });
 

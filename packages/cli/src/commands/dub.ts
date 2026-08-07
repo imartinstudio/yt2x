@@ -32,7 +32,10 @@ export const registerDubCommand = (program: Command): void => {
       .option("--elevenlabs-model <id>", "ElevenLabs model id (default: eleven_multilingual_v2)")
       .option("--ffprobe-path <path>", "Path to ffprobe (default: ffprobe on PATH)")
       .option("--ffmpeg-path <path>", "Path to ffmpeg (default: ffmpeg on PATH)")
-      .option("--python-path <path>", "Python with demucs installed (default: python3)")
+      .option(
+        "--python-path <path>",
+        "Python with demucs installed (auto-detected; override only if needed)",
+      )
       .option("--demucs-model <name>", "Demucs model name (default: htdemucs)")
       .option("--max-duration-ms <ms>", "Max duration per utterance before a hard split (default 8000)")
       .option(

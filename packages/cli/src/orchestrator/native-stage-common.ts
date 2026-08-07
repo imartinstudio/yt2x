@@ -9,6 +9,13 @@ import { isLlmError, type LlmPort, type PipelineStep } from "@yt2x/core";
 import { LlmProviderSchema } from "../args/llm.js";
 import { resolveLlmConfig, validateLlmConfigReady, defaultCliLlmProvider } from "../config/env.js";
 
+/** 合并子阶段退出码：保留最严重的非零码（如 partial=4 优先于 generic=1）。 */
+export const mergePipelineExitCode = (current: number, next: number): number => {
+  if (next === 0) return current;
+  if (current === 0) return next;
+  return Math.max(current, next);
+};
+
 export const NATIVE_EXIT = {
   CONFIG_MISSING: 2,
   NO_INPUT: 3,

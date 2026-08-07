@@ -107,7 +107,7 @@ const looksLikeYoutubeAuthFailure = (detail: string): boolean =>
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 const retryAcquireCommand = (videoUrl: string): string =>
-  `pnpm yt2x acquire --urls ${shellQuote(videoUrl)} --cookies-from-browser chrome`;
+  `pnpm yt2x video --urls ${shellQuote(videoUrl)} --cookies-from-browser chrome --deliver <tier>`;
 
 const printAcquireFailure = (
   videoId: string,
@@ -122,7 +122,7 @@ const printAcquireFailure = (
   if (process.stderr.isTTY === true) {
     process.stderr.write("\n");
   }
-  console.error(red(`ERROR yt2x acquire failed for ${videoId}`));
+  console.error(red(`ERROR yt2x video failed for ${videoId}`));
   console.error("");
   console.error(bold("Reason:"));
   for (const line of summary) {

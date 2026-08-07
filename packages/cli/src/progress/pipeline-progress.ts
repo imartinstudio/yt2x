@@ -1,6 +1,4 @@
 import { performance } from "node:perf_hooks";
-import { parseSearchQuery } from "@yt2x/adapters-node";
-import type { PipelineArgs } from "../args/pipeline.js";
 import { logger } from "../logger.js";
 
 const BAR_WIDTH = 28;
@@ -15,45 +13,7 @@ export const formatProgressBar = (percent: number, width = BAR_WIDTH): string =>
   return `[${"█".repeat(filled)}${"░".repeat(width - filled)}] ${Math.round(pct)}%`;
 };
 
-/** 估算 pipeline 进度总步数用的视频数（URL 列表 / search:N / 已有目录）。 */
-export const estimatePipelineVideoCount = (
-  args: PipelineArgs,
-  knownFromDisk = 0,
-): number => {
-  if (knownFromDisk > 0) {
-    return knownFromDisk;
-  }
-  if (args.sources.urls.length > 0) {
-    return args.sources.urls.length;
-  }
-  if (args.sources.search !== undefined) {
-    return parseSearchQuery(args.sources.search).count;
-  }
-  return 1;
-};
-
-export const countPipelineProgressUnits = (args: PipelineArgs, videoCount: number): number => {
-  const n = Math.max(1, videoCount);
-  let total = 0;
-
-  const runAcquire = args.stages.acquire !== "skip" && !args.control.continueFlag;
-  if (runAcquire) {
-    const subSteps = args.acquire.keyframes > 0 ? 5 : 4;
-    total += subSteps * n;
-  }
-  if (args.stages.notes !== "skip") {
-    total += n;
-  }
-  if (args.stages.article !== "skip") {
-    total += n;
-  }
-  if (args.stages.publish !== "skip") {
-    total += n;
-  }
-  return total;
-};
-
-export type ProgressCommand = "pipeline" | "acquire" | "notes" | "article" | "publish";
+export type ProgressCommand = "notes" | "article" | "publish";
 
 export type PipelineTimingsPayload = {
   command: ProgressCommand;
@@ -244,48 +204,8 @@ const createProgressHandle = (opts: ProgressHandleOptions): PipelineProgressHand
   };
 };
 
-export const createPipelineProgress = (
-  args: PipelineArgs,
-  videoCount: number,
-): PipelineProgressHandle =>
-  createProgressHandle({
-    totalUnits: countPipelineProgressUnits(args, videoCount),
-    command: "pipeline",
-  });
-
-export const acquireSubStepProgressFromHandle = (
-  handle: PipelineProgressHandle,
-  labelPrefix: string,
-): {
-  onSubStepStart: (videoId: string, stepKey: string) => void;
-  onSubStepEnd: (videoId: string, stepKey: string, durationMs: number) => void;
-  onSubStepProgress: (videoId: string, stepKey: string, detail: string, fraction: number) => void;
-} => ({
-  onSubStepStart: (videoId, stepKey) => {
-    handle.setActive(`${labelPrefix} · ${stepKey} · ${videoId}`);
-  },
-  onSubStepEnd: (videoId, stepKey, durationMs) => {
-    handle.record(`${labelPrefix}.${videoId}.${stepKey}`, durationMs);
-  },
-  onSubStepProgress: (_videoId, _stepKey, detail, fraction) => {
-    handle.setActiveDetail(detail, fraction);
-  },
-});
-
-/** 单命令 `yt2x acquire` 的子步骤数（每视频）。 */
-export const countAcquireSubSteps = (keyframes: number): number => (keyframes > 0 ? 5 : 4);
-
-export const createAcquireOnlyProgress = (
-  videoCount: number,
-  keyframes: number,
-): PipelineProgressHandle =>
-  createProgressHandle({
-    totalUnits: countAcquireSubSteps(keyframes) * Math.max(1, videoCount),
-    command: "acquire",
-  });
-
 export const createCommandProgress = (
-  command: Exclude<ProgressCommand, "pipeline" | "acquire">,
+  command: ProgressCommand,
   totalUnits = 1,
 ): PipelineProgressHandle =>
   createProgressHandle({

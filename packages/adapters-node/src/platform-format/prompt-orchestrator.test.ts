@@ -1,8 +1,9 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { previewExistingArticleImages } from "./prompt-orchestrator.js";
+import type { ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
+import { orchestratePlatformPrompts, previewExistingArticleImages } from "./prompt-orchestrator.js";
 
 let tmpRoot: string;
 
@@ -307,5 +308,97 @@ describe("previewExistingArticleImages platform-specific", () => {
     const result = await previewExistingArticleImages(tmpRoot, "wechat");
     expect(result).not.toBeNull();
     expect(result!.html).toContain("公众号");
+  });
+});
+
+describe("orchestratePlatformPrompts technical terms", () => {
+  it("guards cover and illustration prompt fields, including discovered terms", async () => {
+    const requests: ChatRequest[] = [];
+    const response = (content: string): ChatResponse => ({
+      content,
+      model: "task7-model",
+      finishReason: "stop",
+    });
+    const llm: LlmPort = {
+      chat: async (request) => {
+        requests.push(request);
+        const system = request.messages[0]?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) {
+          return response(JSON.stringify([
+            { sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" },
+          ]));
+        }
+        if (system.includes("专业术语定向修复器")) {
+          const user = request.messages[1]?.content ?? "";
+          const currentJson = user.match(/Current value:\n([\s\S]*?)\n\n只输出修复后的值/u)?.[1] ?? "{}";
+          const current = JSON.parse(currentJson) as Record<string, unknown>;
+          const repair = (value: unknown): unknown => {
+            if (typeof value === "string") {
+              return value
+                .replaceAll("图工程", "Graph Engineering")
+                .replaceAll("知识图谱", "Knowledge Graph")
+                .replaceAll("代理图谱", "Agent Graph")
+                .replaceAll("潜在工作区路由", "Latent Workspace Routing");
+            }
+            if (Array.isArray(value)) return value.map(repair);
+            if (value !== null && typeof value === "object") {
+              return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, repair(child)]));
+            }
+            return value;
+          };
+          return response(JSON.stringify(repair(current)));
+        }
+        if (system.includes("Create a cover image-generation prompt")) {
+          return response("图工程连接知识图谱、代理图谱和潜在工作区路由。流程图封面。");
+        }
+        return response(JSON.stringify([{
+          index: 1,
+          filename: "illustration.png",
+          name: "配图",
+          prompt: "图工程、知识图谱、代理图谱、潜在工作区路由；保留流程图标签。",
+        }]));
+      },
+    };
+
+    const articleMd = [
+      "# Graph Engineering 的实践",
+      "",
+      "## Knowledge Graph 与 Agent Graph",
+      "Graph Engineering connects a Knowledge Graph to an Agent Graph.",
+      "Latent Workspace Routing keeps the 流程图 and 配图 labels readable.",
+    ].join("\n");
+    await writeFile(path.join(tmpRoot, "article.md"), articleMd, "utf8");
+
+    const result = await orchestratePlatformPrompts({
+      articleDir: tmpRoot,
+      videoId: "task7-visual-terms",
+      articleMd,
+      platform: "x",
+      llm,
+      llmModel: "task7-model",
+    });
+
+    const prompts = JSON.parse(await readFile(path.join(result.outputDir, "prompts.json"), "utf8")) as {
+      coverPrompts: Array<Record<string, string>>;
+      illustrationPrompts: Array<Record<string, string>>;
+      technicalTermProfileFingerprint: string;
+    };
+    const persistedText = JSON.stringify(prompts);
+    expect(persistedText).toContain("Graph Engineering");
+    expect(persistedText).toContain("Knowledge Graph");
+    expect(persistedText).toContain("Agent Graph");
+    expect(persistedText).toContain("Latent Workspace Routing");
+    expect(persistedText).toContain("流程图");
+    expect(persistedText).toContain("配图");
+    expect(persistedText).not.toContain("图工程连接知识图谱");
+    expect(prompts.technicalTermProfileFingerprint).toMatch(/^fnv1a-/u);
+
+    const preview = await readFile(path.join(result.outputDir, "orchestrate.html"), "utf8");
+    expect(preview).toContain("Graph Engineering");
+    expect(preview).toContain("Knowledge Graph");
+    expect(preview).toContain("Latent Workspace Routing");
+    expect(preview).toContain("流程图");
+    expect(requests.filter((request) => request.messages[0]?.content.includes("严格的源级专业术语发现器"))).toHaveLength(1);
+    expect(requests.filter((request) => request.messages[0]?.content.includes("专业术语定向修复器"))).toHaveLength(1);
   });
 });

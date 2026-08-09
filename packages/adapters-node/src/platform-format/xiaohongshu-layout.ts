@@ -1,6 +1,10 @@
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { LlmPort } from "@yt2x/core";
+import { appendTechnicalTermRuleToSystemPrompt, createTechnicalTermGuard, type LlmPort } from "@yt2x/core";
+import {
+  createPlatformTechnicalTermContext,
+  finalizePlatformVisualPrompts,
+} from "./prompt-orchestrator.js";
 import type { PlatformFormatInput, PlatformFormatResult, XiaohongshuMetadata } from "./types.js";
 
 const METADATA_FILE = "xiaohongshu-format/xiaohongshu-metadata.json";
@@ -49,8 +53,9 @@ const generatePromptViaLlm = async (
   topic: string,
   sectionText: string,
   sectionIndex: number,
+  promptRule: string,
 ): Promise<string> => {
-  const systemPrompt = [
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt([
     `You are creating illustration prompts following the sketch-knowledge-kit visual system.`,
     ``,
     `Shared visual identity across all illustrations:`,
@@ -74,7 +79,7 @@ const generatePromptViaLlm = async (
     `CRITICAL: Every prompt MUST specify the aspect ratio — "3:4 portrait/vertical (1080×1440 for Xiaohongshu feed)".`,
     ``,
     `Output ONLY the English prompt, 150-300 words. No markdown formatting, no JSON wrapper.`,
-  ].join("\n");
+  ].join("\n"), promptRule);
 
   const userPrompt = [
     `Create a sketch-knowledge-kit illustration prompt for section #${sectionIndex + 1} of a Xiaohongshu article.`,
@@ -209,9 +214,21 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
   }
 
   const body = metadata?.body ?? input.articleMd;
-  const title = metadata?.title ?? "";
+  const title = metadata?.title ?? input.articleMd.match(/^#\s+(.+)$/m)?.[1] ?? "";
   const sections = splitBodyIntoSections(body);
   const articleImages = extractArticleImages(input.articleMd);
+  const termContext = input.llm !== undefined && input.llmModel !== undefined
+    ? await createPlatformTechnicalTermContext({
+      llm: input.llm,
+      llmModel: input.llmModel,
+      title,
+      body,
+    })
+    : (() => {
+      const guard = createTechnicalTermGuard({ sourceText: body, sourceTitle: title });
+      return { guard, prepared: guard.prepare({ title, body }) };
+    })();
+  const preparedArticle = termContext.prepared.value;
 
   const files: string[] = [];
   let imagesGenerated = 0;
@@ -224,8 +241,14 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
   let hasCachedPrompts = false;
   try {
     const cachedRaw = await readFile(promptsPath, "utf8");
-    const cached = JSON.parse(cachedRaw) as string[];
-    if (Array.isArray(cached) && cached.length === sections.length) {
+    const parsed = JSON.parse(cachedRaw) as string[] | {
+      prompts?: string[];
+      technicalTermProfileFingerprint?: string;
+    };
+    const cached = Array.isArray(parsed) ? parsed : parsed.prompts;
+    const profileMatches = Array.isArray(parsed)
+      || parsed.technicalTermProfileFingerprint === termContext.prepared.profileFingerprint;
+    if (profileMatches && Array.isArray(cached) && cached.length === sections.length) {
       sectionPrompts.push(...cached);
       hasCachedPrompts = true;
     }
@@ -239,10 +262,19 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
   for (let i = 0; i < sections.length; i++) {
     let prompt = "";
     if (hasLlm) {
-      const sectionText = sections[i]!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 400);
-      const topic = metadata?.cover.headline || metadata?.title || title;
+      const sectionText = (preparedArticle
+        ? splitBodyIntoSections(preparedArticle.body)[i]
+        : sections[i])!.replace(/^#+\s*/gm, "").replace(/\*\*/g, "").slice(0, 400);
+      const topic = metadata?.cover.headline || preparedArticle?.title || title;
       try {
-        prompt = await generatePromptViaLlm(input.llm!, input.llmModel!, topic, sectionText, i);
+        prompt = await generatePromptViaLlm(
+          input.llm!,
+          input.llmModel!,
+          topic,
+          sectionText,
+          i,
+          termContext.prepared.promptRule,
+        );
       } catch {
         prompt = "";
       }
@@ -250,11 +282,31 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
     sectionPrompts.push(prompt);
   }
 
-  // save prompts
-  await mkdir(outputDir, { recursive: true });
-  await writeFile(promptsPath, JSON.stringify(sectionPrompts, null, 2), "utf8");
-  files.push(promptsPath);
   } // end if (!hasCachedPrompts)
+
+  if (input.llm !== undefined && input.llmModel !== undefined) {
+    const guarded = await finalizePlatformVisualPrompts({
+      llm: input.llm,
+      llmModel: input.llmModel,
+      context: termContext,
+      value: { prompts: sectionPrompts },
+      parseResponse: (content) => JSON.parse(content) as { prompts: string[] },
+    });
+    sectionPrompts.splice(0, sectionPrompts.length, ...guarded.prompts);
+  } else {
+    const guarded = termContext.guard.finalize({ prompts: sectionPrompts }, termContext.prepared.restoration);
+    if (guarded.violations.length > 0) {
+      throw new Error(`小红书视觉提示专业术语校验失败：${guarded.violations.map((item) => item.message).join("；")}`);
+    }
+    sectionPrompts.splice(0, sectionPrompts.length, ...guarded.value.prompts);
+  }
+
+  await mkdir(outputDir, { recursive: true });
+  await writeFile(promptsPath, JSON.stringify({
+    prompts: sectionPrompts,
+    technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
+  }, null, 2), "utf8");
+  files.push(promptsPath);
 
   // ensure output directory exists (needed for image generation below)
   await mkdir(outputDir, { recursive: true });
@@ -278,6 +330,11 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
           `3:4 portrait/vertical. Clean composition, generous whitespace. No photorealism, no 3D.`,
         ].join(" ");
       }
+      const guardedPrompt = termContext.guard.finalize(prompt, termContext.prepared.restoration);
+      if (guardedPrompt.violations.length > 0) {
+        throw new Error(`小红书图片提示专业术语校验失败：${guardedPrompt.violations.map((item) => item.message).join("；")}`);
+      }
+      prompt = guardedPrompt.value;
       try {
         const result = await input.imageGenerator.generateImage({ prompt, size: XHS_IMAGE_SIZE });
         await downloadImage(result.url, destPath);

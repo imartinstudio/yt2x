@@ -68,29 +68,30 @@
 
 ## 3. Native article 产物（`files/articles/<videoId>/`）
 
-| 文件                                 | 说明                                             |
-| ------------------------------------ | ------------------------------------------------ |
-| `article.md`                         | 长文章草稿 Markdown；暂不通过 X API 自动发布     |
-| `run.json`                           | 文章生成元数据（模型、耗时、usage 等）           |
-| `x-thread.md`                        | 专门生成的 X 串推 Markdown                       |
-| `x-hooks.json`                       | 串推首推候选                                     |
-| `x-short.md`                         | 单条 X 短帖                                      |
-| `images/cover.*`                     | 可选；从笔记目录 `screenshots/` 复制             |
-| `video/full.*` / `video/clip.*`      | 可选；从采集目录复制完整视频或手动片段供长文引用 |
-| `video/full.en.srt`                  | 双语模式按完整语义句投影后的英文原文字幕         |
-| `video/full.zh.srt`                  | 双语模式按完整语义句投影后的简体中文译文字幕     |
-| `video/full.bilingual.srt`           | 译文在上、原文在下且共享时间轴的交付字幕         |
-| `video/full.bilingual.ass`           | 可选；双语 ASS 版本                              |
-| `video/full.bilingual.semantic.json` | 双语投影、布局指纹、字体回退结果与质量报告       |
-| `video/full.bilingual-burned.mp4`    | 可选；仅在内容和展示质量门都通过后生成           |
-| `x-thread-visuals.json`              | 可选；串推配图计划（v0.2）                       |
-| `x-short-visual.json`                | 可选；短文配图计划（v0.2）                       |
-| `xiaohongshu-article.md`             | 计划；小红书图文笔记适配稿                       |
-| `xiaohongshu-metadata.json`          | 计划；小红书标题、核心标签和封面/配图建议        |
-| `wechat-article.md`                  | 计划；微信公众号 Markdown 长文适配稿             |
-| `wechat-metadata.json`               | 计划；公众号标题候选、摘要、导语和封面图建议     |
-| `bilibili-article.md`                | 计划；哔哩哔哩标题、简介、分区和标签建议         |
-| `bilibili-metadata.json`             | 计划；哔哩哔哩标题、标签和章节时间线草案         |
+| 文件                                 | 说明                                                                                |
+| ------------------------------------ | ----------------------------------------------------------------------------------- |
+| `article.md`                         | 长文章草稿 Markdown；暂不通过 X API 自动发布                                        |
+| `run.json`                           | 文章生成元数据（模型、耗时、usage 等）                                              |
+| `x-thread.md`                        | 专门生成的 X 串推 Markdown                                                          |
+| `x-hooks.json`                       | 串推首推候选                                                                        |
+| `x-short.md`                         | 单条 X 短帖                                                                         |
+| `<platform>-format/prompts.json`     | X、公众号、小红书或 B 站的封面/插图提示包；包含术语档案指纹时只允许在同一档案下复用 |
+| `images/cover.*`                     | 可选；从笔记目录 `screenshots/` 复制                                                |
+| `video/full.*` / `video/clip.*`      | 可选；从采集目录复制完整视频或手动片段供长文引用                                    |
+| `video/full.en.srt`                  | 双语模式按完整语义句投影后的英文原文字幕                                            |
+| `video/full.zh.srt`                  | 双语模式按完整语义句投影后的简体中文译文字幕                                        |
+| `video/full.bilingual.srt`           | 译文在上、原文在下且共享时间轴的交付字幕                                            |
+| `video/full.bilingual.ass`           | 可选；双语 ASS 版本                                                                 |
+| `video/full.bilingual.semantic.json` | 双语投影、布局指纹、字体回退结果与质量报告                                          |
+| `video/full.bilingual-burned.mp4`    | 可选；仅在内容和展示质量门都通过后生成                                              |
+| `x-thread-visuals.json`              | 可选；串推配图计划（v0.2）                                                          |
+| `x-short-visual.json`                | 可选；短文配图计划（v0.2）                                                          |
+| `xiaohongshu-article.md`             | 计划；小红书图文笔记适配稿                                                          |
+| `xiaohongshu-metadata.json`          | 计划；小红书标题、核心标签和封面/配图建议                                           |
+| `wechat-article.md`                  | 计划；微信公众号 Markdown 长文适配稿                                                |
+| `wechat-metadata.json`               | 计划；公众号标题候选、摘要、导语和封面图建议                                        |
+| `bilibili-article.md`                | 计划；哔哩哔哩标题、简介、分区和标签建议                                            |
+| `bilibili-metadata.json`             | 计划；哔哩哔哩标题、标签和章节时间线草案                                            |
 
 `article.md` 落盘时会固定补齐首屏素材与尾注：如果存在 `images/cover.*`，H1 后的第一张图就是封面；如果存在下载视频片段，首个 `##` 小节前会插入引用 `video/clip.*` 的 `<video>`；LLM 正文末尾应输出 3-5 个从主题提取的 X 话题标签，之后再追加固定格式 `👇完整视频：` 与原视频地址。
 
@@ -101,6 +102,31 @@ manifest、烧录视频或本地转写临时文件。双语模式只读取已经
 `semantic-bilingual`；其中记录 `status`、翻译/对齐/断句/布局四阶段状态、源字幕 SHA、
 翻译规则与模型、布局和样式版本、实际解析字体、视频尺寸、
 `videoWidthFraction: 0.8`、三份 SRT 的 SHA 以及质量报告。
+
+### 3.1 术语档案与可追踪指纹
+
+所有会生成文字、JSON 字段或视觉提示的目标，都从中央目录和本次源材料的动态发现结果创建同一份 `TechnicalTermProfile`。它的 `profileFingerprint` 必须随可复用产物保存，并参与缓存命中判断：目录条目、别名、策略、源文本、已批准的动态术语或发现规则版本变化时，旧产物不可静默复用。
+
+当前已落盘的指纹字段如下：
+
+- `run.json.technicalTermProfileFingerprint`：主文章生成所使用的术语档案。
+- `full.bilingual.semantic.json.technicalTermProfileFingerprint`：语义双语字幕的源级档案；与源字幕 SHA、翻译规则版本和模型一起校验。
+- `dub/dub-script.json.technicalTermProfileFingerprint`：配音稿的源级档案；当前 `dub-script.json` schema 为 **version 3**，旧版 2（以及更早版本）必须视为缓存未命中并重新生成。
+- `<platform>-format/prompts.json.technicalTermProfileFingerprint`：平台视觉提示包的档案；封面、插图、`name` 和 `prompt` 等嵌套字段写入前统一校验。
+
+#### 如何维护中央术语库
+
+机器可读唯一事实来源是 `packages/core/src/domain/technical-term-catalog.ts`。添加一个人工确认的术语时，只修改中央目录及其条目测试，不在平台 prompt、字幕、配音或适配器中新增局部数组：
+
+1. `canonical` 填标准输出拼写；`aliases` 只填源材料可能出现的大小写或 ASR 变体。canonical 必须唯一，别名不能与其他条目的 canonical/alias 冲突。
+2. `categories` 至少填写一个领域分类：`ai`、`ai-coding`、`ai-agent`、`product`、`person` 或 `domain`。分类用于提示和审计，不应在调用方复制成枚举白名单。
+3. `policy` 选择 `preserve`、`contextual-preserve` 或 `fixed-zh`。前两者保留 canonical 原文；只有 `fixed-zh` 才填写 `preferredZh`。
+4. `forbiddenZh` 只记录该术语的已知错误中文替代词，并且只能在同一源范围命中该术语时恢复；它不是全局替换表。普通词（例如“图片”“配图”“插图”“流程图”）不得作为 Graph 的错误翻译加入全局规则。
+5. 为每个新条目补一个应命中的正例和一个不应命中的反例，运行目录不变量、相关产物 focused tests、typecheck 和 `git diff --check`。
+
+源材料出现目录中没有的 AI、AI coding 或 AI agent 术语时，源级 discovery 会要求模型返回可在原文中逐字定位的 span。高置信度候选只进入当前运行的 profile，不会自动写回中央目录；中置信度候选进入 warning，低置信度或无法定位的候选丢弃。这样未来术语可以立即在文章、帖子、视觉提示、字幕和 dub 中保持原文，同时不会把一次模型误判永久升级为全仓库规则。人工确认后，再按上述目录流程提交 canonical、aliases、category、policy、forbiddenZh 及测试。
+
+所有后续重写、压缩、补漏和定向 repair 都必须复用初始 profile；格式化、烧录、TTS 和混音模块只消费已通过术语门的上游产物，不再维护第二套术语枚举。
 
 ### 下载目录只读契约（硬性）
 

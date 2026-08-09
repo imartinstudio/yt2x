@@ -10,6 +10,7 @@ import {
   type FinalizedTechnicalTermValue,
   type ClipPostList,
   type DeconstructManifest,
+  type DiscoveredTechnicalTerm,
   type GeneratePostsInput,
   type LlmPort,
   type TechnicalTermGuard,
@@ -35,6 +36,8 @@ export type GeneratePostsRunnerResult = {
 export type ClipPostTechnicalTerms = {
   guard: TechnicalTermGuard;
   restoration: TechnicalTermRestoration;
+  articleTitle: string;
+  discoveredTerms: readonly DiscoveredTechnicalTerm[];
 };
 
 const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -133,13 +136,15 @@ export const generateClipsPosts = async (
     discoveredTerms: discovery.accepted,
   });
   const finalGuard = createTechnicalTermGuard({
-    sourceText: `${sourceText}\n${CLIP_POST_CALL_TO_ACTION}\nYouTube`,
+    sourceText: `${sourceText}\n${CLIP_POST_CALL_TO_ACTION}`,
     sourceTitle: articleTitle,
     discoveredTerms: discovery.accepted,
   });
   const finalTechnicalTerms: ClipPostTechnicalTerms = {
     guard: finalGuard,
     restoration: { placeholders: [] },
+    articleTitle,
+    discoveredTerms: discovery.accepted,
   };
   const prepared = guard.prepare({
     articleTitle,
@@ -196,7 +201,7 @@ export const generateClipsPosts = async (
     // Last post appends YouTube link
     const articleFooter = i < total - 1
       ? articleLine
-      : `${articleLine}\n🔗 https://www.YouTube.com/watch?v=${manifest.source.videoId}`;
+      : `${articleLine}\n🔗 https://www.youtube.com/watch?v=${manifest.source.videoId}`;
 
     const postLines = [
       post.opening_quote,
@@ -267,18 +272,46 @@ export const writeSelectedPostFiles = async (
 
   const selected = manifest.clips.filter((c) => c.selected === true);
 
-  const finalGuard = technicalTerms.guard;
   const restoration = technicalTerms.restoration;
+  const youtubeUrl = `https://www.youtube.com/watch?v=${manifest.source.videoId}`;
   const assembledTexts = selected.map((clip, index) => {
     if (!clip.text) return "";
     const baseText = stripClipPostYoutubeLink(stripClipPostCallToAction(clip.text));
     return index === selected.length - 1
-      ? `${baseText}\n🔗 https://www.YouTube.com/watch?v=${manifest.source.videoId}\n\n${CLIP_POST_CALL_TO_ACTION}`
+      ? `${baseText}\n🔗 ${youtubeUrl}\n\n${CLIP_POST_CALL_TO_ACTION}`
       : baseText;
   });
-  const finalizedTexts = finalGuard.finalize(assembledTexts, restoration);
-  if (hasHardTechnicalTermViolations(finalizedTexts.violations)) {
-    throw new Error(`Technical term validation failed: ${finalizedTexts.violations.map((item) => item.message).join("; ")}`);
+  const selectedContentText = assembledTexts
+    .map((text) => text.replace(youtubeUrl, ""))
+    .join("\n");
+  const usedArticleTerms = technicalTerms.guard.profile.entries
+    .filter((term) => [
+      term.canonical,
+      term.sourceText,
+      term.preferredZh ?? "",
+      ...term.forbiddenZh.filter((candidate) => candidate !== "图"),
+    ].some((candidate) => candidate !== "" && selectedContentText.includes(candidate)))
+    .map((term) => term.canonical);
+  const selectedSourceText = [
+    technicalTerms.articleTitle,
+    ...selected.flatMap((clip) => [clip.title, clip.articleSection ?? ""]),
+    ...usedArticleTerms,
+    CLIP_POST_CALL_TO_ACTION,
+  ].join("\n");
+  const finalGuard = createTechnicalTermGuard({
+    sourceText: selectedSourceText,
+    sourceTitle: technicalTerms.articleTitle,
+    discoveredTerms: technicalTerms.discoveredTerms,
+  });
+  const canonicalizedTexts = finalGuard.finalize(assembledTexts, restoration);
+  const finalizedTexts = canonicalizedTexts.value.map((text) =>
+    normalizeControlledYoutubeUrl(text, youtubeUrl)
+  );
+  const blockingViolations = finalGuard.validate(finalizedTexts).filter((violation) =>
+    !isControlledYoutubeUrlViolation(violation, finalizedTexts, youtubeUrl)
+  );
+  if (hasHardTechnicalTermViolations(blockingViolations)) {
+    throw new Error(`Technical term validation failed: ${blockingViolations.map((item) => item.message).join("; ")}`);
   }
 
   for (let i = 0; i < selected.length; i++) {
@@ -287,7 +320,7 @@ export const writeSelectedPostFiles = async (
 
     const slug = clip.slug || clip.id;
     const postPath = path.join(clipsDir, `post-${i + 1}-${slug}.md`);
-    const finalText = finalizedTexts.value[i]!;
+    const finalText = finalizedTexts[i]!;
     clip.text = finalText;
     clip.charCount = finalText.length;
 
@@ -319,6 +352,23 @@ const stripClipPostYoutubeLink = (text: string): string => {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+};
+
+const isControlledYoutubeUrlViolation = (
+  violation: { code: string; canonical?: string },
+  texts: readonly string[],
+  expectedUrl: string,
+): boolean => {
+  if (violation.code !== "invented-canonical-term" || violation.canonical !== "YouTube") return false;
+  if (!texts.at(-1)?.includes(expectedUrl)) return false;
+  return texts.every((text, index) => {
+    const withoutExpectedUrl = index === texts.length - 1 ? text.replace(expectedUrl, "") : text;
+    return !/youtube/iu.test(withoutExpectedUrl);
+  });
+};
+
+const normalizeControlledYoutubeUrl = (text: string, expectedUrl: string): string => {
+  return text.replace(expectedUrl.replace("youtube.com", "YouTube.com"), expectedUrl);
 };
 
 const parseClipPosts = (raw: string): ClipPostList => {

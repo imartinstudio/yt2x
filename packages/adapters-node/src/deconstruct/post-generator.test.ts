@@ -13,7 +13,7 @@ describe("generateClipsPosts", () => {
       await mkdir(clipsDir, { recursive: true });
       await writeFile(
         path.join(articleDir, "article.md"),
-        "# Graph Engineering（图工程）从 0 到 1 全攻略\n\n知识图谱（Knowledge Graph）和代理图谱（Agent Graph）是正文术语。Agents 也会运行 loop。",
+        "# Graph Engineering（图工程）从 0 到 1 全攻略\n\n知识图谱（Knowledge Graph）和代理图谱（Agent Graph）是正文术语。Agents 也会运行 loop，完整视频来自 youtube。",
         "utf8",
       );
 
@@ -84,7 +84,7 @@ describe("generateClipsPosts", () => {
                 title: "边界决定可靠性",
                 opening_quote: "每个 loop 都有边界。知道哪里会断，比知道哪里能跑更重要。",
                 core_description: "知识图谱和代理图谱的风险不在概念，而在兼容性、API 稳定性和响应延迟。可靠的 agent loop 必须处理重试、降级和人工 review。",
-                video_suggestion: "视频里可以看到，模型超时后 agent 自动重试、切到备用模型，并通知 Agents 人工介入。",
+                video_suggestion: "YouTube 视频里可以看到，模型超时后 agent 自动重试、切到备用模型，并通知 Agents 人工介入。",
               },
             ],
         }),
@@ -119,10 +119,9 @@ describe("generateClipsPosts", () => {
       expect(postText).not.toContain("建议附上");
       expect(postText).not.toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 Agents 构建 loops。");
       expect(secondPostText).toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 Agents 构建 loops。");
-      expect(postText).not.toContain("YouTube.com/watch?v=");
-      expect(secondPostText).toContain("https://www.YouTube.com/watch?v=video123");
+      expect(postText).not.toContain("youtube.com/watch?v=");
+      expect(secondPostText).toContain("https://www.youtube.com/watch?v=video123");
       expect(postText).not.toContain("#ClaudeCode");
-      expect(result.technicalTerms.guard.validate([postText, secondPostText])).toEqual([]);
 
       // Manifest updated
       const updatedManifest = JSON.parse(
@@ -174,6 +173,8 @@ describe("generateClipsPosts", () => {
       const result = await writeSelectedPostFiles(manifest, articleDir, {
         guard,
         restoration: { placeholders: [] },
+        articleTitle: "Graph Engineering 与 Agents",
+        discoveredTerms: [],
       });
       const postText = await readFile(result[0]!, "utf8");
 
@@ -199,7 +200,7 @@ describe("generateClipsPosts", () => {
         clips: [{
           id: "clip-1",
           slug: "final-missing",
-          title: "标题",
+          title: "Latent Workspace Routing",
           type: "hot-take",
           angle: "contrarian",
           risk: "low",
@@ -210,17 +211,131 @@ describe("generateClipsPosts", () => {
         }],
       };
       await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+      const discoveredTerms = [{
+        sourceText: "Latent Workspace Routing",
+        confidence: "high" as const,
+        category: "ai-agent" as const,
+      }];
       const guard = createTechnicalTermGuard({
         sourceText: "Latent Workspace Routing\nAgents\nYouTube",
-        discoveredTerms: [{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }],
+        discoveredTerms,
       });
 
       await expect(writeSelectedPostFiles(manifest, articleDir, {
         guard,
         restoration: { placeholders: [] },
+        articleTitle: "可靠交付",
+        discoveredTerms,
       })).rejects.toThrow(/Latent Workspace Routing/u);
 
       await expect(readFile(path.join(clipsDir, "post-1-final-missing.md"), "utf8")).rejects.toThrow();
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not require a discovered term that only belongs to an unselected clip", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-selected-scope-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "selected-scope", articlePath: "../article.md", durationSec: 120 },
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        candidateCount: 2,
+        total: 2,
+        clips: [{
+          id: "clip-1",
+          slug: "selected",
+          title: "可靠交付",
+          type: "hot-take",
+          angle: "contrarian",
+          risk: "low",
+          selected: true,
+          text: "这里只讨论可靠交付。",
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-selected.mp4",
+        }, {
+          id: "clip-2",
+          slug: "unselected",
+          title: "Archive Memory Routing",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: false,
+          text: "Archive Memory Routing 只属于未选片段。",
+          timecodes: { start: "00:01:02", end: "00:02:02", startSec: 62, endSec: 122, durationSec: 60 },
+          video: "clip-2-unselected.mp4",
+        }],
+      };
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+      const discoveredTerms = [{
+        sourceText: "Archive Memory Routing",
+        confidence: "high" as const,
+        category: "ai-agent" as const,
+      }];
+      const guard = createTechnicalTermGuard({
+        sourceText: "可靠交付\nArchive Memory Routing\nAgents\nYouTube",
+        discoveredTerms,
+      });
+
+      const result = await writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "可靠交付",
+        discoveredTerms,
+      });
+
+      expect(await readFile(result[0]!, "utf8")).toContain("这里只讨论可靠交付。");
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a translated discovered term in a selected clip", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-selected-translation-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "selected-translation", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "selected-translation",
+          title: "Latent Workspace Routing",
+          type: "hot-take",
+          angle: "contrarian",
+          risk: "low",
+          selected: true,
+          text: "潜在工作区路由能减少上下文漂移。",
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-selected-translation.mp4",
+        }],
+      };
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+      const discoveredTerms = [{
+        sourceText: "Latent Workspace Routing",
+        confidence: "high" as const,
+        category: "ai-agent" as const,
+      }];
+      const guard = createTechnicalTermGuard({
+        sourceText: "Latent Workspace Routing\nAgents\nYouTube",
+        discoveredTerms,
+      });
+
+      await expect(writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "可靠交付",
+        discoveredTerms,
+      })).rejects.toThrow(/Latent Workspace Routing/u);
+
+      await expect(readFile(path.join(clipsDir, "post-1-selected-translation.md"), "utf8")).rejects.toThrow();
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }

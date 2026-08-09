@@ -71,6 +71,12 @@ describe("runDeconstructCommand", () => {
       const technicalTerms = {
         guard: { profile: { profileFingerprint: "fnv1a-profile-pass" } },
         restoration: { placeholders: [] },
+        articleTitle: "Latent Workspace Routing",
+        discoveredTerms: [{
+          sourceText: "Latent Workspace Routing",
+          confidence: "high",
+          category: "ai-agent",
+        }],
       };
       mocks.readDeconstructArtifacts.mockResolvedValue({
         articleMd: "# Latent Workspace Routing",

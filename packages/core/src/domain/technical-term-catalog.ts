@@ -409,13 +409,23 @@ const createProfile = (
   discoveredTerms: readonly DiscoveredTechnicalTerm[],
 ): TechnicalTermProfile => {
   const matches = findProfileMatches(sourceText, sourceTitle, discoveredTerms);
+  const base = resolvedFromMatches(matches);
   const contextualMatches = TECHNICAL_TERM_CATALOG
     .filter((entry) => entry.policy === "contextual-preserve")
     .flatMap((entry) => [
       ...matchesForEntry(sourceText, entry, "sourceText"),
       ...matchesForEntry(sourceTitle, entry, "sourceTitle"),
-    ]);
-  const base = resolvedFromMatches(matches);
+    ])
+    // A contextual term such as Graph may be a substring of a longer,
+    // source-active term such as Graph Engineering. Keep it active only when
+    // the source profile selected that exact occurrence; otherwise recovery of
+    // a natural Chinese "图" in an unrelated output cue becomes global.
+    .filter((match) => base.occurrences.some((occurrence) =>
+      occurrence.canonical === match.entry.canonical
+      && occurrence.start === match.start
+      && occurrence.end === match.end
+      && occurrence.source === match.source,
+    ));
   const contextual = resolvedFromMatches(contextualMatches);
   const mergedEntries = Object.freeze([
     ...base.entries,

@@ -148,9 +148,9 @@ describe("generateXThreadContent", () => {
       "Graph Engineering",
       "Knowledge Graph",
       "Agent Graph",
-      "什么时候值得用 Graph",
-      "更大的 Graph",
-      "第一个 Graph",
+      "什么时候值得用图",
+      "更大的图",
+      "第一个图",
     ]);
     expect(result.thread.hooks[0]?.text).toContain("Graph Engineering");
   });

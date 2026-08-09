@@ -37,7 +37,7 @@ describe("technical term restoration", () => {
       [
         "Graph Engineering 需要把工作拆开。",
         "Knowledge Graph vs Agent Graph。",
-        "Graph 的基本词汇。",
+        "图的基本词汇。",
         "截图、缩略图和图片不能被改写。",
         "Prompt Engineering 和 Context Engineering 必须保留原名。",
       ].join("\n"),

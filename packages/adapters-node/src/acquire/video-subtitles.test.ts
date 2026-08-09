@@ -1407,6 +1407,75 @@ Add a screenshot and a flow chart.
     await expect(readFile(path.join(root, "source.en.srt"), "utf8")).resolves.toBe(sourceSrt);
   });
 
+  it("discovers once and reuses one profile across 31-plus ordinary SRT cues", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-technical-terms-batches-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    const sourceSrt = Array.from({ length: 31 }, (_, offset) => {
+      const start = String(offset).padStart(2, "0");
+      const end = String(offset + 1).padStart(2, "0");
+      const text = offset === 0
+        ? "Latent Workspace Routing keeps state."
+        : `Source cue ${offset + 1}.`;
+      return `${offset + 1}\n00:00:${start},000 --> 00:00:${end},000\n${text}`;
+    }).join("\n\n") + "\n";
+    await writeFile(path.join(root, "source.en.srt"), sourceSrt, "utf8");
+
+    let callCount = 0;
+    const systemPrompts: string[] = [];
+    const llm: LlmPort = {
+      chat: async (request: ChatRequest): Promise<ChatResponse> => {
+        callCount += 1;
+        const systemPrompt = request.messages[0]!.content;
+        systemPrompts.push(systemPrompt);
+        if (systemPrompt.includes("源级专业术语发现器")) {
+          return {
+            content: JSON.stringify([
+              { sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" },
+            ]),
+            model: "test",
+            finishReason: "stop",
+          };
+        }
+        const payload = JSON.parse(request.messages[1]!.content) as Array<{ index: number }>;
+        return {
+          content: JSON.stringify(payload.map((item) => ({
+            index: item.index,
+            text: item.index === 1 ? "Latent Workspace Routing keeps state." : `第${item.index}条。`,
+          }))),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    await runSubtitlePipeline({
+      videoDir: root,
+      subtitle: { mode: "srt", sourceLang: "en", targetLang: "zh-CN", source: "auto" },
+      llm,
+      llmModel: "test",
+      runner: {
+        run: async (spec) => ({
+          exitCode: 0, signal: null, stdout: "", stderr: "",
+          stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+          command: spec.command, args: spec.args ?? [],
+        }),
+      },
+    });
+
+    const translated = parseSubtitleBlocks(await readFile(path.join(root, "video", "full.zh.srt"), "utf8"));
+    expect(callCount).toBe(3);
+    expect(systemPrompts[0]).toContain("源级专业术语发现器");
+    expect(systemPrompts[1]).toContain("Latent Workspace Routing");
+    expect(systemPrompts[2]).toContain("Latent Workspace Routing");
+    expect(translated).toHaveLength(31);
+    expect(translated[0]?.text.join(" ")).toContain("Latent Workspace Routing");
+    expect(translated[30]).toMatchObject({
+      index: 31,
+      start: "00:00:30,000",
+      end: "00:00:31,000",
+    });
+  });
+
   it("translates when source_language is bare 'zh' but subtitle content is Traditional Chinese", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-bare-zh-"));
     await mkdir(root, { recursive: true });

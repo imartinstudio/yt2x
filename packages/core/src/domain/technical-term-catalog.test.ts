@@ -172,6 +172,17 @@ describe("technical term catalog", () => {
     );
   });
 
+  it("does not globally replace a natural 图 when only Graph Engineering is source-active", () => {
+    const guard = createTechnicalTermGuard({ sourceText: "Graph Engineering is useful." });
+    const finalized = guard.finalize(
+      "图工程很有用。\n什么时候值得用图",
+      { placeholders: [] },
+    );
+
+    expect(finalized.value).toBe("Graph Engineering 很有用。\n什么时候值得用图");
+    expect(finalized.violations).toEqual([]);
+  });
+
   it("keeps the catalog fingerprint independent of entry order", () => {
     const reversed = defineTechnicalTermCatalog([...TECHNICAL_TERM_CATALOG].reverse());
 

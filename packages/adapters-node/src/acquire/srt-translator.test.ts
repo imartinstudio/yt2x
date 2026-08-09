@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTechnicalTermGuard, type LlmPort, type ChatResponse, type ChatRequest } from "@yt2x/core";
 import { translateSrt } from "./srt-translator.js";
+import { parseSubtitleBlocks } from "./video-subtitles.js";
 
 const mockLlm = (response: string): LlmPort => ({
   chat: async (_req: ChatRequest): Promise<ChatResponse> => ({
@@ -167,6 +168,171 @@ Protocol
       .join(" ");
     expect(joined.match(/Model Context Protocol/gu)).toHaveLength(1);
     expect(callCount).toBe(2);
+  });
+
+  it("repairs multiple failed terms with one targeted call and preserves SRT structure", async () => {
+    const source = `1
+00:00:01,000 --> 00:00:02,000
+Latent Workspace Routing keeps state.
+
+2
+00:00:03,000 --> 00:00:04,500
+Vector Memory Routing stores context.
+`;
+    const guard = createTechnicalTermGuard({
+      sourceText: "Latent Workspace Routing keeps state. Vector Memory Routing stores context.",
+      discoveredTerms: [
+        { sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" },
+        { sourceText: "Vector Memory Routing", confidence: "high", category: "ai-agent" },
+      ],
+    });
+    let callCount = 0;
+    const llm: LlmPort = {
+      chat: async (): Promise<ChatResponse> => {
+        callCount += 1;
+        return {
+          content: callCount === 1
+            ? JSON.stringify([
+                { index: 1, text: "潜在工作区路由保存状态。" },
+                { index: 2, text: "向量记忆路由保存上下文。" },
+              ])
+            : JSON.stringify([
+                { index: 1, text: "Latent Workspace Routing 保存状态。" },
+                { index: 2, text: "Vector Memory Routing 保存上下文。" },
+              ]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const { srt: result } = await translateSrt(source, {
+      llm,
+      model: "test",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      technicalTermGuard: guard,
+    });
+
+    const cues = parseSubtitleBlocks(result);
+    expect(callCount).toBe(2);
+    expect(cues).toEqual([
+      {
+        index: 1,
+        start: "00:00:01,000",
+        end: "00:00:02,000",
+        text: ["Latent Workspace Routing 保存状态。"],
+      },
+      {
+        index: 2,
+        start: "00:00:03,000",
+        end: "00:00:04,500",
+        text: ["Vector Memory Routing 保存上下文。"],
+      },
+    ]);
+  });
+
+  it("does not replace a natural 图 in another cue when Graph Engineering is source-active", async () => {
+    const source = [
+      "1",
+      "00:00:01,000 --> 00:00:02,000",
+      "Graph Engineering is useful.",
+      "",
+      "2",
+      "00:00:03,000 --> 00:00:04,000",
+      "When is it worth using?",
+      "",
+    ].join("\n");
+    const guard = createTechnicalTermGuard({ sourceText: "Graph Engineering is useful. When is it worth using?" });
+    const llm: LlmPort = {
+      chat: async (): Promise<ChatResponse> => ({
+        content: JSON.stringify([
+          { index: 1, text: "图工程很有用。" },
+          { index: 2, text: "什么时候值得用图" },
+        ]),
+        model: "test",
+        finishReason: "stop",
+      }),
+    };
+
+    const { srt: result } = await translateSrt(source, {
+      llm,
+      model: "test",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      technicalTermGuard: guard,
+    });
+
+    expect(parseSubtitleBlocks(result)).toEqual([
+      {
+        index: 1,
+        start: "00:00:01,000",
+        end: "00:00:02,000",
+        text: ["Graph Engineering 很有用。"],
+      },
+      {
+        index: 2,
+        start: "00:00:03,000",
+        end: "00:00:04,000",
+        text: ["什么时候值得用图"],
+      },
+    ]);
+  });
+
+  it("keeps the active term rule in phase 3 and phase 4 repair prompts", async () => {
+    const prompts: string[] = [];
+    const guard = createTechnicalTermGuard({ sourceText: "Graph Engineering" });
+    const llm: LlmPort = {
+      chat: async (request: ChatRequest): Promise<ChatResponse> => {
+        prompts.push(request.messages[0]!.content);
+        return { content: "[]", model: "test", finishReason: "stop" };
+      },
+    };
+
+    const { warnings } = await translateSrt(
+      "1\n00:00:01,000 --> 00:00:02,000\nGraph Engineering\n",
+      { llm, model: "test", sourceLang: "en", targetLang: "zh-CN", technicalTermGuard: guard },
+    );
+
+    expect(prompts).toHaveLength(5);
+    expect(prompts[0]).toContain("Graph Engineering");
+    expect(prompts[1]).toContain("Graph Engineering");
+    expect(prompts[2]).toContain("Graph Engineering");
+    expect(prompts[3]).toContain("Graph Engineering");
+    expect(prompts[4]).toContain("Graph Engineering");
+    expect(warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining("phase 2 repair failed"),
+      expect.stringContaining("phase 3 repair failed"),
+      expect.stringContaining("phase 4: failed"),
+    ]));
+  });
+
+  it("keeps the active term rule in the phase 5 empty-cue repair prompt", async () => {
+    const prompts: string[] = [];
+    const guard = createTechnicalTermGuard({ sourceText: "Graph Engineering" });
+    let callCount = 0;
+    const llm: LlmPort = {
+      chat: async (request: ChatRequest): Promise<ChatResponse> => {
+        prompts.push(request.messages[0]!.content);
+        callCount += 1;
+        return {
+          content: callCount === 1
+            ? JSON.stringify([{ index: 1, text: "" }])
+            : JSON.stringify([{ index: 1, text: "Graph Engineering" }]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    await translateSrt(
+      "1\n00:00:01,000 --> 00:00:02,000\nGraph Engineering\n",
+      { llm, model: "test", sourceLang: "en", targetLang: "zh-CN", technicalTermGuard: guard },
+    );
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("Graph Engineering");
+    expect(prompts[1]).toContain("Graph Engineering");
   });
 
   it("translates SRT blocks and preserves timecodes", async () => {

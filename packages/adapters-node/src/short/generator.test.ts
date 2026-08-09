@@ -90,7 +90,7 @@ describe("generateXShortContent", () => {
     const result = await generateXShortContent({ llm, model: "m", artifacts });
 
     expect(result.shortPost.text).toBe(
-      "Graph Engineering 的核心不是更大的 Graph，而是 Knowledge Graph 和 Agent Graph 的分工。",
+      "Graph Engineering 的核心不是更大的图，而是 Knowledge Graph 和 Agent Graph 的分工。",
     );
   });
 });

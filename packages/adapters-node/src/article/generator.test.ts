@@ -139,7 +139,7 @@ describe("generateXArticleContent", () => {
     expect(r.content).toMatch(/^# \*\*为什么 Graph Engineering 会让 Claude\/Codex 效率提升十倍\*\*/);
   });
 
-  it("preserves Graph terminology throughout the article body", async () => {
+  it("preserves technical terms without rewriting natural graph wording", async () => {
     const llm = makeLlm(() => ({
       content: [
         "# 营销标题",
@@ -161,7 +161,7 @@ describe("generateXArticleContent", () => {
         "图工程需要把工作拆成可检查的步骤。",
         "截图、缩略图和图片应该保持原样。",
         "",
-        "#AI #Graph #工作流",
+        "#AI #Claude #工作流",
       ].join("\n"),
       model: "m",
       finishReason: "stop",
@@ -181,18 +181,17 @@ describe("generateXArticleContent", () => {
 
     const r = await generateXArticleContent({ llm, model: "m", artifacts });
 
-    expect(r.content).toContain("## Graph 的基本词汇");
+    expect(r.content).toContain("## 图的基本词汇");
     expect(r.content).toContain("## Knowledge Graph vs Agent Graph");
     expect(r.content).toContain("Prompt Engineering");
     expect(r.content).toContain("Context Engineering");
-    expect(r.content).toContain("什么时候值得用 Graph");
-    expect(r.content).toContain("现成 Graph");
-    expect(r.content).toContain("更大的 Graph");
-    expect(r.content).toContain("第一个 Graph");
+    expect(r.content).toContain("什么时候值得用图");
+    expect(r.content).toContain("现成图");
+    expect(r.content).toContain("更大的图");
+    expect(r.content).toContain("第一个图");
     expect(r.content).toContain("Graph Engineering 需要");
     expect(r.content).toContain("截图、缩略图和图片应该保持原样。");
-    expect(r.content).not.toContain("## 图的基本词汇");
-    expect(r.content).not.toContain("## 知识图谱 vs 代理图谱");
+    expect(r.content).not.toContain("## Graph 的基本词汇");
   });
 
   it("strips trailing source attribution from generated article markdown", async () => {

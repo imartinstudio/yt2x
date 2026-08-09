@@ -18,4 +18,9 @@ describe("shared technical term rules", () => {
       expect(prompt).toContain("不得只写");
     }
   });
+
+  it("uses generic catalog-driven terminology language", () => {
+    expect(SHARED_TECHNICAL_TERMS).toContain("源材料中实际出现的术语");
+    expect(SHARED_TECHNICAL_TERMS).not.toContain("尤其是 Prompt Engineering");
+  });
 });

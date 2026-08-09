@@ -1,0 +1,91 @@
+import { describe, expect, it } from "vitest";
+import {
+  TECHNICAL_TERM_CATALOG,
+  TECHNICAL_TERM_CATALOG_FINGERPRINT,
+  createTechnicalTermGuard,
+  defineTechnicalTermCatalog,
+} from "./technical-term-catalog.js";
+
+describe("technical term catalog", () => {
+  it("protects source terms through an immutable guard", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Graph Engineering connects a Knowledge Graph to an Agent Graph.",
+    });
+    const prepared = guard.prepare("Graph Engineering connects a Knowledge Graph to an Agent Graph.");
+
+    expect(prepared.value).not.toContain("Graph Engineering");
+    expect(prepared.promptRule).toContain("Graph Engineering");
+
+    const finalized = guard.finalize(
+      "图工程连接知识图谱和代理图谱。",
+      prepared.restoration,
+    );
+    expect(finalized.value).toBe(
+      "Graph Engineering 连接 Knowledge Graph 和 Agent Graph。",
+    );
+    expect(finalized.violations).toEqual([]);
+  });
+
+  it("does not confuse ordinary image words with contextual Graph", () => {
+    const imageGuard = createTechnicalTermGuard({ sourceText: "Add a screenshot and a flow chart." });
+    const imagePrepared = imageGuard.prepare("Add a screenshot and a flow chart.");
+
+    expect(
+      imageGuard.finalize("添加一张截图和流程图。", imagePrepared.restoration).value,
+    ).toBe("添加一张截图和流程图。");
+  });
+
+  it("includes high-confidence discovered terms in the source profile", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Agentic RAG",
+      discoveredTerms: [{ sourceText: "Agentic RAG", confidence: "high", category: "ai-agent" }],
+    });
+
+    expect(guard.profile.entries.some((entry) => entry.canonical === "Agentic RAG")).toBe(true);
+  });
+
+  it("contains unique canonical terms and the initial AI catalog entries", () => {
+    const canonicals = TECHNICAL_TERM_CATALOG.map((entry) => entry.canonical);
+    expect(new Set(canonicals).size).toBe(canonicals.length);
+    expect(canonicals).toEqual(expect.arrayContaining([
+      "Artificial Intelligence",
+      "AI Coding",
+      "AI Agent",
+      "Prompt Engineering",
+      "Context Engineering",
+      "Graph Engineering",
+      "Knowledge Graph",
+      "Agent Graph",
+    ]));
+  });
+
+  it("rejects alias conflicts and missing fixed Chinese preferences", () => {
+    expect(() => defineTechnicalTermCatalog([
+      {
+        canonical: "First Term",
+        aliases: ["shared alias"],
+        categories: ["domain"],
+        policy: "preserve",
+      },
+      {
+        canonical: "Second Term",
+        aliases: ["SHARED ALIAS"],
+        categories: ["domain"],
+        policy: "preserve",
+      },
+    ])).toThrow(/alias conflict/i);
+
+    expect(() => defineTechnicalTermCatalog([{
+      canonical: "Fixed Term",
+      aliases: [],
+      categories: ["domain"],
+      policy: "fixed-zh",
+    }])).toThrow(/preferredZh/i);
+  });
+
+  it("keeps the catalog fingerprint independent of entry order", () => {
+    const reversed = defineTechnicalTermCatalog([...TECHNICAL_TERM_CATALOG].reverse());
+
+    expect(reversed.fingerprint).toBe(TECHNICAL_TERM_CATALOG_FINGERPRINT);
+  });
+});

@@ -15,6 +15,12 @@ describe("PROTECTED_TERMS", () => {
     expect(PROTECTED_TERMS).toEqual([...PROTECTED_GLOSSARY_TERMS, ...PROTECTED_NAMES]);
   });
 
+  it("derives compatibility exports from catalog policy categories", () => {
+    expect(PROTECTED_TERMS).toContain("Codex");
+    expect(PROTECTED_TERMS).toContain("Matt Pocock");
+    expect(DUB_TERM_TRANSLATIONS).toContainEqual({ source: "grill", zh: "追问" });
+  });
+
   it("carries the skill names the dub translation prompt must never translate", () => {
     expect(PROTECTED_GLOSSARY_TERMS).toContain("Grill Me");
     expect(PROTECTED_GLOSSARY_TERMS).toContain("Grill with Docs");

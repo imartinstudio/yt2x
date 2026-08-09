@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -58,10 +58,10 @@ describe("formatXiaohongshuLayout technical terms", () => {
       llmModel: "task7-xhs",
     });
     const prompts = JSON.parse(await readFile(path.join(result.outputDir, "prompts.json"), "utf8")) as {
-      prompts: string[];
+      illustrationPrompts: Array<{ prompt: string }>;
       technicalTermProfileFingerprint: string;
     };
-    const promptText = prompts.prompts.join("\n");
+    const promptText = prompts.illustrationPrompts.map((item) => item.prompt).join("\n");
 
     expect(promptText).toContain("Graph Engineering");
     expect(promptText).toContain("Knowledge Graph");
@@ -73,5 +73,70 @@ describe("formatXiaohongshuLayout technical terms", () => {
     expect(await readFile(path.join(result.outputDir, "article.html"), "utf8")).toContain("Latent Workspace Routing");
     expect(requests.filter((request) => request.messages[0]?.content.includes("严格的源级专业术语发现器"))).toHaveLength(1);
     expect(requests.filter((request) => request.messages[0]?.content.includes("专业术语定向修复器"))).toHaveLength(1);
+  });
+
+  it("invalidates legacy and stale prompt caches instead of treating them as hits", async () => {
+    const formatDir = path.join(tmpRoot, "xiaohongshu-format");
+    const articleMd = "# Graph Engineering\n\n## Section\n正文。";
+    await mkdir(formatDir, { recursive: true });
+    await writeFile(path.join(formatDir, "prompts.json"), JSON.stringify(["legacy cached prompt"]), "utf8");
+
+    const requests: ChatRequest[] = [];
+    const response = (content: string): ChatResponse => ({ content, model: "cache-test", finishReason: "stop" });
+    const llm: LlmPort = {
+      chat: async (request) => {
+        requests.push(request);
+        const system = request.messages[0]?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) return response("[]");
+        return response("Graph Engineering fresh generated visual prompt");
+      },
+    };
+
+    const first = await formatXiaohongshuLayout({ articleDir: tmpRoot, videoId: "cache-legacy", articleMd, llm, llmModel: "cache-test" });
+    const firstPrompts = JSON.parse(await readFile(path.join(first.outputDir, "prompts.json"), "utf8")) as { illustrationPrompts: Array<{ prompt: string }>; technicalTermProfileFingerprint: string };
+    expect(firstPrompts.illustrationPrompts.map((item) => item.prompt).join("\n")).toContain("fresh generated visual prompt");
+    expect(firstPrompts.technicalTermProfileFingerprint).toMatch(/^fnv1a-/u);
+    const firstRequestCount = requests.length;
+
+    await writeFile(path.join(formatDir, "prompts.json"), JSON.stringify({
+      prompts: ["stale cached prompt"],
+      technicalTermProfileFingerprint: "fnv1a-stale-catalog-or-source",
+    }), "utf8");
+    const changedArticleMd = "# Graph Engineering\n\n## Changed source\n正文。";
+    await formatXiaohongshuLayout({ articleDir: tmpRoot, videoId: "cache-stale", articleMd: changedArticleMd, llm, llmModel: "cache-test" });
+    expect(requests.length).toBeGreaterThan(firstRequestCount);
+  });
+
+  it("merges concurrent adapter writers into the canonical prompt schema", async () => {
+    const articleMd = "# Graph Engineering\n\n## Section\nKnowledge Graph and Agent Graph。";
+    const response = (content: string): ChatResponse => ({ content, model: "race-test", finishReason: "stop" });
+    const llm: LlmPort = {
+      chat: async (request) => {
+        const system = request.messages[0]?.content ?? "";
+        const user = request.messages[1]?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) return response("[]");
+        if (system.includes("Create a cover image-generation prompt")) return response("cover prompt");
+        if (user.includes("Create a sketch-knowledge-kit illustration prompt for section")) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return response("Graph Engineering Knowledge Graph Agent Graph section prompt");
+        }
+        return response(JSON.stringify([{ index: 1, filename: "illustration.png", name: "插图", prompt: "section prompt" }]));
+      },
+    };
+
+    const { orchestratePlatformPrompts } = await import("./prompt-orchestrator.js");
+    await Promise.all([
+      orchestratePlatformPrompts({ articleDir: tmpRoot, videoId: "race-video", articleMd, platform: "xiaohongshu", llm, llmModel: "race-test" }),
+      formatXiaohongshuLayout({ articleDir: tmpRoot, videoId: "race-video", articleMd, llm, llmModel: "race-test" }),
+    ]);
+
+    const prompts = JSON.parse(await readFile(path.join(tmpRoot, "xiaohongshu-format", "prompts.json"), "utf8")) as {
+      coverPrompts: unknown[];
+      illustrationPrompts: unknown[];
+      technicalTermProfileFingerprint: string;
+    };
+    expect(prompts.coverPrompts).toHaveLength(1);
+    expect(prompts.illustrationPrompts.length).toBeGreaterThan(0);
+    expect(prompts.technicalTermProfileFingerprint).toMatch(/^fnv1a-/u);
   });
 });

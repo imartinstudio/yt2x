@@ -77,7 +77,7 @@ describe("generateClipsPosts", () => {
             posts: [
               {
                 title: "Loops 才是优势",
-                opening_quote: "「未来属于把 agents 变成 loops 的团队。」——输入素材中的 OpenAI 工程师",
+                opening_quote: "「未来属于把 agents 变成 loops 的团队。」——输入素材中的工程师",
                 core_description: "图工程的杠杆不是更大的模型，而是围绕它的 loop：评估、重试、上下文和部署反馈。这就是一个 agent 从好看的 demo 变成每天 20-40 个 PR 的方式。Agents 需要持续验证。",
                 video_suggestion: "视频里可以看到，agent 盯住 CI、修复失败，再打开下一个 PR。",
               },
@@ -107,7 +107,7 @@ describe("generateClipsPosts", () => {
       const firstBodyLine = bodyLines.find((line) => line.trim().length > 0)!;
       // Clip post body starts directly with quote/viewpoint, without a title line.
       expect(postText).not.toContain("\nLoops 才是优势\n");
-      expect(firstBodyLine).toBe("「未来属于把 Agents 变成 loops 的团队。」——输入素材中的 OpenAI 工程师");
+      expect(firstBodyLine).toBe("「未来属于把 Agents 变成 loops 的团队。」——输入素材中的工程师");
       expect(firstBodyLine).not.toContain("🎬");
       expect(firstBodyLine).not.toContain("｜1/1");
       // AnatoliKopadze-style structure — no hashtags, no teaser

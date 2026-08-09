@@ -112,7 +112,22 @@ manifest、烧录视频或本地转写临时文件。双语模式只读取已经
 - `run.json.technicalTermProfileFingerprint`：主文章生成所使用的术语档案。
 - `full.bilingual.semantic.json.technicalTermProfileFingerprint`：语义双语字幕的源级档案；与源字幕 SHA、翻译规则版本和模型一起校验。
 - `dub/dub-script.json.technicalTermProfileFingerprint`：配音稿的源级档案；当前 `dub-script.json` schema 为 **version 3**，旧版 2（以及更早版本）必须视为缓存未命中并重新生成。
-- `<platform>-format/prompts.json.technicalTermProfileFingerprint`：平台视觉提示包的档案；封面、插图、`name` 和 `prompt` 等嵌套字段写入前统一校验。
+- `<platform>-format/prompts.json.technicalTermProfileFingerprint`：平台视觉提示包的档案；封面、插图、`name`、`filename`、`label` 和 `prompt` 等嵌套字段写入前统一校验。
+
+视觉提示包使用单一对象 schema：
+
+```json
+{
+  "platform": "<platform>",
+  "title": "<source title>",
+  "model": "<model>",
+  "technicalTermProfileFingerprint": "fnv1a-<fingerprint>",
+  "coverPrompts": [],
+  "illustrationPrompts": []
+}
+```
+
+`prompts.json` 的旧版 `string[]`、旧版 `{ "prompts": [...] }` 或缺少 `technicalTermProfileFingerprint` 的对象均视为缓存未命中，必须重建。平台编排器和小红书版式适配器通过同一个按路径串行、临时文件 rename 的写入器合并字段；Dashboard 的上传、编辑和删除也必须使用同一把锁，不能直接做无锁的 read-modify-write。
 
 #### 如何维护中央术语库
 

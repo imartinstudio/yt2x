@@ -17,7 +17,7 @@ export const SHARED_TECHNICAL_TERMS = [
   "- 目录中的 canonical 仅在源材料实际命中时激活；可以追加中文解释，但不能只用中文替换 preserve 术语。",
   `- 中央目录当前覆盖：${TECHNICAL_TERM_CATALOG.map((entry) => entry.canonical).join("、")}。`,
   `- ${TECHNICAL_TERM_CATALOG.filter((entry) => entry.policy === "contextual-preserve")
-    .map((entry) => `${entry.canonical} 在源材料中表示技术概念时不得只写中文「图」，例如「图的基本词汇」写成「${entry.canonical} 的基本词汇」。`)
+    .map((entry) => `${entry.canonical} 在源材料中表示技术概念时不得只写中文「图」，例如「图的基本词汇」写成「${entry.canonical} 的基本词汇」，「构建你的第一个 ${entry.canonical}」也必须保留原文。`)
     .join("\n- ")}`,
 ].join("\n");
 

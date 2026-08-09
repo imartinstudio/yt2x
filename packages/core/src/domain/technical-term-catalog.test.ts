@@ -35,6 +35,24 @@ describe("technical term catalog", () => {
     ).toBe("添加一张截图和流程图。");
   });
 
+  it("allows natural graph vocabulary only in visual prompts, while strict artifacts still reject invented Graph", () => {
+    const sourceText = "Graph Engineering helps teams explain the Knowledge Graph workflow.";
+    const strictGuard = createTechnicalTermGuard({ sourceText });
+    const strictPrepared = strictGuard.prepare("A graph diagram image explains the workflow.");
+    expect(strictGuard.finalize(strictPrepared.value, strictPrepared.restoration).violations).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "invented-canonical-term", canonical: "Graph" })]),
+    );
+
+    const visualGuard = createTechnicalTermGuard({ sourceText, artifact: "visual-prompt" });
+    const visualPrepared = visualGuard.prepare("Graph Engineering uses a graph diagram image to explain the Knowledge Graph workflow.");
+    expect(visualGuard.finalize(visualPrepared.value, visualPrepared.restoration).violations).toEqual([]);
+
+    const protectedVisual = visualGuard.prepare("Graph Engineering connects a Knowledge Graph.");
+    const finalized = visualGuard.finalize("图工程连接知识图谱。", protectedVisual.restoration);
+    expect(finalized.value).toContain("Graph Engineering");
+    expect(finalized.value).toContain("Knowledge Graph");
+  });
+
   it("includes high-confidence discovered terms in the source profile", () => {
     const guard = createTechnicalTermGuard({
       sourceText: "Agentic RAG",
@@ -187,5 +205,36 @@ describe("technical term catalog", () => {
     const reversed = defineTechnicalTermCatalog([...TECHNICAL_TERM_CATALOG].reverse());
 
     expect(reversed.fingerprint).toBe(TECHNICAL_TERM_CATALOG_FINGERPRINT);
+  });
+
+  it("changes profile and catalog fingerprints when source, artifact, or catalog changes", () => {
+    const source = "Graph Engineering";
+    const content = createTechnicalTermGuard({ sourceText: source }).profile.profileFingerprint;
+    const visual = createTechnicalTermGuard({ sourceText: source, artifact: "visual-prompt" }).profile.profileFingerprint;
+    const changedSource = createTechnicalTermGuard({ sourceText: source + " workflow" }).profile.profileFingerprint;
+    const baseCatalog = defineTechnicalTermCatalog([{
+      canonical: "Base Term",
+      aliases: [],
+      categories: ["domain"],
+      policy: "preserve",
+    }]);
+    const extendedCatalog = defineTechnicalTermCatalog([
+      {
+        canonical: "Base Term",
+        aliases: [],
+        categories: ["domain"],
+        policy: "preserve",
+      },
+      {
+        canonical: "Future Term",
+        aliases: [],
+        categories: ["domain"],
+        policy: "preserve",
+      },
+    ]);
+
+    expect(visual).not.toBe(content);
+    expect(changedSource).not.toBe(content);
+    expect(extendedCatalog.fingerprint).not.toBe(baseCatalog.fingerprint);
   });
 });

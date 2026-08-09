@@ -5,6 +5,7 @@ import {
 
 export {
   appendTechnicalTermRuleToSystemPrompt,
+  buildTechnicalTermPromptRule,
   createTechnicalTermGuard,
   defineTechnicalTermCatalog,
   hasHardTechnicalTermViolations,
@@ -21,6 +22,7 @@ export {
   type TechnicalTermGuard,
   type TechnicalTermOccurrence,
   type TechnicalTermPolicy,
+  type TechnicalTermArtifact,
   type TechnicalTermProfile,
   type TechnicalTermRestoration,
   type TechnicalTermViolation,

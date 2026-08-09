@@ -178,4 +178,36 @@ describe("saveDashboardPromptImage", () => {
     await deleteDashboardPromptImage!({ articleOutDir, videoId: "video123", platform: "xiaohongshu", promptId: "ill-0" });
     await expect(readFile(path.join(articleDir, "xiaohongshu-article.md"), "utf8")).resolves.not.toContain("prompt-ill-0.jpg");
   });
+
+  it("serializes concurrent prompt image updates without dropping fields or filenames", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-dashboard-race-"));
+    const articleOutDir = path.join(root, "articles");
+    const articleDir = path.join(articleOutDir, "race123", "xiaohongshu-format");
+    await mkdir(articleDir, { recursive: true });
+    await writeFile(path.join(articleDir, "prompts.json"), JSON.stringify({
+      platform: "xiaohongshu",
+      technicalTermProfileFingerprint: "fnv1a-race",
+      coverPrompts: [{ label: "封面", prompt: "cover", filename: "cover.png", name: "封面" }],
+      illustrationPrompts: [
+        { index: 0, name: "第一节", prompt: "one" },
+        { index: 1, name: "第二节", prompt: "two" },
+      ],
+    }));
+    await writeFile(path.join(articleDir, "xiaohongshu-article.md"), "# 标题\n\n正文。\n");
+
+    const saveDashboardPromptImage = (dashboard as Record<string, unknown>)["saveDashboardPromptImage"] as
+      | ((input: { articleOutDir: string; videoId: string; platform: string; promptId: string; dataUrl: string }) => Promise<{ file: string }>)
+      | undefined;
+    await Promise.all([
+      saveDashboardPromptImage!({ articleOutDir, videoId: "race123", platform: "xiaohongshu", promptId: "ill-0", dataUrl: "data:image/png;base64,AA==" }),
+      saveDashboardPromptImage!({ articleOutDir, videoId: "race123", platform: "xiaohongshu", promptId: "ill-1", dataUrl: "data:image/png;base64,AQ==" }),
+    ]);
+    const prompts = JSON.parse(await readFile(path.join(articleDir, "prompts.json"), "utf8")) as Record<string, unknown>;
+    expect(prompts.technicalTermProfileFingerprint).toBe("fnv1a-race");
+    expect(prompts.coverPrompts).toEqual(expect.any(Array));
+    expect((prompts.illustrationPrompts as Array<Record<string, unknown>>).map((item) => item.filename)).toEqual([
+      "prompt-ill-0.png",
+      "prompt-ill-1.png",
+    ]);
+  });
 });

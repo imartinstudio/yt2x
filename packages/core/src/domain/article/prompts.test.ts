@@ -134,7 +134,7 @@ describe("buildArticleUserPrompt", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/标题与导语一致性检查/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/最高优先级原则/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/可被读者预测/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/2GB 显存跑 AI Agent/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/2GB 显存跑本地工具/);
   });
 
   it("anchors the generated title to the original video title", () => {

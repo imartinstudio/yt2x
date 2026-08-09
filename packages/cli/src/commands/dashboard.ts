@@ -18,6 +18,7 @@ import {
   writePlatformArticleBundle,
   createLlmAdapter,
   createImageGeneratorAdapter,
+  withPlatformVisualPromptFileLock,
   type LlmFactoryConfig,
   type ImageGeneratorPort,
 } from "@yt2x/adapters-node";
@@ -600,6 +601,7 @@ export const saveDashboardPromptImage = async (input: {
   assertInsideArticleDir(articleDir, articlePath);
   assertInsideArticleDir(articleDir, imageDir);
 
+  return withPlatformVisualPromptFileLock(promptsPath, async () => {
   const rawPrompts = await readFile(promptsPath, "utf8");
   const prompts = JSON.parse(rawPrompts) as unknown;
   if (!isRecord(prompts)) throw new Error("图片 Prompt 文件无效");
@@ -630,6 +632,7 @@ export const saveDashboardPromptImage = async (input: {
     await rm(previousPath, { force: true });
   }
   return { file };
+  });
 };
 
 export const deleteDashboardPromptImage = async (input: {
@@ -649,6 +652,7 @@ export const deleteDashboardPromptImage = async (input: {
   assertInsideArticleDir(articleDir, promptsPath);
   assertInsideArticleDir(articleDir, articlePath);
   assertInsideArticleDir(articleDir, imageDir);
+  return withPlatformVisualPromptFileLock(promptsPath, async () => {
   const parsed = JSON.parse(await readFile(promptsPath, "utf8")) as unknown;
   if (!isRecord(parsed)) throw new Error("图片 Prompt 文件无效");
   const prompt = promptForId(parsed, input.promptId);
@@ -665,6 +669,7 @@ export const deleteDashboardPromptImage = async (input: {
     writeFile(articlePath, nextArticleMd, "utf8"),
     rm(imagePath, { force: true }),
   ]);
+  });
 };
 
 const fileForPlatform = (platform: PlatformKey): string =>
@@ -1022,6 +1027,7 @@ const handleDashboardRequest = async (
 
       // X / XHS / WeChat (no images): generate prompts via orchestratePlatformPrompts
       const needsPrompts = platform === "x" || platform === "xiaohongshu";
+      let visualPromptPromise: Promise<unknown> | undefined;
       if (needsPrompts) {
         // Prefer Anthropic-compatible DeepSeek endpoint (supports [1m] extended thinking)
         let provider = defaultCliLlmProvider();
@@ -1041,7 +1047,14 @@ const handleDashboardRequest = async (
           try {
             const cfg: LlmFactoryConfig = { provider, apiKey, baseUrl: baseUrlMap[provider] ?? "https://api.openai.com/v1", defaultModel: modelMap[provider] ?? "deepseek-v4-flash" };
             const llm = createLlmAdapter(cfg);
-            orchestratePlatformPrompts({ articleDir, videoId, articleMd, platform, llm, llmModel: cfg.defaultModel! }).catch(function(){});
+            visualPromptPromise = orchestratePlatformPrompts({
+              articleDir,
+              videoId,
+              articleMd,
+              platform,
+              llm,
+              llmModel: cfg.defaultModel!,
+            }).catch(function(){});
           } catch (err: unknown) {
             process.stderr.write(`orchestrate warning: ${err instanceof Error ? err.message : String(err)}\n`);
           }
@@ -1084,6 +1097,7 @@ const handleDashboardRequest = async (
           return;
         }
         try {
+          if (visualPromptPromise !== undefined) await visualPromptPromise;
           await formatXiaohongshuLayout({ articleDir, videoId, articleMd });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -1393,6 +1407,7 @@ const handleDashboardRequest = async (
     if (!formatDir) { sendJson(res, 400, { error: "无效平台" }); return; }
     const promptsPath = path.join(path.resolve(opts.articleOutDir), videoId, formatDir, "prompts.json");
     try {
+      await withPlatformVisualPromptFileLock(promptsPath, async () => {
       const raw = await readFile(promptsPath, "utf8");
       const prompts = JSON.parse(raw) as Record<string, unknown>;
       const match = promptId.match(/^(cover|ill)(?:-(\d+))?$/);
@@ -1410,6 +1425,7 @@ const handleDashboardRequest = async (
       if (!found) { sendJson(res, 404, { error: "未找到该 prompt" }); return; }
       await writeFile(promptsPath, JSON.stringify(prompts, null, 2) + "\n", "utf8");
       sendJson(res, 200, { ok: true });
+      });
     } catch (err: unknown) {
       sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
     }
@@ -1429,6 +1445,7 @@ const handleDashboardRequest = async (
     if (!formatDir) { sendJson(res, 400, { error: "无效平台" }); return; }
     const promptsPath = path.join(path.resolve(opts.articleOutDir), videoId, formatDir, "prompts.json");
     try {
+      await withPlatformVisualPromptFileLock(promptsPath, async () => {
       const raw = await readFile(promptsPath, "utf8");
       const prompts = JSON.parse(raw) as Record<string, unknown>;
       const match = promptId.match(/^(cover|ill)(?:-(\d+))?$/);
@@ -1451,6 +1468,7 @@ const handleDashboardRequest = async (
       if (!found) { sendJson(res, 404, { error: "未找到该 prompt" }); return; }
       await writeFile(promptsPath, JSON.stringify(prompts, null, 2) + "\n", "utf8");
       sendJson(res, 200, { ok: true });
+      });
     } catch (err: unknown) {
       sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
     }

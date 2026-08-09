@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   appendTechnicalTermRuleToSystemPrompt,
@@ -12,8 +12,82 @@ import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../techni
 import type { PlatformFormatInput, PlatformFormatResult } from "./types.js";
 
 export type PlatformVisualPromptData = {
+  platform?: string;
+  title?: string;
+  model?: string;
+  technicalTermProfileFingerprint: string;
   coverPrompts: Array<{ label: string; prompt: string; size: string; filename: string; name: string }>;
   illustrationPrompts: Array<{ index: number; text: string; prompt: string; filename: string; name: string }>;
+};
+
+type PlatformVisualPromptPatch = Partial<PlatformVisualPromptData>;
+
+const promptFileLocks = new Map<string, Promise<void>>();
+let promptTempCounter = 0;
+
+export const withPlatformVisualPromptFileLock = async <T>(
+  promptsPath: string,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  const key = path.resolve(promptsPath);
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = promptFileLocks.get(key);
+  promptFileLocks.set(key, current);
+  if (previous !== undefined) await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (promptFileLocks.get(key) === current) promptFileLocks.delete(key);
+  }
+};
+
+const readPromptObject = async (promptsPath: string): Promise<Record<string, unknown> | undefined> => {
+  try {
+    const parsed = JSON.parse(await readFile(promptsPath, "utf8")) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const writePromptObjectAtomically = async (promptsPath: string, value: Record<string, unknown>): Promise<void> => {
+  await mkdir(path.dirname(promptsPath), { recursive: true });
+  const tempPath = promptsPath + ".tmp-" + process.pid + "-" + promptTempCounter++;
+  await writeFile(tempPath, JSON.stringify(value, null, 2) + "\n", "utf8");
+  await rename(tempPath, promptsPath);
+};
+
+export const mergePlatformVisualPrompts = async (input: {
+  promptsPath: string;
+  patch: PlatformVisualPromptPatch;
+}): Promise<PlatformVisualPromptData> =>
+  withPlatformVisualPromptFileLock(input.promptsPath, async () => {
+    const current = await readPromptObject(input.promptsPath);
+    const next = {
+      ...(current ?? {}),
+      ...input.patch,
+      coverPrompts: input.patch.coverPrompts ?? current?.["coverPrompts"] ?? [],
+      illustrationPrompts: input.patch.illustrationPrompts ?? current?.["illustrationPrompts"] ?? [],
+    } as PlatformVisualPromptData;
+    delete (next as unknown as Record<string, unknown>)["prompts"];
+    if (typeof next.technicalTermProfileFingerprint !== "string") {
+      throw new Error("平台视觉提示缺少 technicalTermProfileFingerprint");
+    }
+    await writePromptObjectAtomically(input.promptsPath, next as unknown as Record<string, unknown>);
+    return next;
+  });
+
+export const persistPlatformVisualPrompts = async (input: {
+  promptsPath: string;
+  value: PlatformVisualPromptData;
+}): Promise<void> => {
+  await mergePlatformVisualPrompts({ promptsPath: input.promptsPath, patch: input.value });
 };
 
 export type PlatformTechnicalTermContext = {
@@ -37,6 +111,7 @@ export const createPlatformTechnicalTermContext = async (input: {
     sourceText: input.body,
     sourceTitle: input.title,
     discoveredTerms: discovery.accepted,
+    artifact: "visual-prompt",
   });
   return { guard, prepared: guard.prepare({ title: input.title, body: input.body }) };
 };
@@ -970,7 +1045,11 @@ export const orchestratePlatformPrompts = async (
     llm: input.llm,
     llmModel: input.llmModel,
     context: termContext,
-    value: { coverPrompts, illustrationPrompts },
+    value: {
+      technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
+      coverPrompts,
+      illustrationPrompts,
+    },
     parseResponse: (content) => JSON.parse(content) as PlatformVisualPromptData,
   });
   coverPrompts = guardedPrompts.coverPrompts;
@@ -984,7 +1063,7 @@ export const orchestratePlatformPrompts = async (
     coverPrompts,
     illustrationPrompts,
   };
-  await writeFile(promptsPath, JSON.stringify(promptsData, null, 2), "utf8");
+  await persistPlatformVisualPrompts({ promptsPath, value: promptsData });
   files.push(promptsPath);
 
   // Build prompt lookup: section index → prompt text

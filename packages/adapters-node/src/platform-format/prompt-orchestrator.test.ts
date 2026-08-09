@@ -401,4 +401,38 @@ describe("orchestratePlatformPrompts technical terms", () => {
     expect(requests.filter((request) => request.messages[0]?.content.includes("严格的源级专业术语发现器"))).toHaveLength(1);
     expect(requests.filter((request) => request.messages[0]?.content.includes("专业术语定向修复器"))).toHaveLength(1);
   });
+
+  it.each(["wechat", "bilibili"] as const)("guards %s visual fields including label, name, and filename", async (platform) => {
+    const response = (content: string): ChatResponse => ({ content, model: "platform-fields", finishReason: "stop" });
+    const llm: LlmPort = {
+      chat: async (request) => {
+        const system = request.messages[0]?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) return response("[]");
+        if (system.includes("专业术语定向修复器")) {
+          const user = request.messages[1]?.content ?? "";
+          const currentJson = user.match(/Current value:\n([\s\S]*?)\n\n只输出修复后的值/u)?.[1] ?? "{}";
+          const current = JSON.parse(currentJson) as Record<string, unknown>;
+          const repair = (value: unknown): unknown => {
+            if (typeof value === "string") return value.replaceAll("图工程", "Graph Engineering").replaceAll("知识图谱", "Knowledge Graph").replaceAll("代理图谱", "Agent Graph");
+            if (Array.isArray(value)) return value.map(repair);
+            if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, repair(child)]));
+            return value;
+          };
+          return response(JSON.stringify(repair(current)));
+        }
+        if (system.includes("Create a cover image-generation prompt")) return response("图工程封面");
+        return response(JSON.stringify([{ index: 1, text: "图工程", filename: "图工程-知识图谱.png", name: "代理图谱", prompt: "图工程、知识图谱和代理图谱；流程图。" }]));
+      },
+    };
+    const articleMd = "# Graph Engineering\n\n## Knowledge Graph\nAgent Graph 的流程图。";
+    const result = await orchestratePlatformPrompts({ articleDir: tmpRoot, videoId: "fields-" + platform, articleMd, platform, llm, llmModel: "platform-fields" });
+    const prompts = JSON.parse(await readFile(path.join(result.outputDir, "prompts.json"), "utf8")) as Record<string, unknown>;
+    const serialized = JSON.stringify(prompts);
+    expect(serialized).toContain("Graph Engineering");
+    expect(serialized).toContain("Knowledge Graph");
+    expect(serialized).toContain("Agent Graph");
+    expect(serialized).not.toContain("图工程");
+    expect(serialized).not.toContain("知识图谱");
+    expect(serialized).not.toContain("代理图谱");
+  });
 });

@@ -257,7 +257,7 @@ describe("generateXArticleContent", () => {
       }
       const repairPrompt = req.messages.at(-1)?.content ?? "";
       if (repairPrompt.includes("只返回一行")) {
-        return { content: "#GraphEngineering #Claude #Codex", model: "m", finishReason: "stop" };
+        return { content: "#GraphEngineering #Workflow #Codex", model: "m", finishReason: "stop" };
       }
       return { content: "# T\n\n修复后的正文仍然没有标签", model: "m", finishReason: "stop" };
     });
@@ -265,7 +265,7 @@ describe("generateXArticleContent", () => {
     const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
 
     expect(llm.chat).toHaveBeenCalledTimes(3);
-    expect(r.content).toBe("# **Notes**\n\n修复后的正文仍然没有标签\n\n#GraphEngineering #Claude #Codex");
+    expect(r.content).toBe("# **Notes**\n\n修复后的正文仍然没有标签\n\n#GraphEngineering #Workflow #Codex");
   });
 
   it("normalizes command-style topic hashtags into X-compatible tags", async () => {

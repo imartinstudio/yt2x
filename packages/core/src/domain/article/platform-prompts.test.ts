@@ -132,4 +132,11 @@ describe("title helpers", () => {
   it("extracts protected title terms case-insensitively", () => {
     expect(extractProtectedTitleTerms("用 claude 和 Codex 做代码重构")).toEqual(["Codex", "Claude"]);
   });
+
+  it("derives title protection from a central catalog term without a local allowlist", () => {
+    expect(extractProtectedTitleTerms("Artificial Intelligence 与 Codex 的边界")).toEqual([
+      "Artificial Intelligence",
+      "Codex",
+    ]);
+  });
 });

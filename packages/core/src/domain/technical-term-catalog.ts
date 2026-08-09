@@ -1,4 +1,5 @@
 export type TechnicalTermPolicy = "preserve" | "fixed-zh" | "contextual-preserve";
+export type TechnicalTermArtifact = "content" | "visual-prompt";
 
 export type TechnicalTermCategory =
   | "ai"
@@ -237,6 +238,14 @@ const INITIAL_CATALOG: readonly TechnicalTermEntry[] = [
   entry("Grill with Docs", ["product"], "preserve", { aliases: ["grill with docs"] }),
   entry("2PRD", ["product"], "preserve", { aliases: ["2prd"] }),
   entry("Codex", ["product"], "preserve", { aliases: ["codex"] }),
+  entry("Claude", ["product"], "preserve", { aliases: ["claude"] }),
+  entry("ChatGPT", ["product"], "preserve", { aliases: ["chatgpt"] }),
+  entry("GPT", ["product"], "preserve", { aliases: ["gpt"] }),
+  entry("OpenAI", ["product"], "preserve", { aliases: ["openai"] }),
+  entry("Gemini", ["product"], "preserve", { aliases: ["gemini"] }),
+  entry("DeepSeek", ["product"], "preserve", { aliases: ["deepseek"] }),
+  entry("Cursor", ["product"], "preserve", { aliases: ["cursor"] }),
+  entry("GitHub Copilot", ["product"], "preserve", { aliases: ["github copilot"] }),
   entry("Plan Mode", ["product"], "preserve", { aliases: ["plan mode"] }),
   entry("Agents", ["product"], "preserve", { aliases: ["agents"] }),
   entry("PRD", ["product"], "preserve", { aliases: ["prd"] }),
@@ -407,6 +416,7 @@ const createProfile = (
   sourceText: string,
   sourceTitle: string,
   discoveredTerms: readonly DiscoveredTechnicalTerm[],
+  artifact: TechnicalTermArtifact,
 ): TechnicalTermProfile => {
   const matches = findProfileMatches(sourceText, sourceTitle, discoveredTerms);
   const base = resolvedFromMatches(matches);
@@ -441,6 +451,7 @@ const createProfile = (
       entries: mergedEntries,
       occurrences: base.occurrences,
       catalogFingerprint: TECHNICAL_TERM_CATALOG_FINGERPRINT,
+      artifact,
     }),
   });
 };
@@ -449,14 +460,16 @@ export type CreateTechnicalTermGuardArgs = {
   sourceText: string;
   sourceTitle?: string;
   discoveredTerms?: readonly DiscoveredTechnicalTerm[];
+  artifact?: TechnicalTermArtifact;
 };
 
 export const createTechnicalTermGuard = ({
   sourceText,
   sourceTitle = "",
   discoveredTerms = [],
+  artifact = "content",
 }: CreateTechnicalTermGuardArgs): TechnicalTermGuard => {
-  const profile = createProfile(sourceText, sourceTitle, discoveredTerms);
+  const profile = createProfile(sourceText, sourceTitle, discoveredTerms, artifact);
   const preservedEntries = profile.entries.filter(
     (term) => term.policy === "preserve" || term.policy === "contextual-preserve",
   );
@@ -471,6 +484,9 @@ export const createTechnicalTermGuard = ({
     ...profile.entries
       .filter((term) => term.policy === "fixed-zh")
       .map((term) => `${term.canonical} → ${term.preferredZh}`),
+    ...(artifact === "visual-prompt"
+      ? ["视觉提示可以使用 graph、diagram、image 等自然英文视觉描述；只有源材料实际激活的技术术语需要保留。"]
+      : []),
   ].join("\n");
 
   const restorePlaceholders = (value: string, restoration: TechnicalTermRestoration): string => {
@@ -551,17 +567,19 @@ export const createTechnicalTermGuard = ({
     for (const term of preservedEntries) {
       if (!combinedText.includes(term.canonical)) {
         const forbidden = term.forbiddenZh.find((candidate) => combinedText.includes(candidate));
-        violations.push(forbidden === undefined
-          ? {
-              code: "missing-canonical-term",
-              canonical: term.canonical,
-              message: `输出缺少源术语 ${term.canonical}。`,
-            }
-          : {
-              code: "forbidden-translation",
-              canonical: term.canonical,
-              message: `输出使用了 ${forbidden}，应保留 ${term.canonical}。`,
-            });
+        if (forbidden !== undefined) {
+          violations.push({
+            code: "forbidden-translation",
+            canonical: term.canonical,
+            message: "输出使用了 " + forbidden + "，应保留 " + term.canonical + "。",
+          });
+        } else {
+          violations.push({
+            code: "missing-canonical-term",
+            canonical: term.canonical,
+            message: "输出缺少源术语 " + term.canonical + "。",
+          });
+        }
       }
     }
     const activeCanonicals = new Set(profile.entries.map((term) => term.canonical));
@@ -570,7 +588,9 @@ export const createTechnicalTermGuard = ({
       .sort((a, b) => b.sourceText.length - a.sourceText.length || a.start - b.start)
       .filter((match, index, all) => all.slice(0, index).every((selected) => !overlaps(match, selected)));
     for (const match of unexpectedMatches) {
-      if (!activeCanonicals.has(match.entry.canonical)) {
+      const visualVocabularyIsAllowed = artifact === "visual-prompt"
+        && match.entry.policy === "contextual-preserve";
+      if (!activeCanonicals.has(match.entry.canonical) && !visualVocabularyIsAllowed) {
         violations.push({
           code: "invented-canonical-term",
           canonical: match.entry.canonical,
@@ -615,4 +635,31 @@ export const appendTechnicalTermRuleToSystemPrompt = (
 ): string => [systemPrompt.trim(), promptRule.trim()].filter(Boolean).join("\n\n");
 
 export const TECHNICAL_TERM_GENERAL_RULE =
-  "源材料中实际出现的术语必须遵循其目录策略：preserve 保留 canonical 原文，fixed-zh 使用统一中文译法，contextual-preserve 只在技术语境中保留原文；不得凭空加入源材料没有的术语。";
+  "源材料中实际出现的术语必须遵循其目录策略：preserve 保留 canonical 原文，必须按原文逐字保留，不得翻译、音译或本地化；fixed-zh 使用统一中文译法，contextual-preserve 只在技术语境中保留原文；不得凭空加入源材料没有的术语。";
+
+export const buildTechnicalTermPromptRule = (language: "zh" | "en"): string => {
+  const canonicals = TECHNICAL_TERM_CATALOG.map((entry) => entry.canonical).join("、");
+  const contextual = TECHNICAL_TERM_CATALOG
+    .filter((entry) => entry.policy === "contextual-preserve")
+    .map((entry) => entry.canonical + " 只有在源材料明确作为技术概念时才需要保留原文。")
+    .join("\n");
+  const contextualExamples = TECHNICAL_TERM_CATALOG
+    .filter((entry) => entry.policy === "contextual-preserve")
+    .map((entry) => `例如「${entry.canonical} 的基本词汇」和「构建你的第一个 ${entry.canonical}」。`)
+    .join("\n");
+  if (language === "en") {
+    return [
+      "Technical-term rule: preserve source-active technical terms exactly; never translate, transliterate, or localize them.",
+      "Central catalog canonicals currently covered: " + canonicals + ".",
+      contextual,
+      "Do not introduce catalog terms that are absent from the source.",
+    ].filter(Boolean).join("\n");
+  }
+  return [
+    "专业术语保护（硬性规则）：只保护源材料中实际出现的技术术语、方法名、框架名、模型名、产品名、命令、API 名、代码标识和可复制 prompt，必须按原文逐字保留；preserve/contextual-preserve 保留 canonical 原文，fixed-zh 使用统一中文译法；不得翻译、音译或本地化。",
+    "中央目录当前覆盖的 canonical：" + canonicals + "。",
+    contextual,
+    contextualExamples,
+    "不得凭空加入源材料没有的目录术语；普通词不因与术语同形而改写。",
+  ].filter(Boolean).join("\n");
+};

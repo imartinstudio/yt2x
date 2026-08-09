@@ -4,6 +4,7 @@ import { appendTechnicalTermRuleToSystemPrompt, createTechnicalTermGuard, type L
 import {
   createPlatformTechnicalTermContext,
   finalizePlatformVisualPrompts,
+  mergePlatformVisualPrompts,
 } from "./prompt-orchestrator.js";
 import type { PlatformFormatInput, PlatformFormatResult, XiaohongshuMetadata } from "./types.js";
 
@@ -225,7 +226,7 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
       body,
     })
     : (() => {
-      const guard = createTechnicalTermGuard({ sourceText: body, sourceTitle: title });
+      const guard = createTechnicalTermGuard({ sourceText: body, sourceTitle: title, artifact: "visual-prompt" });
       return { guard, prepared: guard.prepare({ title, body }) };
     })();
   const preparedArticle = termContext.prepared.value;
@@ -241,14 +242,16 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
   let hasCachedPrompts = false;
   try {
     const cachedRaw = await readFile(promptsPath, "utf8");
-    const parsed = JSON.parse(cachedRaw) as string[] | {
-      prompts?: string[];
+    const parsed = JSON.parse(cachedRaw) as {
+      illustrationPrompts?: Array<{ index: number; prompt: string }>;
       technicalTermProfileFingerprint?: string;
     };
-    const cached = Array.isArray(parsed) ? parsed : parsed.prompts;
-    const profileMatches = Array.isArray(parsed)
-      || parsed.technicalTermProfileFingerprint === termContext.prepared.profileFingerprint;
-    if (profileMatches && Array.isArray(cached) && cached.length === sections.length) {
+    const cached = parsed.illustrationPrompts
+      ?.slice()
+      .sort((left, right) => left.index - right.index)
+      .map((item) => item.prompt);
+    const profileMatches = parsed.technicalTermProfileFingerprint === termContext.prepared.profileFingerprint;
+    if (profileMatches && cached !== undefined && cached.length === sections.length) {
       sectionPrompts.push(...cached);
       hasCachedPrompts = true;
     }
@@ -302,10 +305,22 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
   }
 
   await mkdir(outputDir, { recursive: true });
-  await writeFile(promptsPath, JSON.stringify({
-    prompts: sectionPrompts,
-    technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
-  }, null, 2), "utf8");
+  await mergePlatformVisualPrompts({
+    promptsPath,
+    patch: {
+      platform: "xiaohongshu",
+      title,
+      ...(input.llmModel === undefined ? {} : { model: input.llmModel }),
+      technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
+      illustrationPrompts: sectionPrompts.map((prompt, index) => ({
+        index,
+        text: sections[index] ?? "",
+        prompt,
+        filename: IMAGE_PREFIX + String(index + 1).padStart(2, "0") + IMAGE_EXT,
+        name: "第" + String(index + 1) + "节插图",
+      })),
+    },
+  });
   files.push(promptsPath);
 
   // ensure output directory exists (needed for image generation below)

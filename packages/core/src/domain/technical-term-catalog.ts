@@ -97,6 +97,7 @@ type TermMatch = {
 const NON_GRAPH_IMAGE_TERM_RE =
   /(?:截图|截屏|缩略图|图片|图像|图表|图标|图形|图案|图层|图纸|图书|图解|图示|示意图|流程图|封面图|配图|插图|地图|草图|图文)/gu;
 const PRIVATE_PLACEHOLDER_RE = /\uE000YT2X_TERM_[^\uE001]+\uE001/u;
+const FIELD_BOUNDARY = "\uE002YT2X_FIELD_BOUNDARY\uE003";
 const HAN_CHAR_RE = /\p{Script=Han}/u;
 
 const freezeEntry = (entry: TechnicalTermEntry): TechnicalTermEntry => Object.freeze({
@@ -521,7 +522,7 @@ export const createTechnicalTermGuard = ({
       }
     };
     collectTextValues(value);
-    const combinedText = textValues.join("\n");
+    const combinedText = textValues.join(FIELD_BOUNDARY);
     for (const text of textValues) {
       if (PRIVATE_PLACEHOLDER_RE.test(text)) {
         violations.push({ code: "unrestored-placeholder", message: "内部术语占位符残留在输出中。" });

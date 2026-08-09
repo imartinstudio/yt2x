@@ -126,6 +126,19 @@ describe("technical term catalog", () => {
     expect(guard.validate({ title: "Graph Engineering", body: "普通摘要" })).toEqual([]);
   });
 
+  it("does not join separate fields into a discovered canonical term", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "AI Agent\nKnowledge\nGraph",
+      discoveredTerms: [{ sourceText: "Knowledge Graph", confidence: "high", category: "ai-agent" }],
+    });
+    const violations = guard.validate({ title: "AI Agent", first: "Knowledge", second: "Graph" });
+
+    expect(violations).toContainEqual(expect.objectContaining({
+      code: "missing-canonical-term",
+      canonical: "Knowledge\nGraph",
+    }));
+  });
+
   it("keeps 图文 image wording Chinese while restoring contextual Graph", () => {
     const guard = createTechnicalTermGuard({ sourceText: "Graph is useful." });
     const prepared = guard.prepare("图文说明和图的基本词汇");

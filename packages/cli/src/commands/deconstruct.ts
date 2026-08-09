@@ -115,6 +115,7 @@ export const runDeconstructCommand = async (
     artifacts.videoId,
     artifacts.videoPath,
     artifacts.durationSec,
+    artifacts.articleMd,
   );
 
   logger.info({ manifestPath: output.manifestPath, clipCount: output.clippedCount }, "Deconstruct: manifest written");

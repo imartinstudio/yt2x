@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createTechnicalTermGuard, type DeconstructManifest, type LlmPort } from "@yt2x/core";
+import { writeDeconstructOutput } from "./file-store.js";
 import { generateClipsPosts, writeSelectedPostFiles } from "./post-generator.js";
 
 describe("generateClipsPosts", () => {
@@ -428,6 +429,156 @@ describe("generateClipsPosts", () => {
       })).rejects.toThrow(/Latent Workspace Routing/u);
 
       await expect(readFile(path.join(clipsDir, "post-1-selected-translation.md"), "utf8")).rejects.toThrow();
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["summary", "Knowledge Graph", "知识图谱能提高检索质量。", "输出使用了 知识图谱，应保留 Knowledge Graph"],
+    ["key_quote", "Graph", "图能表达节点关系。", "输出使用了 图，应保留 Graph"],
+    ["video_script", "Agent Graph", "代理图谱展示了调用链。", "输出使用了 代理图谱，应保留 Agent Graph"],
+  ])("activates a selected term persisted only in %s", async (field, term, generatedText, expectedError) => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), `yt2x-clips-persisted-${field}-`));
+    try {
+      const selectedCandidate = {
+        id: "section-1",
+        title: "可靠检索",
+        summary: field === "summary" ? `${term} 负责检索。` : "普通摘要。",
+        article_section: "可靠检索",
+        angle: "tutorial" as const,
+        risk: "low" as const,
+        timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+        scores: {
+          counter_intuitiveness: 3,
+          shareability: 3,
+          practical_value: 4,
+          visual_appeal: 2,
+          composite: 3,
+        },
+        key_quote: field === "key_quote" ? `${term} 不是普通图片。` : "普通引语。",
+        video_script: field === "video_script" ? `画面展示 ${term}。` : "普通画面。",
+      };
+      const output = await writeDeconstructOutput(
+        articleDir,
+        [selectedCandidate],
+        `persisted-${field}`,
+        path.join(articleDir, "full.mp4"),
+        60,
+        "# 可靠检索\n\n## 可靠检索\n\n普通正文。",
+      );
+      const manifest = JSON.parse(await readFile(output.manifestPath, "utf8")) as DeconstructManifest;
+      manifest.clips[0]!.selected = true;
+      manifest.clips[0]!.text = generatedText;
+      const guard = createTechnicalTermGuard({
+        sourceText: `${term}\nAgents`,
+      });
+
+      await expect(writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "可靠检索",
+        discoveredTerms: [],
+      })).rejects.toThrow(expectedError);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not activate a persisted term that only belongs to an unselected clip", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-persisted-unselected-"));
+    try {
+      const baseCandidate = {
+        article_section: "可靠检索",
+        angle: "tutorial" as const,
+        risk: "low" as const,
+        timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+        scores: {
+          counter_intuitiveness: 3,
+          shareability: 3,
+          practical_value: 4,
+          visual_appeal: 2,
+          composite: 3,
+        },
+        key_quote: "普通引语。",
+        video_script: "普通画面。",
+      };
+      const output = await writeDeconstructOutput(
+        articleDir,
+        [{ ...baseCandidate, id: "section-1", title: "选中片段", summary: "普通摘要。" }, {
+          ...baseCandidate,
+          id: "section-2",
+          title: "未选片段",
+          summary: "Archive Memory Routing 只属于未选片段。",
+        }],
+        "persisted-unselected",
+        path.join(articleDir, "full.mp4"),
+        120,
+        "# 可靠检索\n\n## 可靠检索\n\n普通正文。",
+      );
+      const manifest = JSON.parse(await readFile(output.manifestPath, "utf8")) as DeconstructManifest;
+      manifest.clips[0]!.selected = true;
+      manifest.clips[0]!.text = "这里只讨论可靠检索。";
+      manifest.clips[1]!.selected = false;
+      manifest.clips[1]!.text = "Archive Memory Routing 只属于未选片段。";
+      const discoveredTerms = [{
+        sourceText: "Archive Memory Routing",
+        confidence: "high" as const,
+        category: "ai-agent" as const,
+      }];
+      const guard = createTechnicalTermGuard({
+        sourceText: "普通摘要。\nArchive Memory Routing\nAgents",
+        discoveredTerms,
+      });
+
+      const paths = await writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "可靠检索",
+        discoveredTerms,
+      });
+
+      expect(await readFile(paths[0]!, "utf8")).toContain("这里只讨论可靠检索。");
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back safely for an old manifest without persisted source context", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-legacy-source-fallback-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "legacy-source-fallback", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        candidateCount: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "legacy",
+          title: "旧片段",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: true,
+          text: "这里只保留旧格式正文。",
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-legacy.mp4",
+          articleSection: "旧章节",
+        }],
+      };
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+      const guard = createTechnicalTermGuard({ sourceText: "旧片段\n旧章节\nAgents" });
+
+      const paths = await writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "旧文章",
+        discoveredTerms: [],
+      });
+
+      expect(await readFile(paths[0]!, "utf8")).toContain("这里只保留旧格式正文。");
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }

@@ -38,7 +38,7 @@ export type ClipPostTechnicalTerms = {
   restoration: TechnicalTermRestoration;
   articleTitle: string;
   discoveredTerms: readonly DiscoveredTechnicalTerm[];
-  sourceTextByClipId: Readonly<Record<string, string>>;
+  sourceTextByClipId?: Readonly<Record<string, string>>;
 };
 
 const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -122,9 +122,9 @@ export const generateClipsPosts = async (
     timecodes: { durationSec: Math.round(c.timecodes.durationSec) },
     video: c.video,
   }));
-  const sourceTextByClipId = Object.freeze(Object.fromEntries(allClips.map((clip, index) => [
+  const sourceTextByClipId = Object.freeze(Object.fromEntries(allClips.map((clip) => [
     clip.id,
-    buildClipSourceText(clip, clipsInput[index]!, articleMd),
+    buildClipSourceText(clip, articleMd),
   ])));
 
   const sourceText = `${articleMd}\n${JSON.stringify(clipsInput)}`;
@@ -289,8 +289,7 @@ export const writeSelectedPostFiles = async (
   });
   const selectedSourceText = [
     technicalTerms.articleTitle,
-    ...selected.map((clip) => technicalTerms.sourceTextByClipId[clip.id]
-      ?? [clip.title, clip.articleSection ?? ""].join("\n")),
+    ...selected.map((clip) => sourceTextForSelectedClip(clip, technicalTerms)),
     CLIP_POST_CALL_TO_ACTION,
   ].join("\n");
   const finalGuard = createTechnicalTermGuard({
@@ -301,7 +300,11 @@ export const writeSelectedPostFiles = async (
   const selectedSourceCanonicals = new Set(finalGuard.profile.occurrences.map((item) => item.canonical));
   const sourceTranslationViolations = finalGuard.validate(assembledTexts).filter((violation) =>
     violation.code === "forbidden-translation"
-      && (violation.canonical === "Graph" || violation.canonical === "Knowledge Graph")
+      && (
+        violation.canonical === "Graph"
+        || violation.canonical === "Knowledge Graph"
+        || violation.canonical === "Agent Graph"
+      )
       && selectedSourceCanonicals.has(violation.canonical)
   );
   if (hasHardTechnicalTermViolations(sourceTranslationViolations)) {
@@ -377,9 +380,9 @@ const normalizeControlledYoutubeUrl = (text: string, expectedUrl: string): strin
 
 const buildClipSourceText = (
   clip: DeconstructManifest["clips"][number],
-  promptClip: GeneratePostsInput["clips"][number],
   articleMd: string,
 ): string => {
+  if (clip.sourceContext !== undefined) return sourceContextText(clip.sourceContext);
   const sourceRecord = clip as unknown as Record<string, unknown>;
   const optionalSourceFields = [
     "summary",
@@ -392,12 +395,31 @@ const buildClipSourceText = (
   ].map((key) => sourceRecord[key]).filter((value): value is string => typeof value === "string");
   return [
     clip.title,
-    promptClip.summary,
     clip.articleSection ?? "",
     extractArticleSection(articleMd, clip.articleSection),
     ...optionalSourceFields,
   ].filter(Boolean).join("\n");
 };
+
+const sourceTextForSelectedClip = (
+  clip: DeconstructManifest["clips"][number],
+  technicalTerms: ClipPostTechnicalTerms,
+): string => {
+  if (clip.sourceContext !== undefined) return sourceContextText(clip.sourceContext);
+  return technicalTerms.sourceTextByClipId?.[clip.id]
+    ?? [clip.title, clip.articleSection ?? ""].join("\n");
+};
+
+const sourceContextText = (
+  sourceContext: NonNullable<DeconstructManifest["clips"][number]["sourceContext"]>,
+): string => [
+  sourceContext.title,
+  sourceContext.summary,
+  sourceContext.keyQuote,
+  sourceContext.videoScript,
+  sourceContext.articleSection,
+  sourceContext.articleBody,
+].filter(Boolean).join("\n");
 
 const extractArticleSection = (articleMd: string, sectionTitle: string | undefined): string => {
   const target = sectionTitle?.trim();

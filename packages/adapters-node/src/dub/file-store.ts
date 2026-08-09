@@ -204,7 +204,7 @@ export const readDubScript = async (dubDir: string): Promise<DubScript> => {
     throw new Error(
         `Invalid or incompatible ${DUB_SCRIPT_FILE} in ${dubDir} (expected schema version ${DUB_SCRIPT_VERSION}): ` +
         `${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}. ` +
-        "This is likely a pre-PR3 cache from the old Chinese-subtitle dubbing path — delete the " +
+        "This is likely a legacy dubbing cache from before the current technical-term profile — delete the " +
         "file or re-run with --force to regenerate it.",
     );
   }

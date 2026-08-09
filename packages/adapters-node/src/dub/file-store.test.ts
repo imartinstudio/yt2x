@@ -254,7 +254,7 @@ describe("writers", () => {
     await expect(readDubTimingReport(dubDir)).rejects.toThrow(/Invalid dub-timing\.json/);
   });
 
-  it("rejects a pre-PR3 (version 1) dub-script.json instead of silently reusing it", async () => {
+  it("rejects a legacy version-1 dub-script.json instead of silently reusing it", async () => {
     const dubDir = path.join(await tmpRoot(), "dub");
     await mkdir(dubDir, { recursive: true });
     // 旧链路的产物：sourceSubtitle/中文 sourceText，字段形状与新 schema 不兼容。
@@ -269,7 +269,9 @@ describe("writers", () => {
       }),
       "utf8",
     );
-    await expect(readDubScript(dubDir)).rejects.toThrow(/Invalid or incompatible dub-script\.json/);
+    await expect(readDubScript(dubDir)).rejects.toThrow(
+      /legacy dubbing cache from before the current technical-term profile/,
+    );
   });
 
   it("rejects a dub-script.json that fails schema validation even at version 2", async () => {

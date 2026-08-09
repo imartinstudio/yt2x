@@ -21,9 +21,45 @@ export type {
 } from "@yt2x/core";
 
 const completedDiscoveryCache = new Map<string, Promise<TechnicalTermDiscoveryResult>>();
+const resolvedDiscoveryCache = new Map<string, TechnicalTermDiscoveryResult>();
 
 export const fingerprintTechnicalTermDiscoverySource = (value: string): string =>
   `sha256-${createHash("sha256").update(value, "utf8").digest("hex")}`;
+
+const discoveryCacheKey = (input: {
+  model: string;
+  sourceText: string;
+  sourceTitle?: string;
+  catalogFingerprint?: string;
+}): string => {
+  const sourceForDiscovery = input.sourceTitle?.trim() === ""
+    || input.sourceTitle === undefined
+    ? input.sourceText
+    : `${input.sourceTitle}\n\n${input.sourceText}`;
+  return [
+    fingerprintTechnicalTermDiscoverySource(sourceForDiscovery),
+    input.model,
+    TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
+    input.catalogFingerprint ?? TECHNICAL_TERM_CATALOG_FINGERPRINT,
+  ].join("\u0000");
+};
+
+/**
+ * Return only a discovery result already completed in this process. Cache matching must not
+ * turn a normal dub-script read into an extra provider call; an unavailable result is treated
+ * as absent so the deterministic catalog-only profile remains the safe fallback.
+ */
+export const getCachedTechnicalTermDiscovery = (input: {
+  model: string;
+  sourceText: string;
+  sourceTitle?: string;
+  catalogFingerprint?: string;
+}): TechnicalTermDiscoveryResult | undefined => {
+  const result = resolvedDiscoveryCache.get(discoveryCacheKey(input));
+  return result?.warnings.some((warning) => warning.code === "technical-term-discovery-unavailable")
+    ? undefined
+    : result;
+};
 
 const termPattern = (term: string): RegExp => {
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -122,13 +158,7 @@ export const discoverTechnicalTerms = (
     || input.sourceTitle === undefined
     ? input.sourceText
     : `${input.sourceTitle}\n\n${input.sourceText}`;
-  const catalogFingerprint = input.catalogFingerprint ?? TECHNICAL_TERM_CATALOG_FINGERPRINT;
-  const key = [
-    fingerprintTechnicalTermDiscoverySource(sourceForDiscovery),
-    input.model,
-    TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
-    catalogFingerprint,
-  ].join("\u0000");
+  const key = discoveryCacheKey(input);
   const existing = completedDiscoveryCache.get(key);
   if (existing !== undefined) return existing;
 
@@ -160,6 +190,7 @@ export const discoverTechnicalTerms = (
       completedDiscoveryCache.delete(key);
       return unavailable("专业术语发现响应无法解析，已跳过未知术语发现。");
     }
+    resolvedDiscoveryCache.set(key, parsed);
     return parsed;
   }).catch(() => {
     completedDiscoveryCache.delete(key);

@@ -9,6 +9,7 @@ import { createTechnicalTermGuard } from "@yt2x/core";
 import {
   discoverTechnicalTerms,
   fingerprintTechnicalTermDiscoverySource,
+  getCachedTechnicalTermDiscovery,
   repairTechnicalTermViolations,
 } from "./discovery.js";
 
@@ -47,6 +48,11 @@ describe("source-level technical term discovery", () => {
 
     expect(requests).toHaveLength(1);
     expect(second).toEqual(first);
+    expect(getCachedTechnicalTermDiscovery({
+      model: input.model,
+      sourceText: input.sourceText,
+    })).toEqual(first);
+    expect(llm.chat).toHaveBeenCalledTimes(1);
     expect(requests[0]!.messages.map((message) => message.content).join("\n")).toMatch(
       /exact(?:ly)?[^\n]*source[^\n]*span/i,
     );

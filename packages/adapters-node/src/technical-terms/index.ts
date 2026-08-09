@@ -1,5 +1,6 @@
 export {
   discoverTechnicalTerms,
+  getCachedTechnicalTermDiscovery,
   repairTechnicalTermViolations,
   type DiscoverTechnicalTermsInput,
   type RepairTechnicalTermViolationsInput,

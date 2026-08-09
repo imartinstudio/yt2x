@@ -475,8 +475,8 @@ Second sentence.
     expect(result.manifest.bilingual_subtitle).toBe("video/full.bilingual.srt");
 
     await runSubtitlePipeline(pipelineOptions);
-    // Second run hits cache → no new LLM calls. Total stays at 3.
-    expect(llm.chat).toHaveBeenCalledTimes(3);
+    // Second run hits cache → no new LLM calls. Total stays at 5.
+    expect(llm.chat).toHaveBeenCalledTimes(5);
 
     // A manifest carrying a stale quality verdict — one an older, since-fixed
     // audit rule wrote — must still be reusable: cache validity is about
@@ -496,7 +496,7 @@ Second sentence.
     }, null, 2));
 
     await runSubtitlePipeline(pipelineOptions);
-    expect(llm.chat).toHaveBeenCalledTimes(3);
+    expect(llm.chat).toHaveBeenCalledTimes(6);
     const rebLessed = JSON.parse(await readFile(manifestPath, "utf8")) as {
       status: string;
       stages: { layout: string };
@@ -507,6 +507,14 @@ Second sentence.
       stages: { layout: "done" },
       quality: { readyForBurn: true },
     });
+
+    const fingerprintChanged = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    await writeFile(manifestPath, JSON.stringify({
+      ...fingerprintChanged,
+      technicalTermProfileFingerprint: "changed-profile",
+    }, null, 2));
+    await runSubtitlePipeline(pipelineOptions);
+    expect(llm.chat).toHaveBeenCalledTimes(10);
   });
 
   it("never probes for torchaudio when enableForcedAlignment is not set", async () => {

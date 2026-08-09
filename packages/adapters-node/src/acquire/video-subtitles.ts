@@ -749,6 +749,7 @@ type ArticleBilingualManifest = {
   };
   version: number;
   sourceSha256: string;
+  technicalTermProfileFingerprint: string;
   translationRuleVersion: string;
   llmModel: string;
   layoutRuleVersion: string;
@@ -878,6 +879,7 @@ const readValidArticleCache = async (opts: {
   articleVideoDir: string;
   sourceSha256: string;
   model: string;
+  technicalTermProfileFingerprint: string;
 }): Promise<ArticleBilingualManifest | undefined> => {
   try {
     const raw = await readFile(path.join(opts.articleVideoDir, "full.bilingual.semantic.json"), "utf8");
@@ -887,6 +889,7 @@ const readValidArticleCache = async (opts: {
       manifest.files === undefined ||
       manifest.groups === undefined ||
       manifest.sourceSha256 !== opts.sourceSha256 ||
+      manifest.technicalTermProfileFingerprint !== opts.technicalTermProfileFingerprint ||
       manifest.translationRuleVersion !== TRANSLATION_RULE_VERSION ||
       manifest.llmModel !== opts.model
     ) return undefined;
@@ -1067,6 +1070,22 @@ const runArticleBilingualPipeline = async (
     "video",
   );
   const sourceSha256 = contentSha256(source.content);
+  const sourceText = parseSubtitleBlocks(source.content).map((cue) => cue.text.join(" ")).join(" ");
+  let technicalTermGuard = createTechnicalTermGuard({ sourceText });
+  if (detectSubtitleLanguage(source.content) !== "zh") {
+    const discovery = await discoverTechnicalTerms({
+      llm: opts.llm,
+      model: opts.llmModel,
+      sourceText,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+    warnings.push(...discovery.warnings.map((warning) => `technical term discovery: ${warning.message}`));
+    technicalTermGuard = createTechnicalTermGuard({
+      sourceText,
+      discoveredTerms: discovery.accepted,
+    });
+  }
+  const technicalTermProfileFingerprint = technicalTermGuard.profile.profileFingerprint;
   const measureLayout = async (srt: string): Promise<SubtitleLayoutMeasurement[]> =>
     measureBilingualSubtitleLayout({
       srtContent: srt,
@@ -1079,6 +1098,7 @@ const runArticleBilingualPipeline = async (
     articleVideoDir,
     sourceSha256,
     model: opts.llmModel,
+    technicalTermProfileFingerprint,
   });
   if (cached !== undefined) {
     const [enSrt, zhSrt, bilingualSrt] = await Promise.all([
@@ -1094,6 +1114,7 @@ const runArticleBilingualPipeline = async (
       bilingualSrt,
       manifest: cached,
       measurements,
+      technicalTermGuard,
     });
     const quality = semanticDeliveryQuality(audit, bilingualMode);
     pushAdvisoryWarnings(warnings, audit);
@@ -1185,6 +1206,7 @@ const runArticleBilingualPipeline = async (
       measureLayout,
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       ...(wordTimings !== undefined ? { wordTimings } : {}),
+      technicalTermGuard,
     });
   } catch (error: unknown) {
     if (!(error instanceof SemanticProjectionError)) throw error;
@@ -1199,6 +1221,7 @@ const runArticleBilingualPipeline = async (
       },
       version: SEMANTIC_VERSION,
       sourceSha256,
+      technicalTermProfileFingerprint,
       translationRuleVersion: TRANSLATION_RULE_VERSION,
       llmModel: opts.llmModel,
       layoutRuleVersion: LAYOUT_RULE_VERSION,
@@ -1234,8 +1257,9 @@ const runArticleBilingualPipeline = async (
     enSrt,
     zhSrt,
     bilingualSrt,
-    manifest: { sourceSha256 },
+    manifest: { sourceSha256, technicalTermProfileFingerprint },
     measurements,
+    technicalTermGuard,
   });
   projection = { ...projection, enSrt, zhSrt, bilingualSrt };
   const quality = semanticDeliveryQuality(audit, bilingualMode);
@@ -1256,6 +1280,7 @@ const runArticleBilingualPipeline = async (
     },
     version: SEMANTIC_VERSION,
     sourceSha256,
+    technicalTermProfileFingerprint,
     translationRuleVersion: TRANSLATION_RULE_VERSION,
     llmModel: opts.llmModel,
     layoutRuleVersion: LAYOUT_RULE_VERSION,
@@ -1285,6 +1310,7 @@ const runArticleBilingualPipeline = async (
     articleVideoDir,
     sourceSha256,
     model: opts.llmModel,
+    technicalTermProfileFingerprint,
   });
   if (validatedManifest === undefined) {
     throw new Error("semantic bilingual delivery manifest or subtitle hashes failed validation");

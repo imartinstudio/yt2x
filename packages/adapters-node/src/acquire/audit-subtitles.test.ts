@@ -5,6 +5,7 @@ import {
   isSubtitleAuditReadyForDelivery,
   type SubtitleAuditInput,
 } from "./audit-subtitles.js";
+import { createTechnicalTermGuard } from "@yt2x/core";
 
 const srt = (
   cues: readonly { start?: string; end?: string; lines: readonly string[] }[],
@@ -48,6 +49,48 @@ const validInput = (overrides: Partial<SubtitleAuditInput> = {}): SubtitleAuditI
 });
 
 describe("auditSubtitleArtifacts", () => {
+  it("reports a glossary violation from the full technical term profile", () => {
+    const guard = createTechnicalTermGuard({ sourceText: "Knowledge Graph" });
+    const result = auditSubtitleArtifacts(validInput({
+      sourceSrt: srt([{ lines: ["Knowledge Graph"] }]),
+      enSrt: srt([{ lines: ["Knowledge Graph"] }]),
+      zhSrt: srt([{ lines: ["知识图谱"] }]),
+      bilingualSrt: srt([{ lines: ["知识图谱", "Knowledge Graph"] }]),
+      manifest: { sourceSha256: createHash("sha256").update(srt([{ lines: ["Knowledge Graph"] }])).digest("hex") },
+      technicalTermGuard: guard,
+    }));
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "glossary-violation",
+      severity: "content",
+    }));
+    expect(result.verdict).toBe("fail");
+  });
+
+  it("does not turn a natural Chinese 图 into Graph when Graph Engineering is also present", () => {
+    const source = srt([
+      { lines: ["Graph Engineering helps."], start: "00:00:00,000", end: "00:00:02,000" },
+      { lines: ["When is it worth using a graph?"], start: "00:00:02,000", end: "00:00:04,000" },
+    ]);
+    const guard = createTechnicalTermGuard({ sourceText: "Graph Engineering helps. When is it worth using a graph?" });
+    const result = auditSubtitleArtifacts({
+      sourceSrt: source,
+      enSrt: source,
+      zhSrt: srt([
+        { lines: ["Graph Engineering 很有帮助。"], start: "00:00:00,000", end: "00:00:02,000" },
+        { lines: ["什么时候值得用图？"], start: "00:00:02,000", end: "00:00:04,000" },
+      ]),
+      bilingualSrt: srt([
+        { lines: ["Graph Engineering 很有帮助。", "Graph Engineering helps."], start: "00:00:00,000", end: "00:00:02,000" },
+        { lines: ["什么时候值得用图？", "When is it worth using a graph?"], start: "00:00:02,000", end: "00:00:04,000" },
+      ]),
+      manifest: { sourceSha256: createHash("sha256").update(source).digest("hex") },
+      technicalTermGuard: guard,
+    });
+
+    expect(result.issues.filter((issue) => issue.code === "glossary-violation")).toEqual([]);
+  });
+
   it("passes artifacts that satisfy every available invariant", () => {
     expect(auditSubtitleArtifacts(validInput())).toEqual({
       verdict: "pass",

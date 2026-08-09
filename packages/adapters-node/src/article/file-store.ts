@@ -9,6 +9,8 @@ import {
   type VisualSuggestion,
   type YouTubeMetadata,
 } from "@yt2x/core";
+import type { ContentTargetCacheExpectation } from "../content-cache.js";
+import { isContentTargetMetadataFresh, readContentTargetMetadata } from "../content-cache.js";
 
 /**
  * Native article 输出根目录（扁平）：articleOutDir/videoId/article.md
@@ -31,6 +33,10 @@ export type NativeArticleRunRecord = {
   generatedAt: string;
   durationMs: number;
   technicalTermProfileFingerprint: string;
+  target?: string;
+  sourceFingerprint?: string;
+  promptVersion?: string;
+  seedFingerprint?: string;
   /** 新记录写入审计；旧 run.json 读取方可继续忽略该字段。 */
   technicalTermDiscovery?: TechnicalTermDiscoveryAudit;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
@@ -80,11 +86,14 @@ export const readStructuredNotesArtifacts = async (videoDir: string): Promise<St
 };
 
 /**
- * 扫描 notesOutDir：已有 structured-notes.md、且 native article 目录下尚无 article.md。
+ * 扫描 notesOutDir：所有已有 structured-notes.md 的视频目录都返回给上层。
+ *
+ * 是否可以复用 article.md 必须由 native article 编排器根据 source/model/
+ * prompt/profile metadata 判断；仅凭目标文件存在不能把 stale 产物排除在外。
  */
 export const findPendingNativeArticleDirs = async (
   notesOutDir: string,
-  articleOutDir: string,
+  _articleOutDir: string,
 ): Promise<string[]> => {
   let entries: Dirent[];
   try {
@@ -99,9 +108,6 @@ export const findPendingNativeArticleDirs = async (
     const videoDir = path.join(notesOutDir, entry.name);
     const hasNotes = await fileExists(path.join(videoDir, "structured-notes.md"));
     if (!hasNotes) continue;
-    const destArticle = path.join(articleOutDir, entry.name, "article.md");
-    const hasArticle = await fileExists(destArticle);
-    if (hasArticle) continue;
     pending.push(videoDir);
   }
   return pending.sort();
@@ -129,7 +135,12 @@ export const writeNativeArticleBundle = async (
   videoId: string,
   articleMd: string,
   run: NativeArticleRunRecord,
-  options: { force?: boolean; notesVideoDir?: string; sourceVideoUrl?: string } = {},
+  options: {
+    force?: boolean;
+    notesVideoDir?: string;
+    sourceVideoUrl?: string;
+    cacheExpectation?: ContentTargetCacheExpectation;
+  } = {},
 ): Promise<WriteNativeArticleResult | null> => {
   if (!isValidVideoId(videoId)) {
     throw new Error(`Invalid videoId: "${videoId}". Expected alphanumeric, hyphens, and underscores only.`);
@@ -139,11 +150,19 @@ export const writeNativeArticleBundle = async (
   const runPath = path.join(articleDir, "run.json");
 
   if (options.force !== true) {
-    try {
-      await stat(articlePath);
-      return null;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    if (options.cacheExpectation !== undefined) {
+      const existing = await readContentTargetMetadata(runPath);
+      if (await isContentTargetMetadataFresh(existing, {
+        ...options.cacheExpectation,
+        requiredFiles: [articlePath, runPath],
+      })) return null;
+    } else {
+      try {
+        await stat(articlePath);
+        return null;
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
     }
   }
 

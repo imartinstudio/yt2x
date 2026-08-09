@@ -14,9 +14,15 @@ import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import { parseJsonWithRepairs, salvageLooseJsonTextField } from "../llm/parse-json.js";
 import {
   discoverTechnicalTerms,
+  createFileTechnicalTermDiscoveryCacheStore,
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
 } from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  structuredNotesContentSourceFor,
+} from "../content-cache.js";
 
 export type GenerateXShortInput = {
   llm: LlmPort;
@@ -26,6 +32,7 @@ export type GenerateXShortInput = {
   artifacts: StructuredNotesArtifacts;
   availableVisuals?: AvailableVisual[] | null;
   signal?: AbortSignal;
+  technicalTermDiscoveryCacheDir?: string;
 };
 
 export type GenerateXShortResult = {
@@ -35,6 +42,10 @@ export type GenerateXShortResult = {
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
   durationMs: number;
+  technicalTermProfileFingerprint: string;
+  technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
+  sourceFingerprint: string;
+  promptVersion: string;
 };
 
 const ShortVisualSchema = z.object({
@@ -110,13 +121,17 @@ export const generateXShortContent = async (
     model: input.model,
     sourceText,
     sourceTitle,
+    ...(input.technicalTermDiscoveryCacheDir === undefined ? {} : {
+      cache: createFileTechnicalTermDiscoveryCacheStore(input.technicalTermDiscoveryCacheDir),
+    }),
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
   const guard = createTechnicalTermGuard({
     sourceText,
     sourceTitle,
     discoveredTerms: discovery.accepted,
-    discovery: technicalTermDiscoveryAuditFor(discovery),
+    discovery: discoveryAudit,
   });
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
@@ -147,6 +162,23 @@ export const generateXShortContent = async (
   } catch {
     // Keep original if import/processing fails
   }
+  // Remove invalid visual references before the one and only term repair/final validation.
+  if (shortPost.visual !== undefined) {
+    const availVisuals = input.availableVisuals ?? [];
+    const validIds = new Set(availVisuals.map((v) => v.visual_id));
+    if (!validIds.has(shortPost.visual.visual_id)) delete shortPost.visual;
+  }
+  const schemaResult = GeneratedShortPostSchema.safeParse(shortPost);
+  if (!schemaResult.success) {
+    throw new Error(`Short post-process result does not match expected schema: ${schemaResult.error.message}`);
+  }
+  shortPost = {
+    text: schemaResult.data.text,
+    angle: schemaResult.data.angle,
+    risk: schemaResult.data.risk,
+    ...(schemaResult.data.visual === undefined ? {} : { visual: schemaResult.data.visual }),
+  };
+
   let finalized: FinalizedTechnicalTermValue<GeneratedShortPost> = guard.finalize(shortPost, prepared.restoration);
   if (hasHardTechnicalTermViolations(finalized.violations)) {
     finalized = await repairTechnicalTermViolations({
@@ -164,15 +196,9 @@ export const generateXShortContent = async (
     throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
   }
   shortPost = finalized.value;
-
-  // 验证 visual 只引用 available_visuals 中存在的截图
-  if (shortPost.visual !== undefined) {
-    const availVisuals = input.availableVisuals ?? [];
-    const validIds = new Set(availVisuals.map((v) => v.visual_id));
-    if (!validIds.has(shortPost.visual.visual_id)) {
-      // 静默去除无效 visual 引用（LLM 幻觉常见，不中断流程）
-      delete shortPost.visual;
-    }
+  const finalSchemaResult = GeneratedShortPostSchema.safeParse(shortPost);
+  if (!finalSchemaResult.success) {
+    throw new Error(`Short final post-process result does not match expected schema: ${finalSchemaResult.error.message}`);
   }
 
   const result: GenerateXShortResult = {
@@ -181,6 +207,14 @@ export const generateXShortContent = async (
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
+    technicalTermProfileFingerprint: prepared.profileFingerprint,
+    technicalTermDiscovery: discoveryAudit,
+    sourceFingerprint: contentSourceFingerprintFor(structuredNotesContentSourceFor({
+      metadata: input.artifacts.metadata,
+      structuredNotesMd: input.artifacts.structuredNotesMd,
+      availableVisuals: input.availableVisuals,
+    })),
+    promptVersion: CONTENT_PROMPT_VERSIONS.xShort,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

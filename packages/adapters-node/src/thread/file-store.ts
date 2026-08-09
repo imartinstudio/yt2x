@@ -2,6 +2,14 @@ import { mkdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { GeneratedThread } from "@yt2x/core";
 import { isValidVideoId } from "../article/file-store.js";
+import {
+  contentTargetMetadataPathFor,
+  isContentTargetMetadataFresh,
+  readContentTargetMetadata,
+  writeContentTargetMetadata,
+  type ContentTargetCacheExpectation,
+  type ContentTargetMetadata,
+} from "../content-cache.js";
 
 export type WriteNativeThreadResult = {
   articleDir: string;
@@ -23,7 +31,11 @@ export const writeNativeThreadBundle = async (
   articleOutDir: string,
   videoId: string,
   thread: GeneratedThread,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    cacheExpectation?: ContentTargetCacheExpectation;
+    cacheMetadata?: ContentTargetMetadata;
+  } = {},
 ): Promise<WriteNativeThreadResult | null> => {
   if (!isValidVideoId(videoId)) {
     throw new Error(`Invalid videoId: "${videoId}". Expected alphanumeric, hyphens, and underscores only.`);
@@ -32,10 +44,19 @@ export const writeNativeThreadBundle = async (
   const articleDir = path.join(path.resolve(articleOutDir), videoId);
   const threadPath = path.join(articleDir, "x-format", "x-thread.md");
   const hooksPath = path.join(articleDir, "x-format", "x-hooks.json");
+  const metadataPath = contentTargetMetadataPathFor(articleDir, "x-thread");
 
   if (options.force !== true) {
-    const exists = (await assertMissing(threadPath)) || (await assertMissing(hooksPath));
-    if (exists) return null;
+    if (options.cacheExpectation !== undefined) {
+      const existing = await readContentTargetMetadata(metadataPath);
+      if (await isContentTargetMetadataFresh(existing, {
+        ...options.cacheExpectation,
+        requiredFiles: [threadPath, hooksPath, metadataPath],
+      })) return null;
+    } else {
+      const exists = (await assertMissing(threadPath)) || (await assertMissing(hooksPath));
+      if (exists) return null;
+    }
   }
 
   await mkdir(articleDir, { recursive: true });
@@ -49,6 +70,9 @@ export const writeNativeThreadBundle = async (
       visualsPath,
       JSON.stringify({ visuals: thread.visuals }, null, 2) + "\n",
     );
+  }
+  if (options.cacheMetadata !== undefined) {
+    await writeContentTargetMetadata(metadataPath, options.cacheMetadata);
   }
 
   return { articleDir, threadPath, hooksPath, visualsPath };

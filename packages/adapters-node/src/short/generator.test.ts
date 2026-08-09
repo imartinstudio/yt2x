@@ -93,6 +93,31 @@ describe("generateXShortContent", () => {
       "Graph Engineering 的核心不是更大的图，而是 Knowledge Graph 和 Agent Graph 的分工。",
     );
   });
+
+  it("revalidates after removing an invalid visual instead of letting the visual hide a missing term", async () => {
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "Graph Engineering 是这里必须保留的专业术语。",
+      metadata: { id: "short-final-validation", title: "Graph Engineering" },
+    };
+    const llm = makeLlm(() => ({
+      content: JSON.stringify({
+        text: "这里只保留普通正文。",
+        angle: "technical",
+        risk: "low",
+        visual: { visual_id: "missing-visual", caption: "图工程" },
+      }),
+      model: "m",
+      finishReason: "stop",
+    }));
+
+    await expect(generateXShortContent({
+      llm,
+      model: "m",
+      artifacts,
+      availableVisuals: [],
+    })).rejects.toThrow(/Graph/u);
+  });
 });
 
 describe("parseGeneratedShortPostJson", () => {

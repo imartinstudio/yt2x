@@ -16,6 +16,11 @@ import {
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
 } from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  structuredNotesContentSourceFor,
+} from "../content-cache.js";
 import type { StructuredNotesArtifacts } from "./file-store.js";
 
 export type GenerateXArticleInput = {
@@ -42,6 +47,8 @@ export type GenerateXArticleResult = {
   durationMs: number;
   technicalTermProfileFingerprint: string;
   technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
+  sourceFingerprint: string;
+  promptVersion: string;
 };
 
 const FENCE_RE = /^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -411,6 +418,12 @@ export const generateXArticleContent = async (
     durationMs: Date.now() - t0,
     technicalTermProfileFingerprint: prepared.profileFingerprint,
     technicalTermDiscovery: discoveryAudit,
+    sourceFingerprint: contentSourceFingerprintFor(structuredNotesContentSourceFor({
+      metadata: input.artifacts.metadata,
+      structuredNotesMd: input.artifacts.structuredNotesMd,
+      availableVisuals: input.availableVisuals,
+    })),
+    promptVersion: CONTENT_PROMPT_VERSIONS.article,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

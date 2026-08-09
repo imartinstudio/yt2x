@@ -13,9 +13,15 @@ import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import { parseJsonWithRepairs } from "../llm/parse-json.js";
 import {
   discoverTechnicalTerms,
+  createFileTechnicalTermDiscoveryCacheStore,
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
 } from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  platformArticleContentSourceFor,
+} from "../content-cache.js";
 
 export type GeneratePlatformArticleInput = {
   llm: LlmPort;
@@ -27,6 +33,7 @@ export type GeneratePlatformArticleInput = {
   articleMd: string;
   timestampedCuesMd?: string;
   signal?: AbortSignal;
+  technicalTermDiscoveryCacheDir?: string;
 };
 
 export type GeneratePlatformArticleResult = {
@@ -36,6 +43,10 @@ export type GeneratePlatformArticleResult = {
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
   durationMs: number;
+  technicalTermProfileFingerprint: string;
+  technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
+  sourceFingerprint: string;
+  promptVersion: string;
 };
 
 const CoverSchema = z.object({
@@ -128,13 +139,17 @@ export const generatePlatformArticleContent = async (
     model: input.model,
     sourceText,
     sourceTitle,
+    ...(input.technicalTermDiscoveryCacheDir === undefined ? {} : {
+      cache: createFileTechnicalTermDiscoveryCacheStore(input.technicalTermDiscoveryCacheDir),
+    }),
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
   const guard = createTechnicalTermGuard({
     sourceText,
     sourceTitle,
     discoveredTerms: discovery.accepted,
-    discovery: technicalTermDiscoveryAuditFor(discovery),
+    discovery: discoveryAudit,
   });
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
@@ -213,6 +228,10 @@ export const generatePlatformArticleContent = async (
     // Keep original if import/processing fails
   }
   platformArticle = (await finalize(platformArticle)).value;
+  const finalSchemaResult = GeneratedPlatformArticleSchema.safeParse(platformArticle);
+  if (!finalSchemaResult.success) {
+    throw new Error(`Platform article final post-process result does not match expected schema: ${finalSchemaResult.error.message}`);
+  }
 
   const result: GeneratePlatformArticleResult = {
     platformArticle,
@@ -220,6 +239,16 @@ export const generatePlatformArticleContent = async (
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
+    technicalTermProfileFingerprint: prepared.profileFingerprint,
+    technicalTermDiscovery: discoveryAudit,
+    sourceFingerprint: contentSourceFingerprintFor(platformArticleContentSourceFor({
+      metadata: input.artifacts.metadata,
+      structuredNotesMd: input.artifacts.structuredNotesMd,
+      articleMd: input.articleMd,
+      timestampedCuesMd: input.timestampedCuesMd ?? "",
+      target: input.target,
+    })),
+    promptVersion: CONTENT_PROMPT_VERSIONS.platformArticle,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

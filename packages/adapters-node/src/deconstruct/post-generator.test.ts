@@ -3,6 +3,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createTechnicalTermGuard, type DeconstructManifest, type LlmPort } from "@yt2x/core";
+import { technicalTermDiscoveryAuditFor } from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  contentTargetMetadataPathFor,
+  createContentTargetMetadata,
+  writeContentTargetMetadata,
+} from "../content-cache.js";
 import { writeDeconstructOutput } from "./file-store.js";
 import { generateClipsPosts, writeSelectedPostFiles } from "./post-generator.js";
 
@@ -13,6 +21,184 @@ describe("generateClipsPosts", () => {
     expect(implementation).not.toMatch(/violation\.canonical\s*===\s*["']Graph["']/u);
     expect(implementation).not.toMatch(/violation\.canonical\s*===\s*["']Knowledge Graph["']/u);
     expect(implementation).not.toMatch(/violation\.canonical\s*===\s*["']Agent Graph["']/u);
+  });
+
+  it("keeps the previous manifest and selected post bytes when final validation fails", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-atomic-failure-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const previousManifest = JSON.stringify({
+        v: 1,
+        source: { videoId: "atomic-failure", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        candidateCount: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "atomic",
+          title: "Knowledge Graph",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: true,
+          text: "Knowledge Graph 的旧成功文案。",
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-atomic.mp4",
+        }],
+      }, null, 2) + "\n";
+      const previousPost = "旧成功帖子\n";
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), previousManifest, "utf8");
+      await writeFile(path.join(clipsDir, "post-1-atomic.md"), previousPost, "utf8");
+
+      const manifest = JSON.parse(previousManifest) as DeconstructManifest;
+      manifest.clips[0]!.text = "知识图谱的错误新文案。";
+      const guard = createTechnicalTermGuard({ sourceText: "Knowledge Graph" });
+
+      await expect(writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "Knowledge Graph",
+        discoveredTerms: [],
+        sourceTextByClipId: { "clip-1": "Knowledge Graph" },
+      })).rejects.toThrow(/Knowledge Graph/u);
+
+      await expect(readFile(path.join(clipsDir, "clips-manifest.json"), "utf8"))
+        .resolves.toBe(previousManifest);
+      await expect(readFile(path.join(clipsDir, "post-1-atomic.md"), "utf8"))
+        .resolves.toBe(previousPost);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("can generate posts from an in-memory manifest without replacing the persisted one", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-staged-generation-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      await writeFile(path.join(articleDir, "article.md"), "# 标题\n\n正文。", "utf8");
+      const previousManifest = "{\"previous\":true}\n";
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), previousManifest, "utf8");
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "staged-generation", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "staged",
+          title: "片段",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: false,
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-staged.mp4",
+        }],
+      };
+      const responses = [
+        "[]",
+        JSON.stringify({
+          posts: [{
+            title: "片段标题",
+            opening_quote: "一句引语",
+            core_description: "一段描述",
+            video_suggestion: "一个画面",
+          }],
+        }),
+      ];
+      const llm: LlmPort = {
+        chat: async () => ({ content: responses.shift()!, model: "test-model", finishReason: "stop" }),
+      };
+
+      const result = await generateClipsPosts({
+        llm,
+        model: "test-model",
+        articleDir,
+        manifest,
+        persist: false,
+      });
+
+      expect(result.manifest.clips[0]!.text).toContain("一句引语");
+      expect(result.postPaths).toEqual([]);
+      expect(await readFile(path.join(clipsDir, "clips-manifest.json"), "utf8")).toBe(previousManifest);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses clip posts only when profile-aware metadata matches without calling the provider", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-cache-hit-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const articleMd = "# 标题\n\n正文。";
+      await writeFile(path.join(articleDir, "article.md"), articleMd, "utf8");
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "cache-hit", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "cached",
+          title: "片段",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: true,
+          text: "旧成功帖子。",
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-cached.mp4",
+          articleSection: "章节",
+        }],
+      };
+      const clips = [{
+        id: "clip-1",
+        title: "片段",
+        summary: "片段",
+        angle: "tutorial",
+        timecodes: { durationSec: 60 },
+        video: "clip-1-cached.mp4",
+      }];
+      const sourceText = `${articleMd}\n${JSON.stringify(clips)}`;
+      const audit = technicalTermDiscoveryAuditFor(
+        { accepted: [], reviewCandidates: [], warnings: [] },
+        { sourceText, sourceTitle: "标题" },
+      );
+      const finalSourceText = [
+        "标题",
+        "片段\n章节",
+        "先看视频，再阅读下方完整/分步指南，学习如何为你的 Agents 构建 loops。",
+      ].join("\n");
+      const guard = createTechnicalTermGuard({ sourceText: finalSourceText, sourceTitle: "标题", discovery: audit });
+      const metadataPath = contentTargetMetadataPathFor(articleDir, "clip-post");
+      await writeContentTargetMetadata(metadataPath, createContentTargetMetadata({
+        target: "clip-post",
+        sourceFingerprint: contentSourceFingerprintFor({ articleTitle: "标题", articleMd, clips }),
+        model: "test-model",
+        promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
+        technicalTermProfileFingerprint: guard.profile.profileFingerprint,
+        technicalTermDiscovery: audit,
+      }));
+      const postPath = path.join(clipsDir, "post-1-cached.md");
+      await writeFile(postPath, "旧成功帖子。\n", "utf8");
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+
+      const provider = {
+        chat: async (): Promise<never> => {
+          throw new Error("provider must not be called on a cache hit");
+        },
+      } satisfies LlmPort;
+      const result = await generateClipsPosts({ llm: provider, model: "test-model", articleDir });
+
+      expect(result.postPaths).toEqual([postPath]);
+      expect(result.postCount).toBe(1);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
   });
 
   it("writes clip posts with quote, loops leverage, video suggestion, and CTA", async () => {

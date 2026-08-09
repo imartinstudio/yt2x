@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -25,6 +25,31 @@ const candidate: SectionCandidate = {
 };
 
 describe("writeDeconstructOutput", () => {
+  it("can prepare a manifest without replacing an existing manifest", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-staged-manifest-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      const previousManifest = "{\"previous\":true}\n";
+      await mkdir(clipsDir, { recursive: true });
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), previousManifest, "utf8");
+
+      const result = await writeDeconstructOutput(
+        articleDir,
+        [candidate],
+        "staged-manifest",
+        path.join(articleDir, "full.mp4"),
+        60,
+        "# 技术文章",
+        { persist: false },
+      );
+
+      expect(result.manifest.clips).toHaveLength(1);
+      expect(await readFile(result.manifestPath, "utf8")).toBe(previousManifest);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
   it("persists the original candidate source fields and matching article body", async () => {
     const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-source-context-"));
     try {

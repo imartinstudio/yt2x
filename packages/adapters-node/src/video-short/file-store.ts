@@ -2,6 +2,14 @@ import { mkdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { GeneratedVideoShortPost } from "@yt2x/core";
 import { isValidVideoId } from "../article/file-store.js";
+import {
+  contentTargetMetadataPathFor,
+  isContentTargetMetadataFresh,
+  readContentTargetMetadata,
+  writeContentTargetMetadata,
+  type ContentTargetCacheExpectation,
+  type ContentTargetMetadata,
+} from "../content-cache.js";
 
 export type WriteNativeVideoShortResult = {
   articleDir: string;
@@ -21,7 +29,11 @@ export const writeNativeVideoShortBundle = async (
   articleOutDir: string,
   videoId: string,
   post: GeneratedVideoShortPost,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    cacheExpectation?: ContentTargetCacheExpectation;
+    cacheMetadata?: ContentTargetMetadata;
+  } = {},
 ): Promise<WriteNativeVideoShortResult | null> => {
   if (!isValidVideoId(videoId)) {
     throw new Error(`Invalid videoId: "${videoId}". Expected alphanumeric, hyphens, and underscores only.`);
@@ -29,14 +41,26 @@ export const writeNativeVideoShortBundle = async (
 
   const articleDir = path.join(path.resolve(articleOutDir), videoId);
   const shortPath = path.join(articleDir, "x-format", "x-video-short.md");
+  const metadataPath = contentTargetMetadataPathFor(articleDir, "x-video-short");
 
   if (options.force !== true) {
-    const exists = await assertMissing(shortPath);
-    if (exists) return null;
+    if (options.cacheExpectation !== undefined) {
+      const existing = await readContentTargetMetadata(metadataPath);
+      if (await isContentTargetMetadataFresh(existing, {
+        ...options.cacheExpectation,
+        requiredFiles: [shortPath, metadataPath],
+      })) return null;
+    } else {
+      const exists = await assertMissing(shortPath);
+      if (exists) return null;
+    }
   }
 
   await mkdir(articleDir, { recursive: true });
   await atomicWriteUtf8(shortPath, renderXVideoShortMarkdown(post));
+  if (options.cacheMetadata !== undefined) {
+    await writeContentTargetMetadata(metadataPath, options.cacheMetadata);
+  }
 
   return { articleDir, shortPath };
 };

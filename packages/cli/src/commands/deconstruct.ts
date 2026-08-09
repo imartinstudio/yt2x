@@ -1,13 +1,11 @@
-import { readFile } from "node:fs/promises";
 import type { Command } from "commander";
-import type { DeconstructManifest } from "@yt2x/core";
 import {
   readDeconstructArtifacts,
   runDeconstruct,
   clipCandidates,
   writeDeconstructOutput,
   createLlmAdapter,
-  selectClips,
+  applyClipSelection,
   selectTopUniqueArticleSections,
   generateClipsPosts,
   writeSelectedPostFiles,
@@ -116,9 +114,10 @@ export const runDeconstructCommand = async (
     artifacts.videoPath,
     artifacts.durationSec,
     artifacts.articleMd,
+    { persist: false },
   );
 
-  logger.info({ manifestPath: output.manifestPath, clipCount: output.clippedCount }, "Deconstruct: manifest written");
+  logger.info({ manifestPath: output.manifestPath, clipCount: output.clippedCount }, "Deconstruct: manifest prepared");
 
   // Step 5: Generate posts for ALL candidates — 先生成文案，基于文案质量筛选
   logger.info({ model: llmConfig.model }, "Deconstruct: generating posts for all candidates");
@@ -135,6 +134,8 @@ export const runDeconstructCommand = async (
     llm: genLlm,
     model: llmConfig.model ?? "",
     articleDir,
+    manifest: output.manifest,
+    persist: false,
   });
 
   if (genResult.usage !== undefined) {
@@ -162,17 +163,11 @@ export const runDeconstructCommand = async (
 
     logger.info({ keepIds }, "Deconstruct: marking selected clips");
 
-    await selectClips({
-      articleDir,
-      keep: keepIds,
-    });
+    const selectedManifest = applyClipSelection(genResult.manifest, keepIds).manifest;
 
     // Step 6b: Write .md files only for selected clips
-    const manifestPath = `${articleDir}/x-format/clips/clips-manifest.json`;
-    const manifestRaw = await readFile(manifestPath, "utf8");
-    const postManifest = JSON.parse(manifestRaw) as DeconstructManifest;
     const selectedPostPaths = await writeSelectedPostFiles(
-      postManifest,
+      selectedManifest,
       articleDir,
       genResult.technicalTerms,
     );

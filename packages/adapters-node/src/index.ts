@@ -13,6 +13,7 @@ export * from "./process/index.js";
 export * from "./short/index.js";
 export * from "./thread/index.js";
 export * from "./technical-terms/index.js";
+export * from "./content-cache.js";
 export * from "./video-short/index.js";
 export * from "./wechat-format/index.js";
 export * from "./x-auth/index.js";

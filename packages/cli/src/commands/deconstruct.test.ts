@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   clipCandidates: vi.fn(),
   writeDeconstructOutput: vi.fn(),
   createLlmAdapter: vi.fn(() => ({})),
-  selectClips: vi.fn(),
+  applyClipSelection: vi.fn((manifest: unknown) => ({ manifest, kept: 1, removed: 0 })),
   selectTopUniqueArticleSections: vi.fn(),
   generateClipsPosts: vi.fn(),
   writeSelectedPostFiles: vi.fn(),
@@ -92,9 +92,10 @@ describe("runDeconstructCommand", () => {
       mocks.validateClipEndings.mockReturnValue([]);
       mocks.writeDeconstructOutput.mockResolvedValue({
         manifestPath: path.join(clipsDir, "clips-manifest.json"),
+        manifest,
         clippedCount: 1,
       });
-      mocks.generateClipsPosts.mockResolvedValue({ postCount: 1, postPaths: [], technicalTerms });
+      mocks.generateClipsPosts.mockResolvedValue({ postCount: 1, postPaths: [], manifest, technicalTerms });
       mocks.selectTopUniqueArticleSections.mockReturnValue([{ section, originalIndex: 0 }]);
       mocks.writeSelectedPostFiles.mockResolvedValue([path.join(clipsDir, "post-1.md")]);
       mocks.clipCandidates.mockResolvedValue([{ success: true, candidate: section }]);

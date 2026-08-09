@@ -13,9 +13,15 @@ import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import { parseJsonWithRepairs, salvageLooseJsonTextField, stripJsonFenceWrapper } from "../llm/parse-json.js";
 import {
   discoverTechnicalTerms,
+  createFileTechnicalTermDiscoveryCacheStore,
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
 } from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  structuredNotesContentSourceFor,
+} from "../content-cache.js";
 
 export type GenerateXVideoShortInput = {
   llm: LlmPort;
@@ -25,6 +31,7 @@ export type GenerateXVideoShortInput = {
   artifacts: StructuredNotesArtifacts;
   availableVisuals?: unknown;
   signal?: AbortSignal;
+  technicalTermDiscoveryCacheDir?: string;
 };
 
 export type GenerateXVideoShortResult = {
@@ -34,6 +41,10 @@ export type GenerateXVideoShortResult = {
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
   durationMs: number;
+  technicalTermProfileFingerprint: string;
+  technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
+  sourceFingerprint: string;
+  promptVersion: string;
 };
 
 const GeneratedVideoShortPostSchema = z.object({
@@ -96,13 +107,17 @@ export const generateXVideoShortContent = async (
     model: input.model,
     sourceText,
     sourceTitle,
+    ...(input.technicalTermDiscoveryCacheDir === undefined ? {} : {
+      cache: createFileTechnicalTermDiscoveryCacheStore(input.technicalTermDiscoveryCacheDir),
+    }),
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
   const guard = createTechnicalTermGuard({
     sourceText,
     sourceTitle,
     discoveredTerms: discovery.accepted,
-    discovery: technicalTermDiscoveryAuditFor(discovery),
+    discovery: discoveryAudit,
   });
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
@@ -165,6 +180,10 @@ export const generateXVideoShortContent = async (
     throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
   }
   videoShortPost = finalized.value;
+  const finalSchemaResult = GeneratedVideoShortPostSchema.safeParse(videoShortPost);
+  if (!finalSchemaResult.success) {
+    throw new Error(`Video short final post-process result does not match expected schema: ${finalSchemaResult.error.message}`);
+  }
 
   const result: GenerateXVideoShortResult = {
     videoShortPost,
@@ -172,6 +191,13 @@ export const generateXVideoShortContent = async (
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
+    technicalTermProfileFingerprint: prepared.profileFingerprint,
+    technicalTermDiscovery: discoveryAudit,
+    sourceFingerprint: contentSourceFingerprintFor(structuredNotesContentSourceFor({
+      metadata: input.artifacts.metadata,
+      structuredNotesMd: input.artifacts.structuredNotesMd,
+    })),
+    promptVersion: CONTENT_PROMPT_VERSIONS.xVideoShort,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

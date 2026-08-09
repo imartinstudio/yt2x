@@ -1,10 +1,11 @@
-import { readFile, readdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   appendTechnicalTermRuleToSystemPrompt,
   CLIP_POST_CALL_TO_ACTION,
   CLIP_POST_SYSTEM_PROMPT,
   createTechnicalTermGuard,
+  DeconstructManifestSchema,
   deriveSeriesName,
   hasHardTechnicalTermViolations,
   type FinalizedTechnicalTermValue,
@@ -23,17 +24,31 @@ import {
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
 } from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  contentTargetMetadataPathFor,
+  createContentTargetMetadata,
+  isContentTargetMetadataFresh,
+  readContentTargetMetadata,
+  writeContentTargetMetadata,
+} from "../content-cache.js";
 
 export type GeneratePostsRunnerInput = {
   llm: LlmPort;
   model: string;
   articleDir: string;
+  /** 可选的内存 manifest；用于在所有校验完成前不替换旧 manifest。 */
+  manifest?: DeconstructManifest;
+  /** false 时只返回内存结果，不触碰 clips/ 下的既有文件。 */
+  persist?: boolean;
   signal?: AbortSignal;
 };
 
 export type GeneratePostsRunnerResult = {
   postCount: number;
   postPaths: string[];
+  manifest: DeconstructManifest;
   technicalTerms: ClipPostTechnicalTerms;
   usage?: { promptTokens: number; completionTokens: number };
 };
@@ -45,6 +60,10 @@ export type ClipPostTechnicalTerms = {
   discoveredTerms: readonly DiscoveredTechnicalTerm[];
   discoveryAudit?: TechnicalTermDiscoveryAudit;
   sourceTextByClipId?: Readonly<Record<string, string>>;
+  model?: string;
+  sourceFingerprint?: string;
+  promptVersion?: string;
+  profileFingerprint?: string;
 };
 
 const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -101,11 +120,11 @@ export const generateClipsPosts = async (
   const articlePath = path.join(input.articleDir, "article.md");
 
   const [manifestRaw, articleMd] = await Promise.all([
-    readFile(manifestPath, "utf8"),
+    input.manifest === undefined ? readFile(manifestPath, "utf8") : Promise.resolve(undefined),
     readFile(articlePath, "utf8"),
   ]);
 
-  const manifest: DeconstructManifest = JSON.parse(manifestRaw);
+  const manifest: DeconstructManifest = input.manifest ?? JSON.parse(manifestRaw!);
   const allClips = manifest.clips;
 
   if (allClips.length === 0) {
@@ -134,6 +153,48 @@ export const generateClipsPosts = async (
   ])));
 
   const sourceText = `${articleMd}\n${JSON.stringify(clipsInput)}`;
+  const selected = manifest.clips.filter((clip) => clip.selected === true && Boolean(clip.text));
+  const selectedSourceText = selectedClipPostSourceText(selected, articleTitle, sourceTextByClipId);
+  const sourceFingerprint = contentSourceFingerprintFor({ articleTitle, articleMd, clips: clipsInput });
+  const metadataPath = contentTargetMetadataPathFor(input.articleDir, "clip-post");
+  const selectedPostPaths = selected.map((clip, index) => selectedPostPathFor(input.articleDir, clip, index));
+  if (input.persist !== false) {
+    const existingMetadata = await readContentTargetMetadata(metadataPath);
+    const cacheHit = await isContentTargetMetadataFresh(existingMetadata, {
+      target: "clip-post",
+      sourceFingerprint,
+      model: input.model,
+      promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
+      sourceText: selectedSourceText,
+      sourceTitle: articleTitle,
+      requiredFiles: [manifestPath, metadataPath, ...selectedPostPaths],
+    });
+    if (cacheHit && existingMetadata !== undefined) {
+      const cacheGuard = createTechnicalTermGuard({
+        sourceText: selectedSourceText,
+        sourceTitle: articleTitle,
+        discoveredTerms: existingMetadata.technicalTermDiscovery.acceptedCandidates,
+        discovery: existingMetadata.technicalTermDiscovery,
+      });
+      return {
+        postCount: manifest.clips.filter((clip) => typeof clip.text === "string" && clip.text.trim() !== "").length,
+        postPaths: selectedPostPaths,
+        manifest,
+        technicalTerms: {
+          guard: cacheGuard,
+          restoration: { placeholders: [] },
+          articleTitle,
+          discoveredTerms: existingMetadata.technicalTermDiscovery.acceptedCandidates,
+          discoveryAudit: existingMetadata.technicalTermDiscovery,
+          sourceTextByClipId,
+          model: input.model,
+          sourceFingerprint,
+          promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
+          profileFingerprint: existingMetadata.technicalTermProfileFingerprint,
+        },
+      };
+    }
+  }
   const discovery = await discoverTechnicalTerms({
     llm: input.llm,
     model: input.model,
@@ -160,6 +221,10 @@ export const generateClipsPosts = async (
     discoveredTerms: discovery.accepted,
     discoveryAudit: technicalTermDiscoveryAuditFor(discovery),
     sourceTextByClipId,
+    model: input.model,
+    sourceFingerprint,
+    promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
+    profileFingerprint: finalGuard.profile.profileFingerprint,
   };
   const prepared = guard.prepare({
     articleTitle,
@@ -240,16 +305,15 @@ export const generateClipsPosts = async (
     }
   }
 
-  // Write updated manifest (all post text in JSON)
-  manifest.generatedAt = new Date().toISOString();
-  await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
-
   // Only write .md files for selected clips
-  const postPaths = await writeSelectedPostFiles(manifest, input.articleDir, finalTechnicalTerms);
+  const postPaths = input.persist === false
+    ? []
+    : await writeSelectedPostFiles(manifest, input.articleDir, finalTechnicalTerms);
 
   const result: GeneratePostsRunnerResult = {
     postCount: total,
     postPaths,
+    manifest,
     technicalTerms: finalTechnicalTerms,
   };
   if (resp.usage !== undefined) {
@@ -274,17 +338,6 @@ export const writeSelectedPostFiles = async (
   const manifestPath = path.join(clipsDir, "clips-manifest.json");
   const postPaths: string[] = [];
 
-  // Remove stale post-*.md files from previous runs so they don't pollute
-  // the publish readiness check (e.g. old posts with wrong clipIds, series
-  // numbers, or video filenames).
-  try {
-    const existing = await readdir(clipsDir);
-    const stalePosts = existing.filter((f) => /^post-\d+-.+\.md$/.test(f));
-    await Promise.all(stalePosts.map((f) => unlink(path.join(clipsDir, f)).catch(() => {})));
-  } catch {
-    // Directory may not exist yet — that's fine.
-  }
-
   const selected = manifest.clips.filter((c) => c.selected === true);
 
   const restoration = technicalTerms.restoration;
@@ -296,60 +349,135 @@ export const writeSelectedPostFiles = async (
       ? `${baseText}\n🔗 ${youtubeUrl}\n\n${CLIP_POST_CALL_TO_ACTION}`
       : baseText;
   });
-  const selectedSourceText = [
+  const selectedSourceText = selectedClipPostSourceText(
+    selected,
     technicalTerms.articleTitle,
-    ...selected.map((clip) => sourceTextForSelectedClip(clip, technicalTerms)),
-    CLIP_POST_CALL_TO_ACTION,
-  ].join("\n");
+    technicalTerms.sourceTextByClipId,
+    technicalTerms,
+  );
   const finalGuard = createTechnicalTermGuard({
     sourceText: selectedSourceText,
     sourceTitle: technicalTerms.articleTitle,
     discoveredTerms: technicalTerms.discoveredTerms,
     ...(technicalTerms.discoveryAudit === undefined ? {} : { discovery: technicalTerms.discoveryAudit }),
   });
-  const selectedSourceCanonicals = new Set(finalGuard.profile.occurrences.map((item) => item.canonical));
-  const rejectingCanonicals = new Set(finalGuard.profile.entries
-    .filter((term) => term.forbiddenTranslationHandling === "reject")
-    .map((term) => term.canonical));
-  const sourceTranslationViolations = finalGuard.validate(assembledTexts).filter((violation) =>
-    violation.code === "forbidden-translation"
-      && violation.canonical !== undefined
-      && selectedSourceCanonicals.has(violation.canonical)
-      && rejectingCanonicals.has(violation.canonical),
-  );
-  if (hasHardTechnicalTermViolations(sourceTranslationViolations)) {
-    throw new Error(`Technical term validation failed: ${sourceTranslationViolations.map((item) => item.message).join("; ")}`);
-  }
-  const canonicalizedTexts = finalGuard.finalize(assembledTexts, restoration);
-  const finalizedTexts = canonicalizedTexts.value.map((text) =>
-    normalizeControlledYoutubeUrl(text, youtubeUrl)
-  );
-  const blockingViolations = finalGuard.validate(finalizedTexts).filter((violation) =>
-    !isControlledYoutubeUrlViolation(violation, finalizedTexts, youtubeUrl)
-  );
-  if (hasHardTechnicalTermViolations(blockingViolations)) {
-    throw new Error(`Technical term validation failed: ${blockingViolations.map((item) => item.message).join("; ")}`);
-  }
 
+  // 每个选中片段单独派生 source scope，避免片段 A 的术语被片段 B 的正文
+  // “至少出现一次”而掩盖。此处只在内存中组装和校验，之后才接触旧文件。
+  const finalizedTexts = assembledTexts.map((text, index) => {
+    const clip = selected[index]!;
+    if (!clip.text) return "";
+    const clipSourceText = [
+      sourceTextForSelectedClip(clip, technicalTerms),
+      CLIP_POST_CALL_TO_ACTION,
+    ].join("\n");
+    const clipGuard = createTechnicalTermGuard({
+      sourceText: clipSourceText,
+      discoveredTerms: technicalTerms.discoveredTerms,
+      ...(technicalTerms.discoveryAudit === undefined ? {} : { discovery: technicalTerms.discoveryAudit }),
+    });
+    const selectedSourceCanonicals = new Set(clipGuard.profile.occurrences.map((item) => item.canonical));
+    const rejectingCanonicals = new Set(clipGuard.profile.entries
+      .filter((term) => term.forbiddenTranslationHandling === "reject")
+      .map((term) => term.canonical));
+    const sourceTranslationViolations = clipGuard.validate([text]).filter((violation) =>
+      violation.code === "forbidden-translation"
+        && violation.canonical !== undefined
+        && selectedSourceCanonicals.has(violation.canonical)
+        && rejectingCanonicals.has(violation.canonical),
+    );
+    if (hasHardTechnicalTermViolations(sourceTranslationViolations)) {
+      throw new Error(`Technical term validation failed: ${sourceTranslationViolations.map((item) => item.message).join("; ")}`);
+    }
+    const finalized = clipGuard.finalize([text], restoration);
+    const normalized = normalizeControlledYoutubeUrl(finalized.value[0] ?? "", youtubeUrl);
+    const finalViolations = finalized.violations.filter((violation) =>
+      !isControlledYoutubeUrlViolation(violation, finalized.value, youtubeUrl),
+    );
+    const blockingViolations = clipGuard.validate([normalized]).filter((violation) =>
+      !isControlledYoutubeUrlViolation(violation, [normalized], youtubeUrl),
+    );
+    if (hasHardTechnicalTermViolations(finalViolations)
+      || hasHardTechnicalTermViolations(blockingViolations)) {
+      const violations = [...finalViolations, ...blockingViolations];
+      throw new Error(`Technical term validation failed: ${violations.map((item) => item.message).join("; ")}`);
+    }
+    return normalized;
+  });
+
+  const nextManifest = JSON.parse(JSON.stringify(manifest)) as DeconstructManifest;
+  nextManifest.generatedAt = new Date().toISOString();
   for (let i = 0; i < selected.length; i++) {
     const clip = selected[i]!;
-    if (!clip.text) continue; // Copy not generated yet, skip
-
+    if (!clip.text) continue;
     const slug = clip.slug || clip.id;
     const postPath = path.join(clipsDir, `post-${i + 1}-${slug}.md`);
     const finalText = finalizedTexts[i]!;
-    clip.text = finalText;
-    clip.charCount = finalText.length;
-
-    await writeFile(
-      postPath,
-      `---\nref: clips-manifest.json\nclipId: ${clip.id}\ntype: clip-post\nplatform: x\nseries: ${i + 1}/${selected.length}\n---\n\n${finalText}\n`,
-      "utf8",
-    );
+    const nextClip = nextManifest.clips.find((candidate) => candidate.id === clip.id);
+    if (nextClip !== undefined) {
+      nextClip.text = finalText;
+      nextClip.charCount = finalText.length;
+    }
     postPaths.push(postPath);
   }
 
-  await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  const schemaResult = DeconstructManifestSchema.safeParse(nextManifest);
+  if (!schemaResult.success) {
+    throw new Error(`Deconstruct manifest post-process result does not match expected schema: ${schemaResult.error.message}`);
+  }
+
+  const existing = await readdir(clipsDir).catch(() => [] as string[]);
+  const stalePosts = existing.filter((file) => /^post-\d+-.+\.md$/.test(file));
+  const stageDir = path.join(clipsDir, `.posts-stage-${process.pid}-${Date.now()}`);
+  await mkdir(stageDir, { recursive: true });
+  try {
+    let stagedMetadataPath: string | undefined;
+    for (let i = 0; i < selected.length; i++) {
+      const clip = selected[i]!;
+      if (!clip.text) continue;
+      const slug = clip.slug || clip.id;
+      const fileName = `post-${i + 1}-${slug}.md`;
+      const finalText = finalizedTexts[i]!;
+      await writeFile(
+        path.join(stageDir, fileName),
+        `---\nref: clips-manifest.json\nclipId: ${clip.id}\ntype: clip-post\nplatform: x\nseries: ${i + 1}/${selected.length}\n---\n\n${finalText}\n`,
+        "utf8",
+      );
+    }
+    await writeFile(path.join(stageDir, "clips-manifest.json"), JSON.stringify(nextManifest, null, 2) + "\n", "utf8");
+    if (technicalTerms.model !== undefined
+      && technicalTerms.sourceFingerprint !== undefined
+      && technicalTerms.promptVersion !== undefined
+      && technicalTerms.discoveryAudit !== undefined) {
+      stagedMetadataPath = path.join(stageDir, ".content-metadata", "clip-post.json");
+      await writeContentTargetMetadata(
+        stagedMetadataPath,
+        createContentTargetMetadata({
+          target: "clip-post",
+          sourceFingerprint: technicalTerms.sourceFingerprint,
+          model: technicalTerms.model,
+          promptVersion: technicalTerms.promptVersion,
+          technicalTermProfileFingerprint: finalGuard.profile.profileFingerprint,
+          technicalTermDiscovery: technicalTerms.discoveryAudit,
+        }),
+      );
+    }
+
+    for (const filePath of postPaths) {
+      await rename(path.join(stageDir, path.basename(filePath)), filePath);
+    }
+    await rename(path.join(stageDir, "clips-manifest.json"), manifestPath);
+    if (stagedMetadataPath !== undefined) {
+      const metadataPath = contentTargetMetadataPathFor(articleDir, "clip-post");
+      await mkdir(path.dirname(metadataPath), { recursive: true });
+      await rename(stagedMetadataPath, metadataPath);
+    }
+    await Promise.all(stalePosts
+      .filter((file) => !postPaths.some((postPath) => path.basename(postPath) === file))
+      .map((file) => unlink(path.join(clipsDir, file)).catch(() => {})));
+  } finally {
+    await rm(stageDir, { recursive: true, force: true });
+  }
   return postPaths;
 };
 
@@ -418,6 +546,28 @@ const sourceTextForSelectedClip = (
   if (clip.sourceContext !== undefined) return sourceContextText(clip.sourceContext);
   return technicalTerms.sourceTextByClipId?.[clip.id]
     ?? [clip.title, clip.articleSection ?? ""].join("\n");
+};
+
+const selectedClipPostSourceText = (
+  selected: readonly DeconstructManifest["clips"][number][],
+  articleTitle: string,
+  sourceTextByClipId?: Readonly<Record<string, string>>,
+  technicalTerms?: ClipPostTechnicalTerms,
+): string => [
+  articleTitle,
+  ...selected.map((clip) => technicalTerms === undefined
+    ? sourceTextByClipId?.[clip.id] ?? [clip.title, clip.articleSection ?? ""].join("\n")
+    : sourceTextForSelectedClip(clip, technicalTerms)),
+  CLIP_POST_CALL_TO_ACTION,
+].join("\n");
+
+const selectedPostPathFor = (
+  articleDir: string,
+  clip: DeconstructManifest["clips"][number],
+  index: number,
+): string => {
+  const slug = clip.slug || clip.id;
+  return path.join(articleDir, "x-format", "clips", `post-${index + 1}-${slug}.md`);
 };
 
 const sourceContextText = (

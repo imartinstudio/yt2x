@@ -286,12 +286,12 @@ describe("writeVisualSuggestions", () => {
 });
 
 describe("findPendingNativeArticleDirs", () => {
-  it("lists dirs with notes but no destination article.md", async () => {
+  it("lists dirs with notes even when a destination article.md already exists", async () => {
     await seedNotesVideo("a");
     await seedNotesVideo("b");
     await mkdir(path.join(articleRoot, "b"), { recursive: true });
     await writeFile(path.join(articleRoot, "b", "article.md"), "done");
     const pending = await findPendingNativeArticleDirs(notesRoot, articleRoot);
-    expect(pending).toEqual([path.join(notesRoot, "a")]);
+    expect(pending).toEqual([path.join(notesRoot, "a"), path.join(notesRoot, "b")]);
   });
 });

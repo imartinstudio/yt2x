@@ -13,9 +13,15 @@ import {
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import {
   discoverTechnicalTerms,
+  createFileTechnicalTermDiscoveryCacheStore,
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
 } from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  structuredNotesContentSourceFor,
+} from "../content-cache.js";
 
 export type GenerateXThreadInput = {
   llm: LlmPort;
@@ -25,6 +31,7 @@ export type GenerateXThreadInput = {
   artifacts: StructuredNotesArtifacts;
   availableVisuals?: AvailableVisual[] | null;
   signal?: AbortSignal;
+  technicalTermDiscoveryCacheDir?: string;
 };
 
 export type GenerateXThreadResult = {
@@ -34,6 +41,10 @@ export type GenerateXThreadResult = {
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
   durationMs: number;
+  technicalTermProfileFingerprint: string;
+  technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
+  sourceFingerprint: string;
+  promptVersion: string;
 };
 
 const ThreadHookSchema = z.object({
@@ -164,13 +175,17 @@ export const generateXThreadContent = async (
     model: input.model,
     sourceText,
     sourceTitle,
+    ...(input.technicalTermDiscoveryCacheDir === undefined ? {} : {
+      cache: createFileTechnicalTermDiscoveryCacheStore(input.technicalTermDiscoveryCacheDir),
+    }),
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
   const guard = createTechnicalTermGuard({
     sourceText,
     sourceTitle,
     discoveredTerms: discovery.accepted,
-    discovery: technicalTermDiscoveryAuditFor(discovery),
+    discovery: discoveryAudit,
   });
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
@@ -202,6 +217,23 @@ export const generateXThreadContent = async (
   } catch {
     // Keep original if import/processing fails
   }
+  // Remove invalid visual references before the one and only term repair/final validation.
+  if (thread.visuals !== undefined && thread.visuals.length > 0) {
+    const availVisuals = input.availableVisuals ?? [];
+    const validIds = new Set(availVisuals.map((v) => v.visual_id));
+    const validVisuals = thread.visuals.filter((v) => {
+      if (!validIds.has(v.visual_id)) return false;
+      return v.tweet_index >= 0 && v.tweet_index < thread.tweets.length;
+    });
+    if (validVisuals.length > 0) thread.visuals = validVisuals;
+    else delete thread.visuals;
+  }
+  const schemaResult = GeneratedThreadSchema.safeParse(thread);
+  if (!schemaResult.success) {
+    throw new Error(`Thread post-process result does not match expected schema: ${schemaResult.error.message}`);
+  }
+  thread = normalizeThread(schemaResult.data);
+
   let finalized: FinalizedTechnicalTermValue<GeneratedThread> = guard.finalize(thread, prepared.restoration);
   if (hasHardTechnicalTermViolations(finalized.violations)) {
     finalized = await repairTechnicalTermViolations({
@@ -219,22 +251,9 @@ export const generateXThreadContent = async (
     throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
   }
   thread = finalized.value;
-
-  // 验证 visuals 只引用 available_visuals 中存在的截图
-  if (thread.visuals !== undefined && thread.visuals.length > 0) {
-    const availVisuals = input.availableVisuals ?? [];
-    const validIds = new Set(availVisuals.map((v) => v.visual_id));
-    // 过滤掉无效引用（LLM 幻觉常见），保留有效配图
-    const validVisuals = thread.visuals.filter((v) => {
-      if (!validIds.has(v.visual_id)) return false;
-      if (v.tweet_index < 0 || v.tweet_index >= thread.tweets.length) return false;
-      return true;
-    });
-    if (validVisuals.length > 0) {
-      thread.visuals = validVisuals;
-    } else {
-      delete thread.visuals;
-    }
+  const finalSchemaResult = GeneratedThreadSchema.safeParse(thread);
+  if (!finalSchemaResult.success) {
+    throw new Error(`Thread final post-process result does not match expected schema: ${finalSchemaResult.error.message}`);
   }
 
   const result: GenerateXThreadResult = {
@@ -243,6 +262,14 @@ export const generateXThreadContent = async (
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
+    technicalTermProfileFingerprint: prepared.profileFingerprint,
+    technicalTermDiscovery: discoveryAudit,
+    sourceFingerprint: contentSourceFingerprintFor(structuredNotesContentSourceFor({
+      metadata: input.artifacts.metadata,
+      structuredNotesMd: input.artifacts.structuredNotesMd,
+      availableVisuals: input.availableVisuals,
+    })),
+    promptVersion: CONTENT_PROMPT_VERSIONS.xThread,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

@@ -15,6 +15,8 @@ export type WriteDeconstructOutput = {
   clipsDir: string;
   /** manifest 文件路径 */
   manifestPath: string;
+  /** 已完成源字段持久化的 manifest；调用方可先在内存中继续校验/选择。 */
+  manifest: DeconstructManifest;
   /** 裁剪成功的条目数 */
   clippedCount: number;
 };
@@ -26,6 +28,7 @@ export const writeDeconstructOutput = async (
   videoPath: string,
   durationSec: number,
   articleMd = "",
+  options: { persist?: boolean } = {},
 ): Promise<WriteDeconstructOutput> => {
   const clipsDir = path.join(articleDir, "x-format", "clips");
   await mkdir(clipsDir, { recursive: true });
@@ -69,15 +72,18 @@ export const writeDeconstructOutput = async (
   };
 
   const manifestPath = path.join(clipsDir, "clips-manifest.json");
-  await writeFile(
-    manifestPath,
-    JSON.stringify(manifest, null, 2) + "\n",
-    "utf8",
-  );
+  if (options.persist !== false) {
+    await writeFile(
+      manifestPath,
+      JSON.stringify(manifest, null, 2) + "\n",
+      "utf8",
+    );
+  }
 
   return {
     clipsDir,
     manifestPath,
+    manifest,
     clippedCount: clips.length,
   };
 };

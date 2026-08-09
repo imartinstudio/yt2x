@@ -333,7 +333,7 @@ describe("runDeconstruct technical term restoration", () => {
               composite: 3,
             },
             key_quote: "什么时候值得用 Graph",
-            video_script: "构建你的第一个 Graph；Prompt Engineering、Context Engineering 和 Latent Workspace Routing。",
+            video_script: "构建你的第一个 Graph Prompt Engineering Context Engineering Latent Workspace Routing",
           }],
         }),
       ];

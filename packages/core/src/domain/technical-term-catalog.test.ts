@@ -105,9 +105,33 @@ describe("technical term catalog", () => {
     });
 
     expect(guard.profile.occurrences).toEqual(expect.arrayContaining([
-      { canonical: "Graph", sourceText: "Graph", start: 0, end: 5 },
-      { canonical: "Knowledge Graph", sourceText: "Knowledge Graph", start: 0, end: 15 },
+      { canonical: "Graph", sourceText: "Graph", start: 0, end: 5, source: "sourceText" },
+      { canonical: "Knowledge Graph", sourceText: "Knowledge Graph", start: 0, end: 15, source: "sourceTitle" },
     ]));
+  });
+
+  it("activates a discovered term found only in the source title and keeps its range", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "The workflow is practical.",
+      sourceTitle: "Why Latent Workspace Routing matters",
+      discoveredTerms: [{
+        sourceText: "Latent Workspace Routing",
+        confidence: "high",
+        category: "ai-agent",
+      }],
+    });
+
+    expect(guard.profile.entries).toContainEqual(expect.objectContaining({
+      canonical: "Latent Workspace Routing",
+      sourceText: "Latent Workspace Routing",
+    }));
+    expect(guard.profile.occurrences).toContainEqual({
+      canonical: "Latent Workspace Routing",
+      sourceText: "Latent Workspace Routing",
+      start: 4,
+      end: 28,
+      source: "sourceTitle",
+    });
   });
 
   it("uses the actual source spelling for discovered terms", () => {

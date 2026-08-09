@@ -12,6 +12,8 @@ import {
   type DeconstructManifest,
   type GeneratePostsInput,
   type LlmPort,
+  type TechnicalTermGuard,
+  type TechnicalTermRestoration,
 } from "@yt2x/core";
 import { ClipPostListSchema } from "@yt2x/core";
 import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
@@ -208,7 +210,10 @@ export const generateClipsPosts = async (
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
 
   // Only write .md files for selected clips
-  const postPaths = await writeSelectedPostFiles(manifest, input.articleDir);
+  const postPaths = await writeSelectedPostFiles(manifest, input.articleDir, {
+    guard,
+    restoration: prepared.restoration,
+  });
 
   const result: GeneratePostsRunnerResult = {
     postCount: total,
@@ -230,6 +235,10 @@ export const generateClipsPosts = async (
 export const writeSelectedPostFiles = async (
   manifest: DeconstructManifest,
   articleDir: string,
+  technicalTerms?: {
+    guard: TechnicalTermGuard;
+    restoration: TechnicalTermRestoration;
+  },
 ): Promise<string[]> => {
   const clipsDir = path.join(articleDir, "x-format", "clips");
   const manifestPath = path.join(clipsDir, "clips-manifest.json");
@@ -248,16 +257,59 @@ export const writeSelectedPostFiles = async (
 
   const selected = manifest.clips.filter((c) => c.selected === true);
 
+  const articleMd = technicalTerms === undefined
+    ? await readFile(path.join(articleDir, "article.md"), "utf8")
+    : "";
+  const sourceTitle = articleMd.match(/^#\s+(.+)$/m)?.[1] ?? "";
+  const finalGuard = technicalTerms?.guard ?? createTechnicalTermGuard({
+    sourceText: articleMd,
+    sourceTitle,
+  });
+  const restoration = technicalTerms?.restoration ?? { placeholders: [] };
+  const assembledTexts = selected.map((clip, index) => {
+    if (!clip.text) return "";
+    const baseText = stripClipPostCallToAction(clip.text);
+    return index === selected.length - 1
+      ? `${baseText}\n\n${CLIP_POST_CALL_TO_ACTION}`
+      : baseText;
+  });
+  const boilerplateByPost = assembledTexts.map((text, postIndex) => {
+    const replacements = new Map<string, string>();
+    let nextToken = 0;
+    const masked = text.split("\n").map((line) => {
+      const isBoilerplate = line === CLIP_POST_CALL_TO_ACTION
+        || line.startsWith("🎬 视频 ")
+        || line.startsWith("📖 完整文章：")
+        || line.startsWith("🔗 https://www.youtube.com/");
+      if (!isBoilerplate) return line;
+      const token = `\uE000YT2X_CLIP_FIXED_${postIndex}_${nextToken}\uE001`;
+      nextToken += 1;
+      replacements.set(token, line);
+      return token;
+    }).join("\n");
+    return { masked, replacements };
+  });
+  const finalizedTexts = finalGuard.finalize(
+    boilerplateByPost.map((item) => item.masked),
+    restoration,
+  );
+  const blockingViolations = finalizedTexts.violations.filter(
+    (violation) => violation.code !== "missing-canonical-term",
+  );
+  if (blockingViolations.length > 0) {
+    throw new Error(`Technical term validation failed: ${blockingViolations.map((item) => item.message).join("; ")}`);
+  }
+
   for (let i = 0; i < selected.length; i++) {
     const clip = selected[i]!;
     if (!clip.text) continue; // Copy not generated yet, skip
 
     const slug = clip.slug || clip.id;
     const postPath = path.join(clipsDir, `post-${i + 1}-${slug}.md`);
-    const baseText = stripClipPostCallToAction(clip.text);
-    const finalText = i === selected.length - 1
-      ? `${baseText}\n\n${CLIP_POST_CALL_TO_ACTION}`
-      : baseText;
+    let finalText = finalizedTexts.value[i]!;
+    for (const [token, fixedText] of boilerplateByPost[i]!.replacements) {
+      finalText = finalText.replaceAll(token, fixedText);
+    }
     clip.text = finalText;
     clip.charCount = finalText.length;
 

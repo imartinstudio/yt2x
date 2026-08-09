@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DeconstructManifest, LlmPort } from "@yt2x/core";
-import { generateClipsPosts } from "./post-generator.js";
+import { generateClipsPosts, writeSelectedPostFiles } from "./post-generator.js";
 
 describe("generateClipsPosts", () => {
   it("writes clip posts with quote, loops leverage, video suggestion, and CTA", async () => {
@@ -106,11 +106,11 @@ describe("generateClipsPosts", () => {
       const firstBodyLine = bodyLines.find((line) => line.trim().length > 0)!;
       // Clip post body starts directly with quote/viewpoint, without a title line.
       expect(postText).not.toContain("\nLoops 才是优势\n");
-      expect(firstBodyLine).toBe("「未来属于把 agents 变成 loops 的团队。」——输入素材中的 OpenAI 工程师");
+      expect(firstBodyLine).toBe("「未来属于把 Agents 变成 loops 的团队。」——输入素材中的 OpenAI 工程师");
       expect(firstBodyLine).not.toContain("🎬");
       expect(firstBodyLine).not.toContain("｜1/1");
       // AnatoliKopadze-style structure — no hashtags, no teaser
-      expect(postText).toContain("「未来属于把 agents 变成 loops 的团队。」");
+      expect(postText).toContain("「未来属于把 Agents 变成 loops 的团队。」");
       expect(postText).toContain("每天 20-40 个 PR");
       expect(postText).toContain("Graph Engineering");
       expect(secondPostText).toContain("Knowledge Graph");
@@ -125,10 +125,52 @@ describe("generateClipsPosts", () => {
       const updatedManifest = JSON.parse(
         await readFile(path.join(clipsDir, "clips-manifest.json"), "utf8"),
       ) as DeconstructManifest;
-      expect(updatedManifest.clips[0]!.text?.startsWith("「未来属于把 agents 变成 loops 的团队。」")).toBe(true);
+      expect(updatedManifest.clips[0]!.text?.startsWith("「未来属于把 Agents 变成 loops 的团队。」")).toBe(true);
       expect(updatedManifest.clips[0]!.text).not.toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 agents 构建 loops。");
       expect(updatedManifest.clips[1]!.text).toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 agents 构建 loops。");
       expect(updatedManifest.clips[0]!.postTitle).toBe("Loops 才是优势");
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("canonicalizes the final selected post after adding the lowercase agents CTA", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-final-term-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      await writeFile(
+        path.join(articleDir, "article.md"),
+        "# Graph Engineering 与 Agents\n\nGraph Engineering 应保留 canonical 原文。",
+        "utf8",
+      );
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "final-term", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "final-term",
+          title: "标题",
+          type: "hot-take",
+          angle: "contrarian",
+          risk: "low",
+          selected: true,
+          text: "图工程会让工作流更可靠。",
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-final-term.mp4",
+        }],
+      };
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+
+      const result = await writeSelectedPostFiles(manifest, articleDir);
+      const postText = await readFile(result[0]!, "utf8");
+
+      expect(postText).toContain("Graph Engineering");
+      expect(postText).not.toContain("图工程");
+      expect(postText).toContain("学习如何为你的 agents 构建 loops。");
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }

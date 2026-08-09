@@ -48,8 +48,8 @@ describe("generateXThreadContent", () => {
     const responses = [
       JSON.stringify({
         title: "图工程线程",
-        planning: { core_thesis: "提示工程", conflict: "上下文工程", key_points: ["图工程", "知识图谱", "代理图谱", "潜在工作区路由"], reader_gain: "图片和图表", final_post: "图文总结" },
-        tweets: ["图工程", "知识图谱", "代理图谱", "潜在工作区路由", "图片", "图文"],
+        planning: { core_thesis: "提示工程", conflict: "上下文工程", key_points: ["图工程", "知识图谱", "代理图谱", "术语：潜在工作区路由"], reader_gain: "图片和图表", final_post: "图文总结" },
+        tweets: ["图工程", "知识图谱", "代理图谱", "术语：潜在工作区路由", "图片", "图文"],
         hooks: [
           { text: "提示工程", angle: "反直觉", risk: "low" },
           { text: "上下文工程", angle: "实用收益", risk: "low" },
@@ -57,9 +57,9 @@ describe("generateXThreadContent", () => {
         ],
       }),
       JSON.stringify({
-        title: "Graph Engineering thread",
-        planning: { core_thesis: "Prompt Engineering", conflict: "Context Engineering", key_points: ["Graph Engineering", "Knowledge Graph", "Agent Graph", "Latent Workspace Routing"], reader_gain: "图片和图表", final_post: "图文总结" },
-        tweets: ["Graph Engineering", "Knowledge Graph", "Agent Graph", "Latent Workspace Routing", "图片", "图文"],
+        title: "Graph Engineering 线程",
+        planning: { core_thesis: "Prompt Engineering", conflict: "Context Engineering", key_points: ["Graph Engineering", "Knowledge Graph", "Agent Graph", "术语：Latent Workspace Routing"], reader_gain: "图片和图表", final_post: "图文总结" },
+        tweets: ["Graph Engineering", "Knowledge Graph", "Agent Graph", "术语：Latent Workspace Routing", "图片", "图文"],
         hooks: [
           { text: "Prompt Engineering", angle: "反直觉", risk: "low" },
           { text: "Context Engineering", angle: "实用收益", risk: "low" },

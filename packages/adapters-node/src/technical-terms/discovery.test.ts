@@ -5,6 +5,7 @@ import type {
   LlmPort,
   TechnicalTermGuard,
 } from "@yt2x/core";
+import { createTechnicalTermGuard } from "@yt2x/core";
 import {
   discoverTechnicalTerms,
   fingerprintTechnicalTermDiscoverySource,
@@ -170,7 +171,7 @@ describe("source-level technical term discovery", () => {
 
 describe("targeted technical term repair", () => {
   const guard = {
-    profile: { entries: [] },
+    profile: { entries: [{ canonical: "Latent Workspace Routing" }] },
     finalize: vi.fn((value: unknown) => ({
       value,
       violations: typeof value === "string" && value.includes("Latent Workspace Routing")
@@ -180,27 +181,27 @@ describe("targeted technical term repair", () => {
   } as unknown as TechnicalTermGuard;
 
   it("repairs a string once and finalizes the repaired value", async () => {
-    const { llm } = fakeLlm("Latent Workspace Routing is retained.");
+    const { llm } = fakeLlm("术语：Latent Workspace Routing");
 
     const result = await repairTechnicalTermViolations({
       llm,
       model: "fake-model",
       guard,
-      currentValue: "术语缺失。",
+      currentValue: "术语：",
       restoration: { placeholders: [] },
       violations: [{ code: "missing-canonical-term", canonical: "Latent Workspace Routing", message: "missing" }],
       parseResponse: (content) => content,
     });
 
     expect(llm.chat).toHaveBeenCalledTimes(1);
-    expect(guard.finalize).toHaveBeenCalledWith("Latent Workspace Routing is retained.", { placeholders: [] });
-    expect(result).toEqual({ value: "Latent Workspace Routing is retained.", violations: [] });
+    expect(guard.finalize).toHaveBeenCalledWith("术语：Latent Workspace Routing", { placeholders: [] });
+    expect(result).toEqual({ value: "术语：Latent Workspace Routing", violations: [] });
   });
 
   it("repairs a nested JSON value while preserving its outer shape", async () => {
-    const { llm } = fakeLlm(JSON.stringify({ title: "Latent Workspace Routing", nested: { body: "保留" } }));
+    const { llm } = fakeLlm(JSON.stringify({ title: "术语：Latent Workspace Routing", nested: { body: "保留" } }));
     const nestedGuard = {
-      profile: { entries: [] },
+      profile: { entries: [{ canonical: "Latent Workspace Routing" }] },
       finalize: vi.fn((value: unknown) => ({ value, violations: [] })),
     } as unknown as TechnicalTermGuard;
 
@@ -208,13 +209,13 @@ describe("targeted technical term repair", () => {
       llm,
       model: "fake-model",
       guard: nestedGuard,
-      currentValue: { title: "术语缺失", nested: { body: "保留" } },
+      currentValue: { title: "术语：", nested: { body: "保留" } },
       restoration: { placeholders: [] },
       violations: [{ code: "missing-canonical-term", canonical: "Latent Workspace Routing", message: "missing" }],
       parseResponse: (content) => JSON.parse(content) as { title: string; nested: { body: string } },
     });
 
-    expect(result.value).toEqual({ title: "Latent Workspace Routing", nested: { body: "保留" } });
+    expect(result.value).toEqual({ title: "术语：Latent Workspace Routing", nested: { body: "保留" } });
     expect(nestedGuard.finalize).toHaveBeenCalledOnce();
   });
 
@@ -274,5 +275,108 @@ describe("targeted technical term repair", () => {
 
     expect(llm.chat).toHaveBeenCalledTimes(1);
     expect(result.violations).not.toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "plain text",
+      currentValue: "正文：",
+      repairedValue: "正文：Latent Workspace Routing",
+      parseResponse: (content: string) => content,
+    },
+    {
+      name: "object",
+      currentValue: { title: "正文：", body: "保留" },
+      repairedValue: { title: "正文：Latent Workspace Routing", body: "保留" },
+      parseResponse: (content: string) => JSON.parse(content) as { title: string; body: string },
+    },
+    {
+      name: "array",
+      currentValue: ["正文：", "保留"],
+      repairedValue: ["正文：Latent Workspace Routing", "保留"],
+      parseResponse: (content: string) => JSON.parse(content) as string[],
+    },
+  ])("accepts a $name repair when only the missing term changes", async ({ currentValue, repairedValue, parseResponse }) => {
+    const { llm } = fakeLlm(typeof repairedValue === "string" ? repairedValue : JSON.stringify(repairedValue));
+    const termGuard = createTechnicalTermGuard({
+      sourceText: "Latent Workspace Routing",
+      discoveredTerms: [{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }],
+    });
+    const violations = termGuard.validate(currentValue);
+
+    const result = await repairTechnicalTermViolations({
+      llm,
+      model: "term-only-model",
+      guard: termGuard,
+      currentValue,
+      restoration: { placeholders: [] },
+      violations,
+      parseResponse,
+    });
+
+    expect(result.violations).toEqual([]);
+    expect(result.value).toEqual(repairedValue);
+  });
+
+  it("accepts replacing a translated term without treating adjacent text as rewritten", async () => {
+    const { llm } = fakeLlm("Graph Engineering 很重要");
+    const termGuard = createTechnicalTermGuard({ sourceText: "Graph Engineering" });
+    const violations = [{
+      code: "forbidden-translation" as const,
+      canonical: "Graph Engineering",
+      message: "replace translated term",
+    }];
+
+    const result = await repairTechnicalTermViolations({
+      llm,
+      model: "term-replacement-model",
+      guard: termGuard,
+      currentValue: "图工程很重要",
+      restoration: { placeholders: [] },
+      violations,
+      parseResponse: (content) => content,
+    });
+
+    expect(result).toEqual({ value: "Graph Engineering 很重要", violations: [] });
+  });
+
+  it.each([
+    {
+      name: "plain text",
+      currentValue: "原始正文",
+      repairedValue: "被重写的正文 Latent Workspace Routing",
+      parseResponse: (content: string) => content,
+    },
+    {
+      name: "object",
+      currentValue: { title: "正文：", body: "原始内容" },
+      repairedValue: { title: "正文：Latent Workspace Routing", body: "被重写" },
+      parseResponse: (content: string) => JSON.parse(content) as { title: string; body: string },
+    },
+    {
+      name: "array",
+      currentValue: ["正文：", "原始内容"],
+      repairedValue: ["正文：Latent Workspace Routing", "被重写"],
+      parseResponse: (content: string) => JSON.parse(content) as string[],
+    },
+  ])("rejects a $name repair when non-term text changes", async ({ currentValue, repairedValue, parseResponse }) => {
+    const { llm } = fakeLlm(typeof repairedValue === "string" ? repairedValue : JSON.stringify(repairedValue));
+    const termGuard = createTechnicalTermGuard({
+      sourceText: "Latent Workspace Routing",
+      discoveredTerms: [{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }],
+    });
+    const violations = termGuard.validate(currentValue);
+
+    const result = await repairTechnicalTermViolations({
+      llm,
+      model: "term-only-model",
+      guard: termGuard,
+      currentValue,
+      restoration: { placeholders: [] },
+      violations,
+      parseResponse,
+    });
+
+    expect(result).toEqual({ value: currentValue, violations });
   });
 });

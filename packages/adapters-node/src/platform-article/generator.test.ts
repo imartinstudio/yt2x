@@ -42,7 +42,7 @@ describe("generatePlatformArticleContent", () => {
         title: "Prompt Engineering 和 Graph Engineering",
         body: "Context Engineering 连接 Knowledge Graph 与 Agent Graph，也包含 Latent Workspace Routing。",
         tags: ["Graph Engineering", "Knowledge Graph", "Agent Graph"],
-        cover: { headline: "Prompt Engineering", subhead: "Context Engineering", visual_prompt: "图片、图表和图文" },
+        cover: { headline: "Graph Engineering", subhead: "Knowledge Graph", visual_prompt: "图片、图表和图文" },
       }),
     ];
     const llm = makeLlm(

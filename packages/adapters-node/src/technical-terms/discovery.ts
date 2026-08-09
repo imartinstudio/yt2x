@@ -48,6 +48,73 @@ const repairPromptRule = (guard: RepairTechnicalTermViolationsInput<unknown>["gu
     : `本次源材料中必须保留的专业术语：${activeTerms.join("、")}`;
 };
 
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const canonicalTermPattern = (
+  guard: RepairTechnicalTermViolationsInput<unknown>["guard"],
+): RegExp | undefined => {
+  const alternatives = [...new Set(guard.profile.entries.map((term) => term.canonical).filter(Boolean))]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegExp);
+  return alternatives.length === 0
+    ? undefined
+    : new RegExp(`(?<![A-Za-z0-9])(?:${alternatives.join("|")})(?![A-Za-z0-9])`, "giu");
+};
+
+const stringMatchesTermOnlyTemplate = (
+  current: string,
+  repaired: string,
+  termPattern: RegExp | undefined,
+): boolean => {
+  if (current === repaired) return true;
+  if (termPattern === undefined) return false;
+
+  const matches = [...repaired.matchAll(termPattern)];
+  if (matches.length === 0) return false;
+  const segments: string[] = [];
+  let cursor = 0;
+  for (const match of matches) {
+    segments.push(repaired.slice(cursor, match.index).trimEnd());
+    cursor = match.index + match[0].length;
+  }
+  segments.push(repaired.slice(cursor).trimStart());
+  for (let index = 1; index < segments.length - 1; index += 1) {
+    segments[index] = segments[index]!.trim();
+  }
+
+  if (segments.every((segment) => segment === "")) return current.trim() === "";
+  const template = new RegExp(`^${segments.map(escapeRegExp).join("[\\s\\S]*")}$`, "u");
+  return template.test(current);
+};
+
+const hasOnlyTechnicalTermChanges = (
+  current: unknown,
+  repaired: unknown,
+  guard: RepairTechnicalTermViolationsInput<unknown>["guard"],
+): boolean => {
+  const termPattern = canonicalTermPattern(guard);
+  const visit = (left: unknown, right: unknown): boolean => {
+    if (typeof left === "string" || typeof right === "string") {
+      return typeof left === "string"
+        && typeof right === "string"
+        && stringMatchesTermOnlyTemplate(left, right, termPattern);
+    }
+    if (Array.isArray(left) || Array.isArray(right)) {
+      return Array.isArray(left)
+        && Array.isArray(right)
+        && left.length === right.length
+        && left.every((child, index) => visit(child, right[index]));
+    }
+    if (left !== null && right !== null && typeof left === "object" && typeof right === "object") {
+      const leftRecord = left as Record<string, unknown>;
+      const rightRecord = right as Record<string, unknown>;
+      return Object.keys(leftRecord).every((key) => visit(leftRecord[key], rightRecord[key]));
+    }
+    return Object.is(left, right);
+  };
+  return visit(current, repaired);
+};
+
 export const discoverTechnicalTerms = (
   input: DiscoverTechnicalTermsInput,
 ): Promise<TechnicalTermDiscoveryResult> => {
@@ -131,7 +198,12 @@ export const repairTechnicalTermViolations = async <T>(
       value: input.currentValue,
       violations: input.violations,
     };
-    return input.guard.finalize(repaired, input.restoration);
+    const finalized = input.guard.finalize(repaired, input.restoration);
+    if (!hasOnlyTechnicalTermChanges(input.currentValue, finalized.value, input.guard)) return {
+      value: input.currentValue,
+      violations: input.violations,
+    };
+    return finalized;
   } catch {
     return { value: input.currentValue, violations: input.violations };
   }

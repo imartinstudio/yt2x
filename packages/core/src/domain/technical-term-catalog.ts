@@ -49,6 +49,7 @@ export type TechnicalTermOccurrence = {
   sourceText: string;
   start: number;
   end: number;
+  source: "sourceText" | "sourceTitle";
 };
 
 export type TechnicalTermProfile = {
@@ -316,7 +317,8 @@ const findProfileMatches = (
     )
     .filter((candidate) => candidate.sourceText.trim() !== "")
     .map((candidate) => {
-      const actualSourceText = findActualSourceText(sourceText, candidate.sourceText);
+      const actualSourceText = findActualSourceText(sourceText, candidate.sourceText)
+        ?? findActualSourceText(sourceTitle, candidate.sourceText);
       return actualSourceText === undefined
         ? undefined
         : entry(actualSourceText, [candidate.category], "preserve");
@@ -353,6 +355,7 @@ const resolvedFromMatches = (matches: readonly TermMatch[]): TechnicalTermProfil
     sourceText: match.sourceText,
     start: match.start,
     end: match.end,
+    source: match.source,
   })));
   return { sourceFingerprint: "", entries, occurrences, profileFingerprint: "" };
 };
@@ -468,6 +471,13 @@ export const createTechnicalTermGuard = ({
 
   const applySourceScopedRecovery = (value: string): string => {
     let output = value;
+    for (const term of preservedEntries
+      .sort((a, b) => b.canonical.length - a.canonical.length)) {
+      output = output.replace(
+        termPattern([term.canonical, term.sourceText], "giu"),
+        term.canonical,
+      );
+    }
     for (const term of profile.entries
       .filter((candidate) => candidate.policy === "fixed-zh" && candidate.preferredZh !== undefined)
       .sort((a, b) => b.canonical.length - a.canonical.length)) {

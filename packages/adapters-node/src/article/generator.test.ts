@@ -35,12 +35,22 @@ const sampleVisuals: AvailableVisual[] = [
 
 describe("generateXArticleContent", () => {
   it("guards article markdown and repairs catalog plus discovered terms once", async () => {
-    const responses = [
-      "# 标题\n\n提示工程、上下文工程和图工程会连接知识图谱与代理图谱，潜在工作区路由也很重要。\n\n#AI #Agent #Workflow",
-      "# Prompt Engineering\n\nPrompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph、Latent Workspace Routing。图片、图表和图文不应误报。\n\n#AI #Agent #Workflow",
-    ];
     const llm = makeLlm(
-      () => ({ content: responses.shift()!, model: "m", finishReason: "stop" }),
+      (req) => {
+        if (req.messages[0]?.content.includes("术语定向修复器")) {
+          const current = req.messages[1]?.content.match(/Current value:\n([\s\S]*?)\n\n只输出修复后的值/u)?.[1] ?? "";
+          return {
+            content: current.replace("潜在工作区路由", "Latent Workspace Routing"),
+            model: "m",
+            finishReason: "stop",
+          };
+        }
+        return {
+          content: "# 标题\n\n提示工程、上下文工程和图工程会连接知识图谱与代理图谱，潜在工作区路由也很重要。图片、图表和图文不应误报。\n\n#AI #Agent #Workflow",
+          model: "m",
+          finishReason: "stop",
+        };
+      },
       JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
     );
     const artifacts: StructuredNotesArtifacts = {

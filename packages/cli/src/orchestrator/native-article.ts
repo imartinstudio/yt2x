@@ -21,6 +21,7 @@ import {
   writeNativeVideoShortBundle,
   writePlatformArticleBundle,
   writeVisualSuggestions,
+  acquireContentTargetLock,
   technicalTermDiscoveryCacheDirFor,
   CONTENT_PROMPT_VERSIONS,
   contentSourceFingerprintFor,
@@ -28,6 +29,7 @@ import {
   createContentTargetMetadata,
   isContentTargetMetadataFresh,
   readContentTargetMetadata,
+  summarySourceTextFor,
   structuredNotesContentSourceFor,
   platformArticleContentSourceFor,
   type ContentTargetCacheExpectation,
@@ -79,6 +81,8 @@ const addUsage = (
 
 type ContentResultMetadata = {
   model: string;
+  requestedModel?: string;
+  resolvedModel?: string;
   sourceFingerprint?: string;
   promptVersion?: string;
   technicalTermProfileFingerprint?: string;
@@ -96,7 +100,8 @@ const contentMetadataForResult = (
   return createContentTargetMetadata({
     target,
     sourceFingerprint: result.sourceFingerprint,
-    model: result.model,
+    requestedModel: result.requestedModel ?? result.model,
+    resolvedModel: result.resolvedModel ?? result.model,
     promptVersion: result.promptVersion,
     technicalTermProfileFingerprint: result.technicalTermProfileFingerprint,
     technicalTermDiscovery: result.technicalTermDiscovery,
@@ -254,14 +259,16 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
 
   for (const videoDir of targets) {
     const stageT0 = performance.now();
+    let releaseContentLock: (() => Promise<void>) | undefined;
     try {
       const artifacts = await readStructuredNotesArtifacts(videoDir);
       progress?.setActive(`article · ${artifacts.videoId}`);
       const url = await readYoutubePageUrl(videoDir, artifacts.videoId);
       const identity = { videoId: artifacts.videoId, url };
+      const articleDir = path.join(articleOutDir, artifacts.videoId);
+      releaseContentLock = await acquireContentTargetLock(articleDir, "native-content");
       const t0 = Date.now();
       const writtenArtifacts: string[] = [];
-      const articleDir = path.join(articleOutDir, artifacts.videoId);
       let articleDirForStatus: string | undefined;
       let resultFile: string | undefined;
       let sourceArticleMd: string | undefined;
@@ -292,10 +299,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           expectation: {
             target: "article",
             sourceFingerprint: articleSourceFingerprint,
-            model: llm.model,
+            requestedModel: llm.model,
             promptVersion: CONTENT_PROMPT_VERSIONS.article,
           },
-          sourceText: artifacts.structuredNotesMd,
+          sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
           sourceTitle: artifacts.metadata.title ?? "",
           requiredFiles: [articlePath, runPath],
         });
@@ -337,7 +344,9 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             platform: "x",
             videoId: artifacts.videoId,
             target: "article",
-            model: result.model,
+            model: result.resolvedModel,
+            requestedModel: result.requestedModel,
+            resolvedModel: result.resolvedModel,
             finishReason: result.finishReason,
             generatedAt: new Date().toISOString(),
             durationMs: result.durationMs,
@@ -349,14 +358,15 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           },
           {
             force: flags.force === true,
+            lock: false,
             notesVideoDir: videoDir,
             sourceVideoUrl: url,
             cacheExpectation: {
               target: "article",
               sourceFingerprint: articleSourceFingerprint,
-              model: llm.model,
+              requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.article,
-              sourceText: artifacts.structuredNotesMd,
+              sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
               sourceTitle: artifacts.metadata.title ?? "",
               requiredFiles: [articlePath, runPath],
             },
@@ -419,10 +429,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           expectation: {
             target: "x-thread",
             sourceFingerprint: structuredSourceFingerprint,
-            model: llm.model,
+            requestedModel: llm.model,
             promptVersion: CONTENT_PROMPT_VERSIONS.xThread,
           },
-          sourceText: artifacts.structuredNotesMd,
+          sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
           sourceTitle: artifacts.metadata.title ?? "",
           requiredFiles: [threadPath, path.join(articleDir, "x-format", "x-hooks.json"), threadMetadataPath],
         });
@@ -443,12 +453,13 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           result.thread,
           {
             force: flags.force === true,
+            lock: false,
             cacheExpectation: {
               target: "x-thread",
               sourceFingerprint: structuredSourceFingerprint,
-              model: llm.model,
+              requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.xThread,
-              sourceText: artifacts.structuredNotesMd,
+              sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
               sourceTitle: artifacts.metadata.title ?? "",
               requiredFiles: [threadPath, path.join(articleDir, "x-format", "x-hooks.json"), threadMetadataPath],
             },
@@ -495,10 +506,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           expectation: {
             target: "x-short",
             sourceFingerprint: structuredSourceFingerprint,
-            model: llm.model,
+            requestedModel: llm.model,
             promptVersion: CONTENT_PROMPT_VERSIONS.xShort,
           },
-          sourceText: artifacts.structuredNotesMd,
+          sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
           sourceTitle: artifacts.metadata.title ?? "",
           requiredFiles: [shortPath, shortMetadataPath],
         });
@@ -519,12 +530,13 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           result.shortPost,
           {
             force: flags.force === true,
+            lock: false,
             cacheExpectation: {
               target: "x-short",
               sourceFingerprint: structuredSourceFingerprint,
-              model: llm.model,
+              requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.xShort,
-              sourceText: artifacts.structuredNotesMd,
+              sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
               sourceTitle: artifacts.metadata.title ?? "",
               requiredFiles: [shortPath, shortMetadataPath],
             },
@@ -569,10 +581,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           expectation: {
             target: "x-video-short",
             sourceFingerprint: videoShortSourceFingerprint,
-            model: llm.model,
+            requestedModel: llm.model,
             promptVersion: CONTENT_PROMPT_VERSIONS.xVideoShort,
           },
-          sourceText: artifacts.structuredNotesMd,
+          sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
           sourceTitle: artifacts.metadata.title ?? "",
           requiredFiles: [videoShortPath, videoShortMetadataPath],
         });
@@ -593,12 +605,13 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           result.videoShortPost,
           {
             force: flags.force === true,
+            lock: false,
             cacheExpectation: {
               target: "x-video-short",
               sourceFingerprint: videoShortSourceFingerprint,
-              model: llm.model,
+              requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.xVideoShort,
-              sourceText: artifacts.structuredNotesMd,
+              sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
               sourceTitle: artifacts.metadata.title ?? "",
               requiredFiles: [videoShortPath, videoShortMetadataPath],
             },
@@ -660,7 +673,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             expectation: {
               target: `platform-article-${platformTarget}`,
               sourceFingerprint: platformSourceFingerprint,
-              model: llm.model,
+              requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.platformArticle,
             },
             sourceText: platformSourceText,
@@ -692,10 +705,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           result.platformArticle,
           {
             force: flags.force === true,
+            lock: false,
             cacheExpectation: {
               target: `platform-article-${platformTarget}`,
               sourceFingerprint: platformSourceFingerprint,
-              model: llm.model,
+              requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.platformArticle,
               sourceText: platformSourceText,
               sourceTitle: artifacts.metadata.title ?? "",
@@ -770,7 +784,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
         break;
       }
     } finally {
-      // no-op: error handling above is self-contained
+      await releaseContentLock?.();
     }
   }
 

@@ -39,6 +39,8 @@ export type GeneratePlatformArticleInput = {
 export type GeneratePlatformArticleResult = {
   platformArticle: GeneratedPlatformArticle;
   model: string;
+  requestedModel: string;
+  resolvedModel: string;
   finishReason: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
@@ -236,6 +238,8 @@ export const generatePlatformArticleContent = async (
   const result: GeneratePlatformArticleResult = {
     platformArticle,
     model: resp.model,
+    requestedModel: input.model,
+    resolvedModel: resp.model,
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,

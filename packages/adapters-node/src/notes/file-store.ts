@@ -1,7 +1,16 @@
 import type { Dirent } from "node:fs";
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { NotesPromptInput, ScreenshotManifest, YouTubeMetadata } from "@yt2x/core";
+import {
+  contentTargetMetadataPathFor,
+  isContentTargetMetadataFresh,
+  readContentTargetMetadata,
+  writeContentTargetMetadata,
+  type ContentTargetCacheExpectation,
+  type ContentTargetMetadata,
+} from "../content-cache.js";
+import { atomicWriteUtf8, withContentTargetLock } from "../content-transaction.js";
 
 /**
  * 旧 pipeline 约定的视频目录布局：
@@ -95,21 +104,43 @@ export const readVideoArtifacts = async (videoDir: string): Promise<VideoDirArti
 export const writeStructuredNotes = async (
   videoDir: string,
   content: string,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    cacheExpectation?: ContentTargetCacheExpectation;
+    cacheMetadata?: ContentTargetMetadata;
+    lock?: boolean;
+  } = {},
 ): Promise<string | null> => {
+  if (options.lock !== false) {
+    return withContentTargetLock(videoDir, "notes", () => writeStructuredNotes(videoDir, content, {
+      ...options,
+      lock: false,
+    }));
+  }
   const target = path.join(videoDir, "structured-notes.md");
+  const metadataPath = contentTargetMetadataPathFor(videoDir, "notes");
   if (options.force !== true) {
-    try {
-      await stat(target);
-      return null;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    if (options.cacheExpectation !== undefined) {
+      const existing = await readContentTargetMetadata(metadataPath);
+      const fresh = await isContentTargetMetadataFresh(existing, {
+        ...options.cacheExpectation,
+        requiredFiles: [target, metadataPath],
+      });
+      if (fresh) return null;
+    } else {
+      try {
+        await stat(target);
+        return null;
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
     }
   }
   await mkdir(videoDir, { recursive: true });
-  const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tmp, content, "utf8");
-  await rename(tmp, target);
+  await atomicWriteUtf8(target, content);
+  if (options.cacheMetadata !== undefined) {
+    await writeContentTargetMetadata(metadataPath, options.cacheMetadata);
+  }
   return target;
 };
 
@@ -132,8 +163,6 @@ export const findPendingVideoDirs = async (outDir: string): Promise<string[]> =>
     const videoDir = path.join(outDir, entry.name);
     const hasChunks = await fileExists(path.join(videoDir, "chunks.md"));
     if (!hasChunks) continue;
-    const hasNotes = await fileExists(path.join(videoDir, "structured-notes.md"));
-    if (hasNotes) continue;
     pending.push(videoDir);
   }
   return pending.sort();

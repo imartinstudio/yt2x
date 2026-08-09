@@ -3,10 +3,19 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  contentTargetMetadataPathFor,
+  createContentTargetMetadata,
+  writeContentTargetMetadata,
+} from "../content-cache.js";
+import {
   findPendingVideoDirs,
   readVideoArtifacts,
   writeStructuredNotes,
 } from "./file-store.js";
+import { createTechnicalTermGuard } from "@yt2x/core";
+import { technicalTermDiscoveryAuditFor } from "../technical-terms/discovery.js";
 
 let outDir: string;
 
@@ -120,6 +129,45 @@ describe("writeStructuredNotes", () => {
     expect(await readFile(path.join(dir, "structured-notes.md"), "utf8")).toBe("new");
   });
 
+  it("rebuilds an existing notes file when the profile-aware cache metadata is stale", async () => {
+    const dir = await seedVideo("abc", {
+      chunks: "Graph Engineering",
+      cues: "00:00 — Graph Engineering",
+      metadata: JSON.stringify({ id: "abc", title: "Graph Engineering" }),
+      structuredNotes: "old",
+    });
+    const sourceText = "Graph Engineering\n00:00 — Graph Engineering";
+    const sourceTitle = "Graph Engineering";
+    const audit = technicalTermDiscoveryAuditFor(
+      { accepted: [], reviewCandidates: [], warnings: [] },
+      { sourceText, sourceTitle },
+    );
+    const guard = createTechnicalTermGuard({ sourceText, sourceTitle, discovery: audit });
+    const metadataPath = contentTargetMetadataPathFor(dir, "notes");
+    await writeContentTargetMetadata(metadataPath, createContentTargetMetadata({
+      target: "notes",
+      sourceFingerprint: contentSourceFingerprintFor({ sourceText, sourceTitle, revision: "old" }),
+      requestedModel: "notes-model",
+      resolvedModel: "notes-model",
+      promptVersion: CONTENT_PROMPT_VERSIONS.notes,
+      technicalTermProfileFingerprint: guard.profile.profileFingerprint,
+      technicalTermDiscovery: audit,
+    }));
+
+    await expect(writeStructuredNotes(dir, "new", {
+      cacheExpectation: {
+        target: "notes",
+        sourceFingerprint: contentSourceFingerprintFor({ sourceText, sourceTitle }),
+        requestedModel: "notes-model",
+        promptVersion: CONTENT_PROMPT_VERSIONS.notes,
+        sourceText,
+        sourceTitle,
+        requiredFiles: [path.join(dir, "structured-notes.md"), metadataPath],
+      },
+    })).resolves.toBe(path.join(dir, "structured-notes.md"));
+    await expect(readFile(path.join(dir, "structured-notes.md"), "utf8")).resolves.toBe("new");
+  });
+
   it("creates parent directory if missing", async () => {
     const dir = path.join(outDir, "fresh");
     const file = await writeStructuredNotes(dir, "x");
@@ -132,13 +180,13 @@ describe("findPendingVideoDirs", () => {
     expect(await findPendingVideoDirs(path.join(outDir, "ghost"))).toEqual([]);
   });
 
-  it("lists dirs with chunks.md but no structured-notes.md", async () => {
+  it("lists every acquired dir so stale notes metadata can be rebuilt", async () => {
     await seedVideo("a", { chunks: "x", cues: "x", metadata: "{}" });
     await seedVideo("b", { chunks: "x", cues: "x", metadata: "{}", structuredNotes: "done" });
     await seedVideo("c", { chunks: "x", cues: "x", metadata: "{}" });
     await seedVideo("d", {}); // no chunks → skipped
     const pending = await findPendingVideoDirs(outDir);
-    expect(pending.map((p) => path.basename(p)).sort()).toEqual(["a", "c"]);
+    expect(pending.map((p) => path.basename(p)).sort()).toEqual(["a", "b", "c"]);
   });
 
   it("is deterministic (sorted)", async () => {

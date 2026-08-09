@@ -33,6 +33,7 @@ import {
   readContentTargetMetadata,
   writeContentTargetMetadata,
 } from "../content-cache.js";
+import { withContentTargetLock } from "../content-transaction.js";
 
 export type GeneratePostsRunnerInput = {
   llm: LlmPort;
@@ -42,6 +43,10 @@ export type GeneratePostsRunnerInput = {
   manifest?: DeconstructManifest;
   /** false 时只返回内存结果，不触碰 clips/ 下的既有文件。 */
   persist?: boolean;
+  /** persist:false 只能由已完成 CLI bundle cache 检查的内部 staging 调用。 */
+  cacheContract?: "cli";
+  outputDir?: string;
+  lock?: boolean;
   signal?: AbortSignal;
 };
 
@@ -61,6 +66,8 @@ export type ClipPostTechnicalTerms = {
   discoveryAudit?: TechnicalTermDiscoveryAudit;
   sourceTextByClipId?: Readonly<Record<string, string>>;
   model?: string;
+  requestedModel?: string;
+  resolvedModel?: string;
   sourceFingerprint?: string;
   promptVersion?: string;
   profileFingerprint?: string;
@@ -71,6 +78,33 @@ const stripFence = (s: string): string => {
   const m = s.match(JSON_FENCE_RE);
   return m ? m[1]!.trim() : s.trim();
 };
+
+export const clipsInputForManifest = (manifest: DeconstructManifest): GeneratePostsInput["clips"] =>
+  manifest.clips.map((c) => ({
+    id: c.id,
+    title: c.title,
+    summary: c.scores?.composite !== undefined
+      ? `${c.title}（评分 ${c.scores.composite.toFixed(1)}）：${c.articleSection ?? ""}`
+      : c.title,
+    angle: c.angle,
+    timecodes: { durationSec: Math.round(c.timecodes.durationSec) },
+    video: c.video,
+  }));
+
+export const clipPostSourceTextFor = (
+  articleMd: string,
+  manifest: DeconstructManifest,
+): string => `${articleMd}\n${JSON.stringify(clipsInputForManifest(manifest))}`;
+
+export const clipPostSourceFingerprintFor = (
+  articleTitle: string,
+  articleMd: string,
+  manifest: DeconstructManifest,
+): string => contentSourceFingerprintFor({
+  articleTitle,
+  articleMd,
+  clips: clipsInputForManifest(manifest),
+});
 
 /**
  * Build user prompt for all candidate clips.
@@ -116,7 +150,17 @@ const buildPostUserPrompt = (input: GeneratePostsInput): string => {
 export const generateClipsPosts = async (
   input: GeneratePostsRunnerInput,
 ): Promise<GeneratePostsRunnerResult> => {
-  const manifestPath = path.join(input.articleDir, "x-format", "clips", "clips-manifest.json");
+  if (input.persist === false && input.cacheContract !== "cli") {
+    throw new Error("persist:false deconstruct post generation requires the CLI cache contract.");
+  }
+  if (input.lock !== false && input.persist !== false) {
+    return withContentTargetLock(input.articleDir, "deconstruct", () => generateClipsPosts({
+      ...input,
+      lock: false,
+    }));
+  }
+  const clipsDir = input.outputDir ?? path.join(input.articleDir, "x-format", "clips");
+  const manifestPath = path.join(clipsDir, "clips-manifest.json");
   const articlePath = path.join(input.articleDir, "article.md");
 
   const [manifestRaw, articleMd] = await Promise.all([
@@ -137,25 +181,16 @@ export const generateClipsPosts = async (
   const seriesName = deriveSeriesName(articleTitle);
 
   // Build LLM input — all candidates
-  const clipsInput: GeneratePostsInput["clips"] = allClips.map((c) => ({
-    id: c.id,
-    title: c.title,
-    summary: c.scores?.composite !== undefined
-      ? `${c.title}（评分 ${c.scores.composite.toFixed(1)}）：${c.articleSection ?? ""}`
-      : c.title,
-    angle: c.angle,
-    timecodes: { durationSec: Math.round(c.timecodes.durationSec) },
-    video: c.video,
-  }));
+  const clipsInput = clipsInputForManifest(manifest);
   const sourceTextByClipId = Object.freeze(Object.fromEntries(allClips.map((clip) => [
     clip.id,
     buildClipSourceText(clip, articleMd),
   ])));
 
-  const sourceText = `${articleMd}\n${JSON.stringify(clipsInput)}`;
+  const sourceText = clipPostSourceTextFor(articleMd, manifest);
   const selected = manifest.clips.filter((clip) => clip.selected === true && Boolean(clip.text));
   const selectedSourceText = selectedClipPostSourceText(selected, articleTitle, sourceTextByClipId);
-  const sourceFingerprint = contentSourceFingerprintFor({ articleTitle, articleMd, clips: clipsInput });
+  const sourceFingerprint = clipPostSourceFingerprintFor(articleTitle, articleMd, manifest);
   const metadataPath = contentTargetMetadataPathFor(input.articleDir, "clip-post");
   const selectedPostPaths = selected.map((clip, index) => selectedPostPathFor(input.articleDir, clip, index));
   if (input.persist !== false) {
@@ -163,7 +198,7 @@ export const generateClipsPosts = async (
     const cacheHit = await isContentTargetMetadataFresh(existingMetadata, {
       target: "clip-post",
       sourceFingerprint,
-      model: input.model,
+      requestedModel: input.model,
       promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
       sourceText: selectedSourceText,
       sourceTitle: articleTitle,
@@ -188,6 +223,8 @@ export const generateClipsPosts = async (
           discoveryAudit: existingMetadata.technicalTermDiscovery,
           sourceTextByClipId,
           model: input.model,
+          requestedModel: input.model,
+          resolvedModel: existingMetadata.resolvedModel,
           sourceFingerprint,
           promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
           profileFingerprint: existingMetadata.technicalTermProfileFingerprint,
@@ -222,6 +259,7 @@ export const generateClipsPosts = async (
     discoveryAudit: technicalTermDiscoveryAuditFor(discovery),
     sourceTextByClipId,
     model: input.model,
+    requestedModel: input.model,
     sourceFingerprint,
     promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
     profileFingerprint: finalGuard.profile.profileFingerprint,
@@ -267,6 +305,7 @@ export const generateClipsPosts = async (
     throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
   }
   const parsed = finalized.value;
+  finalTechnicalTerms.resolvedModel = resp.model;
 
   // Write all candidates' copy into manifest JSON
   const total = parsed.posts.length;
@@ -308,7 +347,7 @@ export const generateClipsPosts = async (
   // Only write .md files for selected clips
   const postPaths = input.persist === false
     ? []
-    : await writeSelectedPostFiles(manifest, input.articleDir, finalTechnicalTerms);
+    : await writeSelectedPostFiles(manifest, input.articleDir, finalTechnicalTerms, { lock: false });
 
   const result: GeneratePostsRunnerResult = {
     postCount: total,
@@ -333,8 +372,21 @@ export const writeSelectedPostFiles = async (
   manifest: DeconstructManifest,
   articleDir: string,
   technicalTerms: ClipPostTechnicalTerms,
+  options: {
+    clipsDir?: string;
+    metadataPath?: string;
+    lock?: boolean;
+  } = {},
 ): Promise<string[]> => {
-  const clipsDir = path.join(articleDir, "x-format", "clips");
+  if (options.lock !== false) {
+    return withContentTargetLock(articleDir, "deconstruct", () => writeSelectedPostFiles(
+      manifest,
+      articleDir,
+      technicalTerms,
+      { ...options, lock: false },
+    ));
+  }
+  const clipsDir = options.clipsDir ?? path.join(articleDir, "x-format", "clips");
   const manifestPath = path.join(clipsDir, "clips-manifest.json");
   const postPaths: string[] = [];
 
@@ -445,7 +497,7 @@ export const writeSelectedPostFiles = async (
       );
     }
     await writeFile(path.join(stageDir, "clips-manifest.json"), JSON.stringify(nextManifest, null, 2) + "\n", "utf8");
-    if (technicalTerms.model !== undefined
+    if (technicalTerms.requestedModel !== undefined
       && technicalTerms.sourceFingerprint !== undefined
       && technicalTerms.promptVersion !== undefined
       && technicalTerms.discoveryAudit !== undefined) {
@@ -455,7 +507,8 @@ export const writeSelectedPostFiles = async (
         createContentTargetMetadata({
           target: "clip-post",
           sourceFingerprint: technicalTerms.sourceFingerprint,
-          model: technicalTerms.model,
+          requestedModel: technicalTerms.requestedModel,
+          resolvedModel: technicalTerms.resolvedModel ?? technicalTerms.requestedModel,
           promptVersion: technicalTerms.promptVersion,
           technicalTermProfileFingerprint: finalGuard.profile.profileFingerprint,
           technicalTermDiscovery: technicalTerms.discoveryAudit,
@@ -468,7 +521,7 @@ export const writeSelectedPostFiles = async (
     }
     await rename(path.join(stageDir, "clips-manifest.json"), manifestPath);
     if (stagedMetadataPath !== undefined) {
-      const metadataPath = contentTargetMetadataPathFor(articleDir, "clip-post");
+      const metadataPath = options.metadataPath ?? contentTargetMetadataPathFor(articleDir, "clip-post");
       await mkdir(path.dirname(metadataPath), { recursive: true });
       await rename(stagedMetadataPath, metadataPath);
     }

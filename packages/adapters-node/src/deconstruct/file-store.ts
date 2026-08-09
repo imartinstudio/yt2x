@@ -28,9 +28,17 @@ export const writeDeconstructOutput = async (
   videoPath: string,
   durationSec: number,
   articleMd = "",
-  options: { persist?: boolean } = {},
+  options: {
+    persist?: boolean;
+    outputDir?: string;
+    manifestArticlePath?: string;
+    cacheContract?: "cli";
+  } = {},
 ): Promise<WriteDeconstructOutput> => {
-  const clipsDir = path.join(articleDir, "x-format", "clips");
+  if (options.persist === false && options.cacheContract !== "cli") {
+    throw new Error("persist:false deconstruct preparation requires the CLI cache contract.");
+  }
+  const clipsDir = options.outputDir ?? path.join(articleDir, "x-format", "clips");
   await mkdir(clipsDir, { recursive: true });
 
   // Build manifest entries
@@ -63,7 +71,8 @@ export const writeDeconstructOutput = async (
     v: 1,
     source: {
       videoId,
-      articlePath: path.relative(clipsDir, path.join(articleDir, "article.md")),
+      articlePath: options.manifestArticlePath
+        ?? path.relative(clipsDir, path.join(articleDir, "article.md")),
       durationSec,
     },
     generatedAt: new Date().toISOString(),

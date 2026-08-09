@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   pickArticleCoverFromCandidates,
@@ -11,6 +11,7 @@ import {
 } from "@yt2x/core";
 import type { ContentTargetCacheExpectation } from "../content-cache.js";
 import { isContentTargetMetadataFresh, readContentTargetMetadata } from "../content-cache.js";
+import { atomicWriteUtf8, withContentTargetLock } from "../content-transaction.js";
 
 /**
  * Native article 输出根目录（扁平）：articleOutDir/videoId/article.md
@@ -28,7 +29,10 @@ export type NativeArticleRunRecord = {
   v: 1;
   platform: "x";
   videoId: string;
-  model: string;
+  /** 旧 run.json 的 model 保留为可选迁移字段。 */
+  model?: string;
+  requestedModel?: string;
+  resolvedModel?: string;
   finishReason: string;
   generatedAt: string;
   durationMs: number;
@@ -140,6 +144,7 @@ export const writeNativeArticleBundle = async (
     notesVideoDir?: string;
     sourceVideoUrl?: string;
     cacheExpectation?: ContentTargetCacheExpectation;
+    lock?: boolean;
   } = {},
 ): Promise<WriteNativeArticleResult | null> => {
   if (!isValidVideoId(videoId)) {
@@ -148,6 +153,16 @@ export const writeNativeArticleBundle = async (
   const articleDir = path.join(path.resolve(articleOutDir), videoId);
   const articlePath = path.join(articleDir, "article.md");
   const runPath = path.join(articleDir, "run.json");
+
+  if (options.lock !== false) {
+    return withContentTargetLock(articleDir, "article", () => writeNativeArticleBundle(
+      articleOutDir,
+      videoId,
+      articleMd,
+      run,
+      { ...options, lock: false },
+    ));
+  }
 
   if (options.force !== true) {
     if (options.cacheExpectation !== undefined) {
@@ -403,11 +418,4 @@ const fileExists = async (filePath: string): Promise<boolean> => {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw err;
   }
-};
-
-const atomicWriteUtf8 = async (targetPath: string, body: string): Promise<void> => {
-  await mkdir(path.dirname(targetPath), { recursive: true });
-  const tmp = targetPath + "." + String(process.pid) + "." + String(Date.now()) + ".tmp";
-  await writeFile(tmp, body, "utf8");
-  await rename(tmp, targetPath);
 };

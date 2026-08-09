@@ -1,4 +1,4 @@
-import { mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { GeneratedThread } from "@yt2x/core";
 import { isValidVideoId } from "../article/file-store.js";
@@ -10,6 +10,7 @@ import {
   type ContentTargetCacheExpectation,
   type ContentTargetMetadata,
 } from "../content-cache.js";
+import { atomicWriteUtf8, withContentTargetLock } from "../content-transaction.js";
 
 export type WriteNativeThreadResult = {
   articleDir: string;
@@ -35,6 +36,7 @@ export const writeNativeThreadBundle = async (
     force?: boolean;
     cacheExpectation?: ContentTargetCacheExpectation;
     cacheMetadata?: ContentTargetMetadata;
+    lock?: boolean;
   } = {},
 ): Promise<WriteNativeThreadResult | null> => {
   if (!isValidVideoId(videoId)) {
@@ -45,6 +47,15 @@ export const writeNativeThreadBundle = async (
   const threadPath = path.join(articleDir, "x-format", "x-thread.md");
   const hooksPath = path.join(articleDir, "x-format", "x-hooks.json");
   const metadataPath = contentTargetMetadataPathFor(articleDir, "x-thread");
+
+  if (options.lock !== false) {
+    return withContentTargetLock(articleDir, "x-thread", () => writeNativeThreadBundle(
+      articleOutDir,
+      videoId,
+      thread,
+      { ...options, lock: false },
+    ));
+  }
 
   if (options.force !== true) {
     if (options.cacheExpectation !== undefined) {
@@ -86,11 +97,4 @@ const assertMissing = async (targetPath: string): Promise<boolean> => {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     return false;
   }
-};
-
-const atomicWriteUtf8 = async (targetPath: string, body: string): Promise<void> => {
-  await mkdir(path.dirname(targetPath), { recursive: true });
-  const tmp = targetPath + "." + String(process.pid) + "." + String(Date.now()) + ".tmp";
-  await writeFile(tmp, body, "utf8");
-  await rename(tmp, targetPath);
 };

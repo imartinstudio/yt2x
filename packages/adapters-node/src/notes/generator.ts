@@ -12,6 +12,11 @@ import {
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
 } from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  notesContentSourceFor,
+} from "../content-cache.js";
 import type { VideoDirArtifacts } from "./file-store.js";
 
 export type GenerateNotesInput = {
@@ -29,10 +34,16 @@ export type GenerateNotesInput = {
 export type GenerateNotesResult = {
   content: string;
   model: string;
+  requestedModel: string;
+  resolvedModel: string;
   finishReason: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
   durationMs: number;
+  sourceFingerprint: string;
+  promptVersion: string;
+  technicalTermProfileFingerprint: string;
+  technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
 };
 
 /**
@@ -121,9 +132,20 @@ export const generateNotesContent = async (
   const result: GenerateNotesResult = {
     content,
     model: resp.model,
+    requestedModel: input.model,
+    resolvedModel: resp.model,
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
+    sourceFingerprint: contentSourceFingerprintFor(notesContentSourceFor({
+      metadata: input.artifacts.metadata,
+      chunksMd: input.artifacts.chunksMd,
+      timestampedCuesMd: input.artifacts.timestampedCuesMd,
+      screenshots: input.artifacts.screenshots,
+    })),
+    promptVersion: CONTENT_PROMPT_VERSIONS.notes,
+    technicalTermProfileFingerprint: guard.profile.profileFingerprint,
+    technicalTermDiscovery: technicalTermDiscoveryAuditFor(discovery),
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

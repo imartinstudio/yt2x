@@ -40,7 +40,7 @@ describe("writeDeconstructOutput", () => {
         path.join(articleDir, "full.mp4"),
         60,
         "# 技术文章",
-        { persist: false },
+        { persist: false, cacheContract: "cli" },
       );
 
       expect(result.manifest.clips).toHaveLength(1);

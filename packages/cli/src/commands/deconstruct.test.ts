@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +14,18 @@ const mocks = vi.hoisted(() => ({
   generateClipsPosts: vi.fn(),
   writeSelectedPostFiles: vi.fn(),
   writeReports: vi.fn(),
+  CONTENT_PROMPT_VERSIONS: { deconstruct: "native-deconstruct-v2" },
+  acquireContentTargetLock: vi.fn(async () => async () => {}),
   assertClipPublishReadiness: vi.fn(),
+  contentTargetMetadataPathFor: vi.fn((dir: string, target: string) => dir + "/.content-metadata/" + target + ".json"),
+  createContentTargetMetadata: vi.fn((input: unknown) => input),
+  writeContentTargetMetadata: vi.fn(async () => {}),
+  readContentTargetMetadata: vi.fn(),
+  isContentTargetMetadataFresh: vi.fn(),
+  replaceDirectoryAtomically: vi.fn(async () => {}),
+  clipPostSourceFingerprintFor: vi.fn(() => "source-fingerprint"),
+  clipPostSourceTextFor: vi.fn(() => "source-text"),
+  clipsInputForManifest: vi.fn(() => []),
   filterValidSections: vi.fn(),
   validateClipEndings: vi.fn(),
   splitOversizedSections: vi.fn(),
@@ -101,6 +112,7 @@ describe("runDeconstructCommand", () => {
       mocks.clipCandidates.mockResolvedValue([{ success: true, candidate: section }]);
       mocks.assertClipPublishReadiness.mockResolvedValue({ publishOrder: ["post-1.md"] });
       mocks.writeReports.mockResolvedValue({ decompositionPath: "decomposition.md", reviewPath: "review.md" });
+      mocks.isContentTargetMetadataFresh.mockResolvedValue(false);
 
       await expect(runDeconstructCommand(articleDir, 1)).resolves.toBe(0);
 
@@ -108,7 +120,125 @@ describe("runDeconstructCommand", () => {
         expect.objectContaining({ source: expect.objectContaining({ videoId: "profile-pass" }) }),
         articleDir,
         technicalTerms,
+        expect.objectContaining({
+          clipsDir: expect.stringContaining(".deconstruct-stage-"),
+          lock: false,
+        }),
       );
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("checks the complete bundle cache before candidate and post providers", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-cli-deconstruct-cache-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const manifest = {
+        v: 1,
+        source: { videoId: "cache-pass", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-08-09T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "cached",
+          title: "Cached",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          timecodes: { start: "00:00:00", end: "00:00:10", startSec: 0, endSec: 10, durationSec: 10 },
+          video: "candidate-1-cached.mp4",
+          selected: true,
+          text: "缓存帖子",
+          charCount: 4,
+        }],
+      };
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+      await writeFile(path.join(clipsDir, "post-1-cached.md"), "post", "utf8");
+      await writeFile(path.join(clipsDir, "candidate-1-cached.mp4"), "video", "utf8");
+
+      mocks.readDeconstructArtifacts.mockResolvedValue({
+        articleMd: "# Cached",
+        srtContent: "00:00:00,000 --> 00:00:10,000\nCached",
+        videoId: "cache-pass",
+        videoPath: path.join(articleDir, "video", "full.mp4"),
+        durationSec: 60,
+      });
+      mocks.contentTargetMetadataPathFor.mockReturnValue(path.join(clipsDir, ".content-metadata", "deconstruct.json"));
+      mocks.readContentTargetMetadata.mockResolvedValue({ target: "deconstruct" });
+      mocks.isContentTargetMetadataFresh.mockResolvedValue(true);
+      mocks.assertClipPublishReadiness.mockResolvedValue({ publishOrder: ["post-1-cached.md"] });
+
+      await expect(runDeconstructCommand(articleDir, 1)).resolves.toBe(0);
+
+      expect(mocks.runDeconstruct).not.toHaveBeenCalled();
+      expect(mocks.generateClipsPosts).not.toHaveBeenCalled();
+      expect(mocks.clipCandidates).not.toHaveBeenCalled();
+      expect(mocks.assertClipPublishReadiness).toHaveBeenCalled();
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the previous bundle when staged clip readiness fails", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-cli-deconstruct-readiness-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const previousManifest = "{\"generation\":\"old\"}\n";
+      const previousPost = "old successful post\n";
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), previousManifest, "utf8");
+      await writeFile(path.join(clipsDir, "post-1-old.md"), previousPost, "utf8");
+
+      const manifest = {
+        v: 1,
+        source: { videoId: "readiness-failure", articlePath: "../../../article.md", durationSec: 60 },
+        generatedAt: "2026-08-09T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [],
+      };
+      mocks.contentTargetMetadataPathFor.mockImplementation(
+        (dir: string, target: string) => dir + "/.content-metadata/" + target + ".json",
+      );
+      mocks.readContentTargetMetadata.mockResolvedValue(undefined);
+      mocks.isContentTargetMetadataFresh.mockResolvedValue(false);
+      mocks.readDeconstructArtifacts.mockResolvedValue({
+        articleMd: "# Readiness failure",
+        srtContent: "",
+        videoId: "readiness-failure",
+        videoPath: path.join(articleDir, "video", "full.mp4"),
+        durationSec: 60,
+      });
+      mocks.runDeconstruct.mockResolvedValue({ candidates: { sections: [section] } });
+      mocks.splitOversizedSections.mockReturnValue({ sections: [section] });
+      mocks.filterValidSections.mockReturnValue({ sections: [section] });
+      mocks.validateClipEndings.mockReturnValue([]);
+      mocks.writeDeconstructOutput.mockResolvedValue({
+        manifestPath: path.join(articleDir, "staged", "clips-manifest.json"),
+        manifest,
+        clippedCount: 1,
+      });
+      mocks.generateClipsPosts.mockResolvedValue({
+        postCount: 1,
+        postPaths: [],
+        manifest,
+        technicalTerms: {},
+      });
+      mocks.selectTopUniqueArticleSections.mockReturnValue([{ section, originalIndex: 0 }]);
+      mocks.applyClipSelection.mockReturnValue({ manifest, kept: 1, removed: 0 });
+      mocks.writeSelectedPostFiles.mockResolvedValue([path.join(articleDir, "staged", "post-1-new.md")]);
+      mocks.clipCandidates.mockResolvedValue([{ success: true, candidate: section }]);
+      mocks.assertClipPublishReadiness.mockRejectedValue(new Error("staged readiness failed"));
+
+      await expect(runDeconstructCommand(articleDir, 1)).resolves.toBe(1);
+
+      await expect(readFile(path.join(clipsDir, "clips-manifest.json"), "utf8")).resolves.toBe(previousManifest);
+      await expect(readFile(path.join(clipsDir, "post-1-old.md"), "utf8")).resolves.toBe(previousPost);
+      expect(mocks.assertClipPublishReadiness).toHaveBeenCalledWith(expect.stringContaining(".deconstruct-stage-"));
+      expect(mocks.replaceDirectoryAtomically).not.toHaveBeenCalled();
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }

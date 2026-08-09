@@ -1,6 +1,6 @@
 # Final Remediation B 报告
 
-状态：DONE_WITH_CONCERNS
+状态：DONE
 
 ## 本批次完成
 
@@ -24,4 +24,32 @@
 
 ## 关注项
 
-按本批次明确边界，未修改 subtitle-tools、`files/downloads/`、Dashboard 和 XHS 专项流程。native notes 仍沿用现有 process-status/file-exists 跳过语义，因此“notes 的 profile-aware cache”需要在允许处理 downloads 的后续批次补齐；这也是本报告标记 DONE_WITH_CONCERNS 的原因。
+按本批次明确边界，未修改 subtitle-tools、`files/downloads/`、Dashboard 和 XHS 专项流程。
+
+## Final Remediation B 修复轮次 1
+
+本轮已消除上一版关注项，并完成 reviewer 的 7 项收口：
+
+1. native notes 改为 profile-aware cache。缓存身份持久化 source、requestedModel、resolvedModel、promptVersion、profileFingerprint 和 discoveryAudit；旧 metadata stale，完全命中时 discovery/provider 调用为零。
+2. 真实 CLI deconstruct 在候选识别和帖子生成前检查完整 bundle cache；persist:false 仅允许显式声明已履行 CLI cache contract 的 staging 调用。
+3. article、thread、short、video-short 和 deconstruct 的术语 active scope 来自真实摘要区段或选中 clip source；未讨论的源术语允许省略，选中字段中的遗漏或误译仍严格失败或修复。
+4. metadata 分离 requestedModel 与 resolvedModel，cache key 只比较 requestedModel；v1 model 记录可安全迁移。
+5. deconstruct 在独立 staging generation 中完成 manifest、帖子、metadata、视频裁剪与 readiness；成功后把 generation 移入版本目录，并通过单次原子 rename 切换兼容旧路径的 clips 符号链接。旧实体目录可迁移，提交失败可恢复。
+6. article、notes、platform article、thread、short、video-short、deconstruct 使用可复用的目标级跨进程锁；锁支持超时、过期进程回收和 finally 清理。并发测试直接验证正文与 metadata 最终属于同一 generation。
+7. 原子文件和 staging/pointer 名称使用随机唯一后缀，失败路径清理临时文件与未提交 generation。
+
+### deconstruct 事务证据
+
+- readiness 失败：CLI production orchestration 测试在临时目录保留旧 manifest/post，确认 readiness 针对 staging 路径执行且未调用 commit。
+- pointer 提交中断：真实文件系统测试在第二次 generation 的单原子 pointer rename 注入失败，确认旧符号链接和旧正文仍可读取。
+- 旧目录提交中断：真实文件系统测试确认首次迁移失败时旧实体目录恢复。
+- 成功路径：真实文件系统测试确认正文和 metadata 一起切换到新 generation，旧路径读取保持兼容。
+
+### 本轮验证
+
+- 最终定向 Vitest：8 个测试文件，52 tests passed。
+- 补充并发 generation 断言：1 个测试文件，5 tests passed。
+- pnpm typecheck：通过。
+- git diff --check：通过。
+
+按控制器要求未运行全量测试、lint 或真实 provider/media 流程；所有测试仅使用临时 fixture。字幕、Dashboard 和 XHS 未改动。

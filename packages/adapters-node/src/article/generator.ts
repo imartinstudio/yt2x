@@ -19,6 +19,7 @@ import {
 import {
   CONTENT_PROMPT_VERSIONS,
   contentSourceFingerprintFor,
+  summarySourceTextFor,
   structuredNotesContentSourceFor,
 } from "../content-cache.js";
 import type { StructuredNotesArtifacts } from "./file-store.js";
@@ -41,6 +42,8 @@ export type GenerateXArticleResult = {
   /** 长文生成的配图计划 */
   visualPlan: ArticleVisualPlanItem[];
   model: string;
+  requestedModel: string;
+  resolvedModel: string;
   finishReason: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
@@ -268,18 +271,14 @@ export const generateXArticleContent = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
   const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
-  const guard = createTechnicalTermGuard({
+  const fullGuard = createTechnicalTermGuard({
     sourceText,
     sourceTitle,
     discoveredTerms: discovery.accepted,
     discovery: discoveryAudit,
   });
-  const titleGuard = createTechnicalTermGuard({
-    sourceText: sourceTitle,
-    sourceTitle,
-    discoveredTerms: discovery.accepted,
-    discovery: discoveryAudit,
-  });
+  const guard = fullGuard.scope(summarySourceTextFor(sourceText), sourceTitle);
+  const titleGuard = fullGuard.scope(sourceTitle, sourceTitle);
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
     structuredNotesMd: input.artifacts.structuredNotesMd,
@@ -413,6 +412,8 @@ export const generateXArticleContent = async (
     content,
     visualPlan,
     model: resp.model,
+    requestedModel: input.model,
+    resolvedModel: resp.model,
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,

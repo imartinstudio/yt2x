@@ -17,6 +17,17 @@ export const ProcessStatusErrorSchema = z.object({
 
 export type ProcessStatusError = z.infer<typeof ProcessStatusErrorSchema>;
 
+export const ContentMetadataAuditSchema = z.object({
+  source: z.string(),
+  requestedModel: z.string(),
+  resolvedModel: z.string(),
+  promptVersion: z.string(),
+  profileFingerprint: z.string(),
+  discoveryAudit: z.unknown(),
+});
+
+export type ContentMetadataAudit = z.infer<typeof ContentMetadataAuditSchema>;
+
 export const StepInfoSchema = z.object({
   status: StepStatusSchema,
   startedAt: z.string().optional(),
@@ -24,6 +35,7 @@ export const StepInfoSchema = z.object({
   durationMs: z.number().nonnegative().optional(),
   artifacts: z.array(z.string()),
   resultFile: z.string().optional(),
+  contentMetadata: ContentMetadataAuditSchema.optional(),
   error: ProcessStatusErrorSchema.optional(),
 });
 

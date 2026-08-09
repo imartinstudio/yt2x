@@ -118,6 +118,7 @@ describe("generateClipsPosts", () => {
         articleDir,
         manifest,
         persist: false,
+        cacheContract: "cli",
       });
 
       expect(result.manifest.clips[0]!.text).toContain("一句引语");

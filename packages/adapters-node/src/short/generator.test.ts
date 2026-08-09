@@ -118,6 +118,64 @@ describe("generateXShortContent", () => {
       availableVisuals: [],
     })).rejects.toThrow(/Graph/u);
   });
+
+  it("allows a summary to omit terms that are only in an unselected detailed source section", async () => {
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: [
+        "# Notes",
+        "",
+        "## Executive Summary",
+        "Graph Engineering is the core idea.",
+        "",
+        "## Detailed Notes",
+        "Knowledge Graph is an implementation detail that this summary does not discuss.",
+      ].join("\n"),
+      metadata: { id: "short-summary-scope", title: "Graph Engineering" },
+    };
+    const llm = makeLlm(() => ({
+      content: JSON.stringify({
+        text: "Graph Engineering 是核心判断。",
+        angle: "technical",
+        risk: "low",
+      }),
+      model: "m",
+      finishReason: "stop",
+    }));
+
+    await expect(generateXShortContent({ llm, model: "m", artifacts })).resolves.toMatchObject({
+      shortPost: { text: expect.stringContaining("Graph Engineering") },
+    });
+  });
+
+  it("repairs a translated term inside the selected summary scope", async () => {
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: [
+        "# Notes",
+        "",
+        "## Executive Summary",
+        "Graph Engineering is the core idea.",
+        "",
+        "## Detailed Notes",
+        "Knowledge Graph is an implementation detail.",
+      ].join("\n"),
+      metadata: { id: "short-summary-translation", title: "Graph Engineering" },
+    };
+    const llm = makeLlm(() => ({
+      content: JSON.stringify({
+        text: "图工程是核心判断。",
+        angle: "technical",
+        risk: "low",
+      }),
+      model: "m",
+      finishReason: "stop",
+    }));
+
+    await expect(generateXShortContent({ llm, model: "m", artifacts })).resolves.toMatchObject({
+      shortPost: { text: expect.stringContaining("Graph Engineering") },
+    });
+  });
 });
 
 describe("parseGeneratedShortPostJson", () => {

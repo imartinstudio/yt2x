@@ -21,6 +21,7 @@ import {
 import {
   CONTENT_PROMPT_VERSIONS,
   contentSourceFingerprintFor,
+  summarySourceTextFor,
   structuredNotesContentSourceFor,
 } from "../content-cache.js";
 
@@ -38,6 +39,8 @@ export type GenerateXShortInput = {
 export type GenerateXShortResult = {
   shortPost: GeneratedShortPost;
   model: string;
+  requestedModel: string;
+  resolvedModel: string;
   finishReason: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
@@ -127,12 +130,13 @@ export const generateXShortContent = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
   const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
-  const guard = createTechnicalTermGuard({
+  const fullGuard = createTechnicalTermGuard({
     sourceText,
     sourceTitle,
     discoveredTerms: discovery.accepted,
     discovery: discoveryAudit,
   });
+  const guard = fullGuard.scope(summarySourceTextFor(sourceText), sourceTitle);
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
     structuredNotesMd: input.artifacts.structuredNotesMd,
@@ -204,6 +208,8 @@ export const generateXShortContent = async (
   const result: GenerateXShortResult = {
     shortPost,
     model: resp.model,
+    requestedModel: input.model,
+    resolvedModel: resp.model,
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,

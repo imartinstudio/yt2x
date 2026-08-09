@@ -1,4 +1,4 @@
-import { mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { PlatformArticleTarget } from "@yt2x/core";
 import { isValidVideoId } from "../article/file-store.js";
@@ -11,6 +11,7 @@ import {
   type ContentTargetCacheExpectation,
   type ContentTargetMetadata,
 } from "../content-cache.js";
+import { atomicWriteUtf8, withContentTargetLock } from "../content-transaction.js";
 
 export type WritePlatformArticleResult = {
   articleDir: string;
@@ -26,13 +27,6 @@ const assertMissing = async (targetPath: string): Promise<boolean> => {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     return false;
   }
-};
-
-const atomicWriteUtf8 = async (targetPath: string, body: string): Promise<void> => {
-  await mkdir(path.dirname(targetPath), { recursive: true });
-  const tmp = targetPath + "." + String(process.pid) + "." + String(Date.now()) + ".tmp";
-  await writeFile(tmp, body, "utf8");
-  await rename(tmp, targetPath);
 };
 
 const tagLine = (tags: readonly string[]): string => tags.map((tag) => `#${tag.replace(/^#/, "")}`).join(" ");
@@ -127,6 +121,7 @@ export const writePlatformArticleBundle = async (
     force?: boolean;
     cacheExpectation?: ContentTargetCacheExpectation;
     cacheMetadata?: ContentTargetMetadata;
+    lock?: boolean;
   } = {},
 ): Promise<WritePlatformArticleResult | null> => {
   if (!isValidVideoId(videoId)) {
@@ -138,6 +133,15 @@ export const writePlatformArticleBundle = async (
   const articlePath = path.join(articleDir, articleFile);
   const metadataPath = path.join(articleDir, metadataFile);
   const targetMetadataPath = contentTargetMetadataPathFor(articleDir, `platform-article-${article.target}`);
+
+  if (options.lock !== false) {
+    return withContentTargetLock(articleDir, `platform-article-${article.target}`, () => writePlatformArticleBundle(
+      articleOutDir,
+      videoId,
+      article,
+      { ...options, lock: false },
+    ));
+  }
 
   if (options.force !== true) {
     if (options.cacheExpectation !== undefined) {

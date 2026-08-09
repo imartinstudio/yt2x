@@ -18,6 +18,9 @@ const stubLlm = (
   let calls = 0;
   const llm: LlmPort = {
     chat: async (req) => {
+      if ((req.messages.find((m) => m.role === "system")?.content ?? "").includes("严格的源级专业术语发现器")) {
+        return { content: "[]", model: req.model, finishReason: "stop" as const };
+      }
       calls += 1;
       const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
       const items = JSON.parse(user) as { index: number; maxChars: number }[];
@@ -34,6 +37,82 @@ const allOf = (indices: number[]): Record<number, string> =>
   Object.fromEntries(indices.map((i) => [i, `译文${i}`]));
 
 describe("translateUtterances", () => {
+  it("discovers the complete transcript once and preserves catalog plus discovered terms", async () => {
+    const source =
+      "Graph Engineering connects the Knowledge Graph and Agent Graph through Latent Workspace Routing.";
+    const calls: { system: string; user: string }[] = [];
+    const candidate = `这是一段用于验证配音翻译术语保护的中文候选文本，里面保留了足够的自然表达和标点，方便检查完整流程。`;
+    const repaired =
+      `Graph Engineering Knowledge Graph Agent Graph Latent Workspace Routing ${candidate}`;
+    const llm: LlmPort = {
+      chat: async (req) => {
+        const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        const user = req.messages.find((m) => m.role === "user")?.content ?? "";
+        calls.push({ system, user });
+        if (system.includes("严格的源级专业术语发现器")) {
+          return {
+            content: JSON.stringify([
+              { sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" },
+            ]),
+            model: req.model,
+            finishReason: "stop" as const,
+          };
+        }
+        if (system.includes("专业术语定向修复器")) {
+          return { content: repaired, model: req.model, finishReason: "stop" as const };
+        }
+        const items = JSON.parse(user) as { index: number }[];
+        return {
+          content: JSON.stringify(items.map((item) => ({ index: item.index, text: candidate }))),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+
+    const { lines, warnings } = await translateUtterances({
+      llm,
+      model: "test-model",
+      utterances: [utt(1, 18_000, source)],
+    });
+
+    expect(lines[0]?.text).toContain("Graph Engineering");
+    expect(lines[0]?.text).toContain("Knowledge Graph");
+    expect(lines[0]?.text).toContain("Agent Graph");
+    expect(lines[0]?.text).toContain("Latent Workspace Routing");
+    expect(warnings.join(" ")).not.toMatch(/technical term discovery: .*unavailable/u);
+    expect(calls.filter((call) => call.system.includes("严格的源级专业术语发现器"))).toHaveLength(1);
+    expect(calls.filter((call) => call.system.includes("专业术语定向修复器"))).toHaveLength(1);
+  });
+
+  it("does not turn natural image words into Graph when only Graph Engineering is active", async () => {
+    const source = "Graph Engineering is useful. Add a screenshot and a flow chart.";
+    const translation = "Graph Engineering 很有用，另外我们再添加一张图片和流程图，这样看起来更清楚。";
+    const llm: LlmPort = {
+      chat: async (req) => {
+        const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
+        const items = JSON.parse(req.messages.find((m) => m.role === "user")?.content ?? "[]") as { index: number }[];
+        return {
+          content: JSON.stringify(items.map((item) => ({ index: item.index, text: translation }))),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+
+    const { lines } = await translateUtterances({
+      llm,
+      model: "test-model",
+      utterances: [utt(1, 9_000, source)],
+    });
+
+    expect(lines[0]?.text).toContain("图片和流程图");
+    expect(lines[0]?.text).not.toContain("Graph 很有用");
+  });
+
   it("returns one line per utterance, keyed by the original index", async () => {
     const { llm } = stubLlm((idx) => allOf(idx));
     // 1700ms 的槽位换算出的字符预算恰好等于 "译文1"/"译文2" 的长度（3 字），既不超预算
@@ -142,8 +221,18 @@ describe("translateUtterances", () => {
     let call = 0;
     const llm: LlmPort = {
       chat: async (req) => {
+        if ((req.messages.find((m) => m.role === "system")?.content ?? "").includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
         call += 1;
         const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        if (system.includes("专业术语定向修复器")) {
+          return {
+            content: `Grill Me ${"占位符，".repeat(8)}`,
+            model: req.model,
+            finishReason: "stop" as const,
+          };
+        }
         const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
         const items = JSON.parse(user) as { index: number }[];
         if (call === 1) {
@@ -198,6 +287,9 @@ describe("translateUtterances", () => {
     let call = 0;
     const llm: LlmPort = {
       chat: async (req) => {
+        if ((req.messages.find((m) => m.role === "system")?.content ?? "").includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
         call += 1;
         const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
         const items = JSON.parse(user) as { index: number }[];
@@ -223,31 +315,31 @@ describe("translateUtterances", () => {
     let call = 0;
     const llm: LlmPort = {
       chat: async (req) => {
+        if ((req.messages.find((m) => m.role === "system")?.content ?? "").includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
         call += 1;
         const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        if (system.includes("专业术语定向修复器")) {
+          return {
+            content: `Grill Me ${"占位符，".repeat(8)}`,
+            model: req.model,
+            finishReason: "stop" as const,
+          };
+        }
         const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
         const items = JSON.parse(user) as { index: number }[];
         if (call === 1) {
           // 首轮译文用满预算但漏掉了保护术语 "Grill Me"
           return {
-            content: JSON.stringify(items.map((i) => ({ index: i.index, text: "占位符" }))),
+            content: JSON.stringify(items.map((i) => ({ index: i.index, text: "占位符，".repeat(8) }))),
             model: req.model,
             finishReason: "stop" as const,
           };
         }
-        // 补漏轮必须走术语补漏 prompt，且点名了具体缺失的术语
-        expect(system).toMatch(/missing one or more protected terms/i);
-        expect(system).toContain('"Grill Me"');
-        // 且必须把**当前译文**交给模型编辑，而不是让它从英文原文重译一遍——
-        // 重译等于把刚失败的那道题再出一次，真实素材上连续失败过（见 prompt 注释）。
-        expect(system).toMatch(/editing task, not a translation task/i);
-        const repairItems = items as unknown as { text: string; maxChars: number }[];
-        expect(repairItems[0]?.text).toBe("占位符");
-        expect(repairItems[0]?.maxChars).toBeGreaterThan(0);
+        // 定向修复只插回 canonical 术语，保留现有非术语文本。
         return {
-          content: JSON.stringify(
-            items.map((i) => ({ index: i.index, text: "我的 Grill Me 技能，真的很棒" })),
-          ),
+          content: `Grill Me ${"占位符，".repeat(8)}`,
           model: req.model,
           finishReason: "stop" as const,
         };
@@ -256,17 +348,20 @@ describe("translateUtterances", () => {
     const { lines, warnings } = await translateUtterances({
       llm,
       model: "m",
-      utterances: [utt(1, 1_700, "my grill me skills are great")],
+      utterances: [utt(1, 9_000, "my grill me skills are great")],
     });
     expect(call).toBe(2);
     expect(lines[0]?.text).toContain("Grill Me");
-    expect(warnings.join(" ")).toMatch(/glossary-repaired 1\/1/);
+    expect(warnings.join(" ")).not.toMatch(/glossary repair pass failed/u);
   });
 
   it("keeps the previous translation when the glossary repair retry still drops the term", async () => {
     let call = 0;
     const llm: LlmPort = {
       chat: async (req) => {
+        if ((req.messages.find((m) => m.role === "system")?.content ?? "").includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
         call += 1;
         const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
         const items = JSON.parse(user) as { index: number }[];
@@ -283,9 +378,9 @@ describe("translateUtterances", () => {
       model: "m",
       utterances: [utt(1, 1_700, "my grill me skills are great")],
     });
-    expect(call).toBe(2);
-    expect(lines[0]?.text).toBe("占位符");
-    expect(warnings.join(" ")).toMatch(/glossary-repaired 0\/1/);
+    expect(call).toBe(3);
+    expect(lines).toEqual([]);
+    expect(warnings.join(" ")).toMatch(/no translation for index 1/u);
   });
 
   it("does not run the glossary repair pass when no protected term was dropped", async () => {
@@ -317,6 +412,9 @@ describe("translateUtterances", () => {
     const systems: string[] = [];
     const llm: LlmPort = {
       chat: async (req) => {
+        if ((req.messages.find((m) => m.role === "system")?.content ?? "").includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
         call += 1;
         const system = req.messages.find((m) => m.role === "system")?.content ?? "";
         systems.push(system);
@@ -366,6 +464,9 @@ describe("translateUtterances", () => {
     let call = 0;
     const llm: LlmPort = {
       chat: async (req) => {
+        if ((req.messages.find((m) => m.role === "system")?.content ?? "").includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
         call += 1;
         const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
         const items = JSON.parse(user) as { index: number }[];
@@ -391,7 +492,7 @@ describe("translateUtterances", () => {
       utterances: [utt(1, 9_000, "the grill me skill needs good planning")],
     });
 
-    expect(call).toBe(2);
+    expect(call).toBe(3);
     expect(lines[0]?.text).toContain("Grill Me");
     expect(warnings.join(" ")).toMatch(/speakable-repaired 0\/1/);
   });

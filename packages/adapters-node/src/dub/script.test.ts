@@ -19,6 +19,9 @@ const stubLlm = (handler: Handler): { llm: LlmPort; requests: ChatRequest[] } =>
   const requests: ChatRequest[] = [];
   const llm: LlmPort = {
     chat: async (req: ChatRequest): Promise<ChatResponse> => {
+      if ((req.messages.find((m) => m.role === "system")?.content ?? "").includes("严格的源级专业术语发现器")) {
+        return { content: "[]", model: req.model, finishReason: "stop" };
+      }
       requests.push(req);
       const content = await handler(req, requests.length);
       return { content, model: req.model, finishReason: "stop" };
@@ -59,12 +62,13 @@ describe("generateDubScript", () => {
     expect(result.translatedCount).toBe(2);
     expect(result.droppedCount).toBe(0);
     expect(result.script).toMatchObject({
-      version: 2,
+      version: 3,
       videoId: "<videoId>",
       sourceWords: "video/full.local.en.words.json",
       rewriteModel: "test-model",
       droppedCount: 0,
     });
+    expect(result.script.technicalTermProfileFingerprint).toMatch(/^fnv1a-/u);
     expect(result.script.lines[0]).toEqual({
       index: 1,
       startMs: 0,

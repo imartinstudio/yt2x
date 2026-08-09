@@ -8,15 +8,20 @@ import {
   buildDubTranslateTightenPrompt,
   buildDubTranslateUserPrompt,
   DEFAULT_SPEECH_RATE,
+  createTechnicalTermGuard,
   dubTranslateCharBudget,
   findMissingProtectedTerms,
   getDubTranslateSystemPrompt,
+  hasHardTechnicalTermViolations,
   isTelegraphicChinese,
   type LlmPort,
+  type TechnicalTermGuard,
+  type TechnicalTermRestoration,
   type SpeechRateModel,
   type Utterance,
 } from "@yt2x/core";
 import { parseJsonWithRepairs, salvagePartialJsonArray } from "../llm/parse-json.js";
+import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
 
 /**
  * 长度受限翻译：英文话语单元 → 能在其时长内说完的中文。
@@ -60,9 +65,39 @@ export type TranslateUtterancesInput = {
 export type TranslateUtterancesResult = {
   lines: DubTranslatedLine[];
   warnings: string[];
+  technicalTermProfileFingerprint: string;
 };
 
 type ParsedLine = { index: number; text: string };
+
+type PreparedDubUtterance = {
+  utterance: Utterance;
+  preparedUtterance: Utterance;
+  guard: TechnicalTermGuard;
+  restoration: TechnicalTermRestoration;
+};
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const termOccursInSource = (term: string, sourceText: string): boolean => {
+  const words = term.trim().split(/\s+/u).filter(Boolean).map(escapeRegExp);
+  return words.length > 0
+    && new RegExp(`(?<![A-Za-z0-9])${words.join("\\s+")}(?![A-Za-z0-9])`, "iu").test(sourceText);
+};
+
+const scopeDubTechnicalTermGuard = (
+  guard: TechnicalTermGuard,
+  sourceText: string,
+): TechnicalTermGuard => createTechnicalTermGuard({
+  sourceText,
+  discoveredTerms: guard.profile.entries
+    .filter((entry) => termOccursInSource(entry.sourceText, sourceText))
+    .map((entry) => ({
+      sourceText: entry.sourceText,
+      confidence: "high" as const,
+      category: "domain" as const,
+    })),
+});
 
 const parseResponse = (content: string): ParsedLine[] => {
   let parsed: unknown;
@@ -91,11 +126,12 @@ const translateBatch = async (
   batch: readonly Utterance[],
   input: TranslateUtterancesInput,
   repairMode: boolean,
+  promptRule: string,
 ): Promise<ParsedLine[]> => {
   const rate = input.rate ?? DEFAULT_SPEECH_RATE;
   const systemPrompt = repairMode
-    ? buildDubTranslateRepairPrompt(batch.map((u) => u.index))
-    : getDubTranslateSystemPrompt();
+    ? buildDubTranslateRepairPrompt(batch.map((u) => u.index), promptRule)
+    : getDubTranslateSystemPrompt(promptRule);
 
   const resp = await input.llm.chat({
     model: input.model,
@@ -120,14 +156,78 @@ export const translateUtterances = async (
   const warnings: string[] = [];
   const translated = new Map<number, string>();
   const total = input.utterances.length;
-  if (total === 0) return { lines: [], warnings };
+  const sourceText = input.utterances.map((utterance) => utterance.text).join("\n");
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  });
+  warnings.push(...discovery.warnings.map((item) => `technical term discovery: ${item.message}`));
+  const technicalTermGuard = createTechnicalTermGuard({
+    sourceText,
+    discoveredTerms: discovery.accepted,
+  });
+  const promptRule = technicalTermGuard.prepare([]).promptRule;
+  const preparedByUtterance = new Map<number, PreparedDubUtterance>();
+  for (const utterance of input.utterances) {
+    const guard = scopeDubTechnicalTermGuard(technicalTermGuard, utterance.text);
+    const prepared = guard.prepare(utterance.text);
+    preparedByUtterance.set(utterance.index, {
+      utterance,
+      preparedUtterance: { ...utterance, text: prepared.value },
+      guard,
+      restoration: prepared.restoration,
+    });
+  }
+  const technicalTermRepairState = { used: false };
+  const acceptDubCandidate = async (
+    utterance: Utterance,
+    text: string,
+  ): Promise<string | null> => {
+    const prepared = preparedByUtterance.get(utterance.index);
+    if (prepared === undefined) return null;
+    const finalized = prepared.guard.finalize(text, prepared.restoration);
+    if (!hasHardTechnicalTermViolations(finalized.violations)) return finalized.value;
+    if (technicalTermRepairState.used) return null;
+    technicalTermRepairState.used = true;
+    const repaired = await repairTechnicalTermViolations({
+      llm: input.llm,
+      model: input.model,
+      guard: prepared.guard,
+      currentValue: finalized.value,
+      restoration: prepared.restoration,
+      violations: finalized.violations,
+      parseResponse: (content) => {
+        const parsedLines = parseResponse(content.trim());
+        return parsedLines.find((line) => line.index === utterance.index)?.text ?? content.trim();
+      },
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+    return hasHardTechnicalTermViolations(repaired.violations) ? null : repaired.value;
+  };
+
+  if (total === 0) {
+    return {
+      lines: [],
+      warnings,
+      technicalTermProfileFingerprint: technicalTermGuard.profile.profileFingerprint,
+    };
+  }
 
   let done = 0;
   for (let i = 0; i < total; i += BATCH_SIZE) {
     const batch = input.utterances.slice(i, i + BATCH_SIZE);
     try {
-      for (const line of await translateBatch(batch, input, false)) {
-        translated.set(line.index, line.text);
+      for (const line of await translateBatch(
+        batch.map((utterance) => preparedByUtterance.get(utterance.index)!.preparedUtterance),
+        input,
+        false,
+        promptRule,
+      )) {
+        const utterance = input.utterances.find((candidate) => candidate.index === line.index);
+        const accepted = utterance === undefined ? null : await acceptDubCandidate(utterance, line.text);
+        if (accepted !== null) translated.set(line.index, accepted);
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -144,8 +244,15 @@ export const translateUtterances = async (
   if (missing.length > 0) {
     try {
       const before = translated.size;
-      for (const line of await translateBatch(missing, input, true)) {
-        translated.set(line.index, line.text);
+      for (const line of await translateBatch(
+        missing.map((utterance) => preparedByUtterance.get(utterance.index)!.preparedUtterance),
+        input,
+        true,
+        promptRule,
+      )) {
+        const utterance = input.utterances.find((candidate) => candidate.index === line.index);
+        const accepted = utterance === undefined ? null : await acceptDubCandidate(utterance, line.text);
+        if (accepted !== null) translated.set(line.index, accepted);
       }
       warnings.push(`repaired ${translated.size - before}/${missing.length} missing lines`);
     } catch (err: unknown) {
@@ -181,9 +288,16 @@ export const translateUtterances = async (
                 actualChars: translated.get(u.index)!.length,
                 maxChars: budgetOf(u),
               })),
+              promptRule,
             ),
           },
-          { role: "user", content: buildDubTranslateUserPrompt(overBudget, rate) },
+          {
+            role: "user",
+            content: buildDubTranslateUserPrompt(
+              overBudget.map((utterance) => preparedByUtterance.get(utterance.index)!.preparedUtterance),
+              rate,
+            ),
+          },
         ],
         temperature: input.temperature ?? 0.3,
         maxTokens: input.maxTokens ?? 8192,
@@ -194,9 +308,13 @@ export const translateUtterances = async (
       let tightened = 0;
       for (const line of parseResponse(resp.content.trim())) {
         if (!known.has(line.index)) continue;
+        const utterance = input.utterances.find((candidate) => candidate.index === line.index);
+        if (utterance === undefined) continue;
+        const accepted = await acceptDubCandidate(utterance, line.text);
+        if (accepted === null) continue;
         // 只在真的更短时替换：重译偶尔会更长，那一版没有价值
-        if (line.text.length < translated.get(line.index)!.length) {
-          translated.set(line.index, line.text);
+        if (accepted.length < translated.get(line.index)!.length) {
+          translated.set(line.index, accepted);
           tightened += 1;
         }
       }
@@ -231,9 +349,16 @@ export const translateUtterances = async (
                 actualChars: translated.get(u.index)!.length,
                 maxChars: budgetOf(u),
               })),
+              promptRule,
             ),
           },
-          { role: "user", content: buildDubTranslateUserPrompt(underBudget, rate) },
+          {
+            role: "user",
+            content: buildDubTranslateUserPrompt(
+              underBudget.map((utterance) => preparedByUtterance.get(utterance.index)!.preparedUtterance),
+              rate,
+            ),
+          },
         ],
         temperature: input.temperature ?? 0.3,
         maxTokens: input.maxTokens ?? 8192,
@@ -244,9 +369,13 @@ export const translateUtterances = async (
       let expanded = 0;
       for (const line of parseResponse(resp.content.trim())) {
         if (!known.has(line.index)) continue;
+        const utterance = input.utterances.find((candidate) => candidate.index === line.index);
+        if (utterance === undefined) continue;
+        const accepted = await acceptDubCandidate(utterance, line.text);
+        if (accepted === null) continue;
         // 只在真的更长时替换：重译偶尔仍给出同样短的版本，那一版没有价值
-        if (line.text.length > translated.get(line.index)!.length) {
-          translated.set(line.index, line.text);
+        if (accepted.length > translated.get(line.index)!.length) {
+          translated.set(line.index, accepted);
           expanded += 1;
         }
       }
@@ -278,6 +407,7 @@ export const translateUtterances = async (
             role: "system",
             content: buildDubTranslateGlossaryRepairPrompt(
               glossaryMissing.map((m) => ({ index: m.utterance.index, terms: m.missingTerms })),
+              promptRule,
             ),
           },
           {
@@ -304,10 +434,12 @@ export const translateUtterances = async (
       for (const line of parseResponse(resp.content.trim())) {
         const entry = byIndex.get(line.index);
         if (entry === undefined) continue;
+        const accepted = await acceptDubCandidate(entry.utterance, line.text);
+        if (accepted === null) continue;
         // 只在新译文真的把缺失术语补回来时才替换，否则保留原译文——不用一个
         // "同样丢词"的版本去覆盖一个已知丢词的版本，门禁该拦的还是拦得住。
-        if (findMissingProtectedTerms(entry.utterance.text, line.text).length === 0) {
-          translated.set(line.index, line.text);
+        if (findMissingProtectedTerms(entry.utterance.text, accepted).length === 0) {
+          translated.set(line.index, accepted);
           repaired += 1;
         }
       }
@@ -338,6 +470,7 @@ export const translateUtterances = async (
             role: "system",
             content: buildDubTranslateSpeakablePrompt(
               telegraphic.map((t) => ({ index: t.utterance.index })),
+              promptRule,
             ),
           },
           {
@@ -369,12 +502,14 @@ export const translateUtterances = async (
         // 版本盖掉一个已知难读的版本；同时再次校验保护术语，避免口语化改写把英文
         // 专名掏掉。
         const utterance = telegraphicByIndex.get(line.index);
+        const accepted = utterance === undefined ? null : await acceptDubCandidate(utterance, line.text);
         if (
           utterance !== undefined &&
-          !isTelegraphicChinese(line.text) &&
-          findMissingProtectedTerms(utterance.text, line.text).length === 0
+          accepted !== null &&
+          !isTelegraphicChinese(accepted) &&
+          findMissingProtectedTerms(utterance.text, accepted).length === 0
         ) {
-          translated.set(line.index, line.text);
+          translated.set(line.index, accepted);
           speakable += 1;
         }
       }
@@ -394,5 +529,9 @@ export const translateUtterances = async (
       availableMs: u.endMs - u.startMs,
     }));
 
-  return { lines, warnings };
+  return {
+    lines,
+    warnings,
+    technicalTermProfileFingerprint: technicalTermGuard.profile.profileFingerprint,
+  };
 };

@@ -51,14 +51,7 @@ export type DubScriptLine = {
   cueIndices: readonly number[];
 };
 
-export type DubScript = {
-  /**
-   * 2：PR3 切换输入通道后 schema 实质变了——sourceWords 取代 sourceSubtitle，
-   * sourceText 从中文变英文，cueIndices 语义从"字幕条"变"话语单元"，外加新增
-   * droppedCount。version 仍为 1 的旧文件语义完全不同，不能被当作可复用缓存
-   * 静默读入（见 file-store.ts 的 DubScriptSchema）。
-   */
-  version: 2;
+type DubScriptFields = {
   videoId: string;
   /** 生成配音稿所依据的词级时间戳文件相对路径，如 "video/full.local.en.words.json"。 */
   sourceWords: string;
@@ -72,6 +65,19 @@ export type DubScript = {
    */
   droppedCount: number;
 };
+
+export type DubScriptV2 = DubScriptFields & {
+  /** PR3 schema；保留类型以便旧中间产物可以被识别为缓存未命中。 */
+  version: 2;
+};
+
+export type DubScriptV3 = DubScriptFields & {
+  /** 术语 profile 指纹加入后的当前配音稿 schema。 */
+  version: 3;
+  technicalTermProfileFingerprint: string;
+};
+
+export type DubScript = DubScriptV2 | DubScriptV3;
 
 /**
  * 单行的实测时长数据。

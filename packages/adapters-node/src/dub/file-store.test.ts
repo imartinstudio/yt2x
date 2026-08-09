@@ -42,10 +42,11 @@ const WORDS = JSON.stringify([
 ]);
 
 const script: DubScript = {
-  version: 2,
+  version: 3,
   videoId: "<videoId>",
   sourceWords: "video/full.local.en.words.json",
   rewriteModel: "test-model",
+  technicalTermProfileFingerprint: "fnv1a-test-profile",
   lines: [
     {
       index: 1,
@@ -280,6 +281,17 @@ describe("writers", () => {
       "utf8",
     );
     await expect(readDubScript(dubDir)).rejects.toThrow(/Invalid or incompatible dub-script\.json/);
+  });
+
+  it("rejects a complete version 2 script as a cache miss after the terminology schema bump", async () => {
+    const dubDir = path.join(await tmpRoot(), "dub");
+    await mkdir(dubDir, { recursive: true });
+    await writeFile(
+      path.join(dubDir, DUB_SCRIPT_FILE),
+      JSON.stringify({ ...script, version: 2 }),
+      "utf8",
+    );
+    await expect(readDubScript(dubDir)).rejects.toThrow(/expected schema version 3/);
   });
 
   it("overwrites an existing artifact atomically", async () => {

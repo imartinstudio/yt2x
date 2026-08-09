@@ -146,23 +146,34 @@ export const DUB_TRANSLATE_RULES: readonly string[] = [
     "padding rule 2 tells you to avoid.",
 ];
 
-export const getDubTranslateSystemPrompt = (): string =>
-  [
+const withTechnicalTermRule = (
+  lines: readonly string[],
+  promptRule?: string,
+): string[] => [
+  ...lines,
+  ...(promptRule?.trim() ? ["", promptRule.trim()] : []),
+];
+
+export const getDubTranslateSystemPrompt = (promptRule?: string): string =>
+  withTechnicalTermRule([
     "You are a Chinese dubbing translator. You receive English speech transcribed from a video, one spoken sentence per item, each with the number of Chinese characters it may occupy. You produce Simplified Chinese that carries the same meaning and can be spoken aloud within that budget.",
     "",
     "Rules:",
     ...DUB_TRANSLATE_RULES,
-  ].join("\n");
+  ], promptRule).join("\n");
 
 /** LLM 漏行时的补齐 prompt，索引写死在指令里，逼它一条不落地返回。 */
-export const buildDubTranslateRepairPrompt = (missingIndices: readonly number[]): string =>
-  [
+export const buildDubTranslateRepairPrompt = (
+  missingIndices: readonly number[],
+  promptRule?: string,
+): string =>
+  withTechnicalTermRule([
     `You are a Chinese dubbing translator. Translate these ${missingIndices.length} items from English into Simplified Chinese.`,
     `CRITICAL: return EXACTLY one object per index listed here — no more, no less: ${missingIndices.join(", ")}.`,
     "",
     "Rules:",
     ...DUB_TRANSLATE_RULES,
-  ].join("\n");
+  ], promptRule).join("\n");
 
 /**
  * 术语补漏重译 prompt：上一版译文丢了源文本里该有的保护术语（rule 9），把具体缺失的
@@ -185,8 +196,9 @@ export const buildDubTranslateRepairPrompt = (missingIndices: readonly number[])
  */
 export const buildDubTranslateGlossaryRepairPrompt = (
   missing: readonly { index: number; terms: readonly string[] }[],
+  promptRule?: string,
 ): string =>
-  [
+  withTechnicalTermRule([
     "You are editing existing Chinese dubbing subtitles. Each item below is a finished Chinese translation that is missing one or more protected terms — proper nouns that must appear verbatim in English.",
     ...missing.map(
       (m) => `  index ${m.index}: missing term(s): ${m.terms.map((t) => `"${t}"`).join(", ")}.`,
@@ -199,7 +211,7 @@ export const buildDubTranslateGlossaryRepairPrompt = (
     "- Stay within each item's `maxChars` budget. Drop filler elsewhere in the line if you need the room.",
     "",
     'Return a JSON array: [{"index":<number>,"text":"<edited Chinese>"}]',
-  ].join("\n");
+  ], promptRule).join("\n");
 
 export type DubGlossaryRepairItem = {
   index: number;
@@ -241,8 +253,9 @@ export const buildDubTranslateUserPrompt = (
 /** 超预算重译 prompt：把实际字数和上限一起写死，逼模型给出更紧的一版。 */
 export const buildDubTranslateTightenPrompt = (
   over: readonly { index: number; actualChars: number; maxChars: number }[],
+  promptRule?: string,
 ): string =>
-  [
+  withTechnicalTermRule([
     "You are a Chinese dubbing translator. Your previous translation of the following items exceeded its character budget.",
     "Translate each item again from the English source, tighter this time.",
     ...over.map(
@@ -253,7 +266,7 @@ export const buildDubTranslateTightenPrompt = (
     "",
     "Rules:",
     ...DUB_TRANSLATE_RULES,
-  ].join("\n");
+  ], promptRule).join("\n");
 
 /**
  * 低于预算重译 prompt：与 {@link buildDubTranslateTightenPrompt} 相反的方向。
@@ -263,8 +276,9 @@ export const buildDubTranslateTightenPrompt = (
  */
 export const buildDubTranslateExpandPrompt = (
   under: readonly { index: number; actualChars: number; maxChars: number }[],
+  promptRule?: string,
 ): string =>
-  [
+  withTechnicalTermRule([
     "You are a Chinese dubbing translator. Your previous translation of the following items used far less than its character budget.",
     "This means the Chinese voice will finish speaking while the English speaker in the video is still talking — leaving dead air with no voice and no subtitle for the rest of that line's slot.",
     "Translate each item again from the English source, and use most of the budget this time.",
@@ -276,7 +290,7 @@ export const buildDubTranslateExpandPrompt = (
     "",
     "Rules:",
     ...DUB_TRANSLATE_RULES,
-  ].join("\n");
+  ], promptRule).join("\n");
 
 /**
  * 电报体检测：口语中文写不出「连续十几个字不喘气」的句子。
@@ -369,8 +383,9 @@ export const isTelegraphicChinese = (
  */
 export const buildDubTranslateSpeakablePrompt = (
   items: readonly { index: number }[],
+  promptRule?: string,
 ): string =>
-  [
+  withTechnicalTermRule([
     "You are rewriting Chinese dubbing subtitles that came out unspeakable. Each item below is written in a compressed or bookish register — dropped particles, classical constructions, or punctuation that still does not make the sentence sound spoken — which cannot be understood easily when read aloud.",
     ...items.map((i) => `  index ${i.index}`),
     "",
@@ -382,7 +397,7 @@ export const buildDubTranslateSpeakablePrompt = (
     "- Stay within `maxChars`. If the speakable version will not fit, drop a whole clause and keep the rest natural — never re-compress every clause.",
     "",
     'Return a JSON array: [{"index":<number>,"text":"<rewritten Chinese>"}]',
-  ].join("\n");
+  ], promptRule).join("\n");
 
 export type DubSpeakableRepairItem = {
   index: number;

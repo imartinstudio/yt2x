@@ -7,6 +7,7 @@ import {
   buildDubTranslateGlossaryRepairPrompt,
   buildDubTranslatePayload,
   buildDubTranslateRepairPrompt,
+  buildDubTranslateSpeakablePrompt,
   buildDubTranslateTightenPrompt,
   buildDubTranslateUserPrompt,
   DEFAULT_SPEECH_RATE,
@@ -214,6 +215,14 @@ describe("buildDubTranslateRepairPrompt", () => {
     expect(prompt).toContain("7");
     expect(prompt).toMatch(/EXACTLY|exactly/);
   });
+
+  it("includes the active source-level term rule without copying a global glossary", () => {
+    const prompt = buildDubTranslateRepairPrompt(
+      [3, 7],
+      "本次源材料中必须保留的专业术语：Latent Workspace Routing",
+    );
+    expect(prompt).toContain("Latent Workspace Routing");
+  });
 });
 
 describe("buildDubTranslateTightenPrompt", () => {
@@ -228,6 +237,15 @@ describe("buildDubTranslateTightenPrompt", () => {
   it("asks for a tighter retranslation, not a cut of the previous attempt", () => {
     expect(prompt).toMatch(/tighter/i);
     expect(prompt).toMatch(/NOT an instruction to cut/i);
+  });
+
+  it("includes active source-level terms", () => {
+    expect(
+      buildDubTranslateTightenPrompt(
+        [{ index: 4, actualChars: 90, maxChars: 76 }],
+        "本次源材料中必须保留的专业术语：Latent Workspace Routing",
+      ),
+    ).toContain("Latent Workspace Routing");
   });
 });
 
@@ -261,6 +279,15 @@ describe("buildDubTranslateGlossaryRepairPrompt", () => {
 
   it("keeps the character budget in play so the repair cannot overflow the slot", () => {
     expect(prompt).toMatch(/maxChars/);
+  });
+
+  it("includes active source-level terms", () => {
+    expect(
+      buildDubTranslateGlossaryRepairPrompt(
+        [{ index: 25, terms: ["Grill Me"] }],
+        "本次源材料中必须保留的专业术语：Latent Workspace Routing",
+      ),
+    ).toContain("Latent Workspace Routing");
   });
 });
 
@@ -301,6 +328,15 @@ describe("buildDubTranslateExpandPrompt", () => {
   it("asks for a fuller retranslation, not padding of the previous attempt", () => {
     expect(prompt).toMatch(/use most of the budget/i);
     expect(prompt).toMatch(/NOT an instruction to pad/i);
+  });
+
+  it("includes active source-level terms", () => {
+    expect(
+      buildDubTranslateExpandPrompt(
+        [{ index: 4, actualChars: 27, maxChars: 76 }],
+        "本次源材料中必须保留的专业术语：Latent Workspace Routing",
+      ),
+    ).toContain("Latent Workspace Routing");
   });
 });
 
@@ -350,5 +386,21 @@ describe("buildDubSpeakableRepairUserPrompt", () => {
     expect(payload[0]?.en).toContain("context window");
     expect(payload[0]?.zh).toBe("追问始时上下文窗近空");
     expect(payload[0]?.maxChars).toBe(23);
+  });
+});
+
+describe("all dubbing prompt builders", () => {
+  const activeRule = "本次源材料中必须保留的专业术语：Graph Engineering、Latent Workspace Routing";
+
+  it("injects the same active rule into initial and speakable prompts", () => {
+    expect(getDubTranslateSystemPrompt(activeRule)).toContain(activeRule);
+    expect(buildDubTranslateSpeakablePrompt([{ index: 1 }], activeRule)).toContain(activeRule);
+  });
+
+  it("injects the same active rule into every rewrite-direction prompt", () => {
+    expect(buildDubTranslateRepairPrompt([1], activeRule)).toContain(activeRule);
+    expect(buildDubTranslateTightenPrompt([{ index: 1, actualChars: 90, maxChars: 70 }], activeRule)).toContain(activeRule);
+    expect(buildDubTranslateExpandPrompt([{ index: 1, actualChars: 20, maxChars: 70 }], activeRule)).toContain(activeRule);
+    expect(buildDubTranslateGlossaryRepairPrompt([{ index: 1, terms: ["Graph Engineering"] }], activeRule)).toContain(activeRule);
   });
 });

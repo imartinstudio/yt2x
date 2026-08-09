@@ -176,12 +176,27 @@ export const technicalTermDiscoveryRepairPrompt = <T>(
 ].join("\n\n");
 
 export const sameTechnicalTermOuterShape = (left: unknown, right: unknown): boolean => {
-  const shape = (value: unknown): string => {
-    if (value === null) return "null";
-    if (Array.isArray(value)) return "array";
-    return typeof value;
-  };
-  return shape(left) === shape(right);
+  if (typeof left === "string" || typeof right === "string") {
+    return typeof left === "string" && typeof right === "string";
+  }
+  if (left === null || right === null) return left === null && right === null;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left)
+      && Array.isArray(right)
+      && left.length === right.length
+      && left.every((child, index) => sameTechnicalTermOuterShape(child, right[index]));
+  }
+  if (typeof left === "object" || typeof right === "object") {
+    if (typeof left !== "object" || typeof right !== "object") return false;
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftKeys = Object.keys(leftRecord).sort();
+    const rightKeys = Object.keys(rightRecord).sort();
+    return leftKeys.length === rightKeys.length
+      && leftKeys.every((key, index) => key === rightKeys[index]
+        && sameTechnicalTermOuterShape(leftRecord[key], rightRecord[key]));
+  }
+  return typeof left === typeof right;
 };
 
 export type { DiscoveredTechnicalTerm, FinalizedTechnicalTermValue };

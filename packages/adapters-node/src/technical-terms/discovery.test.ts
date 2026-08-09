@@ -7,6 +7,7 @@ import type {
 } from "@yt2x/core";
 import {
   discoverTechnicalTerms,
+  fingerprintTechnicalTermDiscoverySource,
   repairTechnicalTermViolations,
 } from "./discovery.js";
 
@@ -81,6 +82,90 @@ describe("source-level technical term discovery", () => {
       expect.objectContaining({ code: "technical-term-discovery-unavailable" }),
     ]);
   });
+
+  it("does not cache a provider failure and retries the same key", async () => {
+    let attempts = 0;
+    const llm: LlmPort = {
+      chat: vi.fn(async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("temporary provider failure");
+        return response(JSON.stringify([
+          { sourceText: "Retryable Protocol", confidence: "high", category: "ai" },
+        ]));
+      }),
+    };
+    const input = {
+      llm,
+      model: "retry-model",
+      sourceText: "A source about Retryable Protocol.",
+    };
+
+    const first = await discoverTechnicalTerms(input);
+    const second = await discoverTechnicalTerms(input);
+
+    expect(first.warnings).toEqual([
+      expect.objectContaining({ code: "technical-term-discovery-unavailable" }),
+    ]);
+    expect(second.accepted).toEqual([
+      { sourceText: "Retryable Protocol", confidence: "high", category: "ai" },
+    ]);
+    expect(llm.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache an aborted discovery and retries after cancellation", async () => {
+    let attempts = 0;
+    const llm: LlmPort = {
+      chat: vi.fn(async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("cancelled");
+          error.name = "AbortError";
+          throw error;
+        }
+        return response(JSON.stringify([
+          { sourceText: "Abortable Protocol", confidence: "high", category: "ai" },
+        ]));
+      }),
+    };
+    const controller = new AbortController();
+    controller.abort();
+    const input = {
+      llm,
+      model: "abort-model",
+      sourceText: "A source about Abortable Protocol.",
+      signal: controller.signal,
+    };
+
+    await discoverTechnicalTerms(input);
+    const retry = await discoverTechnicalTerms({ ...input, signal: undefined });
+
+    expect(retry.accepted).toEqual([
+      { sourceText: "Abortable Protocol", confidence: "high", category: "ai" },
+    ]);
+    expect(llm.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses completed results for sequential calls", async () => {
+    const { llm } = fakeLlm(JSON.stringify([
+      { sourceText: "Sequential Protocol", confidence: "high", category: "ai" },
+    ]));
+    const input = {
+      llm,
+      model: "sequential-model",
+      sourceText: "A source about Sequential Protocol.",
+    };
+
+    await discoverTechnicalTerms(input);
+    await discoverTechnicalTerms(input);
+
+    expect(llm.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a Node SHA-256 source fingerprint", () => {
+    expect(fingerprintTechnicalTermDiscoverySource("hello")).toBe(
+      "sha256-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    );
+  });
 });
 
 describe("targeted technical term repair", () => {
@@ -131,6 +216,48 @@ describe("targeted technical term repair", () => {
 
     expect(result.value).toEqual({ title: "Latent Workspace Routing", nested: { body: "保留" } });
     expect(nestedGuard.finalize).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "deleted object key",
+      currentValue: { title: "缺失", nested: { body: "保留" }, metadata: { kind: "note" } },
+      repairedValue: { title: "Latent Workspace Routing", nested: { body: "保留" } },
+    },
+    {
+      name: "changed array length",
+      currentValue: { title: "缺失", items: ["one", "two"] },
+      repairedValue: { title: "Latent Workspace Routing", items: ["one"] },
+    },
+    {
+      name: "changed nested non-string type",
+      currentValue: { title: "缺失", nested: { count: 1, enabled: true } },
+      repairedValue: { title: "Latent Workspace Routing", nested: { count: "1", enabled: true } },
+    },
+  ])("rejects structurally changed repair: $name", async ({ currentValue, repairedValue }) => {
+    const { llm } = fakeLlm(JSON.stringify(repairedValue));
+    const structuralGuard = {
+      profile: { entries: [] },
+      finalize: vi.fn((value: unknown) => ({ value, violations: [] })),
+    } as unknown as TechnicalTermGuard;
+    const violations = [{
+      code: "missing-canonical-term" as const,
+      canonical: "Latent Workspace Routing",
+      message: "missing",
+    }];
+
+    const result = await repairTechnicalTermViolations({
+      llm,
+      model: "structural-model",
+      guard: structuralGuard,
+      currentValue,
+      restoration: { placeholders: [] },
+      violations,
+      parseResponse: (content) => JSON.parse(content) as typeof currentValue,
+    });
+
+    expect(result).toEqual({ value: currentValue, violations });
+    expect(structuralGuard.finalize).not.toHaveBeenCalled();
   });
 
   it("returns remaining violations without a second repair", async () => {

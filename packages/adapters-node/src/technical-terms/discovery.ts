@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   buildTechnicalTermDiscoveryPrompt,
   parseTechnicalTermDiscoveryResponse,
@@ -21,14 +22,8 @@ export type {
 
 const completedDiscoveryCache = new Map<string, Promise<TechnicalTermDiscoveryResult>>();
 
-const stableFingerprint = (value: string): string => {
-  let hash = 2166136261;
-  for (const character of value) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 16777619);
-  }
-  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, "0")}`;
-};
+export const fingerprintTechnicalTermDiscoverySource = (value: string): string =>
+  `sha256-${createHash("sha256").update(value, "utf8").digest("hex")}`;
 
 const termPattern = (term: string): RegExp => {
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -62,7 +57,7 @@ export const discoverTechnicalTerms = (
     : `${input.sourceTitle}\n\n${input.sourceText}`;
   const catalogFingerprint = input.catalogFingerprint ?? TECHNICAL_TERM_CATALOG_FINGERPRINT;
   const key = [
-    stableFingerprint(sourceForDiscovery),
+    fingerprintTechnicalTermDiscoverySource(sourceForDiscovery),
     input.model,
     TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
     catalogFingerprint,
@@ -95,10 +90,14 @@ export const discoverTechnicalTerms = (
       response: response.content,
     });
     if (parsed.warnings.some((item) => item.code === "malformed-response")) {
+      completedDiscoveryCache.delete(key);
       return unavailable("专业术语发现响应无法解析，已跳过未知术语发现。");
     }
     return parsed;
-  }).catch(() => unavailable("专业术语发现服务不可用，已继续使用中央术语目录。"));
+  }).catch(() => {
+    completedDiscoveryCache.delete(key);
+    return unavailable("专业术语发现服务不可用，已继续使用中央术语目录。");
+  });
   completedDiscoveryCache.set(key, pending);
   return pending;
 };

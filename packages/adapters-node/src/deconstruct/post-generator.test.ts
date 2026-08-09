@@ -13,7 +13,7 @@ describe("generateClipsPosts", () => {
       await mkdir(clipsDir, { recursive: true });
       await writeFile(
         path.join(articleDir, "article.md"),
-        "# Graph Engineering（图工程）从 0 到 1 全攻略\n\n知识图谱（Knowledge Graph）和代理图谱（Agent Graph）是正文术语。Agents 也会运行 loop，完整视频来自 youtube。",
+        "# Graph Engineering（图工程）从 0 到 1 全攻略\n\n## 开场章节\n\nGraph Engineering 是正文术语，Agents 也会运行 loop。\n\n## 风险章节\n\nKnowledge Graph 和 Agent Graph 是风险章节术语，完整视频来自 youtube。",
         "utf8",
       );
 
@@ -175,12 +175,98 @@ describe("generateClipsPosts", () => {
         restoration: { placeholders: [] },
         articleTitle: "Graph Engineering 与 Agents",
         discoveredTerms: [],
+        sourceTextByClipId: { "clip-1": "Graph Engineering 应保留 canonical 原文。" },
       });
       const postText = await readFile(result[0]!, "utf8");
 
       expect(postText).toContain("Graph Engineering");
       expect(postText).not.toContain("图工程");
       expect(postText).toContain("学习如何为你的 Agents 构建 loops。");
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects Graph translated as 图 when Graph only appears in the selected source body", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-selected-graph-body-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "selected-graph-body", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "selected-graph-body",
+          title: "构建关系结构",
+          type: "hot-take",
+          angle: "contrarian",
+          risk: "low",
+          selected: true,
+          text: "图能让 agent 看见依赖关系。",
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-selected-graph-body.mp4",
+        }],
+      };
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+      const guard = createTechnicalTermGuard({ sourceText: "Graph\nAgents" });
+
+      await expect(writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "构建关系结构",
+        discoveredTerms: [],
+        sourceTextByClipId: { "clip-1": "Graph 能让 agent 看见依赖关系。" },
+      })).rejects.toThrow("输出使用了 图，应保留 Graph");
+
+      await expect(readFile(path.join(clipsDir, "post-1-selected-graph-body.md"), "utf8")).rejects.toThrow();
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["translated", "知识图谱能提高检索质量。", "输出使用了 知识图谱，应保留 Knowledge Graph"],
+    ["missing", "这种结构能提高检索质量。", "输出缺少源术语 Knowledge Graph"],
+  ])("rejects %s Knowledge Graph from the selected source body", async (_case, generatedText, expectedError) => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-selected-knowledge-graph-body-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "selected-knowledge-graph-body", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "selected-knowledge-graph-body",
+          title: "检索结构",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: true,
+          text: generatedText,
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-selected-knowledge-graph-body.mp4",
+        }],
+      };
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+      const guard = createTechnicalTermGuard({ sourceText: "Knowledge Graph\nAgents" });
+
+      await expect(writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "检索结构",
+        discoveredTerms: [],
+        sourceTextByClipId: { "clip-1": "Knowledge Graph 能提高检索质量。" },
+      })).rejects.toThrow(expectedError);
+
+      await expect(readFile(path.join(clipsDir, "post-1-selected-knowledge-graph-body.md"), "utf8")).rejects.toThrow();
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }
@@ -226,6 +312,7 @@ describe("generateClipsPosts", () => {
         restoration: { placeholders: [] },
         articleTitle: "可靠交付",
         discoveredTerms,
+        sourceTextByClipId: { "clip-1": "Latent Workspace Routing" },
       })).rejects.toThrow(/Latent Workspace Routing/u);
 
       await expect(readFile(path.join(clipsDir, "post-1-final-missing.md"), "utf8")).rejects.toThrow();
@@ -285,6 +372,10 @@ describe("generateClipsPosts", () => {
         restoration: { placeholders: [] },
         articleTitle: "可靠交付",
         discoveredTerms,
+        sourceTextByClipId: {
+          "clip-1": "这里只讨论可靠交付。",
+          "clip-2": "Archive Memory Routing 只属于未选片段。",
+        },
       });
 
       expect(await readFile(result[0]!, "utf8")).toContain("这里只讨论可靠交付。");
@@ -333,6 +424,7 @@ describe("generateClipsPosts", () => {
         restoration: { placeholders: [] },
         articleTitle: "可靠交付",
         discoveredTerms,
+        sourceTextByClipId: { "clip-1": "Latent Workspace Routing" },
       })).rejects.toThrow(/Latent Workspace Routing/u);
 
       await expect(readFile(path.join(clipsDir, "post-1-selected-translation.md"), "utf8")).rejects.toThrow();

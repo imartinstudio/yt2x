@@ -38,6 +38,7 @@ export type ClipPostTechnicalTerms = {
   restoration: TechnicalTermRestoration;
   articleTitle: string;
   discoveredTerms: readonly DiscoveredTechnicalTerm[];
+  sourceTextByClipId: Readonly<Record<string, string>>;
 };
 
 const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -121,6 +122,10 @@ export const generateClipsPosts = async (
     timecodes: { durationSec: Math.round(c.timecodes.durationSec) },
     video: c.video,
   }));
+  const sourceTextByClipId = Object.freeze(Object.fromEntries(allClips.map((clip, index) => [
+    clip.id,
+    buildClipSourceText(clip, clipsInput[index]!, articleMd),
+  ])));
 
   const sourceText = `${articleMd}\n${JSON.stringify(clipsInput)}`;
   const discovery = await discoverTechnicalTerms({
@@ -145,6 +150,7 @@ export const generateClipsPosts = async (
     restoration: { placeholders: [] },
     articleTitle,
     discoveredTerms: discovery.accepted,
+    sourceTextByClipId,
   };
   const prepared = guard.prepare({
     articleTitle,
@@ -281,21 +287,10 @@ export const writeSelectedPostFiles = async (
       ? `${baseText}\n🔗 ${youtubeUrl}\n\n${CLIP_POST_CALL_TO_ACTION}`
       : baseText;
   });
-  const selectedContentText = assembledTexts
-    .map((text) => text.replace(youtubeUrl, ""))
-    .join("\n");
-  const usedArticleTerms = technicalTerms.guard.profile.entries
-    .filter((term) => [
-      term.canonical,
-      term.sourceText,
-      term.preferredZh ?? "",
-      ...term.forbiddenZh.filter((candidate) => candidate !== "图"),
-    ].some((candidate) => candidate !== "" && selectedContentText.includes(candidate)))
-    .map((term) => term.canonical);
   const selectedSourceText = [
     technicalTerms.articleTitle,
-    ...selected.flatMap((clip) => [clip.title, clip.articleSection ?? ""]),
-    ...usedArticleTerms,
+    ...selected.map((clip) => technicalTerms.sourceTextByClipId[clip.id]
+      ?? [clip.title, clip.articleSection ?? ""].join("\n")),
     CLIP_POST_CALL_TO_ACTION,
   ].join("\n");
   const finalGuard = createTechnicalTermGuard({
@@ -303,6 +298,15 @@ export const writeSelectedPostFiles = async (
     sourceTitle: technicalTerms.articleTitle,
     discoveredTerms: technicalTerms.discoveredTerms,
   });
+  const selectedSourceCanonicals = new Set(finalGuard.profile.occurrences.map((item) => item.canonical));
+  const sourceTranslationViolations = finalGuard.validate(assembledTexts).filter((violation) =>
+    violation.code === "forbidden-translation"
+      && (violation.canonical === "Graph" || violation.canonical === "Knowledge Graph")
+      && selectedSourceCanonicals.has(violation.canonical)
+  );
+  if (hasHardTechnicalTermViolations(sourceTranslationViolations)) {
+    throw new Error(`Technical term validation failed: ${sourceTranslationViolations.map((item) => item.message).join("; ")}`);
+  }
   const canonicalizedTexts = finalGuard.finalize(assembledTexts, restoration);
   const finalizedTexts = canonicalizedTexts.value.map((text) =>
     normalizeControlledYoutubeUrl(text, youtubeUrl)
@@ -369,6 +373,48 @@ const isControlledYoutubeUrlViolation = (
 
 const normalizeControlledYoutubeUrl = (text: string, expectedUrl: string): string => {
   return text.replace(expectedUrl.replace("youtube.com", "YouTube.com"), expectedUrl);
+};
+
+const buildClipSourceText = (
+  clip: DeconstructManifest["clips"][number],
+  promptClip: GeneratePostsInput["clips"][number],
+  articleMd: string,
+): string => {
+  const sourceRecord = clip as unknown as Record<string, unknown>;
+  const optionalSourceFields = [
+    "summary",
+    "articleBody",
+    "body",
+    "keyQuote",
+    "quote",
+    "segmentTranscript",
+    "transcript",
+  ].map((key) => sourceRecord[key]).filter((value): value is string => typeof value === "string");
+  return [
+    clip.title,
+    promptClip.summary,
+    clip.articleSection ?? "",
+    extractArticleSection(articleMd, clip.articleSection),
+    ...optionalSourceFields,
+  ].filter(Boolean).join("\n");
+};
+
+const extractArticleSection = (articleMd: string, sectionTitle: string | undefined): string => {
+  const target = sectionTitle?.trim();
+  if (!target) return "";
+  const lines = articleMd.split("\n");
+  const headingIndex = lines.findIndex((line) => {
+    const match = line.match(/^(#{1,6})\s+(.+)$/u);
+    return match !== null && match[2]!.replaceAll("**", "").trim() === target;
+  });
+  if (headingIndex < 0) return "";
+  const level = lines[headingIndex]!.match(/^#+/u)![0].length;
+  const nextHeadingOffset = lines.slice(headingIndex + 1).findIndex((line) => {
+    const match = line.match(/^(#{1,6})\s+/u);
+    return match !== null && match[1]!.length <= level;
+  });
+  const end = nextHeadingOffset < 0 ? lines.length : headingIndex + 1 + nextHeadingOffset;
+  return lines.slice(headingIndex, end).join("\n");
 };
 
 const parseClipPosts = (raw: string): ClipPostList => {

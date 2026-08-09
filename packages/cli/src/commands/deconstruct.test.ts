@@ -77,6 +77,7 @@ describe("runDeconstructCommand", () => {
           confidence: "high",
           category: "ai-agent",
         }],
+        sourceTextByClipId: { "1": "Latent Workspace Routing" },
       };
       mocks.readDeconstructArtifacts.mockResolvedValue({
         articleMd: "# Latent Workspace Routing",

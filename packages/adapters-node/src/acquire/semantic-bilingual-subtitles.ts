@@ -1515,7 +1515,11 @@ export const requestContentAlignedSplit = async (
 ): Promise<ContentAlignedPiece[] | null> => {
   if (cues.length === 0) return null;
   try {
-    const prepared = technicalTermGuard?.prepare(zhFull);
+    const alignmentSourceText = cues.map((cue) => normalizeText(cue.text)).join(" ");
+    const alignmentGuard = technicalTermGuard === undefined
+      ? undefined
+      : scopeTechnicalTermGuard(technicalTermGuard, alignmentSourceText);
+    const prepared = alignmentGuard?.prepare(zhFull);
     const resp = await llm.chat({
       model,
       messages: [
@@ -1583,8 +1587,8 @@ export const requestContentAlignedSplit = async (
     }
     if (prevThrough !== cues.length) return null; // must cover every cue, exactly once
 
-    if (technicalTermGuard !== undefined) {
-      const finalized = technicalTermGuard.finalize(
+    if (alignmentGuard !== undefined) {
+      const finalized = alignmentGuard.finalize(
         rawPieces,
         prepared?.restoration ?? { placeholders: [] },
       );
@@ -1645,6 +1649,9 @@ export const requestContentAlignedSplit = async (
         .slice(cueCursor, raw.throughCue)
         .map((c) => normalizeText(c.text))
         .join(" ");
+      const pieceGuard = technicalTermGuard === undefined
+        ? undefined
+        : scopeTechnicalTermGuard(technicalTermGuard, pieceSourceText);
       const compact = await requestCompactRewrite(
         pieceSourceText,
         raw.zhText,
@@ -1653,6 +1660,7 @@ export const requestContentAlignedSplit = async (
         llm,
         model,
         signal,
+        pieceGuard,
       );
       const rewritten = compact !== null && compact.length === 1 ? compact[0]! : raw.zhText;
       if (visualWidth(rewritten) <= hardLimit) {
@@ -1663,9 +1671,9 @@ export const requestContentAlignedSplit = async (
 
       const span = raw.throughCue - cueCursor;
       const subParts = enforceHardCeiling(
-        splitLongZh(rewritten, Math.ceil(visualWidth(rewritten) / TARGET_CJK), technicalTermGuard),
+        splitLongZh(rewritten, Math.ceil(visualWidth(rewritten) / TARGET_CJK), pieceGuard),
         hardLimit,
-        technicalTermGuard,
+        pieceGuard,
       );
       if (subParts.length > 1 && span >= subParts.length) {
         // `allocateCuesByWeight` sums to exactly `span`, so the last

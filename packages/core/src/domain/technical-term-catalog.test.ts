@@ -62,6 +62,21 @@ describe("technical term catalog", () => {
   it("rejects alias conflicts and missing fixed Chinese preferences", () => {
     expect(() => defineTechnicalTermCatalog([
       {
+        canonical: "Duplicate Term",
+        aliases: [],
+        categories: ["domain"],
+        policy: "preserve",
+      },
+      {
+        canonical: "Duplicate Term",
+        aliases: [],
+        categories: ["domain"],
+        policy: "contextual-preserve",
+      },
+    ])).toThrow(/duplicate canonical/i);
+
+    expect(() => defineTechnicalTermCatalog([
+      {
         canonical: "First Term",
         aliases: ["shared alias"],
         categories: ["domain"],
@@ -81,6 +96,43 @@ describe("technical term catalog", () => {
       categories: ["domain"],
       policy: "fixed-zh",
     }])).toThrow(/preferredZh/i);
+  });
+
+  it("keeps source and title occurrences independent when their offsets overlap", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Graph starts here.",
+      sourceTitle: "Knowledge Graph",
+    });
+
+    expect(guard.profile.occurrences).toEqual(expect.arrayContaining([
+      { canonical: "Graph", sourceText: "Graph", start: 0, end: 5 },
+      { canonical: "Knowledge Graph", sourceText: "Knowledge Graph", start: 0, end: 15 },
+    ]));
+  });
+
+  it("uses the actual source spelling for discovered terms", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Agentic   RAG changes the workflow.",
+      discoveredTerms: [{ sourceText: "agentic rag", confidence: "high", category: "ai-agent" }],
+    });
+
+    expect(guard.profile.entries).toContainEqual(expect.objectContaining({ canonical: "Agentic   RAG" }));
+    expect(guard.profile.entries).not.toContainEqual(expect.objectContaining({ canonical: "agentic rag" }));
+  });
+
+  it("validates nested values against one aggregate output", () => {
+    const guard = createTechnicalTermGuard({ sourceText: "Graph Engineering" });
+
+    expect(guard.validate({ title: "Graph Engineering", body: "普通摘要" })).toEqual([]);
+  });
+
+  it("keeps 图文 image wording Chinese while restoring contextual Graph", () => {
+    const guard = createTechnicalTermGuard({ sourceText: "Graph is useful." });
+    const prepared = guard.prepare("图文说明和图的基本词汇");
+
+    expect(guard.finalize(prepared.value, prepared.restoration).value).toBe(
+      "图文说明和 Graph 的基本词汇",
+    );
   });
 
   it("keeps the catalog fingerprint independent of entry order", () => {

@@ -91,10 +91,11 @@ type TermMatch = {
   sourceText: string;
   start: number;
   end: number;
+  source: "sourceText" | "sourceTitle";
 };
 
 const NON_GRAPH_IMAGE_TERM_RE =
-  /(?:截图|截屏|缩略图|图片|图像|图表|图标|图形|图案|图层|图纸|图书|图解|图示|示意图|流程图|封面图|配图|插图|地图|草图)/gu;
+  /(?:截图|截屏|缩略图|图片|图像|图表|图标|图形|图案|图层|图纸|图书|图解|图示|示意图|流程图|封面图|配图|插图|地图|草图|图文)/gu;
 const PRIVATE_PLACEHOLDER_RE = /\uE000YT2X_TERM_[^\uE001]+\uE001/u;
 const HAN_CHAR_RE = /\p{Script=Han}/u;
 
@@ -154,6 +155,9 @@ export const defineTechnicalTermCatalog = (
       throw new Error(`fixed-zh term ${entry.canonical} requires preferredZh`);
     }
     const frozen = freezeEntry(entry);
+    if (seen.has(normalizedKey(frozen.canonical))) {
+      throw new Error(`duplicate canonical: ${frozen.canonical}`);
+    }
     for (const candidate of [frozen.canonical, ...frozen.aliases]) {
       const key = normalizedKey(candidate);
       const previous = seen.get(key);
@@ -267,7 +271,21 @@ const termPattern = (terms: readonly string[], flags: string): RegExp => {
   return new RegExp(`(?<![A-Za-z0-9])(${alternatives})(?![A-Za-z0-9])`, flags);
 };
 
-const matchesForEntry = (text: string, entryToMatch: TechnicalTermEntry): TermMatch[] => {
+const findActualSourceText = (text: string, candidate: string): string | undefined => {
+  const parts = candidate.trim().split(/\s+/u).filter(Boolean).map(escapeRegExp);
+  if (parts.length === 0) return undefined;
+  const match = text.match(new RegExp(
+    `(?<![A-Za-z0-9])(${parts.join("\\s+")})(?![A-Za-z0-9])`,
+    "iu",
+  ));
+  return match?.[1];
+};
+
+const matchesForEntry = (
+  text: string,
+  entryToMatch: TechnicalTermEntry,
+  source: "sourceText" | "sourceTitle",
+): TermMatch[] => {
   const terms = [entryToMatch.canonical, ...entryToMatch.aliases];
   if (terms.length === 0) return [];
   const matches: TermMatch[] = [];
@@ -277,6 +295,7 @@ const matchesForEntry = (text: string, entryToMatch: TechnicalTermEntry): TermMa
       sourceText: match[1] ?? match[0],
       start: match.index,
       end: match.index + match[0].length,
+      source,
     });
   }
   return matches;
@@ -295,14 +314,24 @@ const findProfileMatches = (
       all.findIndex((other) => normalizedKey(other.sourceText) === normalizedKey(candidate.sourceText)) === index,
     )
     .filter((candidate) => candidate.sourceText.trim() !== "")
-    .filter((candidate) => normalizedKey(sourceText).includes(normalizedKey(candidate.sourceText)))
-    .map((candidate) => entry(candidate.sourceText, [candidate.category], "preserve"));
+    .map((candidate) => {
+      const actualSourceText = findActualSourceText(sourceText, candidate.sourceText);
+      return actualSourceText === undefined
+        ? undefined
+        : entry(actualSourceText, [candidate.category], "preserve");
+    })
+    .filter((candidate): candidate is TechnicalTermEntry => candidate !== undefined);
   const allEntries = [...TECHNICAL_TERM_CATALOG, ...discoveredEntries];
-  const sourceMatches = allEntries.flatMap((candidate) => matchesForEntry(sourceText, candidate));
-  const titleMatches = allEntries.flatMap((candidate) => matchesForEntry(sourceTitle, candidate));
-  return [...sourceMatches, ...titleMatches]
+  const selectLongestMatches = (matches: TermMatch[]): TermMatch[] => [...matches]
     .sort((a, b) => b.sourceText.length - a.sourceText.length || a.start - b.start)
     .filter((match, index, all) => all.slice(0, index).every((selected) => !overlaps(match, selected)));
+  const sourceMatches = selectLongestMatches(
+    allEntries.flatMap((candidate) => matchesForEntry(sourceText, candidate, "sourceText")),
+  );
+  const titleMatches = selectLongestMatches(
+    allEntries.flatMap((candidate) => matchesForEntry(sourceTitle, candidate, "sourceTitle")),
+  );
+  return [...sourceMatches, ...titleMatches];
 };
 
 const resolvedFromMatches = (matches: readonly TermMatch[]): TechnicalTermProfile => {
@@ -318,15 +347,12 @@ const resolvedFromMatches = (matches: readonly TermMatch[]): TechnicalTermProfil
     }));
   }
   const entries = Object.freeze([...byCanonical.values()]);
-  const occurrences = Object.freeze([...matches]
-    .sort((a, b) => b.sourceText.length - a.sourceText.length || a.start - b.start)
-    .filter((match, index, all) => all.slice(0, index).every((selected) => !overlaps(match, selected)))
-    .map((match) => Object.freeze({
+  const occurrences = Object.freeze(matches.map((match) => Object.freeze({
     canonical: match.entry.canonical,
     sourceText: match.sourceText,
     start: match.start,
     end: match.end,
-    })));
+  })));
   return { sourceFingerprint: "", entries, occurrences, profileFingerprint: "" };
 };
 
@@ -381,7 +407,10 @@ const createProfile = (
   const matches = findProfileMatches(sourceText, sourceTitle, discoveredTerms);
   const contextualMatches = TECHNICAL_TERM_CATALOG
     .filter((entry) => entry.policy === "contextual-preserve")
-    .flatMap((entry) => [...matchesForEntry(sourceText, entry), ...matchesForEntry(sourceTitle, entry)]);
+    .flatMap((entry) => [
+      ...matchesForEntry(sourceText, entry, "sourceText"),
+      ...matchesForEntry(sourceTitle, entry, "sourceTitle"),
+    ]);
   const base = resolvedFromMatches(matches);
   const contextual = resolvedFromMatches(contextualMatches);
   const mergedEntries = Object.freeze([
@@ -479,50 +508,55 @@ export const createTechnicalTermGuard = ({
 
   const validateValue = <T>(value: T): readonly TechnicalTermViolation[] => {
     const violations: TechnicalTermViolation[] = [];
-    const check = (current: unknown): void => {
+    const textValues: string[] = [];
+    const collectTextValues = (current: unknown): void => {
       if (typeof current === "string") {
-        if (PRIVATE_PLACEHOLDER_RE.test(current)) {
-          violations.push({ code: "unrestored-placeholder", message: "内部术语占位符残留在输出中。" });
-        }
-        for (const term of preservedEntries) {
-          if (!current.includes(term.canonical)) {
-            const forbidden = term.forbiddenZh.find((candidate) => current.includes(candidate));
-            violations.push(forbidden === undefined
-              ? {
-                  code: "missing-canonical-term",
-                  canonical: term.canonical,
-                  message: `输出缺少源术语 ${term.canonical}。`,
-                }
-              : {
-                  code: "forbidden-translation",
-                  canonical: term.canonical,
-                  message: `输出使用了 ${forbidden}，应保留 ${term.canonical}。`,
-                });
-          }
-        }
-        const activeCanonicals = new Set(profile.entries.map((term) => term.canonical));
-        const unexpectedMatches = TECHNICAL_TERM_CATALOG
-          .flatMap((candidate) => matchesForEntry(current, candidate))
-          .sort((a, b) => b.sourceText.length - a.sourceText.length || a.start - b.start)
-          .filter((match, index, all) => all.slice(0, index).every((selected) => !overlaps(match, selected)));
-        for (const match of unexpectedMatches) {
-          if (!activeCanonicals.has(match.entry.canonical)) {
-            violations.push({
-              code: "invented-canonical-term",
-              canonical: match.entry.canonical,
-              message: `输出凭空加入了源材料未命中的术语 ${match.entry.canonical}。`,
-            });
-          }
-        }
+        textValues.push(current);
         return;
       }
       if (Array.isArray(current)) {
-        current.forEach(check);
+        current.forEach(collectTextValues);
       } else if (current !== null && typeof current === "object") {
-        Object.values(current).forEach(check);
+        Object.values(current).forEach(collectTextValues);
       }
     };
-    check(value);
+    collectTextValues(value);
+    const combinedText = textValues.join("\n");
+    for (const text of textValues) {
+      if (PRIVATE_PLACEHOLDER_RE.test(text)) {
+        violations.push({ code: "unrestored-placeholder", message: "内部术语占位符残留在输出中。" });
+      }
+    }
+    for (const term of preservedEntries) {
+      if (!combinedText.includes(term.canonical)) {
+        const forbidden = term.forbiddenZh.find((candidate) => combinedText.includes(candidate));
+        violations.push(forbidden === undefined
+          ? {
+              code: "missing-canonical-term",
+              canonical: term.canonical,
+              message: `输出缺少源术语 ${term.canonical}。`,
+            }
+          : {
+              code: "forbidden-translation",
+              canonical: term.canonical,
+              message: `输出使用了 ${forbidden}，应保留 ${term.canonical}。`,
+            });
+      }
+    }
+    const activeCanonicals = new Set(profile.entries.map((term) => term.canonical));
+    const unexpectedMatches = TECHNICAL_TERM_CATALOG
+      .flatMap((candidate) => matchesForEntry(combinedText, candidate, "sourceText"))
+      .sort((a, b) => b.sourceText.length - a.sourceText.length || a.start - b.start)
+      .filter((match, index, all) => all.slice(0, index).every((selected) => !overlaps(match, selected)));
+    for (const match of unexpectedMatches) {
+      if (!activeCanonicals.has(match.entry.canonical)) {
+        violations.push({
+          code: "invented-canonical-term",
+          canonical: match.entry.canonical,
+          message: `输出凭空加入了源材料未命中的术语 ${match.entry.canonical}。`,
+        });
+      }
+    }
     return Object.freeze(dedupeViolations(violations));
   };
 

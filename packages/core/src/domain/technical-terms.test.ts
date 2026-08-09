@@ -59,4 +59,10 @@ describe("technical term restoration", () => {
       nested: { hook: "Context Engineering 与 Prompt Engineering" },
     });
   });
+
+  it("keeps 图文 image wording Chinese when Graph protection is active", () => {
+    expect(restoreProtectedTechnicalTermsInContent("图文说明和图的基本词汇", "Graph is useful.")).toBe(
+      "图文说明和 Graph 的基本词汇",
+    );
+  });
 });

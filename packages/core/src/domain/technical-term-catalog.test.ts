@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   TECHNICAL_TERM_CATALOG,
   TECHNICAL_TERM_CATALOG_FINGERPRINT,
+  buildTechnicalTermPromptRule,
   createTechnicalTermGuard,
   defineTechnicalTermCatalog,
 } from "./technical-term-catalog.js";
@@ -35,13 +36,27 @@ describe("technical term catalog", () => {
     ).toBe("添加一张截图和流程图。");
   });
 
-  it("allows natural graph vocabulary only in visual prompts, while strict artifacts still reject invented Graph", () => {
+  it("does not activate a bare Graph without technical context", () => {
+    const guard = createTechnicalTermGuard({ sourceText: "Graph" });
+
+    expect(guard.profile.entries.map((term) => term.canonical)).not.toContain("Graph");
+    expect(guard.finalize("图", { placeholders: [] }).violations).toEqual([]);
+  });
+
+  it("recognizes mixed Chinese technical context without activating a visual Graph", () => {
+    const technical = createTechnicalTermGuard({ sourceText: "Graph 能让 agent 看见依赖关系。" });
+    const visual = createTechnicalTermGuard({ sourceText: "Graph 是一张图片。" });
+
+    expect(technical.profile.entries.map((term) => term.canonical)).toContain("Graph");
+    expect(visual.profile.entries.map((term) => term.canonical)).not.toContain("Graph");
+  });
+
+  it("allows natural graph vocabulary without activating or inventing contextual Graph", () => {
     const sourceText = "Graph Engineering helps teams explain the Knowledge Graph workflow.";
     const strictGuard = createTechnicalTermGuard({ sourceText });
     const strictPrepared = strictGuard.prepare("A graph diagram image explains the workflow.");
-    expect(strictGuard.finalize(strictPrepared.value, strictPrepared.restoration).violations).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: "invented-canonical-term", canonical: "Graph" })]),
-    );
+    expect(strictGuard.finalize(strictPrepared.value, strictPrepared.restoration).violations)
+      .not.toContainEqual(expect.objectContaining({ code: "invented-canonical-term", canonical: "Graph" }));
 
     const visualGuard = createTechnicalTermGuard({ sourceText, artifact: "visual-prompt" });
     const visualPrepared = visualGuard.prepare("Graph Engineering uses a graph diagram image to explain the Knowledge Graph workflow.");
@@ -254,5 +269,108 @@ describe("technical term catalog", () => {
     expect(visual).not.toBe(content);
     expect(changedSource).not.toBe(content);
     expect(extendedCatalog.fingerprint).not.toBe(baseCatalog.fingerprint);
+  });
+
+  it("scopes contextual Graph recovery to the source translation unit", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Graph is a technical concept.\nThis graph diagram shows latency.",
+    });
+    const technicalUnit = guard.scope({ sourceText: "Graph is a technical concept.", unitId: "cue-1" });
+    const visualUnit = guard.scope({ sourceText: "This graph diagram shows latency.", unitId: "cue-2" });
+
+    expect(technicalUnit.profile.entries.map((term) => term.canonical)).toContain("Graph");
+    expect(visualUnit.profile.entries.map((term) => term.canonical)).not.toContain("Graph");
+    expect(technicalUnit.finalize("图是一个技术概念。", { placeholders: [] }).value)
+      .toBe("Graph 是一个技术概念。");
+    expect(visualUnit.finalize("这张图表显示延迟。", { placeholders: [] }).value)
+      .toBe("这张图表显示延迟。");
+  });
+
+  it("requires every source occurrence while allowing independent unit validation", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Graph Engineering appears here.\nGraph Engineering appears again.",
+    });
+
+    expect(guard.profile.occurrences.filter((occurrence) => occurrence.canonical === "Graph Engineering"))
+      .toHaveLength(2);
+    const firstUnit = guard.scope({
+      sourceText: "Graph Engineering appears here.",
+      unitId: "unit-1",
+    });
+    const secondUnit = guard.scope({
+      sourceText: "Graph Engineering appears again.",
+      unitId: "unit-2",
+    });
+
+    expect(firstUnit.validate("Graph Engineering")).toEqual([]);
+    expect(secondUnit.validate("普通文本")).toContainEqual(expect.objectContaining({
+      code: "missing-canonical-term",
+      canonical: "Graph Engineering",
+      message: expect.stringMatching(/1/),
+    }));
+  });
+
+  it("stores discovery audit metadata and changes SHA-256 profile fingerprints", () => {
+    const accepted = [{ sourceText: "Latent Workspace Routing", confidence: "high" as const, category: "ai-agent" as const }];
+    const base = createTechnicalTermGuard({
+      sourceText: "Latent Workspace Routing",
+      discovery: {
+        promptVersion: "discovery-v1",
+        acceptedCandidates: accepted,
+        reviewCandidates: [],
+        warnings: [],
+      },
+    }).profile;
+    const changedVersion = createTechnicalTermGuard({
+      sourceText: "Latent Workspace Routing",
+      discovery: {
+        promptVersion: "discovery-v2",
+        acceptedCandidates: accepted,
+        reviewCandidates: [],
+        warnings: [],
+      },
+    }).profile;
+    const changedCandidate = createTechnicalTermGuard({
+      sourceText: "Latent Workspace Routing",
+      discovery: {
+        promptVersion: "discovery-v1",
+        acceptedCandidates: [{ ...accepted[0]!, confidence: "medium" }],
+        reviewCandidates: [],
+        warnings: [],
+      },
+    }).profile;
+
+    expect(base.profileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
+    expect(base.discovery).toEqual(expect.objectContaining({
+      promptVersion: "discovery-v1",
+      acceptedCandidates: accepted,
+      reviewCandidates: [],
+      warnings: [],
+    }));
+    expect(JSON.parse(JSON.stringify(base))).toEqual(base);
+    expect(changedVersion.profileFingerprint).not.toBe(base.profileFingerprint);
+    expect(changedCandidate.profileFingerprint).not.toBe(base.profileFingerprint);
+    expect(TECHNICAL_TERM_CATALOG_FINGERPRINT).toMatch(/^sha256-[0-9a-f]{64}$/u);
+  });
+
+  it("only injects active terms into the technical-term prompt rule", () => {
+    const inactiveRule = buildTechnicalTermPromptRule("zh");
+    const activeGuard = createTechnicalTermGuard({ sourceText: "Graph Engineering" });
+    const activeRule = buildTechnicalTermPromptRule("zh", activeGuard.profile.entries);
+
+    expect(inactiveRule).not.toContain("Graph Engineering");
+    expect(inactiveRule).not.toContain("Knowledge Graph");
+    expect(activeRule).toContain("Graph Engineering");
+    expect(activeRule).not.toContain("Knowledge Graph");
+  });
+
+  it("rejects a preserve entry that also declares a Chinese translation", () => {
+    expect(() => defineTechnicalTermCatalog([{
+      canonical: "Conflicting Preserve Term",
+      aliases: [],
+      categories: ["domain"],
+      policy: "preserve",
+      preferredZh: "冲突译法",
+    }])).toThrow(/conflicting-term-policy|preserve.*preferredZh/i);
   });
 });

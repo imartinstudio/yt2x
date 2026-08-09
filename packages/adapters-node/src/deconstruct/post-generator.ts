@@ -13,11 +13,16 @@ import {
   type DiscoveredTechnicalTerm,
   type GeneratePostsInput,
   type LlmPort,
+  type TechnicalTermDiscoveryAudit,
   type TechnicalTermGuard,
   type TechnicalTermRestoration,
 } from "@yt2x/core";
 import { ClipPostListSchema } from "@yt2x/core";
-import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
+import {
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
 
 export type GeneratePostsRunnerInput = {
   llm: LlmPort;
@@ -38,6 +43,7 @@ export type ClipPostTechnicalTerms = {
   restoration: TechnicalTermRestoration;
   articleTitle: string;
   discoveredTerms: readonly DiscoveredTechnicalTerm[];
+  discoveryAudit?: TechnicalTermDiscoveryAudit;
   sourceTextByClipId?: Readonly<Record<string, string>>;
 };
 
@@ -139,17 +145,20 @@ export const generateClipsPosts = async (
     sourceText,
     sourceTitle: articleTitle,
     discoveredTerms: discovery.accepted,
+    discovery: technicalTermDiscoveryAuditFor(discovery),
   });
   const finalGuard = createTechnicalTermGuard({
     sourceText: `${sourceText}\n${CLIP_POST_CALL_TO_ACTION}`,
     sourceTitle: articleTitle,
     discoveredTerms: discovery.accepted,
+    discovery: technicalTermDiscoveryAuditFor(discovery),
   });
   const finalTechnicalTerms: ClipPostTechnicalTerms = {
     guard: finalGuard,
     restoration: { placeholders: [] },
     articleTitle,
     discoveredTerms: discovery.accepted,
+    discoveryAudit: technicalTermDiscoveryAuditFor(discovery),
     sourceTextByClipId,
   };
   const prepared = guard.prepare({
@@ -296,16 +305,17 @@ export const writeSelectedPostFiles = async (
     sourceText: selectedSourceText,
     sourceTitle: technicalTerms.articleTitle,
     discoveredTerms: technicalTerms.discoveredTerms,
+    ...(technicalTerms.discoveryAudit === undefined ? {} : { discovery: technicalTerms.discoveryAudit }),
   });
   const selectedSourceCanonicals = new Set(finalGuard.profile.occurrences.map((item) => item.canonical));
+  const rejectingCanonicals = new Set(finalGuard.profile.entries
+    .filter((term) => term.forbiddenTranslationHandling === "reject")
+    .map((term) => term.canonical));
   const sourceTranslationViolations = finalGuard.validate(assembledTexts).filter((violation) =>
     violation.code === "forbidden-translation"
-      && (
-        violation.canonical === "Graph"
-        || violation.canonical === "Knowledge Graph"
-        || violation.canonical === "Agent Graph"
-      )
+      && violation.canonical !== undefined
       && selectedSourceCanonicals.has(violation.canonical)
+      && rejectingCanonicals.has(violation.canonical),
   );
   if (hasHardTechnicalTermViolations(sourceTranslationViolations)) {
     throw new Error(`Technical term validation failed: ${sourceTranslationViolations.map((item) => item.message).join("; ")}`);

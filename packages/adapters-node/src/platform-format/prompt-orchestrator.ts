@@ -8,7 +8,11 @@ import {
   type PreparedTechnicalTermValue,
   type TechnicalTermGuard,
 } from "@yt2x/core";
-import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
+import {
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
 import type { PlatformFormatInput, PlatformFormatResult } from "./types.js";
 
 export type PlatformVisualPromptData = {
@@ -125,6 +129,7 @@ export const createPlatformTechnicalTermContext = async (input: {
     sourceText: input.body,
     sourceTitle: input.title,
     discoveredTerms: discovery.accepted,
+    discovery: technicalTermDiscoveryAuditFor(discovery),
     artifact: "visual-prompt",
   });
   return { guard, prepared: guard.prepare({ title: input.title, body: input.body }) };

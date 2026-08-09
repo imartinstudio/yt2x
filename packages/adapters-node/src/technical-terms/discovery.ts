@@ -1,7 +1,12 @@
-import { createHash } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
 import {
   buildTechnicalTermDiscoveryPrompt,
+  createTechnicalTermDiscoveryCacheRecord,
   parseTechnicalTermDiscoveryResponse,
+  parseTechnicalTermDiscoveryCacheRecord,
+  recognizeDeterministicTechnicalTerms,
+  sha256Hex,
   sameTechnicalTermOuterShape,
   technicalTermDiscoveryRepairPrompt,
   TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
@@ -10,6 +15,8 @@ import {
   type DiscoverTechnicalTermsInput,
   type FinalizedTechnicalTermValue,
   type RepairTechnicalTermViolationsInput,
+  type TechnicalTermDiscoveryCache,
+  type TechnicalTermDiscoveryAudit,
   type TechnicalTermDiscoveryResult,
 } from "@yt2x/core";
 import type { TechnicalTermEntry } from "@yt2x/core";
@@ -23,25 +30,79 @@ export type {
 const completedDiscoveryCache = new Map<string, Promise<TechnicalTermDiscoveryResult>>();
 const resolvedDiscoveryCache = new Map<string, TechnicalTermDiscoveryResult>();
 
-export const fingerprintTechnicalTermDiscoverySource = (value: string): string =>
-  `sha256-${createHash("sha256").update(value, "utf8").digest("hex")}`;
+const confidenceRank = (confidence: TechnicalTermDiscoveryResult["accepted"][number]["confidence"]): number =>
+  confidence === "high" ? 3 : confidence === "medium" ? 2 : 1;
 
-const discoveryCacheKey = (input: {
+export const fingerprintTechnicalTermDiscoverySource = (value: string): string =>
+  `sha256-${sha256Hex(value)}`;
+
+/**
+ * Keep adapter discovery output and the core profile audit on one explicit contract.
+ * The prompt version is deliberately supplied here instead of inferred by callers,
+ * so every generated artifact records the same discovery policy provenance.
+ */
+export const technicalTermDiscoveryAuditFor = (
+  result: TechnicalTermDiscoveryResult,
+): TechnicalTermDiscoveryAudit => Object.freeze({
+  promptVersion: TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
+  acceptedCandidates: Object.freeze([...result.accepted]),
+  reviewCandidates: Object.freeze([...result.reviewCandidates]),
+  warnings: Object.freeze([...result.warnings]),
+});
+
+export type TechnicalTermDiscoveryCacheKeyInput = {
   model: string;
   sourceText: string;
   sourceTitle?: string;
   catalogFingerprint?: string;
-}): string => {
-  const sourceForDiscovery = input.sourceTitle?.trim() === ""
-    || input.sourceTitle === undefined
+};
+
+export const technicalTermDiscoverySourceIdentityFor = (input: {
+  sourceText: string;
+  sourceTitle?: string;
+}): string => fingerprintTechnicalTermDiscoverySource(
+  input.sourceTitle?.trim() === "" || input.sourceTitle === undefined
     ? input.sourceText
-    : `${input.sourceTitle}\n\n${input.sourceText}`;
+    : `${input.sourceTitle}\n\n${input.sourceText}`,
+);
+
+export const technicalTermDiscoveryCacheKeyFor = (input: TechnicalTermDiscoveryCacheKeyInput): string => {
   return [
-    fingerprintTechnicalTermDiscoverySource(sourceForDiscovery),
+    technicalTermDiscoverySourceIdentityFor(input),
     input.model,
     TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
     input.catalogFingerprint ?? TECHNICAL_TERM_CATALOG_FINGERPRINT,
   ].join("\u0000");
+};
+
+export const technicalTermDiscoveryCacheFilePath = (cacheDir: string, cacheKey: string): string =>
+  path.join(cacheDir, `${sha256Hex(cacheKey)}.json`);
+
+export const createFileTechnicalTermDiscoveryCacheStore = (
+  cacheDir: string,
+): TechnicalTermDiscoveryCache => ({
+  async read(cacheKey) {
+    try {
+      return JSON.parse(await readFile(technicalTermDiscoveryCacheFilePath(cacheDir, cacheKey), "utf8")) as unknown;
+    } catch {
+      return undefined;
+    }
+  },
+  async write(cacheKey, record) {
+    if (record.cacheKey !== cacheKey || parseTechnicalTermDiscoveryCacheRecord(record) === undefined) {
+      throw new Error("Invalid technical-term discovery cache record");
+    }
+    await mkdir(cacheDir, { recursive: true });
+    const filePath = technicalTermDiscoveryCacheFilePath(cacheDir, cacheKey);
+    const temporaryPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+    await writeFile(temporaryPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    await rename(temporaryPath, filePath);
+  },
+});
+
+export const clearTechnicalTermDiscoveryCaches = (): void => {
+  completedDiscoveryCache.clear();
+  resolvedDiscoveryCache.clear();
 };
 
 /**
@@ -55,7 +116,7 @@ export const getCachedTechnicalTermDiscovery = (input: {
   sourceTitle?: string;
   catalogFingerprint?: string;
 }): TechnicalTermDiscoveryResult | undefined => {
-  const result = resolvedDiscoveryCache.get(discoveryCacheKey(input));
+  const result = resolvedDiscoveryCache.get(technicalTermDiscoveryCacheKeyFor(input));
   return result?.warnings.some((warning) => warning.code === "technical-term-discovery-unavailable")
     ? undefined
     : result;
@@ -71,11 +132,55 @@ const catalogMatches = (source: string, catalog: readonly TechnicalTermEntry[]):
 
 const hasDiscoverySignal = (source: string): boolean => /[A-Za-z0-9`{}[\]();=<>_$\\/]/u.test(source);
 
-const unavailable = (message: string): TechnicalTermDiscoveryResult => ({
-  accepted: [],
-  reviewCandidates: [],
-  warnings: [{ code: "technical-term-discovery-unavailable", message }],
+const unavailable = (
+  message: string,
+  deterministic: TechnicalTermDiscoveryResult,
+): TechnicalTermDiscoveryResult => ({
+  accepted: deterministic.accepted,
+  reviewCandidates: deterministic.reviewCandidates,
+  warnings: [
+    ...deterministic.warnings,
+    { code: "technical-term-discovery-unavailable", message },
+  ],
 });
+
+const mergeDiscoveryResults = (
+  deterministic: TechnicalTermDiscoveryResult,
+  provider: TechnicalTermDiscoveryResult,
+): TechnicalTermDiscoveryResult => {
+  const accepted = new Map<string, TechnicalTermDiscoveryResult["accepted"][number]>();
+  const review = new Map<string, TechnicalTermDiscoveryResult["reviewCandidates"][number]>();
+  const add = (candidate: TechnicalTermDiscoveryResult["accepted"][number]): void => {
+    const key = candidate.sourceText.toLocaleLowerCase("en-US");
+    const existing = accepted.get(key) ?? review.get(key);
+    if (existing === undefined || confidenceRank(candidate.confidence) > confidenceRank(existing.confidence)) {
+      accepted.set(key, candidate);
+      review.delete(key);
+    }
+  };
+  const addReview = (candidate: TechnicalTermDiscoveryResult["reviewCandidates"][number]): void => {
+    const key = candidate.sourceText.toLocaleLowerCase("en-US");
+    if (accepted.has(key)) return;
+    const existing = review.get(key);
+    if (existing === undefined || confidenceRank(candidate.confidence) > confidenceRank(existing.confidence)) {
+      review.set(key, candidate);
+    }
+  };
+  for (const candidate of [...deterministic.accepted, ...provider.accepted]) add(candidate);
+  for (const candidate of [...deterministic.reviewCandidates, ...provider.reviewCandidates]) addReview(candidate);
+  const warningKeys = new Set<string>();
+  const warnings = [...deterministic.warnings, ...provider.warnings].filter((item) => {
+    const key = `${item.code}\u0000${item.sourceText ?? ""}\u0000${item.message}`;
+    if (warningKeys.has(key)) return false;
+    warningKeys.add(key);
+    return true;
+  });
+  return {
+    accepted: [...accepted.values()],
+    reviewCandidates: [...review.values()],
+    warnings,
+  };
+};
 
 const repairPromptRule = (guard: RepairTechnicalTermViolationsInput<unknown>["guard"]): string => {
   const activeTerms = guard.profile.entries.map((term) => term.canonical);
@@ -151,6 +256,52 @@ const hasOnlyTechnicalTermChanges = (
   return visit(current, repaired);
 };
 
+const isReusableDiscoveryResult = (result: TechnicalTermDiscoveryResult): boolean =>
+  !result.warnings.some((item) => item.code === "technical-term-discovery-unavailable");
+
+const readPersistentResult = async (input: {
+  cache: TechnicalTermDiscoveryCache;
+  cacheKey: string;
+  sourceIdentity: string;
+  model: string;
+  catalogFingerprint: string;
+}): Promise<TechnicalTermDiscoveryResult | undefined> => {
+  try {
+    const raw = await input.cache.read(input.cacheKey);
+    const record = parseTechnicalTermDiscoveryCacheRecord(raw);
+    if (record === undefined
+      || record.cacheKey !== input.cacheKey
+      || record.sourceIdentity !== input.sourceIdentity
+      || record.model !== input.model
+      || record.catalogFingerprint !== input.catalogFingerprint
+      || !isReusableDiscoveryResult(record.result)) {
+      return undefined;
+    }
+    return record.result;
+  } catch {
+    return undefined;
+  }
+};
+
+const writePersistentResult = async (input: {
+  cache: TechnicalTermDiscoveryCache;
+  cacheKey: string;
+  sourceIdentity: string;
+  model: string;
+  catalogFingerprint: string;
+  result: TechnicalTermDiscoveryResult;
+}): Promise<void> => {
+  if (!isReusableDiscoveryResult(input.result)) return;
+  const record = createTechnicalTermDiscoveryCacheRecord({
+    cacheKey: input.cacheKey,
+    sourceIdentity: input.sourceIdentity,
+    model: input.model,
+    catalogFingerprint: input.catalogFingerprint,
+    result: input.result,
+  });
+  await input.cache.write(input.cacheKey, record);
+};
+
 export const discoverTechnicalTerms = (
   input: DiscoverTechnicalTermsInput,
 ): Promise<TechnicalTermDiscoveryResult> => {
@@ -158,44 +309,76 @@ export const discoverTechnicalTerms = (
     || input.sourceTitle === undefined
     ? input.sourceText
     : `${input.sourceTitle}\n\n${input.sourceText}`;
-  const key = discoveryCacheKey(input);
+  const catalogFingerprint = input.catalogFingerprint ?? TECHNICAL_TERM_CATALOG_FINGERPRINT;
+  const key = technicalTermDiscoveryCacheKeyFor(input);
   const existing = completedDiscoveryCache.get(key);
   if (existing !== undefined) return existing;
 
-  const catalogHit = catalogMatches(sourceForDiscovery, TECHNICAL_TERM_CATALOG);
-  if (!hasDiscoverySignal(sourceForDiscovery) && !catalogHit) {
-    const skipped = Promise.resolve({ accepted: [], reviewCandidates: [], warnings: [] });
-    completedDiscoveryCache.set(key, skipped);
-    return skipped;
-  }
-
-  const pending = input.llm.chat({
-    model: input.model,
-    messages: [{
-      role: "system",
-      content: "你是严格的源级专业术语发现器。必须遵守 exact source span 约束，并只返回 JSON。",
-    }, {
-      role: "user",
-      content: buildTechnicalTermDiscoveryPrompt(input.sourceText, input.sourceTitle),
-    }],
-    temperature: 0.1,
-    jsonMode: true,
-    ...(input.signal === undefined ? {} : { signal: input.signal }),
-  }).then((response) => {
-    const parsed = parseTechnicalTermDiscoveryResponse({
-      sourceText: sourceForDiscovery,
-      response: response.content,
-    });
-    if (parsed.warnings.some((item) => item.code === "malformed-response")) {
-      completedDiscoveryCache.delete(key);
-      return unavailable("专业术语发现响应无法解析，已跳过未知术语发现。");
+  const pending = (async (): Promise<TechnicalTermDiscoveryResult> => {
+    const sourceIdentity = technicalTermDiscoverySourceIdentityFor(input);
+    const deterministic = recognizeDeterministicTechnicalTerms(sourceForDiscovery);
+    if (input.cache !== undefined) {
+      const cached = await readPersistentResult({
+        cache: input.cache,
+        cacheKey: key,
+        sourceIdentity,
+        model: input.model,
+        catalogFingerprint,
+      });
+      if (cached !== undefined) {
+        resolvedDiscoveryCache.set(key, cached);
+        return cached;
+      }
     }
-    resolvedDiscoveryCache.set(key, parsed);
-    return parsed;
-  }).catch(() => {
-    completedDiscoveryCache.delete(key);
-    return unavailable("专业术语发现服务不可用，已继续使用中央术语目录。");
-  });
+
+    const catalogHit = catalogMatches(sourceForDiscovery, TECHNICAL_TERM_CATALOG);
+    if (!hasDiscoverySignal(sourceForDiscovery) && !catalogHit
+      && deterministic.accepted.length === 0 && deterministic.reviewCandidates.length === 0) {
+      resolvedDiscoveryCache.set(key, deterministic);
+      return deterministic;
+    }
+
+    try {
+      const response = await input.llm.chat({
+        model: input.model,
+        messages: [{
+          role: "system",
+          content: "你是严格的源级专业术语发现器。必须遵守 exact source span 约束，并只返回 JSON。",
+        }, {
+          role: "user",
+          content: buildTechnicalTermDiscoveryPrompt(input.sourceText, input.sourceTitle),
+        }],
+        temperature: 0.1,
+        jsonMode: true,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
+      const parsed = parseTechnicalTermDiscoveryResponse({
+        sourceText: sourceForDiscovery,
+        response: response.content,
+      });
+      if (parsed.warnings.some((item) => item.code === "malformed-response")) {
+        const result = unavailable("专业术语发现响应无法解析，已跳过未知术语发现。", deterministic);
+        completedDiscoveryCache.delete(key);
+        return result;
+      }
+      const result = mergeDiscoveryResults(deterministic, parsed);
+      resolvedDiscoveryCache.set(key, result);
+      if (input.cache !== undefined) {
+        await writePersistentResult({
+          cache: input.cache,
+          cacheKey: key,
+          sourceIdentity,
+          model: input.model,
+          catalogFingerprint,
+          result,
+        }).catch(() => undefined);
+      }
+      return result;
+    } catch {
+      completedDiscoveryCache.delete(key);
+      return unavailable("专业术语发现服务不可用，已继续使用中央术语目录。", deterministic);
+    }
+  })();
   completedDiscoveryCache.set(key, pending);
   return pending;
 };

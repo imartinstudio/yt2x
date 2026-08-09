@@ -66,7 +66,7 @@ describe("generateXArticleContent", () => {
     expect(result.content).toContain("Latent Workspace Routing");
     expect(result.content).toContain("图片、图表和图文");
     expect(result.content).not.toContain("提示工程、上下文工程和图工程");
-    expect(result.technicalTermProfileFingerprint).toMatch(/^fnv1a-/);
+    expect(result.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
     expect(llm.chat).toHaveBeenCalledTimes(3);
   });
 

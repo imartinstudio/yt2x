@@ -11,7 +11,11 @@ import {
   type LlmPort,
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
-import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
+import {
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
 
 export type GenerateXThreadInput = {
   llm: LlmPort;
@@ -162,7 +166,12 @@ export const generateXThreadContent = async (
     sourceTitle,
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
-  const guard = createTechnicalTermGuard({ sourceText, sourceTitle, discoveredTerms: discovery.accepted });
+  const guard = createTechnicalTermGuard({
+    sourceText,
+    sourceTitle,
+    discoveredTerms: discovery.accepted,
+    discovery: technicalTermDiscoveryAuditFor(discovery),
+  });
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
     structuredNotesMd: input.artifacts.structuredNotesMd,

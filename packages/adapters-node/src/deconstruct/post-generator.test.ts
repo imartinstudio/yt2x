@@ -7,6 +7,14 @@ import { writeDeconstructOutput } from "./file-store.js";
 import { generateClipsPosts, writeSelectedPostFiles } from "./post-generator.js";
 
 describe("generateClipsPosts", () => {
+  it("derives final term filtering from the active profile instead of a Graph allowlist", async () => {
+    const implementation = await readFile(new URL("./post-generator.ts", import.meta.url), "utf8");
+
+    expect(implementation).not.toMatch(/violation\.canonical\s*===\s*["']Graph["']/u);
+    expect(implementation).not.toMatch(/violation\.canonical\s*===\s*["']Knowledge Graph["']/u);
+    expect(implementation).not.toMatch(/violation\.canonical\s*===\s*["']Agent Graph["']/u);
+  });
+
   it("writes clip posts with quote, loops leverage, video suggestion, and CTA", async () => {
     const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-posts-"));
     try {

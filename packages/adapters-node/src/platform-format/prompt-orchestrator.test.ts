@@ -417,7 +417,7 @@ describe("orchestratePlatformPrompts technical terms", () => {
     expect(persistedText).toContain("流程图");
     expect(persistedText).toContain("配图");
     expect(persistedText).not.toContain("图工程连接知识图谱");
-    expect(prompts.technicalTermProfileFingerprint).toMatch(/^fnv1a-/u);
+    expect(prompts.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
 
     const preview = await readFile(path.join(result.outputDir, "orchestrate.html"), "utf8");
     expect(preview).toContain("Graph Engineering");

@@ -1,16 +1,25 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   ChatRequest,
   ChatResponse,
   LlmPort,
+  TechnicalTermDiscoveryAudit,
   TechnicalTermGuard,
 } from "@yt2x/core";
-import { createTechnicalTermGuard } from "@yt2x/core";
+import { createTechnicalTermGuard, TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION } from "@yt2x/core";
 import {
   discoverTechnicalTerms,
+  clearTechnicalTermDiscoveryCaches,
+  createFileTechnicalTermDiscoveryCacheStore,
   fingerprintTechnicalTermDiscoverySource,
   getCachedTechnicalTermDiscovery,
   repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+  technicalTermDiscoveryCacheFilePath,
+  technicalTermDiscoveryCacheKeyFor,
 } from "./discovery.js";
 
 const response = (content: string): ChatResponse => ({
@@ -31,6 +40,24 @@ const fakeLlm = (content: string): { llm: LlmPort; requests: ChatRequest[] } => 
 };
 
 describe("source-level technical term discovery", () => {
+  it("projects discovery results into a serializable profile audit", () => {
+    const result = {
+      accepted: [{ sourceText: "Graph Engineering", confidence: "high" as const, category: "ai-agent" as const }],
+      reviewCandidates: [{ sourceText: "Latent Workspace Routing", confidence: "medium" as const, category: "ai-agent" as const }],
+      warnings: [{ code: "provider-warning", message: "review the candidate" }],
+    };
+
+    const audit: TechnicalTermDiscoveryAudit = technicalTermDiscoveryAuditFor(result);
+
+    expect(audit).toEqual({
+      promptVersion: TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
+      acceptedCandidates: result.accepted,
+      reviewCandidates: result.reviewCandidates,
+      warnings: result.warnings,
+    });
+    expect(JSON.parse(JSON.stringify(audit))).toEqual(audit);
+  });
+
   it("caches in-flight and completed discovery by source and model", async () => {
     const { llm, requests } = fakeLlm(JSON.stringify([
       { sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" },
@@ -84,7 +111,9 @@ describe("source-level technical term discovery", () => {
       sourceText: "A source mentioning an unknown API protocol.",
     });
 
-    expect(result.accepted).toEqual([]);
+    expect(result.accepted).toEqual([
+      { sourceText: "API", confidence: "high", category: "ai-coding" },
+    ]);
     expect(result.warnings).toEqual([
       expect.objectContaining({ code: "technical-term-discovery-unavailable" }),
     ]);
@@ -172,6 +201,75 @@ describe("source-level technical term discovery", () => {
     expect(fingerprintTechnicalTermDiscoverySource("hello")).toBe(
       "sha256-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
     );
+  });
+
+  it("reads a persisted cache record after the in-memory cache is cleared", async () => {
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-term-cache-"));
+    try {
+      const cache = createFileTechnicalTermDiscoveryCacheStore(cacheDir);
+      const firstLlm = fakeLlm(JSON.stringify([
+        { sourceText: "Cold Read Protocol", confidence: "high", category: "ai" },
+      ])).llm;
+      const input = {
+        llm: firstLlm,
+        model: "persistent-model",
+        sourceText: "A source about Cold Read Protocol.",
+        cache,
+      };
+      const first = await discoverTechnicalTerms(input);
+      clearTechnicalTermDiscoveryCaches();
+
+      const secondLlm: LlmPort = {
+        chat: vi.fn(async () => { throw new Error("cold read must not call provider"); }),
+      };
+      const second = await discoverTechnicalTerms({ ...input, llm: secondLlm });
+
+      expect(second).toEqual(first);
+      expect(secondLlm.chat).not.toHaveBeenCalled();
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+      clearTechnicalTermDiscoveryCaches();
+    }
+  });
+
+  it("does not persist provider failures and invalidates incompatible records", async () => {
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-term-cache-"));
+    try {
+      const cache = createFileTechnicalTermDiscoveryCacheStore(cacheDir);
+      const sourceText = "A source about Cache Schema Protocol.";
+      const cacheKey = technicalTermDiscoveryCacheKeyFor({ model: "schema-model", sourceText });
+      const cachePath = technicalTermDiscoveryCacheFilePath(cacheDir, cacheKey);
+      await writeFile(cachePath, JSON.stringify({ schemaVersion: 999 }), "utf8");
+
+      let attempts = 0;
+      const llm: LlmPort = {
+        chat: vi.fn(async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("temporary provider failure");
+          return response(JSON.stringify([
+            { sourceText: "Cache Schema Protocol", confidence: "high", category: "ai" },
+          ]));
+        }),
+      };
+      const input = { llm, model: "schema-model", sourceText, cache };
+
+      const first = await discoverTechnicalTerms(input);
+      expect(first.warnings).toEqual([
+        expect.objectContaining({ code: "technical-term-discovery-unavailable" }),
+      ]);
+      expect(await readFile(cachePath, "utf8")).toContain("schemaVersion");
+
+      clearTechnicalTermDiscoveryCaches();
+      const second = await discoverTechnicalTerms(input);
+      expect(second.accepted).toEqual([
+        { sourceText: "Cache Schema Protocol", confidence: "high", category: "ai" },
+      ]);
+      expect(llm.chat).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(await readFile(cachePath, "utf8"))).toMatchObject({ schemaVersion: 1 });
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+      clearTechnicalTermDiscoveryCaches();
+    }
   });
 });
 

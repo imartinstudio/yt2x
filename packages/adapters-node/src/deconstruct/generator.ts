@@ -15,7 +15,11 @@ import {
   estimateTokenCount,
   checkTokenBudget,
 } from "@yt2x/core";
-import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
+import {
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
 
 export type RunDeconstructInput = {
   llm: LlmPort;
@@ -187,6 +191,7 @@ export const runDeconstruct = async (
     sourceText,
     sourceTitle,
     discoveredTerms: discovery.accepted,
+    discovery: technicalTermDiscoveryAuditFor(discovery),
   });
   const prepared = guard.prepare({
     articleMd: artifacts.articleMd,

@@ -121,7 +121,7 @@ manifest、烧录视频或本地转写临时文件。双语模式只读取已经
   "platform": "<platform>",
   "title": "<source title>",
   "model": "<model>",
-  "technicalTermProfileFingerprint": "fnv1a-<fingerprint>",
+  "technicalTermProfileFingerprint": "sha256-<64-hex-fingerprint>",
   "coverPrompts": [],
   "illustrationPrompts": []
 }
@@ -275,7 +275,7 @@ scene_manifest.json → available_visuals → LLM visual_plan → 图片渲染 �
 
 `dub-placement.json` 的 `version` 现为 **3**：新增 `runId`（本次协商执行的唯一标识，`crypto.randomUUID()`）与 `generatedAt`（生成时刻，ISO 8601 字符串）——这份报告此前只写不读，也没有任何机制表明它属于哪一次运行；被流程外的手工命令覆写成残缺内容时，只能靠比对文件系统修改时间去猜测，猜错就会把工具问题误判成协商逻辑缺陷（issue #110 的真实事故）。`readDubPlacementReport`（`packages/adapters-node/src/dub/file-store.ts`）新增，用 zod 校验整体形状与 `version` 字面量，口径与 `readDubTimingReport` 一致：残缺或版本不匹配直接拒绝、报错信息定位到具体字段，不返回裸 JSON。目前唯一的读取方是 `yt2x dub-replay` 的协商核对——比对结果会带上盘上报告的 `runId`/`generatedAt`，无论核对通过还是不通过。它同样是中间产物，重跑 `yt2x dub` 即可重新生成，不提供旧版本兼容读取。写入逻辑本身未变——仍由协商执行阶段一次性写盘；本次改动只新增来源标记与读回校验，不加文件锁或只读权限，因为覆写来自流程外操作，用权限对抗它只会给正常调试添堵。
 
-`dub-script.json` 的 `version` 为 **2**：切到本地转录通道后 schema 实质变了——`sourceWords`（词级时间戳文件相对路径）取代了旧版 1 的 `sourceSubtitle`（中文字幕文件路径），`sourceText` 从中文原文变成英文原文，`cueIndices` 的语义从「字幕条 index」变成「话语单元 index」，并新增 `droppedCount`（翻译失败、未进入 `lines` 的话语单元数——门禁据此拦截静默丢句，见下）。`readDubScript`（`packages/adapters-node/src/dub/file-store.ts`）用 zod 校验 `version` 与整体形状，版本不匹配或字段缺失时直接拒绝、不返回裸 JSON；`yt2x dub` 全片模式下读到这类拒绝会当作缓存未命中，记一条 warning 后重新生成，不会静默复用旧链路产物。
+`dub-script.json` 的 `version` 为 **3**：切到本地转录通道后 schema 实质变了——`sourceWords`（词级时间戳文件相对路径）取代了旧版 1 的 `sourceSubtitle`（中文字幕文件路径），`sourceText` 从中文原文变成英文原文，`cueIndices` 的语义从「字幕条 index」变成「话语单元 index」，并新增 `droppedCount`（翻译失败、未进入 `lines` 的话语单元数——门禁据此拦截静默丢句，见下），以及随术语 profile 变化而失效的 `technicalTermProfileFingerprint`。`readDubScript`（`packages/adapters-node/src/dub/file-store.ts`）用 zod 校验 `version` 与整体形状，版本不匹配或字段缺失时直接拒绝、不返回裸 JSON；`yt2x dub` 全片模式下读到这类拒绝会当作缓存未命中，记一条 warning 后重新生成，不会静默复用旧链路产物。
 
 `dub-report.json`（门禁）中的 `info-loss` 是 advisory（不阻断）：把某行译文的字符数与该行**时长预算**（`dubTranslateCharBudget(targetDurationMs)`）相比，标注明显低于预算、疑似过度精简的行，供人工复核；不再拿英文 `sourceText` 与译文的码点数直接相除——跨语言下那个比例天生偏低，会对忠实翻译系统性误判。`droppedCount`（见上）在门禁里是独立的 hard 指标：只要 `dub-script.json` 里 `droppedCount > 0` 即阻断，因为被丢弃的话语单元在成片里只有 BGM、没有配音也没有字幕，必须显式暴露而不是被 `lineCount` 悄悄吸收。
 

@@ -40,21 +40,17 @@ describe("getPlatformArticleSystemPrompt", () => {
       expect(prompt).toMatch(/不新增事实/);
       expect(prompt).toMatch(/不能改变原文观点、结论和风险边界/);
       expect(prompt).toMatch(/统一主标题/);
-      expect(prompt).toMatch(/Codex、Claude/);
       expect(prompt).toMatch(/不能泛化成/);
+      expect(prompt).not.toMatch(/中央目录当前覆盖/);
     }
   });
 
-  it("requires technical terms and Graph concepts to remain in their source spelling", () => {
+  it("defers source-active technical terms to the runtime profile", () => {
     for (const target of ["xiaohongshu", "wechat", "bilibili"] as const) {
       const prompt = getPlatformArticleSystemPrompt(target);
-      expect(prompt).toMatch(/Prompt Engineering/);
-      expect(prompt).toMatch(/Context Engineering/);
-      expect(prompt).toMatch(/Graph Engineering/);
-      expect(prompt).toMatch(/Knowledge Graph/);
-      expect(prompt).toMatch(/Agent Graph/);
-      expect(prompt).toMatch(/Graph 的基本词汇/);
-      expect(prompt).toMatch(/不得只写/);
+      expect(prompt).toMatch(/运行时会追加本次源材料的 active terms/);
+      expect(prompt).not.toMatch(/Prompt Engineering/);
+      expect(prompt).not.toMatch(/Graph Engineering/);
     }
   });
 });

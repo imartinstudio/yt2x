@@ -5,20 +5,14 @@
  * 使用方式：每个 generator 的 system prompt 从 `${SHARED_BASE} + 特定规则` 组合。
  */
 
-import {
-  TECHNICAL_TERM_CATALOG,
-  TECHNICAL_TERM_GENERAL_RULE,
-} from "./technical-term-catalog.js";
+import { TECHNICAL_TERM_GENERAL_RULE } from "./technical-term-catalog.js";
 
 /** 所有文章、帖子、介绍和 JSON 字段共用的、由中央目录派生的术语保护规则。 */
 export const SHARED_TECHNICAL_TERMS = [
   "专业术语保护（适用于所有文章、帖子、标题、摘要、介绍、标签、时间线、视觉说明和 JSON 字段）：",
   `- ${TECHNICAL_TERM_GENERAL_RULE}`,
-  "- 目录中的 canonical 仅在源材料实际命中时激活；可以追加中文解释，但不能只用中文替换 preserve 术语。",
-  `- 中央目录当前覆盖：${TECHNICAL_TERM_CATALOG.map((entry) => entry.canonical).join("、")}。`,
-  `- ${TECHNICAL_TERM_CATALOG.filter((entry) => entry.policy === "contextual-preserve")
-    .map((entry) => `${entry.canonical} 在源材料中表示技术概念时不得只写中文「图」，例如「图的基本词汇」写成「${entry.canonical} 的基本词汇」，「构建你的第一个 ${entry.canonical}」也必须保留原文。`)
-    .join("\n- ")}`,
+  "- 目录中的 canonical 仅在源材料实际命中时激活；运行时会追加本次源材料的 active terms。",
+  "- 可以追加中文解释，但不能只用中文替换 preserve 术语；普通词不因与术语同形而改写。",
 ].join("\n");
 
 /** 语言：全文统一使用简体中文（硬性要求，不可违反） */

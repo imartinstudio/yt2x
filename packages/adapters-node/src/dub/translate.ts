@@ -21,7 +21,11 @@ import {
   type Utterance,
 } from "@yt2x/core";
 import { parseJsonWithRepairs, salvagePartialJsonArray } from "../llm/parse-json.js";
-import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
+import {
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
 
 /**
  * 长度受限翻译：英文话语单元 → 能在其时长内说完的中文。
@@ -97,6 +101,7 @@ const scopeDubTechnicalTermGuard = (
       confidence: "high" as const,
       category: "domain" as const,
     })),
+  discovery: guard.profile.discovery,
 });
 
 const parseResponse = (content: string): ParsedLine[] => {
@@ -167,6 +172,7 @@ export const translateUtterances = async (
   const technicalTermGuard = createTechnicalTermGuard({
     sourceText,
     discoveredTerms: discovery.accepted,
+    discovery: technicalTermDiscoveryAuditFor(discovery),
   });
   const promptRule = technicalTermGuard.prepare([]).promptRule;
   const preparedByUtterance = new Map<number, PreparedDubUtterance>();

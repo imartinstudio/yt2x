@@ -12,7 +12,11 @@ import {
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import { parseJsonWithRepairs, salvageLooseJsonTextField } from "../llm/parse-json.js";
-import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
+import {
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
 
 export type GenerateXShortInput = {
   llm: LlmPort;
@@ -108,7 +112,12 @@ export const generateXShortContent = async (
     sourceTitle,
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
-  const guard = createTechnicalTermGuard({ sourceText, sourceTitle, discoveredTerms: discovery.accepted });
+  const guard = createTechnicalTermGuard({
+    sourceText,
+    sourceTitle,
+    discoveredTerms: discovery.accepted,
+    discovery: technicalTermDiscoveryAuditFor(discovery),
+  });
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
     structuredNotesMd: input.artifacts.structuredNotesMd,

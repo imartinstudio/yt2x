@@ -10,7 +10,11 @@ import {
   type LlmPort,
   type TechnicalTermGuard,
 } from "@yt2x/core";
-import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
+import {
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
 import type { StructuredNotesArtifacts } from "./file-store.js";
 
 export type GenerateXArticleInput = {
@@ -253,11 +257,13 @@ export const generateXArticleContent = async (
     sourceText,
     sourceTitle,
     discoveredTerms: discovery.accepted,
+    discovery: technicalTermDiscoveryAuditFor(discovery),
   });
   const titleGuard = createTechnicalTermGuard({
     sourceText: sourceTitle,
     sourceTitle,
     discoveredTerms: discovery.accepted,
+    discovery: technicalTermDiscoveryAuditFor(discovery),
   });
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,

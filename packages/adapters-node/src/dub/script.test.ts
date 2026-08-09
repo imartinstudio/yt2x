@@ -68,7 +68,7 @@ describe("generateDubScript", () => {
       rewriteModel: "test-model",
       droppedCount: 0,
     });
-    expect(result.script.technicalTermProfileFingerprint).toMatch(/^fnv1a-/u);
+    expect(result.script.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
     expect(result.script.lines[0]).toEqual({
       index: 1,
       startMs: 0,

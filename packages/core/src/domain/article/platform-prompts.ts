@@ -44,11 +44,6 @@ export const extractProtectedTitleTerms = (sourceTitle: string | undefined): str
 export const getCanonicalTitleSeed = (input: PlatformArticlePromptInput): string | undefined =>
   firstString(input.metadata.title, input.metadata.fulltitle, input.metadata.original_title, firstMarkdownH1(input.articleMd));
 
-const protectedTitleExamples = TECHNICAL_TERM_CATALOG
-  .filter((entry) => entry.categories.includes("product") || entry.categories.includes("person"))
-  .map((entry) => entry.canonical)
-  .join("、");
-
 const buildSharedRules = (spec: PlatformArticleSpec): string => `通用约束：
 - 目标平台：${spec.displayName}。
 - 只基于输入的 article.md、metadata.json 和可选 timestamped-cues.md 适配，不新增事实、数据、案例、价格、链接或承诺。
@@ -57,7 +52,7 @@ const buildSharedRules = (spec: PlatformArticleSpec): string => `通用约束：
 - ${SHARED_TECHNICAL_TERMS}
 - 每个二级标题前加 \`---\` 分割线（第一个二级标题除外）。
 - 多平台标题必须从同一个「统一主标题」派生。小红书标题是统一主标题的缩减版（≤20 字，2 个英文字母算 1 字），B站标题与统一主标题保持一致。任何平台标题都不得引入原文没有的产品名、品牌名或术语（如原文没提 V0 就不能加 V0）。
-- 如果原始标题、统一主标题或 metadata 中出现 ${protectedTitleExamples} 等特指名词，主标题必须保留对应名词，不能泛化成「AI 工具」「智能体」「编程助手」等宽泛说法。
+- 如果原始标题、统一主标题或 metadata 中出现产品名、人物名、方法名或其他特指名词，主标题必须保留对应名词，不能泛化成「AI 工具」「智能体」「编程助手」等宽泛说法。
 - 标题必须体现内容适用范围和局限性，避免让读者误以为文章讨论的是更宽泛的产品、平台或方法。
 - ${SHARED_NO_VIDEO_AUTHOR}
 - ${SHARED_JSON_OUTPUT}

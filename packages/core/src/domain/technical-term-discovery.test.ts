@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTechnicalTermDiscoveryPrompt,
+  createTechnicalTermDiscoveryCacheRecord,
+  parseTechnicalTermDiscoveryCacheRecord,
   parseTechnicalTermDiscoveryResponse,
+  recognizeDeterministicTechnicalTerms,
 } from "./technical-term-discovery.js";
 
 describe("technical term discovery parser", () => {
@@ -55,5 +58,45 @@ describe("technical term discovery parser", () => {
     expect(buildTechnicalTermDiscoveryPrompt("A source about Graph Engineering.")).toMatch(
       /exact(?:ly)?[^\n]*source[^\n]*span/i,
     );
+  });
+
+  it("recognizes high-confidence structural terms without promoting ordinary English", () => {
+    const result = recognizeDeterministicTechnicalTerms(
+      "Run `pnpm yt2x`, pass --download-video, call getUserProfile(), and send the API request to GPT-5.\nThis is a normal sentence with no unusual identifiers.",
+    );
+
+    expect(result.accepted).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceText: "pnpm yt2x", confidence: "high" }),
+      expect.objectContaining({ sourceText: "--download-video", confidence: "high" }),
+      expect.objectContaining({ sourceText: "getUserProfile()", confidence: "high" }),
+      expect.objectContaining({ sourceText: "API", confidence: "high" }),
+      expect.objectContaining({ sourceText: "GPT-5", confidence: "high" }),
+    ]));
+    expect(result.accepted).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceText: "This" }),
+      expect.objectContaining({ sourceText: "normal" }),
+      expect.objectContaining({ sourceText: "sentence" }),
+    ]));
+  });
+
+  it("round-trips a versioned discovery cache record and rejects incompatible schemas", () => {
+    const record = createTechnicalTermDiscoveryCacheRecord({
+      cacheKey: "cache-key",
+      sourceIdentity: "sha256-source",
+      model: "model",
+      catalogFingerprint: "sha256-catalog",
+      result: {
+        accepted: [{ sourceText: "API", confidence: "high", category: "ai-coding" }],
+        reviewCandidates: [],
+        warnings: [],
+      },
+    });
+
+    expect(parseTechnicalTermDiscoveryCacheRecord(JSON.parse(JSON.stringify(record))))
+      .toEqual(record);
+    expect(parseTechnicalTermDiscoveryCacheRecord({ ...record, schemaVersion: 999 }))
+      .toBeUndefined();
+    expect(parseTechnicalTermDiscoveryCacheRecord({ ...record, result: { accepted: [] } }))
+      .toBeUndefined();
   });
 });

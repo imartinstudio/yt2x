@@ -69,7 +69,7 @@ describe("formatXiaohongshuLayout technical terms", () => {
     expect(promptText).toContain("配图");
     expect(promptText).toContain("流程图");
     expect(promptText).not.toContain("图工程和知识图谱");
-    expect(prompts.technicalTermProfileFingerprint).toMatch(/^fnv1a-/u);
+    expect(prompts.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
     expect(await readFile(path.join(result.outputDir, "article.html"), "utf8")).toContain("Latent Workspace Routing");
     expect(requests.filter((request) => request.messages[0]?.content.includes("严格的源级专业术语发现器"))).toHaveLength(1);
     expect(requests.filter((request) => request.messages[0]?.content.includes("专业术语定向修复器"))).toHaveLength(1);
@@ -95,7 +95,7 @@ describe("formatXiaohongshuLayout technical terms", () => {
     const first = await formatXiaohongshuLayout({ articleDir: tmpRoot, videoId: "cache-legacy", articleMd, llm, llmModel: "cache-test" });
     const firstPrompts = JSON.parse(await readFile(path.join(first.outputDir, "prompts.json"), "utf8")) as { illustrationPrompts: Array<{ prompt: string }>; technicalTermProfileFingerprint: string };
     expect(firstPrompts.illustrationPrompts.map((item) => item.prompt).join("\n")).toContain("fresh generated visual prompt");
-    expect(firstPrompts.technicalTermProfileFingerprint).toMatch(/^fnv1a-/u);
+    expect(firstPrompts.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
     const firstRequestCount = requests.length;
 
     await writeFile(path.join(formatDir, "prompts.json"), JSON.stringify({
@@ -137,7 +137,7 @@ describe("formatXiaohongshuLayout technical terms", () => {
     };
     expect(prompts.coverPrompts).toHaveLength(1);
     expect(prompts.illustrationPrompts.length).toBeGreaterThan(0);
-    expect(prompts.technicalTermProfileFingerprint).toMatch(/^fnv1a-/u);
+    expect(prompts.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
   });
 
   it("does not overwrite stale prompts when the adapter has no LLM", async () => {

@@ -7,7 +7,11 @@ import {
   type FinalizedTechnicalTermValue,
   type LlmPort,
 } from "@yt2x/core";
-import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
+import {
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
 import type { VideoDirArtifacts } from "./file-store.js";
 
 export type GenerateNotesInput = {
@@ -54,6 +58,7 @@ export const generateNotesContent = async (
     sourceText,
     sourceTitle: input.artifacts.metadata.title ?? "",
     discoveredTerms: discovery.accepted,
+    discovery: technicalTermDiscoveryAuditFor(discovery),
   });
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,

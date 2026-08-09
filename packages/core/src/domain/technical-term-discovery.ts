@@ -30,6 +30,23 @@ export type TechnicalTermDiscoveryResult = {
   warnings: readonly TechnicalTermDiscoveryWarning[];
 };
 
+export const TECHNICAL_TERM_DISCOVERY_CACHE_SCHEMA_VERSION = 1 as const;
+
+export type TechnicalTermDiscoveryCacheRecord = {
+  schemaVersion: typeof TECHNICAL_TERM_DISCOVERY_CACHE_SCHEMA_VERSION;
+  cacheKey: string;
+  sourceIdentity: string;
+  model: string;
+  promptVersion: string;
+  catalogFingerprint: string;
+  result: TechnicalTermDiscoveryResult;
+};
+
+export type TechnicalTermDiscoveryCache = {
+  read(cacheKey: string): Promise<unknown | undefined>;
+  write(cacheKey: string, record: TechnicalTermDiscoveryCacheRecord): Promise<void>;
+};
+
 export type ParseTechnicalTermDiscoveryResponseInput = {
   sourceText: string;
   response: string;
@@ -41,6 +58,7 @@ export type DiscoverTechnicalTermsInput = {
   sourceText: string;
   sourceTitle?: string;
   catalogFingerprint?: string;
+  cache?: TechnicalTermDiscoveryCache;
   signal?: AbortSignal;
 };
 
@@ -88,6 +106,84 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const confidenceRank = (confidence: DiscoveredTechnicalTerm["confidence"]): number =>
   confidence === "high" ? 3 : confidence === "medium" ? 2 : 1;
+
+const deterministicStopWords = new Set([
+  "AND", "ARE", "BUT", "FOR", "FROM", "HAS", "HAVE", "HOW", "NOT", "THE", "THIS", "THAT", "THEN", "WITH",
+]);
+
+const isDiscoveryCandidate = (value: unknown): value is DiscoveredTechnicalTerm =>
+  isRecord(value)
+  && typeof value.sourceText === "string"
+  && CONFIDENCES.includes(value.confidence as typeof CONFIDENCES[number])
+  && CATEGORIES.includes(value.category as TechnicalTermCategory);
+
+const addDeterministicCandidate = (
+  candidates: Map<string, DiscoveredTechnicalTerm>,
+  sourceText: string,
+  confidence: DiscoveredTechnicalTerm["confidence"],
+  category: TechnicalTermCategory,
+): void => {
+  const normalized = sourceText.trim();
+  if (normalized === "") return;
+  const key = normalized.toLocaleLowerCase("en-US");
+  const next = { sourceText: normalized, confidence, category };
+  const previous = candidates.get(key);
+  if (previous === undefined || confidenceRank(confidence) > confidenceRank(previous.confidence)) {
+    candidates.set(key, next);
+  }
+};
+
+/**
+ * 不依赖 provider 的高置信结构识别：命令、flag、API 调用、模型名和明确缩写。
+ * 普通英文单词不进入结果；不确定的代码标识只进入 reviewCandidates。
+ */
+export const recognizeDeterministicTechnicalTerms = (
+  sourceText: string,
+): TechnicalTermDiscoveryResult => {
+  const accepted = new Map<string, DiscoveredTechnicalTerm>();
+  const reviewCandidates = new Map<string, DiscoveredTechnicalTerm>();
+  const add = (
+    value: string,
+    confidence: DiscoveredTechnicalTerm["confidence"],
+    category: TechnicalTermCategory,
+  ): void => {
+    const target = confidence === "high" ? accepted : reviewCandidates;
+    addDeterministicCandidate(target, value, confidence, category);
+    if (confidence === "high") reviewCandidates.delete(value.toLocaleLowerCase("en-US"));
+  };
+
+  for (const match of sourceText.matchAll(/`([^`\r\n]{1,120})`/gu)) {
+    const value = match[1]?.trim();
+    if (value !== undefined && /(?:^\s*(?:pnpm|npm|npx|git|python|curl|ffmpeg|yt2x)\b|--[a-z]|[A-Za-z_$][\w$]*\s*\(|[A-Za-z_$][\w$]*\.[A-Za-z_$])/u.test(value)) {
+      add(value, "high", "ai-coding");
+    }
+  }
+  for (const match of sourceText.matchAll(/(?<![A-Za-z0-9_])--[a-z][a-z0-9-]*/giu)) {
+    add(match[0]!, "high", "ai-coding");
+  }
+  for (const match of sourceText.matchAll(/\b[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\([^)\r\n]{0,60}\)/gu)) {
+    add(match[0]!, "high", "ai-coding");
+  }
+  for (const match of sourceText.matchAll(/\b(?:GPT-\d+(?:\.\d+)?|Claude(?:\s+\d+(?:\.\d+)?)?|Gemini(?:\s+\d+(?:\.\d+)?)?|Llama(?:\s+\d+(?:\.\d+)?)?|Mistral|Qwen|DeepSeek(?:\s+[A-Za-z0-9.-]+)?|o\d+(?:-[A-Za-z0-9.-]+)?)\b/giu)) {
+    add(match[0]!, "high", "ai");
+  }
+  for (const match of sourceText.matchAll(/\b[A-Z][A-Z0-9_-]{1,}\b/g)) {
+    if (deterministicStopWords.has(match[0]!)) continue;
+    const confidence = /(?:API|SDK|CLI|LLM|RAG|MCP|SQL|HTTP|JSON|URL|SSH|TTS|STT|SRT|UI|UX|IDE)/u.test(match[0]!)
+      ? "high"
+      : "medium";
+    add(match[0]!, confidence, "ai-coding");
+  }
+  for (const match of sourceText.matchAll(/\b[A-Za-z_$]+[A-Z][A-Za-z0-9_$]+\b/g)) {
+    add(match[0]!, "medium", "ai-coding");
+  }
+
+  return {
+    accepted: [...accepted.values()],
+    reviewCandidates: [...reviewCandidates.values()].filter((candidate) => !accepted.has(candidate.sourceText.toLocaleLowerCase("en-US"))),
+    warnings: [],
+  };
+};
 
 export const parseTechnicalTermDiscoveryResponse = ({
   sourceText,
@@ -148,6 +244,51 @@ export const parseTechnicalTermDiscoveryResponse = ({
     else warnings.push(warning("low-confidence-candidate", `忽略低置信度候选：${candidate.sourceText}`, candidate.sourceText));
   }
   return { accepted, reviewCandidates, warnings };
+};
+
+export const createTechnicalTermDiscoveryCacheRecord = (input: {
+  cacheKey: string;
+  sourceIdentity: string;
+  model: string;
+  catalogFingerprint: string;
+  result: TechnicalTermDiscoveryResult;
+}): TechnicalTermDiscoveryCacheRecord => ({
+  schemaVersion: TECHNICAL_TERM_DISCOVERY_CACHE_SCHEMA_VERSION,
+  cacheKey: input.cacheKey,
+  sourceIdentity: input.sourceIdentity,
+  model: input.model,
+  promptVersion: TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
+  catalogFingerprint: input.catalogFingerprint,
+  result: {
+    accepted: [...input.result.accepted],
+    reviewCandidates: [...input.result.reviewCandidates],
+    warnings: [...input.result.warnings],
+  },
+});
+
+export const parseTechnicalTermDiscoveryCacheRecord = (
+  value: unknown,
+): TechnicalTermDiscoveryCacheRecord | undefined => {
+  if (!isRecord(value)
+    || value.schemaVersion !== TECHNICAL_TERM_DISCOVERY_CACHE_SCHEMA_VERSION
+    || typeof value.cacheKey !== "string"
+    || typeof value.sourceIdentity !== "string"
+    || typeof value.model !== "string"
+    || value.promptVersion !== TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION
+    || typeof value.catalogFingerprint !== "string"
+    || !isRecord(value.result)
+    || !Array.isArray(value.result.accepted)
+    || !Array.isArray(value.result.reviewCandidates)
+    || !Array.isArray(value.result.warnings)
+    || !value.result.accepted.every(isDiscoveryCandidate)
+    || !value.result.reviewCandidates.every(isDiscoveryCandidate)
+    || !value.result.warnings.every((warningValue) => isRecord(warningValue)
+      && typeof warningValue.code === "string"
+      && typeof warningValue.message === "string"
+      && (warningValue.sourceText === undefined || typeof warningValue.sourceText === "string"))) {
+    return undefined;
+  }
+  return value as unknown as TechnicalTermDiscoveryCacheRecord;
 };
 
 export const buildTechnicalTermDiscoveryPrompt = (

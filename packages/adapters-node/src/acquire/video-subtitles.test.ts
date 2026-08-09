@@ -1327,6 +1327,86 @@ Second sentence.
     expect(seenSystemPrompts[0]).toMatch(/Traditional Chinese output is FORBIDDEN/);
   });
 
+  it("discovers terms from the complete ordinary source SRT before translating it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-technical-terms-"));
+    await mkdir(path.join(root, "video"), { recursive: true });
+    const sourceSrt = `1
+00:00:01,000 --> 00:00:03,500
+Graph Engineering connects Knowledge Graph and Agent Graph.
+
+2
+00:00:04,000 --> 00:00:06,000
+Latent Workspace Routing keeps the agent state.
+
+3
+00:00:07,000 --> 00:00:09,500
+Add a screenshot and a flow chart.
+`;
+    await writeFile(path.join(root, "source.en.srt"), sourceSrt, "utf8");
+    let callCount = 0;
+    const systemPrompts: string[] = [];
+    const llm: LlmPort = {
+      chat: async (request: ChatRequest): Promise<ChatResponse> => {
+        callCount += 1;
+        const systemPrompt = request.messages[0]!.content;
+        systemPrompts.push(systemPrompt);
+        if (systemPrompt.includes("源级专业术语发现器")) {
+          return {
+            content: JSON.stringify([
+              { sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" },
+            ]),
+            model: "test",
+            finishReason: "stop",
+          };
+        }
+        if (callCount === 2) {
+          return {
+            content: JSON.stringify([
+              { index: 1, text: "图工程连接知识图谱和代理图谱。" },
+              { index: 2, text: "潜在工作区路由保存代理状态。" },
+              { index: 3, text: "添加截图和流程图。" },
+            ]),
+            model: "test",
+            finishReason: "stop",
+          };
+        }
+        return {
+          content: JSON.stringify([{ index: 2, text: "Latent Workspace Routing 保存代理状态。" }]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    await runSubtitlePipeline({
+      videoDir: root,
+      subtitle: { mode: "srt", sourceLang: "en", targetLang: "zh-CN", source: "auto" },
+      llm,
+      llmModel: "test",
+      runner: {
+        run: async (spec) => ({
+          exitCode: 0, signal: null, stdout: "", stderr: "",
+          stdoutTruncated: false, stderrTruncated: false, durationMs: 0,
+          command: spec.command, args: spec.args ?? [],
+        }),
+      },
+    });
+
+    const translated = await readFile(path.join(root, "video", "full.zh.srt"), "utf8");
+    expect(translated).toContain("Graph Engineering");
+    expect(translated).toContain("Knowledge Graph");
+    expect(translated).toContain("Agent Graph");
+    expect(translated).toContain("Latent Workspace Routing");
+    expect(translated).toContain("截图");
+    expect(translated).toContain("流程图");
+    expect(translated.match(/\n\n/gu)).toHaveLength(2);
+    expect(callCount).toBe(3);
+    expect(systemPrompts[0]).toContain("源级专业术语发现器");
+    expect(systemPrompts[1]).toContain("Latent Workspace Routing");
+    expect(systemPrompts[2]).toContain("Latent Workspace Routing");
+    await expect(readFile(path.join(root, "source.en.srt"), "utf8")).resolves.toBe(sourceSrt);
+  });
+
   it("translates when source_language is bare 'zh' but subtitle content is Traditional Chinese", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-sub-pipeline-bare-zh-"));
     await mkdir(root, { recursive: true });

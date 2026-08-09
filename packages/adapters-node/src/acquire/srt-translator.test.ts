@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LlmPort, ChatResponse, ChatRequest } from "@yt2x/core";
+import { createTechnicalTermGuard, type LlmPort, type ChatResponse, type ChatRequest } from "@yt2x/core";
 import { translateSrt } from "./srt-translator.js";
 
 const mockLlm = (response: string): LlmPort => ({
@@ -25,6 +25,150 @@ Goodbye now
 `;
 
 describe("translateSrt", () => {
+  const technicalTermSrt = `1
+00:00:01,000 --> 00:00:03,500
+Graph Engineering connects Knowledge Graph and Agent Graph.
+
+2
+00:00:04,000 --> 00:00:06,000
+Latent Workspace Routing keeps the agent state.
+
+3
+00:00:07,000 --> 00:00:09,500
+Add a screenshot and a flow chart.
+`;
+
+  const technicalTermGuard = createTechnicalTermGuard({
+    sourceText: [
+      "Graph Engineering connects Knowledge Graph and Agent Graph.",
+      "Latent Workspace Routing keeps the agent state.",
+      "Add a screenshot and a flow chart.",
+    ].join(" "),
+    discoveredTerms: [
+      { sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" },
+    ],
+  });
+
+  it("preserves catalog and discovered terms while leaving ordinary image terms in Chinese", async () => {
+    let callCount = 0;
+    const llm: LlmPort = {
+      chat: async (): Promise<ChatResponse> => {
+        callCount += 1;
+        return {
+          content: callCount === 1
+            ? JSON.stringify([
+                { index: 1, text: "图工程连接知识图谱和代理图谱。" },
+                { index: 2, text: "潜在工作区路由保存代理状态。" },
+                { index: 3, text: "添加截图和流程图。" },
+              ])
+            : JSON.stringify([{ index: 2, text: "Latent Workspace Routing 保存代理状态。" }]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const { srt: result } = await translateSrt(technicalTermSrt, {
+      llm,
+      model: "test",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      technicalTermGuard,
+    });
+
+    expect(result).toContain("Graph Engineering");
+    expect(result).toContain("Knowledge Graph");
+    expect(result).toContain("Agent Graph");
+    expect(result).toContain("Latent Workspace Routing");
+    expect(result).toContain("截图");
+    expect(result).toContain("流程图");
+  });
+
+  it("uses the same active term rule in initial and missing-cue repair prompts", async () => {
+    const prompts: string[] = [];
+    let callCount = 0;
+    const llm: LlmPort = {
+      chat: async (_req: ChatRequest): Promise<ChatResponse> => {
+        prompts.push(_req.messages[0]!.content);
+        callCount += 1;
+        return {
+          content: callCount === 1
+            ? JSON.stringify([
+                { index: 2, text: "潜在工作区路由保存代理状态。" },
+                { index: 3, text: "添加截图和流程图。" },
+              ])
+            : callCount === 2
+              ? JSON.stringify([{ index: 1, text: "图工程连接知识图谱和代理图谱。" }])
+              : JSON.stringify([{ index: 2, text: "Latent Workspace Routing 保存代理状态。" }]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const { srt: result } = await translateSrt(technicalTermSrt, {
+      llm,
+      model: "test",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      technicalTermGuard,
+    });
+
+    expect(prompts.length).toBeGreaterThanOrEqual(2);
+    expect(prompts[0]).toContain("Graph Engineering");
+    expect(prompts[0]).toContain("Latent Workspace Routing");
+    expect(prompts[1]).toContain("Graph Engineering");
+    expect(prompts[1]).toContain("Latent Workspace Routing");
+    expect(result).toContain("Knowledge Graph");
+    expect(result).toContain("Latent Workspace Routing");
+  });
+
+  it("repairs a technical term that spans two adjacent cues without duplicating it", async () => {
+    const source = `1
+00:00:01,000 --> 00:00:02,000
+Model Context
+
+2
+00:00:02,000 --> 00:00:03,000
+Protocol
+`;
+    const guard = createTechnicalTermGuard({ sourceText: "Model Context Protocol" });
+    let callCount = 0;
+    const llm: LlmPort = {
+      chat: async (_req: ChatRequest): Promise<ChatResponse> => {
+        callCount += 1;
+        return {
+          content: callCount === 1
+            ? JSON.stringify([
+                { index: 1, text: "模型上下文" },
+                { index: 2, text: "协议" },
+              ])
+            : JSON.stringify([
+                { index: 1, text: "Model Context" },
+                { index: 2, text: "Protocol" },
+              ]),
+          model: "test",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const { srt: result } = await translateSrt(source, {
+      llm,
+      model: "test",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      technicalTermGuard: guard,
+    });
+
+    const joined = result
+      .split(/\n\n/u)
+      .map((block) => block.split("\n").slice(2).join(" "))
+      .join(" ");
+    expect(joined.match(/Model Context Protocol/gu)).toHaveLength(1);
+    expect(callCount).toBe(2);
+  });
+
   it("translates SRT blocks and preserves timecodes", async () => {
     const llm = mockLlm(
       JSON.stringify([

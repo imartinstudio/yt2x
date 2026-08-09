@@ -3,7 +3,7 @@ import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeF
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { LlmPort } from "@yt2x/core";
+import { createTechnicalTermGuard, type LlmPort } from "@yt2x/core";
 import type { ProcessRunner } from "../process/index.js";
 import { buildBilingualAss, mergeBilingualSrt } from "./bilingual-subtitles.js";
 import {
@@ -15,6 +15,7 @@ import type { BurnProgressCallback } from "./burn-subtitles.js";
 import { burnZhSubtitlesForVideo } from "./burn-zh-subtitles-for-video.js";
 import { resolvePythonWithFasterWhisper, resolvePythonWithTorchaudio } from "./resolve-python.js";
 import { translateSrt } from "./srt-translator.js";
+import { discoverTechnicalTerms } from "../technical-terms/discovery.js";
 import {
   auditSubtitleArtifacts,
   isSubtitleAuditReadyForDelivery,
@@ -1517,11 +1518,28 @@ export const runSubtitlePipeline = async (
   if (!hasZhSrt && !contentMatchesTargetLang && hasLlm) {
     try {
       const enSrt = await readFile(subResult.sourceSubtitle, "utf8");
+      const sourceBlocks = parseSubtitleBlocks(enSrt).map((cue) => cue.text.join(" "));
+      const sourceText = sourceBlocks.join(" ");
+      let technicalTermGuard = createTechnicalTermGuard({ sourceText });
+      if (detectSubtitleLanguage(enSrt) !== "zh") {
+        const discovery = await discoverTechnicalTerms({
+          llm: opts.llm!,
+          model: opts.llmModel!,
+          sourceText,
+          ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+        });
+        warnings.push(...discovery.warnings.map((warning) => `technical term discovery: ${warning.message}`));
+        technicalTermGuard = createTechnicalTermGuard({
+          sourceText,
+          discoveredTerms: discovery.accepted,
+        });
+      }
       const { srt: zhSrt, warnings: translationWarnings } = await translateSrt(enSrt, {
         llm: opts.llm!,
         model: opts.llmModel!,
         sourceLang: manifest.source_language,
         targetLang: subtitle.targetLang,
+        technicalTermGuard,
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       });
       await writeFile(zhSrtPath, zhSrt, "utf8");

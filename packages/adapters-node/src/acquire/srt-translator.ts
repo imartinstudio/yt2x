@@ -1,4 +1,10 @@
-import type { LlmPort } from "@yt2x/core";
+import {
+  appendTechnicalTermRuleToSystemPrompt,
+  createTechnicalTermGuard,
+  hasHardTechnicalTermViolations,
+  type LlmPort,
+  type TechnicalTermGuard,
+} from "@yt2x/core";
 import { parseJsonWithRepairs, salvagePartialJsonArray } from "../llm/parse-json.js";
 import { parseSubtitleBlocks, serializeSrtBlocks } from "./video-subtitles.js";
 
@@ -8,6 +14,10 @@ export type SrtTranslatorOptions = {
   sourceLang: string;
   targetLang: string;
   signal?: AbortSignal;
+  /** A full-source guard resolved by the caller, normally by video-subtitles.ts. */
+  technicalTermGuard?: TechnicalTermGuard;
+  /** Alias for callers that pass the resolved profile by domain terminology. */
+  technicalTermProfile?: TechnicalTermGuard;
 };
 
 type TextBlock = { index: number; text: string };
@@ -50,21 +60,27 @@ const buildRepairPrompt = (sourceLang: string, targetLang: string, missingIndice
       : ["4. Do not add explanations or any text outside the JSON array."]),
   ].join("\n");
 
+const appendTermRule = (prompt: string, guard: TechnicalTermGuard | undefined): string =>
+  guard === undefined ? prompt : appendTechnicalTermRuleToSystemPrompt(prompt, guard.prepare([]).promptRule);
+
 const translateBatch = async (
   blocks: TextBlock[],
   opts: SrtTranslatorOptions,
   repairMode = false,
+  guard?: TechnicalTermGuard,
 ): Promise<TextBlock[]> => {
   const payload = blocks.map((b) => ({ index: b.index, text: b.text }));
-  const userPrompt = JSON.stringify(payload);
+  const prepared = guard?.prepare(payload);
+  const userPrompt = JSON.stringify(prepared?.value ?? payload);
 
-  const systemPrompt = repairMode
+  const baseSystemPrompt = repairMode
     ? buildRepairPrompt(
         opts.sourceLang,
         opts.targetLang,
         blocks.map((b) => b.index),
       )
     : buildSystemPrompt(opts.sourceLang, opts.targetLang);
+  const systemPrompt = appendTermRule(baseSystemPrompt, guard);
 
   const resp = await opts.llm.chat({
     model: opts.model,
@@ -112,12 +128,24 @@ const translateBatch = async (
     throw new Error("translation response contains no valid blocks");
   }
 
-  return results;
+  const allowedIndices = new Set(blocks.map((block) => block.index));
+  const dedupedResults = results.filter((result, index, all) =>
+    allowedIndices.has(result.index)
+    && all.findIndex((candidate) => candidate.index === result.index) === index,
+  );
+  if (dedupedResults.length === 0) {
+    throw new Error("translation response contains no requested blocks");
+  }
+
+  return prepared === undefined
+    ? dedupedResults
+    : guard!.finalize(dedupedResults, prepared.restoration).value;
 };
 
 const batchTranslateAll = async (
   blocks: TextBlock[],
   opts: SrtTranslatorOptions,
+  guard?: TechnicalTermGuard,
 ): Promise<{ translated: TextBlock[]; warnings: string[] }> => {
   const results: TextBlock[] = [];
   const warnings: string[] = [];
@@ -128,7 +156,7 @@ const batchTranslateAll = async (
     let batchTranslated = false;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const result = await translateBatch(batch, opts);
+        const result = await translateBatch(batch, opts, false, guard);
         results.push(...result);
         batchTranslated = true;
         break;
@@ -155,14 +183,168 @@ const batchTranslateAll = async (
 };
 
 const buildFinalSrt = (cues: ReturnType<typeof parseSubtitleBlocks>, translated: TextBlock[]): string => {
-  translated.sort((a, b) => a.index - b.index);
-
-  const translatedCues = cues.map((cue, i) => ({
+  const byIndex = new Map<number, TextBlock>();
+  for (const block of translated) {
+    if (!byIndex.has(block.index)) byIndex.set(block.index, block);
+  }
+  const translatedCues = cues.map((cue) => ({
     ...cue,
-    text: [translated[i]!.text],
+    text: [byIndex.get(cue.index)?.text ?? `[未翻译] ${cue.text.join(" ")}`],
   }));
 
   return serializeSrtBlocks(translatedCues);
+};
+
+type CueRange = { index: number; start: number; end: number };
+type CueIndexRange = { start: number; end: number };
+
+const joinedCueText = (blocks: readonly TextBlock[]): string => blocks.map((block) => block.text).join(" ");
+
+const cueRanges = (blocks: readonly TextBlock[]): CueRange[] => {
+  let cursor = 0;
+  return blocks.map((block, position) => {
+    const start = cursor;
+    const end = start + block.text.length;
+    cursor = end + (position < blocks.length - 1 ? 1 : 0);
+    return { index: block.index, start, end };
+  });
+};
+
+const cueRangeForSpan = (
+  ranges: readonly CueRange[],
+  start: number,
+  end: number,
+): CueIndexRange | undefined => {
+  const first = ranges.find((range) => start >= range.start && start <= range.end);
+  const last = [...ranges].reverse().find((range) => end >= range.start && end <= range.end);
+  if (first === undefined || last === undefined) return undefined;
+  return { start: first.index, end: last.index };
+};
+
+const exactCount = (value: string, needle: string): number => {
+  if (needle.length === 0) return 0;
+  let count = 0;
+  let cursor = 0;
+  while (cursor <= value.length - needle.length) {
+    const found = value.indexOf(needle, cursor);
+    if (found < 0) break;
+    count += 1;
+    cursor = found + needle.length;
+  }
+  return count;
+};
+
+const termRepairRanges = (
+  blocks: readonly TextBlock[],
+  translated: readonly TextBlock[],
+  guard: TechnicalTermGuard,
+  violations: readonly { canonical?: string }[],
+): CueIndexRange[] => {
+  const sourceRanges = cueRanges(blocks);
+  const translatedRanges = cueRanges(translated);
+  const translatedJoined = joinedCueText(translated);
+  const ranges: CueIndexRange[] = [];
+  const add = (range: CueIndexRange | undefined): void => {
+    if (range === undefined) return;
+    if (!ranges.some((existing) => existing.start === range.start && existing.end === range.end)) {
+      ranges.push(range);
+    }
+  };
+
+  for (const occurrence of guard.profile.occurrences.filter((item) => item.source === "sourceText")) {
+    const sourceRange = cueRangeForSpan(sourceRanges, occurrence.start, occurrence.end);
+    if (sourceRange === undefined) continue;
+    const targetStart = translatedRanges.find((range) => range.index === sourceRange.start)?.start;
+    const targetEnd = translatedRanges.find((range) => range.index === sourceRange.end)?.end;
+    if (targetStart === undefined || targetEnd === undefined) continue;
+    const targetText = translatedJoined.slice(targetStart, targetEnd);
+    if (exactCount(targetText, occurrence.canonical) !== 1) add(sourceRange);
+  }
+
+  const expectedCounts = new Map<string, number>();
+  for (const occurrence of guard.profile.occurrences) {
+    if (occurrence.source === "sourceText") {
+      expectedCounts.set(occurrence.canonical, (expectedCounts.get(occurrence.canonical) ?? 0) + 1);
+    }
+  }
+  for (const [canonical, expected] of expectedCounts) {
+    if (exactCount(translatedJoined, canonical) !== expected) {
+      const occurrence = guard.profile.occurrences.find((item) =>
+        item.source === "sourceText" && item.canonical === canonical,
+      );
+      add(occurrence === undefined
+        ? undefined
+        : cueRangeForSpan(sourceRanges, occurrence.start, occurrence.end));
+    }
+  }
+
+  if (violations.length > 0 && ranges.length === 0) add({
+    start: blocks[0]?.index ?? 1,
+    end: blocks.at(-1)?.index ?? blocks[0]?.index ?? 1,
+  });
+  return ranges;
+};
+
+const mergeTranslatedBlocks = (
+  current: TextBlock[],
+  replacement: readonly TextBlock[],
+): void => {
+  const byIndex = new Map(current.map((block) => [block.index, block]));
+  for (const block of replacement) byIndex.set(block.index, block);
+  current.length = 0;
+  current.push(...byIndex.values());
+};
+
+const postProcessSrt = async (finalSrt: string, sourceSrt: string): Promise<string> => {
+  let output = finalSrt;
+  try {
+    const { simplifyChinese } = await import("./simplify-chinese.js");
+    output = await simplifyChinese(output);
+  } catch {
+    // If conversion fails, keep original SRT
+  }
+
+  try {
+    const { fixLlmHomoglyphs } = await import("./simplify-chinese.js");
+    output = fixLlmHomoglyphs(output);
+  } catch {
+    // If fix fails, keep original SRT
+  }
+
+  try {
+    const { preserveProperNouns } = await import("./simplify-chinese.js");
+    const parsedZh = parseSubtitleBlocks(output);
+    const parsedEn = parseSubtitleBlocks(sourceSrt);
+    if (parsedZh.length === parsedEn.length) {
+      const fixedCues = parsedZh.map((zhCue, i) => {
+        const enCue = parsedEn[i]!;
+        const fixedText = preserveProperNouns(
+          zhCue.text.join(" "),
+          enCue.text.join(" "),
+        );
+        return { ...zhCue, text: [fixedText] };
+      });
+      output = serializeSrtBlocks(fixedCues);
+    }
+  } catch {
+    // If preservation fails, keep original SRT
+  }
+  return output;
+};
+
+const finalizeTranslatedBlocks = (
+  translated: readonly TextBlock[],
+  guard: TechnicalTermGuard,
+): { blocks: TextBlock[]; violations: ReturnType<TechnicalTermGuard["validate"]> } => {
+  // Validate the joined transcript so a term split over adjacent cues remains
+  // contiguous for the guard. Per-cue finalization still restores complete
+  // terms without changing cue boundaries or timestamps.
+  const blocks = translated.map((block) => ({
+    ...block,
+    text: guard.finalize(block.text, { placeholders: [] }).value,
+  }));
+  const joined = guard.finalize(joinedCueText(blocks), { placeholders: [] });
+  return { blocks, violations: joined.violations };
 };
 
 export const translateSrt = async (
@@ -178,9 +360,12 @@ export const translateSrt = async (
     index: cue.index,
     text: cue.text.join(" "),
   }));
+  const technicalTermGuard = opts.technicalTermGuard
+    ?? opts.technicalTermProfile
+    ?? createTechnicalTermGuard({ sourceText: joinedCueText(blocks) });
 
   // Phase 1: batch translate all blocks (resilient — partial results OK)
-  const { translated, warnings } = await batchTranslateAll(blocks, opts);
+  const { translated, warnings } = await batchTranslateAll(blocks, opts, technicalTermGuard);
 
   // Phase 2: repair missing blocks if count doesn't match
   if (translated.length !== blocks.length) {
@@ -189,7 +374,7 @@ export const translateSrt = async (
 
     if (missing.length > 0) {
       try {
-        const repaired = await translateBatch(missing, opts, true);
+        const repaired = await translateBatch(missing, opts, true, technicalTermGuard);
         const deduped = translated.filter((b) => translatedIndices.has(b.index));
         for (const r of repaired) {
           if (!translatedIndices.has(r.index)) {
@@ -213,7 +398,7 @@ export const translateSrt = async (
 
     if (missing.length > 0) {
       try {
-        const repaired = await translateBatch(missing, opts, true);
+        const repaired = await translateBatch(missing, opts, true, technicalTermGuard);
         const deduped = translated.filter((b) => translatedIndices.has(b.index));
         for (const r of repaired) {
           if (!translatedIndices.has(r.index)) {
@@ -238,7 +423,7 @@ export const translateSrt = async (
     if (missing.length > 0) {
       for (const m of missing) {
         try {
-          const repaired = await translateBatch([m], opts, true);
+          const repaired = await translateBatch([m], opts, true, technicalTermGuard);
           const added = repaired.filter((r) => !translatedIndices.has(r.index));
           translated.push(...added);
           if (added.length > 0) {
@@ -261,7 +446,7 @@ export const translateSrt = async (
     );
     for (const src of sourceBlocks) {
       try {
-        const repaired = await translateBatch([src], opts, true);
+        const repaired = await translateBatch([src], opts, true, technicalTermGuard);
         const valid = repaired.filter((r) => r.text.trim().length > 0);
         if (valid.length > 0) {
           // Replace empty block with repaired one
@@ -308,45 +493,56 @@ export const translateSrt = async (
     }
   }
 
-  let finalSrt = buildFinalSrt(cues, translated);
+  let finalSrt = await postProcessSrt(buildFinalSrt(cues, translated), srtContent);
+  const postProcessedBlocks = parseSubtitleBlocks(finalSrt).map((cue) => ({
+    index: cue.index,
+    text: cue.text.join(" "),
+  }));
+  translated.length = 0;
+  translated.push(...postProcessedBlocks);
 
-  // Post-process: ensure Simplified Chinese output regardless of model preference
-  try {
-    const { simplifyChinese } = await import("./simplify-chinese.js");
-    finalSrt = await simplifyChinese(finalSrt);
-  } catch {
-    // If conversion fails, keep original SRT
-  }
+  // Finalize the complete source profile only after all language and homoglyph
+  // post-processors have run. This is also where forbidden Chinese translations
+  // are restored before the range-level check below.
+  let finalized = finalizeTranslatedBlocks(translated, technicalTermGuard);
+  translated.length = 0;
+  translated.push(...finalized.blocks);
 
-  // Post-process: fix LLM CJK homoglyph mistakes
-  try {
-    const { fixLlmHomoglyphs } = await import("./simplify-chinese.js");
-    finalSrt = fixLlmHomoglyphs(finalSrt);
-  } catch {
-    // If fix fails, keep original SRT
-  }
-
-  // Post-process: preserve proper nouns from English source
-  try {
-    const { preserveProperNouns } = await import("./simplify-chinese.js");
-    // Apply per-cue: find English source text for each translated cue
-    const parsedZh = parseSubtitleBlocks(finalSrt);
-    const parsedEn = parseSubtitleBlocks(srtContent);
-    if (parsedZh.length === parsedEn.length) {
-      const fixedCues = parsedZh.map((zhCue, i) => {
-        const enCue = parsedEn[i]!;
-        const enText = enCue.text.join(" ");
-        const fixedText = preserveProperNouns(
-          zhCue.text.join(" "),
-          enText,
-        );
-        return { ...zhCue, text: [fixedText] };
-      });
-      finalSrt = serializeSrtBlocks(fixedCues);
+  const repairRanges = termRepairRanges(blocks, translated, technicalTermGuard, finalized.violations);
+  if (repairRanges.length > 0) {
+    const targetIndices = new Set<number>();
+    for (const range of repairRanges) {
+      for (const block of blocks) {
+        if (block.index >= range.start && block.index <= range.end) targetIndices.add(block.index);
+      }
     }
-  } catch {
-    // If preservation fails, keep original SRT
+    const targetBlocks = blocks.filter((block) => targetIndices.has(block.index));
+    if (targetBlocks.length > 0) {
+      // One range-level repair covers all failing complete/cross-cue ranges.
+      // Its payload contains only the affected source cues, so a cross-cue term
+      // is never copied into unrelated cues.
+      const repaired = await translateBatch(targetBlocks, opts, true, technicalTermGuard);
+      mergeTranslatedBlocks(translated, repaired);
+      finalSrt = await postProcessSrt(buildFinalSrt(cues, translated), srtContent);
+      const repairedBlocks = parseSubtitleBlocks(finalSrt).map((cue) => ({
+        index: cue.index,
+        text: cue.text.join(" "),
+      }));
+      translated.length = 0;
+      translated.push(...repairedBlocks);
+      finalized = finalizeTranslatedBlocks(translated, technicalTermGuard);
+      translated.length = 0;
+      translated.push(...finalized.blocks);
+    }
   }
+
+  if (hasHardTechnicalTermViolations(finalized.violations)
+    || termRepairRanges(blocks, translated, technicalTermGuard, finalized.violations).length > 0) {
+    throw new Error(
+      `technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`,
+    );
+  }
+  finalSrt = buildFinalSrt(cues, translated);
 
   return { srt: finalSrt, warnings };
 };

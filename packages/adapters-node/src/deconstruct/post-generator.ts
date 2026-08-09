@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { cp, mkdir, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   appendTechnicalTermRuleToSystemPrompt,
@@ -33,7 +34,7 @@ import {
   readContentTargetMetadata,
   writeContentTargetMetadata,
 } from "../content-cache.js";
-import { withContentTargetLock } from "../content-transaction.js";
+import { replaceDirectoryAtomically, withContentTargetLock } from "../content-transaction.js";
 
 export type GeneratePostsRunnerInput = {
   llm: LlmPort;
@@ -191,10 +192,13 @@ export const generateClipsPosts = async (
   const selected = manifest.clips.filter((clip) => clip.selected === true && Boolean(clip.text));
   const selectedSourceText = selectedClipPostSourceText(selected, articleTitle, sourceTextByClipId);
   const sourceFingerprint = clipPostSourceFingerprintFor(articleTitle, articleMd, manifest);
-  const metadataPath = contentTargetMetadataPathFor(input.articleDir, "clip-post");
+  const bundleMetadataPath = contentTargetMetadataPathFor(clipsDir, "clip-post");
+  const legacyMetadataPath = contentTargetMetadataPathFor(input.articleDir, "clip-post");
   const selectedPostPaths = selected.map((clip, index) => selectedPostPathFor(input.articleDir, clip, index));
   if (input.persist !== false) {
-    const existingMetadata = await readContentTargetMetadata(metadataPath);
+    const bundleMetadata = await readContentTargetMetadata(bundleMetadataPath);
+    const existingMetadata = bundleMetadata ?? await readContentTargetMetadata(legacyMetadataPath);
+    const metadataPath = bundleMetadata === undefined ? legacyMetadataPath : bundleMetadataPath;
     const cacheHit = await isContentTargetMetadataFresh(existingMetadata, {
       target: "clip-post",
       sourceFingerprint,
@@ -376,6 +380,8 @@ export const writeSelectedPostFiles = async (
     clipsDir?: string;
     metadataPath?: string;
     lock?: boolean;
+    transaction?: boolean;
+    commit?: typeof replaceDirectoryAtomically;
   } = {},
 ): Promise<string[]> => {
   if (options.lock !== false) {
@@ -387,6 +393,29 @@ export const writeSelectedPostFiles = async (
     ));
   }
   const clipsDir = options.clipsDir ?? path.join(articleDir, "x-format", "clips");
+  if (options.transaction !== false) {
+    const stageDir = path.join(
+      path.dirname(clipsDir),
+      "." + path.basename(clipsDir) + "-write-stage-" + randomUUID(),
+    );
+    await mkdir(path.dirname(stageDir), { recursive: true });
+    try {
+      await cp(clipsDir, stageDir, { recursive: true, dereference: true }).catch(async (err: unknown) => {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+        await mkdir(stageDir, { recursive: true });
+      });
+      const stagedPaths = await writeSelectedPostFiles(manifest, articleDir, technicalTerms, {
+        clipsDir: stageDir,
+        metadataPath: contentTargetMetadataPathFor(stageDir, "clip-post"),
+        lock: false,
+        transaction: false,
+      });
+      await (options.commit ?? replaceDirectoryAtomically)(stageDir, clipsDir);
+      return stagedPaths.map((postPath) => path.join(clipsDir, path.basename(postPath)));
+    } finally {
+      await rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
   const manifestPath = path.join(clipsDir, "clips-manifest.json");
   const postPaths: string[] = [];
 
@@ -480,7 +509,7 @@ export const writeSelectedPostFiles = async (
 
   const existing = await readdir(clipsDir).catch(() => [] as string[]);
   const stalePosts = existing.filter((file) => /^post-\d+-.+\.md$/.test(file));
-  const stageDir = path.join(clipsDir, `.posts-stage-${process.pid}-${Date.now()}`);
+  const stageDir = path.join(clipsDir, `.posts-stage-${process.pid}-${randomUUID()}`);
   await mkdir(stageDir, { recursive: true });
   try {
     let stagedMetadataPath: string | undefined;

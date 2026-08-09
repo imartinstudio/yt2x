@@ -19,7 +19,6 @@ import {
 import {
   CONTENT_PROMPT_VERSIONS,
   contentSourceFingerprintFor,
-  summarySourceTextFor,
   structuredNotesContentSourceFor,
 } from "../content-cache.js";
 import type { StructuredNotesArtifacts } from "./file-store.js";
@@ -277,7 +276,9 @@ export const generateXArticleContent = async (
     discoveredTerms: discovery.accepted,
     discovery: discoveryAudit,
   });
-  const guard = fullGuard.scope(summarySourceTextFor(sourceText), sourceTitle);
+  // A long-form article is faithful to the complete notes contract. Unlike
+  // thread/short summaries, detailed sections remain required source scope.
+  const guard = fullGuard;
   const titleGuard = fullGuard.scope(sourceTitle, sourceTitle);
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,

@@ -16,6 +16,7 @@ import {
   replaceDirectoryAtomically,
   writeContentTargetMetadata,
   readDeconstructArtifacts,
+  deconstructCacheIdentityFor,
   runDeconstruct,
   clipCandidates,
   writeDeconstructOutput,
@@ -58,29 +59,49 @@ export const runDeconstructCommand = async (
 
   // Step 2: Call LLM
   const llmConfig = resolveLlmConfig({ provider: defaultCliLlmProvider() });
+  const requestedModel = llmConfig.model ?? "";
+  const selectCount = selectCountOverride ?? 0;
+  const cacheIdentity = await deconstructCacheIdentityFor(artifacts, {
+    requestedModel,
+    selectCount,
+  });
   const finalClipsDir = path.join(articleDir, "x-format", "clips");
   const existingManifest = await readFile(path.join(finalClipsDir, "clips-manifest.json"), "utf8")
     .then((raw) => JSON.parse(raw) as DeconstructManifest)
     .catch(() => undefined);
-  if (existingManifest !== undefined && llmConfig.model !== undefined) {
+  if (existingManifest !== undefined) {
     const articleTitle = artifacts.articleMd.match(/^#\s+(.+)$/m)?.[1] ?? artifacts.videoId;
-    const sourceFingerprint = clipPostSourceFingerprintFor(articleTitle, artifacts.articleMd, existingManifest);
-    const metadataPath = contentTargetMetadataPathFor(finalClipsDir, "deconstruct");
+    const clipPostSourceFingerprint = clipPostSourceFingerprintFor(articleTitle, artifacts.articleMd, existingManifest);
+    const candidateMetadataPath = contentTargetMetadataPathFor(finalClipsDir, "deconstruct");
+    const clipPostMetadataPath = contentTargetMetadataPathFor(finalClipsDir, "clip-post");
     const expectedSourceText = `${clipPostSourceTextFor(artifacts.articleMd, existingManifest)}\n${CLIP_POST_CALL_TO_ACTION}`;
-    const metadata = await readContentTargetMetadata(metadataPath);
-    const fresh = await isContentTargetMetadataFresh(metadata, {
+    const candidateMetadata = await readContentTargetMetadata(candidateMetadataPath);
+    const clipPostMetadata = await readContentTargetMetadata(clipPostMetadataPath);
+    const candidateFresh = await isContentTargetMetadataFresh(candidateMetadata, {
       target: "deconstruct",
-      sourceFingerprint,
-      requestedModel: llmConfig.model,
+      sourceFingerprint: cacheIdentity.sourceFingerprint,
+      requestedModel,
       promptVersion: CONTENT_PROMPT_VERSIONS.deconstruct,
+      sourceText: cacheIdentity.candidateSourceText,
+      sourceTitle: cacheIdentity.sourceTitle,
+      requiredFiles: [
+        path.join(finalClipsDir, "clips-manifest.json"),
+        candidateMetadataPath,
+      ],
+    });
+    const clipPostFresh = await isContentTargetMetadataFresh(clipPostMetadata, {
+      target: "clip-post",
+      sourceFingerprint: clipPostSourceFingerprint,
+      requestedModel,
+      promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
       sourceText: expectedSourceText,
       sourceTitle: articleTitle,
       requiredFiles: [
         path.join(finalClipsDir, "clips-manifest.json"),
-        metadataPath,
+        clipPostMetadataPath,
       ],
     });
-    if (fresh) {
+    if (candidateFresh && clipPostFresh) {
       try {
         const readiness = await assertClipPublishReadiness(articleDir);
         logger.info({ postCount: readiness.publishOrder.length }, "Deconstruct: complete bundle cache hit, skipping providers");
@@ -109,6 +130,8 @@ export const runDeconstructCommand = async (
       llm,
       model: llmConfig.model ?? "",
       articleDir,
+      artifacts,
+      cacheIdentity,
     });
     if (result.usage !== undefined) {
       logger.info({ usage: result.usage }, "Deconstruct: LLM usage (clip identification)");
@@ -208,20 +231,14 @@ export const runDeconstructCommand = async (
   logger.info({ postCount: genResult.postCount }, "Deconstruct: posts generated for all candidates");
 
   const writeStagedBundleMetadata = async (): Promise<void> => {
-    const terms = genResult.technicalTerms;
-    if (terms.sourceFingerprint === undefined
-      || terms.discoveryAudit === undefined
-      || terms.profileFingerprint === undefined) return;
-    const requestedModel = terms.requestedModel ?? terms.model ?? llmConfig.model;
-    const resolvedModel = terms.resolvedModel ?? terms.model ?? requestedModel;
-    if (requestedModel === undefined || resolvedModel === undefined) return;
+    const terms = result.candidateTechnicalTerms;
     await writeContentTargetMetadata(
       contentTargetMetadataPathFor(stageClipsDir, "deconstruct"),
       createContentTargetMetadata({
         target: "deconstruct",
         sourceFingerprint: terms.sourceFingerprint,
-        requestedModel,
-        resolvedModel,
+        requestedModel: terms.requestedModel,
+        resolvedModel: terms.resolvedModel,
         promptVersion: CONTENT_PROMPT_VERSIONS.deconstruct,
         technicalTermProfileFingerprint: terms.profileFingerprint,
         technicalTermDiscovery: terms.discoveryAudit,
@@ -230,7 +247,6 @@ export const runDeconstructCommand = async (
   };
 
   // Step 6: Auto-select — 基于文案质量 + 综合评分筛选
-  const selectCount = selectCountOverride ?? 0;
   const uniqueSections = selectTopUniqueArticleSections(filtered.sections, filtered.sections.length);
   // --select N clamps to available unique article sections; no --select flag → take all unique article sections
   const effectiveSelect = selectCount > 0
@@ -260,6 +276,7 @@ export const runDeconstructCommand = async (
         clipsDir: stageClipsDir,
         metadataPath: contentTargetMetadataPathFor(stageClipsDir, "clip-post"),
         lock: false,
+        transaction: false,
       },
     );
 

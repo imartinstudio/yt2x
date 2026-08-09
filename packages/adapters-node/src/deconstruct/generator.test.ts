@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
@@ -13,8 +13,71 @@ import {
   splitOversizedSections,
   parseDeconstructLlmOutput,
   runDeconstruct,
+  deconstructCacheIdentityFor,
 } from "./generator.js";
 import { deriveSeriesName, formatClipPostSeriesTitle, type LlmPort } from "@yt2x/core";
+
+describe("deconstructCacheIdentityFor", () => {
+  it("changes for SRT, video bytes, duration, model, and selection while canonicalizing the video path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-identity-"));
+    try {
+      const videoPath = path.join(root, "source.mp4");
+      const aliasPath = path.join(root, "alias.mp4");
+      await writeFile(videoPath, "video-a", "utf8");
+      await symlink(videoPath, aliasPath);
+      const artifacts = {
+        articleDir: root,
+        articleMd: "# Cache identity\n\nArticle source.",
+        srtContent: "1\n00:00:00,000 --> 00:00:01,000\nFirst source.\n",
+        videoPath,
+        videoId: "cache-identity",
+        durationSec: 60,
+      };
+      const base = await deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 2,
+      });
+      const alias = await deconstructCacheIdentityFor({ ...artifacts, videoPath: aliasPath }, {
+        requestedModel: "requested-model",
+        selectCount: 2,
+      });
+      expect(alias.sourceFingerprint).toBe(base.sourceFingerprint);
+      expect(base.srtSha256).toMatch(/^sha256-[0-9a-f]{64}$/u);
+      expect(base.videoSourceIdentity.contentSha256).toMatch(/^sha256-[0-9a-f]{64}$/u);
+
+      const changedSrt = await deconstructCacheIdentityFor({
+        ...artifacts,
+        srtContent: artifacts.srtContent.replace("First", "Other"),
+      }, { requestedModel: "requested-model", selectCount: 2 });
+      expect(changedSrt.sourceFingerprint).not.toBe(base.sourceFingerprint);
+
+      await writeFile(videoPath, "video-b", "utf8");
+      const changedVideo = await deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 2,
+      });
+      expect(changedVideo.sourceFingerprint).not.toBe(base.sourceFingerprint);
+
+      const changedDuration = await deconstructCacheIdentityFor({ ...artifacts, durationSec: 61 }, {
+        requestedModel: "requested-model",
+        selectCount: 2,
+      });
+      expect(changedDuration.sourceFingerprint).not.toBe(changedVideo.sourceFingerprint);
+      const changedModel = await deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "other-model",
+        selectCount: 2,
+      });
+      expect(changedModel.sourceFingerprint).not.toBe(changedVideo.sourceFingerprint);
+      const changedSelection = await deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 3,
+      });
+      expect(changedSelection.sourceFingerprint).not.toBe(changedVideo.sourceFingerprint);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("toSlug", () => {
   it("converts Chinese title to slug", () => {
@@ -265,6 +328,52 @@ describe("parseDeconstructLlmOutput null preprocessing", () => {
 });
 
 describe("runDeconstruct technical term restoration", () => {
+  it("allows a candidate summary to omit a known detailed term", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-summary-scope-"));
+    try {
+      const videoDir = path.join(articleDir, "video");
+      await mkdir(videoDir, { recursive: true });
+      await writeFile(path.join(articleDir, "article.md"), [
+        "# Graph Engineering",
+        "## Executive Summary",
+        "Graph Engineering is the main idea.",
+        "## Detailed Notes",
+        "Context Engineering is discussed later.",
+      ].join("\n"), "utf8");
+      await writeFile(path.join(videoDir, "full.mp4"), "video", "utf8");
+      await writeFile(path.join(videoDir, "full.zh.srt"), "", "utf8");
+      const output = JSON.stringify({ sections: [{
+        id: "section-1",
+        title: "Graph Engineering",
+        summary: "Graph Engineering 摘要",
+        article_section: "Executive Summary",
+        angle: "tutorial",
+        risk: "low",
+        timecodes: { start: "00:00:00", end: "00:00:10", startSec: 0, endSec: 10, durationSec: 10 },
+        scores: { counter_intuitiveness: 3, shareability: 3, practical_value: 3, visual_appeal: 3, composite: 3 },
+        key_quote: "Graph Engineering",
+        video_script: "Graph Engineering",
+      }] });
+      const calls: string[] = [];
+      const llm: LlmPort = { chat: async (request) => {
+        calls.push(request.messages[0]?.content ?? "");
+        return {
+          content: request.messages[0]?.content.includes("术语发现器") ? "[]" : output,
+          model: "resolved-model",
+          finishReason: "stop",
+        };
+      } };
+
+      const result = await runDeconstruct({ llm, model: "requested-model", articleDir });
+
+      expect(result.candidates.sections[0]?.summary).toBe("Graph Engineering 摘要");
+      expect(calls).toHaveLength(2);
+      expect(result.candidateTechnicalTerms.discoveryAudit.sourceIdentity).toMatch(/^sha256-/u);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
   it("restores terms in candidate titles, summaries, quotes, and scripts", async () => {
     const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-terms-"));
     try {

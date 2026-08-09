@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   buildTechnicalTermDiscoveryPrompt,
@@ -102,9 +103,13 @@ export const createFileTechnicalTermDiscoveryCacheStore = (
     }
     await mkdir(cacheDir, { recursive: true });
     const filePath = technicalTermDiscoveryCacheFilePath(cacheDir, cacheKey);
-    const temporaryPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-    await writeFile(temporaryPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-    await rename(temporaryPath, filePath);
+    const temporaryPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
+    try {
+      await writeFile(temporaryPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+      await rename(temporaryPath, filePath);
+    } finally {
+      await rm(temporaryPath, { force: true }).catch(() => {});
+    }
   },
 });
 

@@ -201,6 +201,29 @@ describe("technical term catalog", () => {
     expect(guard.validate({ title: "Graph Engineering", body: "普通摘要" })).toEqual([]);
   });
 
+  it("uses full-source knowledge while requiring only the selected summary scope", () => {
+    const fullGuard = createTechnicalTermGuard({
+      sourceText: [
+        "## Executive Summary",
+        "Graph Engineering is the main idea.",
+        "## Detailed Notes",
+        "Context Engineering is discussed later.",
+      ].join("\n"),
+    });
+    const summaryGuard = fullGuard.scope(
+      "## Executive Summary\nGraph Engineering is the main idea.",
+    );
+
+    expect(summaryGuard.validate("Graph Engineering 摘要")).toEqual([]);
+    expect(summaryGuard.validate("Graph Engineering 与上下文工程")).toContainEqual(
+      expect.objectContaining({
+        code: "forbidden-translation",
+        canonical: "Context Engineering",
+      }),
+    );
+    expect(summaryGuard.validate("Graph Engineering 与 Context Engineering")).toEqual([]);
+  });
+
   it("does not join separate fields into a discovered canonical term", () => {
     const guard = createTechnicalTermGuard({
       sourceText: "AI Agent\nKnowledge\nGraph",

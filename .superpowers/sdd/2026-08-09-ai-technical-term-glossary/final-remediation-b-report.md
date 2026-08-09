@@ -53,3 +53,31 @@
 - git diff --check：通过。
 
 按控制器要求未运行全量测试、lint 或真实 provider/media 流程；所有测试仅使用临时 fixture。字幕、Dashboard 和 XHS 未改动。
+
+## Final Remediation B 修复轮次 2
+
+状态：DONE
+
+本轮完成 reviewer 的 4 Important 与 Minor 收口：
+
+1. deconstruct 候选缓存身份现在覆盖当前 SRT 内容 SHA、视频规范路径与完整内容 SHA/stat、duration、article、requested model、选择参数、候选/clip-post/discovery prompt 版本及术语目录身份。CLI 在创建候选或帖子 provider 前分别验证 candidate 与 clip-post metadata；两者完全命中才零 provider。候选 discovery profile/audit 与 clip-post profile/audit 分开持久化。
+2. 摘要 guard 改为双层语义：父级全文 profile 负责 known canonical、forbidden translation 与 invented term 判断，派生 scope 只负责 required/missing。thread、short、video-short 与 deconstruct 可合法省略未讨论细节；主动写错已知术语仍失败，canonical 原文不会误报 invented。长文 article 使用全文 required contract，不再缩到固定摘要章节。
+3. `writeSelectedPostFiles` 和 `generateClipsPosts(persist=true)` 的直接路径改为完整 generation staging，再通过版本目录和单个 active 符号链接原子切换。post、manifest、clip-post metadata 同属一个 generation；注入提交中断时旧三类字节保持不变。CLI staging 显式由外层事务提交，二者复用同一目录提交 helper。
+4. 所有 content writer 的锁路径只由规范化 bundle/root 决定，caller label 不参与 key。真实 `native-content` 锁与 direct article/x-short writer 组合测试证明互斥。临时文件、post stage、generation 和 pointer 使用 `randomUUID`，失败路径清理未提交临时项。
+5. 首次旧实体目录迁移写入兼容 fallback marker；readiness、publisher 与 selector 在 active pointer 切换窗口可解析旧 generation。旧 generation 不在切换后立即删除，避免已经解析 fallback 的并发 reader 失去可读路径。
+
+### TDD 证据
+
+- deconstruct identity 测试先因 helper 缺失 RED，随后验证 SRT、视频字节、duration、requested model、selectCount 任一变化都会 stale，视频符号链接与真实规范路径身份一致。
+- 双层 guard 三态测试先因误译未被识别 RED，随后验证：省略详细 Context Engineering 合法；主动写“上下文工程”失败；写 Context Engineering 不算 invented。
+- direct post bundle 提交中断测试先错误成功并覆盖旧路径，随后转绿，确认旧 manifest、post、metadata 字节均不变。
+- 锁命名空间测试先因 caller label 生成不同锁 RED，随后以真实 article/x-short writer 验证统一互斥。
+- 首次迁移窗口测试先因 fallback resolver 缺失 RED，随后在 pointer commit 注入中断时仍能读取旧 generation。
+
+### 本轮验证
+
+- reviewer 相关定向 Vitest：10 个测试文件，146 tests passed。
+- `pnpm typecheck`：通过。
+- `git diff --check`：通过。
+
+按要求未运行全量测试、真实 provider、真实媒体或 `files/` 流程；未修改字幕、Dashboard 和 XHS。

@@ -5,6 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readDeconstructArtifacts: vi.fn(),
+  deconstructCacheIdentityFor: vi.fn(() => ({
+    sourceFingerprint: "candidate-source-fingerprint",
+    candidateSourceText: "candidate source text",
+    sourceTitle: "Cached",
+    srtSha256: "sha256-srt",
+    videoSourceIdentity: { contentSha256: "sha256-video" },
+  })),
   runDeconstruct: vi.fn(),
   clipCandidates: vi.fn(),
   writeDeconstructOutput: vi.fn(),
@@ -14,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   generateClipsPosts: vi.fn(),
   writeSelectedPostFiles: vi.fn(),
   writeReports: vi.fn(),
-  CONTENT_PROMPT_VERSIONS: { deconstruct: "native-deconstruct-v2" },
+  CONTENT_PROMPT_VERSIONS: { deconstruct: "native-deconstruct-v2", clipPost: "native-clip-post-v2" },
   acquireContentTargetLock: vi.fn(async () => async () => {}),
   assertClipPublishReadiness: vi.fn(),
   contentTargetMetadataPathFor: vi.fn((dir: string, target: string) => dir + "/.content-metadata/" + target + ".json"),
@@ -97,7 +104,16 @@ describe("runDeconstructCommand", () => {
         videoPath: path.join(articleDir, "video", "full.mp4"),
         durationSec: 60,
       });
-      mocks.runDeconstruct.mockResolvedValue({ candidates: { sections: [section] } });
+      mocks.runDeconstruct.mockResolvedValue({
+        candidates: { sections: [section] },
+        candidateTechnicalTerms: {
+          sourceFingerprint: "candidate-source-fingerprint",
+          profileFingerprint: "candidate-profile",
+          discoveryAudit: { promptVersion: "discovery", sourceIdentity: "candidate-audit" },
+          requestedModel: "test-model",
+          resolvedModel: "resolved-candidate-model",
+        },
+      });
       mocks.splitOversizedSections.mockReturnValue({ sections: [section] });
       mocks.filterValidSections.mockReturnValue({ sections: [section] });
       mocks.validateClipEndings.mockReturnValue([]);
@@ -125,6 +141,12 @@ describe("runDeconstructCommand", () => {
           lock: false,
         }),
       );
+      expect(mocks.createContentTargetMetadata).toHaveBeenCalledWith(expect.objectContaining({
+        target: "deconstruct",
+        sourceFingerprint: "candidate-source-fingerprint",
+        technicalTermProfileFingerprint: "candidate-profile",
+        technicalTermDiscovery: expect.objectContaining({ sourceIdentity: "candidate-audit" }),
+      }));
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }
@@ -167,8 +189,12 @@ describe("runDeconstructCommand", () => {
         durationSec: 60,
       });
       mocks.contentTargetMetadataPathFor.mockReturnValue(path.join(clipsDir, ".content-metadata", "deconstruct.json"));
-      mocks.readContentTargetMetadata.mockResolvedValue({ target: "deconstruct" });
-      mocks.isContentTargetMetadataFresh.mockResolvedValue(true);
+      mocks.readContentTargetMetadata
+        .mockResolvedValueOnce({ target: "deconstruct" })
+        .mockResolvedValueOnce({ target: "clip-post" });
+      mocks.isContentTargetMetadataFresh
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(true);
       mocks.assertClipPublishReadiness.mockResolvedValue({ publishOrder: ["post-1-cached.md"] });
 
       await expect(runDeconstructCommand(articleDir, 1)).resolves.toBe(0);
@@ -177,6 +203,22 @@ describe("runDeconstructCommand", () => {
       expect(mocks.generateClipsPosts).not.toHaveBeenCalled();
       expect(mocks.clipCandidates).not.toHaveBeenCalled();
       expect(mocks.assertClipPublishReadiness).toHaveBeenCalled();
+      expect(mocks.deconstructCacheIdentityFor).toHaveBeenCalledWith(
+        expect.objectContaining({ videoId: "cache-pass" }),
+        { requestedModel: "test-model", selectCount: 1 },
+      );
+      expect(mocks.isContentTargetMetadataFresh).toHaveBeenNthCalledWith(1,
+        { target: "deconstruct" },
+        expect.objectContaining({
+          target: "deconstruct",
+          sourceFingerprint: "candidate-source-fingerprint",
+          sourceText: "candidate source text",
+        }),
+      );
+      expect(mocks.isContentTargetMetadataFresh).toHaveBeenNthCalledWith(2,
+        { target: "clip-post" },
+        expect.objectContaining({ target: "clip-post" }),
+      );
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }
@@ -212,7 +254,16 @@ describe("runDeconstructCommand", () => {
         videoPath: path.join(articleDir, "video", "full.mp4"),
         durationSec: 60,
       });
-      mocks.runDeconstruct.mockResolvedValue({ candidates: { sections: [section] } });
+      mocks.runDeconstruct.mockResolvedValue({
+        candidates: { sections: [section] },
+        candidateTechnicalTerms: {
+          sourceFingerprint: "readiness-candidate-source",
+          profileFingerprint: "readiness-candidate-profile",
+          discoveryAudit: { promptVersion: "discovery", sourceIdentity: "readiness-audit" },
+          requestedModel: "test-model",
+          resolvedModel: "test-model",
+        },
+      });
       mocks.splitOversizedSections.mockReturnValue({ sections: [section] });
       mocks.filterValidSections.mockReturnValue({ sections: [section] });
       mocks.validateClipEndings.mockReturnValue([]);

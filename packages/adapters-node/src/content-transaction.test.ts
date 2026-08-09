@@ -7,8 +7,11 @@ import {
   atomicWriteUtf8,
   contentTargetLockPathFor,
   replaceDirectoryAtomically,
+  resolveContentBundleDir,
   withContentTargetLock,
 } from "./content-transaction.js";
+import { writeNativeArticleBundle } from "./article/file-store.js";
+import { writeNativeShortBundle } from "./short/file-store.js";
 
 const roots: string[] = [];
 
@@ -17,6 +20,46 @@ afterEach(async () => {
 });
 
 describe("content target transaction helpers", () => {
+  it("uses one lock namespace for native and direct writers of the same bundle root", () => {
+    expect(contentTargetLockPathFor("/tmp/article-root", "native-content")).toBe(
+      contentTargetLockPathFor("/tmp/article-root", "article"),
+    );
+    expect(contentTargetLockPathFor("/tmp/article-root", "native-content")).toBe(
+      contentTargetLockPathFor("/tmp/article-root", "x-short"),
+    );
+  });
+
+  it("makes native-content mutually exclusive with real direct article and x-short writers", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "yt2x-content-real-writers-"));
+    roots.push(root);
+    const videoId = "same-root";
+    const articleDir = path.join(root, videoId);
+    const release = await acquireContentTargetLock(articleDir, "native-content");
+    const articleWrite = writeNativeArticleBundle(root, videoId, "article-generation", {
+      v: 1,
+      platform: "x",
+      videoId,
+      model: "model",
+      finishReason: "stop",
+      generatedAt: new Date().toISOString(),
+      durationMs: 1,
+      technicalTermProfileFingerprint: "sha256-profile",
+    }, { force: true });
+    const shortWrite = writeNativeShortBundle(root, videoId, {
+      text: "short-generation",
+      angle: "practical",
+      risk: "low",
+    }, { force: true });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await expect(readFile(path.join(articleDir, "article.md"), "utf8")).rejects.toThrow();
+    await expect(readFile(path.join(articleDir, "x-format", "x-short.md"), "utf8")).rejects.toThrow();
+    await release();
+    await Promise.all([articleWrite, shortWrite]);
+    await expect(readFile(path.join(articleDir, "article.md"), "utf8")).resolves.toBe("article-generation");
+    await expect(readFile(path.join(articleDir, "x-format", "x-short.md"), "utf8")).resolves.toBe("short-generation\n");
+  });
+
   it("serializes concurrent target work and removes the lock in finally", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "yt2x-content-lock-"));
     roots.push(root);
@@ -143,7 +186,11 @@ describe("content target transaction helpers", () => {
     await expect(replaceDirectoryAtomically(interruptedStage, interruptedTarget, {
       rename: async (from, to) => {
         renameCount += 1;
-        if (renameCount === 2) throw new Error("commit interrupted");
+        if (renameCount === 2) {
+          const readableDir = await resolveContentBundleDir(interruptedTarget);
+          await expect(readFile(path.join(readableDir, "body.md"), "utf8")).resolves.toBe("stable");
+          throw new Error("commit interrupted");
+        }
         const { rename } = await import("node:fs/promises");
         await rename(from, to);
       },

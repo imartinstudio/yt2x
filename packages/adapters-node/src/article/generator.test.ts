@@ -81,6 +81,30 @@ describe("generateXArticleContent", () => {
     });
   });
 
+  it("rejects omission of a detailed-note term required by the long-form article contract", async () => {
+    const llm = makeLlm(() => ({
+        content: "# 标题\n\nGraph Engineering 摘要。\n\n#AI #Agent #Workflow",
+        model: "m",
+        finishReason: "stop",
+      }));
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: [
+        "# Graph Engineering",
+        "## Executive Summary",
+        "Graph Engineering is the main idea.",
+        "## Detailed Notes",
+        "Context Engineering is a detailed long-form section.",
+      ].join("\n"),
+      metadata: { id: "article-full-scope", title: "Graph Engineering" },
+    };
+
+    await expect(generateXArticleContent({ llm, model: "m", artifacts })).rejects.toThrow(
+      "输出缺少源术语 Context Engineering",
+    );
+    expect(llm.chat).toHaveBeenCalledTimes(3);
+  });
+
   it("uses the target-side persistent discovery cache after a cold in-memory restart", async () => {
     const cacheDir = await mkdtemp(path.join(tmpdir(), "yt2x-article-term-cache-"));
     try {

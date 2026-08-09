@@ -3,7 +3,6 @@ import {
   lstat,
   mkdir,
   readFile,
-  readlink,
   rename as fsRename,
   rm,
   symlink,
@@ -30,10 +29,8 @@ const DEFAULT_LOCK_POLL_MS = 25;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const safeTargetName = (target: string): string => target.replace(/[^a-zA-Z0-9._-]/g, "_");
-
-export const contentTargetLockPathFor = (targetDir: string, target: string): string =>
-  path.join(path.resolve(targetDir), ".content-locks", `${safeTargetName(target)}.lock`);
+export const contentTargetLockPathFor = (targetDir: string, _target: string): string =>
+  path.join(path.resolve(targetDir), ".content-locks", "bundle.lock");
 
 const isProcessAlive = (pid: number): boolean => {
   try {
@@ -155,12 +152,25 @@ const lstatIfExists = async (filePath: string): Promise<Awaited<ReturnType<typeo
   }
 };
 
-const isInsideDirectory = (parentDir: string, childPath: string): boolean => {
-  const relative = path.relative(parentDir, childPath);
-  return relative !== ""
-    && !relative.startsWith(".." + path.sep)
-    && relative !== ".."
-    && !path.isAbsolute(relative);
+const migrationMarkerPathFor = (targetDir: string): string =>
+  path.join(path.dirname(targetDir), "." + path.basename(targetDir) + ".migration.json");
+
+/** Resolve the current bundle, including the tiny first-migration rename window. */
+export const resolveContentBundleDir = async (targetDir: string): Promise<string> => {
+  try {
+    await lstat(targetDir);
+    return targetDir;
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const marker = JSON.parse(await readFile(migrationMarkerPathFor(targetDir), "utf8")) as {
+    fallbackDir?: unknown;
+  };
+  if (typeof marker.fallbackDir !== "string") {
+    throw new Error("Invalid content bundle migration marker for \"" + targetDir + "\"");
+  }
+  await lstat(marker.fallbackDir);
+  return marker.fallbackDir;
 };
 
 /**
@@ -184,9 +194,7 @@ export const replaceDirectoryAtomically = async (
   const legacyDir = targetEntry !== undefined && !targetEntry.isSymbolicLink()
     ? path.join(versionsDir, "legacy-" + process.pid + "-" + randomUUID())
     : undefined;
-  const previousGeneration = targetEntry?.isSymbolicLink() === true
-    ? path.resolve(targetParent, await readlink(targetDir))
-    : undefined;
+  const migrationMarkerPath = migrationMarkerPathFor(targetDir);
 
   if (targetEntry !== undefined && !targetEntry.isDirectory() && !targetEntry.isSymbolicLink()) {
     throw new Error("Cannot replace content bundle at non-directory target \"" + targetDir + "\"");
@@ -202,6 +210,7 @@ export const replaceDirectoryAtomically = async (
     await symlink(pointerTarget, pointerPath, "dir");
 
     if (legacyDir !== undefined) {
+      await atomicWriteUtf8(migrationMarkerPath, JSON.stringify({ fallbackDir: legacyDir }) + "\n");
       await rename(targetDir, legacyDir);
       legacyMoved = true;
     }
@@ -224,12 +233,9 @@ export const replaceDirectoryAtomically = async (
       throw err;
     }
 
-    const obsoleteGeneration = legacyDir ?? previousGeneration;
-    if (obsoleteGeneration !== undefined
-      && obsoleteGeneration !== generationDir
-      && isInsideDirectory(versionsDir, obsoleteGeneration)) {
-      await rm(obsoleteGeneration, { recursive: true, force: true }).catch(() => {});
-    }
+    // Keep previous immutable generations readable for readers that resolved
+    // the migration fallback immediately before the pointer switch. A later
+    // maintenance pass may garbage-collect generations outside active runs.
   } finally {
     await rm(pointerPath, { force: true }).catch(() => {});
     if (!pointerCommitted && stagedMoved) {
@@ -241,5 +247,6 @@ export const replaceDirectoryAtomically = async (
     if (!pointerCommitted && legacyMoved && legacyDir !== undefined) {
       await rename(legacyDir, targetDir).catch(() => {});
     }
+    await rm(migrationMarkerPath, { force: true }).catch(() => {});
   }
 };

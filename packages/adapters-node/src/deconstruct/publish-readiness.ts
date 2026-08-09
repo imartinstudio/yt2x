@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { DeconstructManifest } from "@yt2x/core";
+import { resolveContentBundleDir } from "../content-transaction.js";
 
 export type ClipPublishOrderItem = {
   file: string;
@@ -124,8 +125,10 @@ export const assertClipPublishReadiness = async (articleDirOrClipsDir: string): 
 
 const resolveClipsDir = async (articleDirOrClipsDir: string): Promise<string> => {
   const direct = path.resolve(articleDirOrClipsDir);
-  if (await exists(path.join(direct, "clips-manifest.json"))) return direct;
-  return path.join(direct, "x-format", "clips");
+  const candidate = path.basename(direct) === "clips"
+    ? direct
+    : path.join(direct, "x-format", "clips");
+  return resolveContentBundleDir(candidate).catch(() => candidate);
 };
 
 const validateSeries = (result: ClipPublishReadiness, selectedCount: number): void => {

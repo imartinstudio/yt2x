@@ -778,4 +778,66 @@ describe("generateClipsPosts", () => {
       await rm(articleDir, { recursive: true, force: true });
     }
   });
+
+  it("keeps the old direct bundle readable when the generation commit is interrupted", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-direct-atomic-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const oldManifest = "{\"generation\":\"old\"}\n";
+      const oldPost = "old post\n";
+      const oldMetadata = "{\"generation\":\"old\"}\n";
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), oldManifest, "utf8");
+      await writeFile(path.join(clipsDir, "post-1-old.md"), oldPost, "utf8");
+      await mkdir(path.join(clipsDir, ".content-metadata"), { recursive: true });
+      await writeFile(path.join(clipsDir, ".content-metadata", "clip-post.json"), oldMetadata, "utf8");
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "direct-atomic", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-08-09T00:00:00.000Z",
+        candidateCount: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "new",
+          title: "新片段",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: true,
+          text: "新文案。",
+          timecodes: { start: "00:00:01", end: "00:00:11", startSec: 1, endSec: 11, durationSec: 10 },
+          video: "clip-1-new.mp4",
+        }],
+      };
+      const guard = createTechnicalTermGuard({ sourceText: "新片段" });
+
+      await expect(writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "新文章",
+        discoveredTerms: [],
+        sourceFingerprint: "sha256-new-source",
+        profileFingerprint: guard.profile.profileFingerprint,
+        discoveryAudit: {
+          promptVersion: "technical-term-discovery-v1",
+          sourceIdentity: "sha256-new-source",
+          acceptedCandidates: [],
+          reviewCandidates: [],
+          warnings: [],
+        },
+        requestedModel: "requested-model",
+        resolvedModel: "resolved-model",
+        promptVersion: "native-clip-post-v2",
+      }, {
+        commit: async () => { throw new Error("commit interrupted"); },
+      })).rejects.toThrow("commit interrupted");
+
+      await expect(readFile(path.join(clipsDir, "clips-manifest.json"), "utf8")).resolves.toBe(oldManifest);
+      await expect(readFile(path.join(clipsDir, "post-1-old.md"), "utf8")).resolves.toBe(oldPost);
+      await expect(readFile(path.join(clipsDir, ".content-metadata", "clip-post.json"), "utf8")).resolves.toBe(oldMetadata);
+      await expect(readFile(path.join(clipsDir, "post-1-new.md"), "utf8")).rejects.toThrow();
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
 });

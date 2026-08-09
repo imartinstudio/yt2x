@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { DeconstructManifest, SectionCandidate } from "@yt2x/core";
+import { resolveContentBundleDir } from "../content-transaction.js";
 
 export type SelectClipsInput = {
   articleDir: string;
@@ -98,7 +99,8 @@ export const applyClipSelection = (
 };
 
 export const selectClips = async (input: SelectClipsInput): Promise<SelectClipsResult> => {
-  const manifestPath = path.join(input.articleDir, "x-format", "clips", "clips-manifest.json");
+  const clipsDir = await resolveContentBundleDir(path.join(input.articleDir, "x-format", "clips"));
+  const manifestPath = path.join(clipsDir, "clips-manifest.json");
   const raw = await readFile(manifestPath, "utf8");
   const manifest: DeconstructManifest = JSON.parse(raw);
   const selected = applyClipSelection(manifest, input.keep);

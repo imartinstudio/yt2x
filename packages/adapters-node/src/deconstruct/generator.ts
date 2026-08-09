@@ -1,4 +1,6 @@
-import { mkdir, readFile, readdir, stat, symlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, readdir, realpath, stat, symlink } from "node:fs/promises";
 import path from "node:path";
 import {
   appendTechnicalTermRuleToSystemPrompt,
@@ -6,12 +8,16 @@ import {
   createTechnicalTermGuard,
   DECONSTRUCT_SYSTEM_PROMPT,
   DeconstructLlmOutputSchema,
+  fingerprintTechnicalTermValue,
   hasHardTechnicalTermViolations,
+  TECHNICAL_TERM_CATALOG_FINGERPRINT,
+  TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
   type DeconstructInput,
   type DeconstructLlmOutput,
   type FinalizedTechnicalTermValue,
   type LlmPort,
   type SectionCandidate,
+  type TechnicalTermDiscoveryAudit,
   estimateTokenCount,
   checkTokenBudget,
 } from "@yt2x/core";
@@ -20,11 +26,14 @@ import {
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
 } from "../technical-terms/discovery.js";
+import { CONTENT_PROMPT_VERSIONS, summarySourceTextFor } from "../content-cache.js";
 
 export type RunDeconstructInput = {
   llm: LlmPort;
   model: string;
   articleDir: string;
+  artifacts?: DeconstructInput;
+  cacheIdentity?: DeconstructCacheIdentity;
   signal?: AbortSignal;
 };
 
@@ -35,6 +44,85 @@ export type RunDeconstructResult = {
   finishReason: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   durationMs: number;
+  candidateTechnicalTerms: {
+    sourceFingerprint: string;
+    profileFingerprint: string;
+    discoveryAudit: TechnicalTermDiscoveryAudit;
+    requestedModel: string;
+    resolvedModel: string;
+  };
+};
+
+export type DeconstructVideoSourceIdentity = {
+  canonicalPath: string;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  device: number;
+  inode: number;
+  contentSha256: string;
+};
+
+export type DeconstructCacheIdentity = {
+  sourceFingerprint: string;
+  candidateSourceText: string;
+  sourceTitle: string;
+  srtSha256: string;
+  videoSourceIdentity: DeconstructVideoSourceIdentity;
+};
+
+const sha256File = async (filePath: string): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve("sha256-" + hash.digest("hex")));
+  });
+
+export const deconstructCacheIdentityFor = async (
+  artifacts: DeconstructInput,
+  options: { requestedModel: string; selectCount: number },
+): Promise<DeconstructCacheIdentity> => {
+  const canonicalVideoPath = await realpath(artifacts.videoPath);
+  const videoStat = await stat(canonicalVideoPath);
+  const videoSourceIdentity: DeconstructVideoSourceIdentity = {
+    canonicalPath: path.normalize(canonicalVideoPath),
+    size: videoStat.size,
+    mtimeMs: videoStat.mtimeMs,
+    ctimeMs: videoStat.ctimeMs,
+    device: videoStat.dev,
+    inode: videoStat.ino,
+    contentSha256: await sha256File(canonicalVideoPath),
+  };
+  const candidateSourceText = artifacts.articleMd + "\n" + condenseSrtContent(artifacts.srtContent);
+  const sourceTitle = artifacts.articleMd.match(/^#\s+(.+)$/m)?.[1] ?? artifacts.videoId;
+  const srtSha256 = fingerprintTechnicalTermValue(artifacts.srtContent);
+  const sourceFingerprint = fingerprintTechnicalTermValue({
+    articleDir: path.normalize(path.resolve(artifacts.articleDir)),
+    articleSha256: fingerprintTechnicalTermValue(artifacts.articleMd),
+    candidateSourceText,
+    durationSec: artifacts.durationSec,
+    requestedModel: options.requestedModel,
+    selectCount: options.selectCount,
+    srtSha256,
+    videoId: artifacts.videoId,
+    videoSourceIdentity,
+    promptVersions: {
+      candidate: CONTENT_PROMPT_VERSIONS.deconstruct,
+      clipPost: CONTENT_PROMPT_VERSIONS.clipPost,
+      discovery: TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
+    },
+    technicalTermStaticIdentity: TECHNICAL_TERM_CATALOG_FINGERPRINT,
+  });
+
+  return {
+    sourceFingerprint,
+    candidateSourceText,
+    sourceTitle,
+    srtSha256,
+    videoSourceIdentity,
+  };
 };
 
 /**
@@ -170,7 +258,7 @@ export const readDeconstructArtifacts = async (
 export const runDeconstruct = async (
   input: RunDeconstructInput,
 ): Promise<RunDeconstructResult> => {
-  const artifacts = await readDeconstructArtifacts(input.articleDir);
+  const artifacts = input.artifacts ?? await readDeconstructArtifacts(input.articleDir);
 
   // We don't have video title easily from article dir, try to extract from article.md
   const titleMatch = artifacts.articleMd.match(/^#\s+(.+)$/m);
@@ -187,12 +275,14 @@ export const runDeconstruct = async (
     sourceTitle,
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
-  const guard = createTechnicalTermGuard({
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
+  const fullGuard = createTechnicalTermGuard({
     sourceText,
     sourceTitle,
     discoveredTerms: discovery.accepted,
-    discovery: technicalTermDiscoveryAuditFor(discovery),
+    discovery: discoveryAudit,
   });
+  const guard = fullGuard.scope(summarySourceTextFor(artifacts.articleMd), sourceTitle);
   const prepared = guard.prepare({
     articleMd: artifacts.articleMd,
     srtContent: condensedSrt,
@@ -248,6 +338,17 @@ export const runDeconstruct = async (
     model: resp.model,
     finishReason: resp.finishReason,
     durationMs: Date.now() - t0,
+    candidateTechnicalTerms: {
+      sourceFingerprint: input.cacheIdentity?.sourceFingerprint
+        ?? (await deconstructCacheIdentityFor(artifacts, {
+          requestedModel: input.model,
+          selectCount: 0,
+        })).sourceFingerprint,
+      profileFingerprint: fullGuard.profile.profileFingerprint,
+      discoveryAudit,
+      requestedModel: input.model,
+      resolvedModel: resp.model,
+    },
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

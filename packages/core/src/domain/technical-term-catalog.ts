@@ -657,6 +657,8 @@ export type CreateTechnicalTermGuardArgs = {
   artifact?: TechnicalTermArtifact;
   catalog?: TechnicalTermCatalog;
   sourceUnitId?: string;
+  /** Parent source knowledge retained by derived summary scopes. */
+  knownProfile?: TechnicalTermProfile;
 };
 
 export const createTechnicalTermGuard = ({
@@ -667,8 +669,9 @@ export const createTechnicalTermGuard = ({
   artifact = "content",
   catalog: termCatalog = catalog,
   sourceUnitId,
+  knownProfile,
 }: CreateTechnicalTermGuardArgs): TechnicalTermGuard => {
-  const profile = createProfile(
+  const requiredProfile = createProfile(
     sourceText,
     sourceTitle,
     discoveredTerms,
@@ -677,7 +680,20 @@ export const createTechnicalTermGuard = ({
     discoveryAudit,
     sourceUnitId,
   );
+  const fullProfile = knownProfile ?? requiredProfile;
+  const profile = knownProfile === undefined
+    ? requiredProfile
+    : Object.freeze({
+      ...requiredProfile,
+      profileFingerprint: fingerprintTechnicalTermValue({
+        required: requiredProfile.profileFingerprint,
+        known: knownProfile.profileFingerprint,
+      }),
+    });
   const preservedEntries = profile.entries.filter(
+    (term) => term.policy === "preserve" || term.policy === "contextual-preserve",
+  );
+  const knownPreservedEntries = fullProfile.entries.filter(
     (term) => term.policy === "preserve" || term.policy === "contextual-preserve",
   );
   const preservedPatterns = preservedEntries.flatMap((term) => [term.canonical, term.sourceText]);
@@ -812,7 +828,20 @@ export const createTechnicalTermGuard = ({
         }
       }
     }
-    const activeCanonicals = new Set(profile.entries.map((term) => term.canonical));
+    for (const term of knownPreservedEntries.filter((known) =>
+      !preservedEntries.some((required) => required.canonical === known.canonical))) {
+      const forbidden = term.forbiddenZh.find((candidate) => candidate === "图"
+        ? [...combinedText.matchAll(/图/gu)].some((match) => isTechnicalChineseGraphContext(combinedText, match.index))
+        : countTermOccurrences(combinedText, candidate) > 0);
+      if (forbidden !== undefined) {
+        violations.push({
+          code: "forbidden-translation",
+          canonical: term.canonical,
+          message: `输出使用了 ${forbidden}，应保留 ${term.canonical}。`,
+        });
+      }
+    }
+    const activeCanonicals = new Set(fullProfile.entries.map((term) => term.canonical));
     const unexpectedMatches = termCatalog.entries
       .flatMap((candidate) => matchesForEntry(combinedText, candidate, "sourceText"))
       .filter((match) => isActiveGraphMatch(match, combinedText))
@@ -863,6 +892,7 @@ export const createTechnicalTermGuard = ({
         artifact,
         catalog: termCatalog,
         sourceUnitId: sourceUnit.unitId,
+        knownProfile: fullProfile,
       });
     },
     scope(sourceUnit: TechnicalTermSourceUnit | string, scopedSourceTitle = ""): TechnicalTermGuard {
@@ -876,6 +906,7 @@ export const createTechnicalTermGuard = ({
         discovery: profile.discovery,
         artifact,
         catalog: termCatalog,
+        knownProfile: fullProfile,
         ...(normalizedUnit.unitId === undefined ? {} : { sourceUnitId: normalizedUnit.unitId }),
       });
     },

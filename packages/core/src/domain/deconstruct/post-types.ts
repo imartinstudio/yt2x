@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const CLIP_POST_CALL_TO_ACTION =
-  "先看视频，再阅读下方完整/分步指南，学习如何为你的 agents 构建 loops。";
+  "先看视频，再阅读下方完整/分步指南，学习如何为你的 Agents 构建 loops。";
 
 /** 单条帖子 LLM 输出 — AI Agents leverage template */
 export const ClipPostSchema = z.object({

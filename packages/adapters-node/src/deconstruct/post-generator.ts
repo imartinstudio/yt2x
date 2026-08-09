@@ -28,7 +28,13 @@ export type GeneratePostsRunnerInput = {
 export type GeneratePostsRunnerResult = {
   postCount: number;
   postPaths: string[];
+  technicalTerms: ClipPostTechnicalTerms;
   usage?: { promptTokens: number; completionTokens: number };
+};
+
+export type ClipPostTechnicalTerms = {
+  guard: TechnicalTermGuard;
+  restoration: TechnicalTermRestoration;
 };
 
 const JSON_FENCE_RE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -126,6 +132,15 @@ export const generateClipsPosts = async (
     sourceTitle: articleTitle,
     discoveredTerms: discovery.accepted,
   });
+  const finalGuard = createTechnicalTermGuard({
+    sourceText: `${sourceText}\n${CLIP_POST_CALL_TO_ACTION}\nYouTube`,
+    sourceTitle: articleTitle,
+    discoveredTerms: discovery.accepted,
+  });
+  const finalTechnicalTerms: ClipPostTechnicalTerms = {
+    guard: finalGuard,
+    restoration: { placeholders: [] },
+  };
   const prepared = guard.prepare({
     articleTitle,
     seriesName,
@@ -181,7 +196,7 @@ export const generateClipsPosts = async (
     // Last post appends YouTube link
     const articleFooter = i < total - 1
       ? articleLine
-      : `${articleLine}\n🔗 https://www.youtube.com/watch?v=${manifest.source.videoId}`;
+      : `${articleLine}\n🔗 https://www.YouTube.com/watch?v=${manifest.source.videoId}`;
 
     const postLines = [
       post.opening_quote,
@@ -210,14 +225,12 @@ export const generateClipsPosts = async (
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
 
   // Only write .md files for selected clips
-  const postPaths = await writeSelectedPostFiles(manifest, input.articleDir, {
-    guard,
-    restoration: prepared.restoration,
-  });
+  const postPaths = await writeSelectedPostFiles(manifest, input.articleDir, finalTechnicalTerms);
 
   const result: GeneratePostsRunnerResult = {
     postCount: total,
     postPaths,
+    technicalTerms: finalTechnicalTerms,
   };
   if (resp.usage !== undefined) {
     result.usage = {
@@ -235,10 +248,7 @@ export const generateClipsPosts = async (
 export const writeSelectedPostFiles = async (
   manifest: DeconstructManifest,
   articleDir: string,
-  technicalTerms?: {
-    guard: TechnicalTermGuard;
-    restoration: TechnicalTermRestoration;
-  },
+  technicalTerms: ClipPostTechnicalTerms,
 ): Promise<string[]> => {
   const clipsDir = path.join(articleDir, "x-format", "clips");
   const manifestPath = path.join(clipsDir, "clips-manifest.json");
@@ -257,47 +267,18 @@ export const writeSelectedPostFiles = async (
 
   const selected = manifest.clips.filter((c) => c.selected === true);
 
-  const articleMd = technicalTerms === undefined
-    ? await readFile(path.join(articleDir, "article.md"), "utf8")
-    : "";
-  const sourceTitle = articleMd.match(/^#\s+(.+)$/m)?.[1] ?? "";
-  const finalGuard = technicalTerms?.guard ?? createTechnicalTermGuard({
-    sourceText: articleMd,
-    sourceTitle,
-  });
-  const restoration = technicalTerms?.restoration ?? { placeholders: [] };
+  const finalGuard = technicalTerms.guard;
+  const restoration = technicalTerms.restoration;
   const assembledTexts = selected.map((clip, index) => {
     if (!clip.text) return "";
-    const baseText = stripClipPostCallToAction(clip.text);
+    const baseText = stripClipPostYoutubeLink(stripClipPostCallToAction(clip.text));
     return index === selected.length - 1
-      ? `${baseText}\n\n${CLIP_POST_CALL_TO_ACTION}`
+      ? `${baseText}\n🔗 https://www.YouTube.com/watch?v=${manifest.source.videoId}\n\n${CLIP_POST_CALL_TO_ACTION}`
       : baseText;
   });
-  const boilerplateByPost = assembledTexts.map((text, postIndex) => {
-    const replacements = new Map<string, string>();
-    let nextToken = 0;
-    const masked = text.split("\n").map((line) => {
-      const isBoilerplate = line === CLIP_POST_CALL_TO_ACTION
-        || line.startsWith("🎬 视频 ")
-        || line.startsWith("📖 完整文章：")
-        || line.startsWith("🔗 https://www.youtube.com/");
-      if (!isBoilerplate) return line;
-      const token = `\uE000YT2X_CLIP_FIXED_${postIndex}_${nextToken}\uE001`;
-      nextToken += 1;
-      replacements.set(token, line);
-      return token;
-    }).join("\n");
-    return { masked, replacements };
-  });
-  const finalizedTexts = finalGuard.finalize(
-    boilerplateByPost.map((item) => item.masked),
-    restoration,
-  );
-  const blockingViolations = finalizedTexts.violations.filter(
-    (violation) => violation.code !== "missing-canonical-term",
-  );
-  if (blockingViolations.length > 0) {
-    throw new Error(`Technical term validation failed: ${blockingViolations.map((item) => item.message).join("; ")}`);
+  const finalizedTexts = finalGuard.finalize(assembledTexts, restoration);
+  if (hasHardTechnicalTermViolations(finalizedTexts.violations)) {
+    throw new Error(`Technical term validation failed: ${finalizedTexts.violations.map((item) => item.message).join("; ")}`);
   }
 
   for (let i = 0; i < selected.length; i++) {
@@ -306,10 +287,7 @@ export const writeSelectedPostFiles = async (
 
     const slug = clip.slug || clip.id;
     const postPath = path.join(clipsDir, `post-${i + 1}-${slug}.md`);
-    let finalText = finalizedTexts.value[i]!;
-    for (const [token, fixedText] of boilerplateByPost[i]!.replacements) {
-      finalText = finalText.replaceAll(token, fixedText);
-    }
+    const finalText = finalizedTexts.value[i]!;
     clip.text = finalText;
     clip.charCount = finalText.length;
 
@@ -329,6 +307,15 @@ const stripClipPostCallToAction = (text: string): string => {
   return text
     .split("\n")
     .filter((line) => line.trim() !== CLIP_POST_CALL_TO_ACTION)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+};
+
+const stripClipPostYoutubeLink = (text: string): string => {
+  return text
+    .split("\n")
+    .filter((line) => !/^🔗 https:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)/iu.test(line.trim()))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

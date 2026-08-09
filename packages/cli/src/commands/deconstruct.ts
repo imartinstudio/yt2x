@@ -173,6 +173,7 @@ export const runDeconstructCommand = async (
     const selectedPostPaths = await writeSelectedPostFiles(
       postManifest,
       articleDir,
+      genResult.technicalTerms,
     );
 
     logger.info({ mdCount: selectedPostPaths.length }, "Deconstruct: .md files written for selected clips");

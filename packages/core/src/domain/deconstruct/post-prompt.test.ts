@@ -15,7 +15,7 @@ describe("clip post prompt", () => {
     expect(CLIP_POST_SYSTEM_PROMPT).toContain("没有真实引用时，opening_quote 改用观点式开头");
     expect(CLIP_POST_SYSTEM_PROMPT).not.toContain("Quote needed");
     expect(CLIP_POST_SYSTEM_PROMPT).toContain(
-      "先看视频，再阅读下方完整/分步指南，学习如何为你的 agents 构建 loops。",
+      "先看视频，再阅读下方完整/分步指南，学习如何为你的 Agents 构建 loops。",
     );
     expect(CLIP_POST_SYSTEM_PROMPT).toContain("写成中文 X 贴文");
     expect(CLIP_POST_SYSTEM_PROMPT).toContain("标题必须是中文纯文本，不要 emoji，不要「｜N/N」");

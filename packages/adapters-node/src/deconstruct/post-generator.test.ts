@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { DeconstructManifest, LlmPort } from "@yt2x/core";
+import { createTechnicalTermGuard, type DeconstructManifest, type LlmPort } from "@yt2x/core";
 import { generateClipsPosts, writeSelectedPostFiles } from "./post-generator.js";
 
 describe("generateClipsPosts", () => {
@@ -117,17 +117,20 @@ describe("generateClipsPosts", () => {
       expect(secondPostText).toContain("Agent Graph");
       expect(postText).toContain("视频里可以看到，agent 盯住 CI");
       expect(postText).not.toContain("建议附上");
-      expect(postText).not.toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 agents 构建 loops。");
-      expect(secondPostText).toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 agents 构建 loops。");
+      expect(postText).not.toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 Agents 构建 loops。");
+      expect(secondPostText).toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 Agents 构建 loops。");
+      expect(postText).not.toContain("YouTube.com/watch?v=");
+      expect(secondPostText).toContain("https://www.YouTube.com/watch?v=video123");
       expect(postText).not.toContain("#ClaudeCode");
+      expect(result.technicalTerms.guard.validate([postText, secondPostText])).toEqual([]);
 
       // Manifest updated
       const updatedManifest = JSON.parse(
         await readFile(path.join(clipsDir, "clips-manifest.json"), "utf8"),
       ) as DeconstructManifest;
       expect(updatedManifest.clips[0]!.text?.startsWith("「未来属于把 Agents 变成 loops 的团队。」")).toBe(true);
-      expect(updatedManifest.clips[0]!.text).not.toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 agents 构建 loops。");
-      expect(updatedManifest.clips[1]!.text).toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 agents 构建 loops。");
+      expect(updatedManifest.clips[0]!.text).not.toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 Agents 构建 loops。");
+      expect(updatedManifest.clips[1]!.text).toContain("先看视频，再阅读下方完整/分步指南，学习如何为你的 Agents 构建 loops。");
       expect(updatedManifest.clips[0]!.postTitle).toBe("Loops 才是优势");
     } finally {
       await rm(articleDir, { recursive: true, force: true });
@@ -165,12 +168,59 @@ describe("generateClipsPosts", () => {
       };
       await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
 
-      const result = await writeSelectedPostFiles(manifest, articleDir);
+      const guard = createTechnicalTermGuard({
+        sourceText: "Graph Engineering 与 Agents\nYouTube",
+      });
+      const result = await writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+      });
       const postText = await readFile(result[0]!, "utf8");
 
       expect(postText).toContain("Graph Engineering");
       expect(postText).not.toContain("图工程");
-      expect(postText).toContain("学习如何为你的 agents 构建 loops。");
+      expect(postText).toContain("学习如何为你的 Agents 构建 loops。");
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects the final selected post when a discovered source term is missing", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-final-missing-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "final-missing", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "final-missing",
+          title: "标题",
+          type: "hot-take",
+          angle: "contrarian",
+          risk: "low",
+          selected: true,
+          text: "这里只保留普通正文。",
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-final-missing.mp4",
+        }],
+      };
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+      const guard = createTechnicalTermGuard({
+        sourceText: "Latent Workspace Routing\nAgents\nYouTube",
+        discoveredTerms: [{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }],
+      });
+
+      await expect(writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+      })).rejects.toThrow(/Latent Workspace Routing/u);
+
+      await expect(readFile(path.join(clipsDir, "post-1-final-missing.md"), "utf8")).rejects.toThrow();
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }

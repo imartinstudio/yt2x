@@ -318,6 +318,7 @@ const findProfileMatches = (
   sourceText: string,
   sourceTitle: string,
   discoveredTerms: readonly DiscoveredTechnicalTerm[],
+  catalogEntries: readonly TechnicalTermEntry[],
 ): TermMatch[] => {
   const discoveredEntries = discoveredTerms
     .filter((candidate) => candidate.confidence === "high")
@@ -333,7 +334,7 @@ const findProfileMatches = (
         : entry(actualSourceText, [candidate.category], "preserve");
     })
     .filter((candidate): candidate is TechnicalTermEntry => candidate !== undefined);
-  const allEntries = [...TECHNICAL_TERM_CATALOG, ...discoveredEntries];
+  const allEntries = [...catalogEntries, ...discoveredEntries];
   const selectLongestMatches = (matches: TermMatch[]): TermMatch[] => [...matches]
     .sort((a, b) => b.sourceText.length - a.sourceText.length || a.start - b.start)
     .filter((match, index, all) => all.slice(0, index).every((selected) => !overlaps(match, selected)));
@@ -417,10 +418,11 @@ const createProfile = (
   sourceTitle: string,
   discoveredTerms: readonly DiscoveredTechnicalTerm[],
   artifact: TechnicalTermArtifact,
+  termCatalog: TechnicalTermCatalog,
 ): TechnicalTermProfile => {
-  const matches = findProfileMatches(sourceText, sourceTitle, discoveredTerms);
+  const matches = findProfileMatches(sourceText, sourceTitle, discoveredTerms, termCatalog.entries);
   const base = resolvedFromMatches(matches);
-  const contextualMatches = TECHNICAL_TERM_CATALOG
+  const contextualMatches = termCatalog.entries
     .filter((entry) => entry.policy === "contextual-preserve")
     .flatMap((entry) => [
       ...matchesForEntry(sourceText, entry, "sourceText"),
@@ -450,7 +452,7 @@ const createProfile = (
       sourceFingerprint,
       entries: mergedEntries,
       occurrences: base.occurrences,
-      catalogFingerprint: TECHNICAL_TERM_CATALOG_FINGERPRINT,
+      catalogFingerprint: termCatalog.fingerprint,
       artifact,
     }),
   });
@@ -461,6 +463,7 @@ export type CreateTechnicalTermGuardArgs = {
   sourceTitle?: string;
   discoveredTerms?: readonly DiscoveredTechnicalTerm[];
   artifact?: TechnicalTermArtifact;
+  catalog?: TechnicalTermCatalog;
 };
 
 export const createTechnicalTermGuard = ({
@@ -468,8 +471,9 @@ export const createTechnicalTermGuard = ({
   sourceTitle = "",
   discoveredTerms = [],
   artifact = "content",
+  catalog: termCatalog = catalog,
 }: CreateTechnicalTermGuardArgs): TechnicalTermGuard => {
-  const profile = createProfile(sourceText, sourceTitle, discoveredTerms, artifact);
+  const profile = createProfile(sourceText, sourceTitle, discoveredTerms, artifact, termCatalog);
   const preservedEntries = profile.entries.filter(
     (term) => term.policy === "preserve" || term.policy === "contextual-preserve",
   );
@@ -583,12 +587,13 @@ export const createTechnicalTermGuard = ({
       }
     }
     const activeCanonicals = new Set(profile.entries.map((term) => term.canonical));
-    const unexpectedMatches = TECHNICAL_TERM_CATALOG
+    const unexpectedMatches = termCatalog.entries
       .flatMap((candidate) => matchesForEntry(combinedText, candidate, "sourceText"))
       .sort((a, b) => b.sourceText.length - a.sourceText.length || a.start - b.start)
       .filter((match, index, all) => all.slice(0, index).every((selected) => !overlaps(match, selected)));
     for (const match of unexpectedMatches) {
       const visualVocabularyIsAllowed = artifact === "visual-prompt"
+        && match.entry.canonical === "Graph"
         && match.entry.policy === "contextual-preserve";
       if (!activeCanonicals.has(match.entry.canonical) && !visualVocabularyIsAllowed) {
         violations.push({

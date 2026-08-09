@@ -235,6 +235,7 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
   let imagesGenerated = 0;
   const sectionHasImage: boolean[] = [];
   const sectionPrompts: string[] = [];
+  const hasLlm = input.llm !== undefined && input.llmModel !== undefined;
 
   // If prompts.json already exists, reuse cached prompts instead of calling the LLM again.
   // This ensures prompts are generated only once — "重新排版" reuses cached prompts.
@@ -259,9 +260,8 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
     // prompts.json doesn't exist — will generate via LLM below
   }
 
-  if (!hasCachedPrompts) {
+  if (!hasCachedPrompts && hasLlm) {
   // generate prompts via LLM
-  const hasLlm = input.llm !== undefined && input.llmModel !== undefined;
   for (let i = 0; i < sections.length; i++) {
     let prompt = "";
     if (hasLlm) {
@@ -287,16 +287,16 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
 
   } // end if (!hasCachedPrompts)
 
-  if (input.llm !== undefined && input.llmModel !== undefined) {
+  if (hasLlm) {
     const guarded = await finalizePlatformVisualPrompts({
-      llm: input.llm,
-      llmModel: input.llmModel,
+      llm: input.llm!,
+      llmModel: input.llmModel!,
       context: termContext,
       value: { prompts: sectionPrompts },
       parseResponse: (content) => JSON.parse(content) as { prompts: string[] },
     });
     sectionPrompts.splice(0, sectionPrompts.length, ...guarded.prompts);
-  } else {
+  } else if (hasCachedPrompts) {
     const guarded = termContext.guard.finalize({ prompts: sectionPrompts }, termContext.prepared.restoration);
     if (guarded.violations.length > 0) {
       throw new Error(`小红书视觉提示专业术语校验失败：${guarded.violations.map((item) => item.message).join("；")}`);
@@ -304,24 +304,26 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
     sectionPrompts.splice(0, sectionPrompts.length, ...guarded.value.prompts);
   }
 
-  await mkdir(outputDir, { recursive: true });
-  await mergePlatformVisualPrompts({
-    promptsPath,
-    patch: {
-      platform: "xiaohongshu",
-      title,
-      ...(input.llmModel === undefined ? {} : { model: input.llmModel }),
-      technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
-      illustrationPrompts: sectionPrompts.map((prompt, index) => ({
-        index,
-        text: sections[index] ?? "",
-        prompt,
-        filename: IMAGE_PREFIX + String(index + 1).padStart(2, "0") + IMAGE_EXT,
-        name: "第" + String(index + 1) + "节插图",
-      })),
-    },
-  });
-  files.push(promptsPath);
+  if (hasLlm || hasCachedPrompts) {
+    await mkdir(outputDir, { recursive: true });
+    await mergePlatformVisualPrompts({
+      promptsPath,
+      patch: {
+        platform: "xiaohongshu",
+        title,
+        ...(input.llmModel === undefined ? {} : { model: input.llmModel }),
+        technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
+        illustrationPrompts: sectionPrompts.map((prompt, index) => ({
+          index,
+          text: sections[index] ?? "",
+          prompt,
+          filename: IMAGE_PREFIX + String(index + 1).padStart(2, "0") + IMAGE_EXT,
+          name: "第" + String(index + 1) + "节插图",
+        })),
+      },
+    });
+    files.push(promptsPath);
+  }
 
   // ensure output directory exists (needed for image generation below)
   await mkdir(outputDir, { recursive: true });

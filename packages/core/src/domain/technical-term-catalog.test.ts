@@ -53,6 +53,24 @@ describe("technical term catalog", () => {
     expect(finalized.value).toContain("Knowledge Graph");
   });
 
+  it("keeps future non-Graph contextual terms strict in visual prompts", () => {
+    const testCatalog = defineTechnicalTermCatalog([
+      { canonical: "Graph", aliases: ["graph"], categories: ["ai-agent"], policy: "contextual-preserve", forbiddenZh: ["图"] },
+      { canonical: "Future Context", aliases: ["future context"], categories: ["domain"], policy: "contextual-preserve", forbiddenZh: ["未来上下文"] },
+    ]);
+    const createGuardWithCatalog = createTechnicalTermGuard as unknown as (input: {
+      sourceText: string;
+      artifact: "visual-prompt";
+      catalog: typeof testCatalog;
+    }) => ReturnType<typeof createTechnicalTermGuard>;
+    const guard = createGuardWithCatalog({ sourceText: "Graph", artifact: "visual-prompt", catalog: testCatalog });
+
+    expect(guard.finalize("A graph diagram", { placeholders: [] }).violations).toEqual([]);
+    expect(guard.finalize("Future Context diagram", { placeholders: [] }).violations).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "invented-canonical-term", canonical: "Future Context" })]),
+    );
+  });
+
   it("includes high-confidence discovered terms in the source profile", () => {
     const guard = createTechnicalTermGuard({
       sourceText: "Agentic RAG",

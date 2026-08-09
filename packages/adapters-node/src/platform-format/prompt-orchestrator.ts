@@ -69,16 +69,30 @@ export const mergePlatformVisualPrompts = async (input: {
 }): Promise<PlatformVisualPromptData> =>
   withPlatformVisualPromptFileLock(input.promptsPath, async () => {
     const current = await readPromptObject(input.promptsPath);
-    const next = {
-      ...(current ?? {}),
-      ...input.patch,
-      coverPrompts: input.patch.coverPrompts ?? current?.["coverPrompts"] ?? [],
-      illustrationPrompts: input.patch.illustrationPrompts ?? current?.["illustrationPrompts"] ?? [],
-    } as PlatformVisualPromptData;
-    delete (next as unknown as Record<string, unknown>)["prompts"];
-    if (typeof next.technicalTermProfileFingerprint !== "string") {
+    const nextFingerprint = input.patch.technicalTermProfileFingerprint;
+    if (typeof nextFingerprint !== "string") {
       throw new Error("平台视觉提示缺少 technicalTermProfileFingerprint");
     }
+    const currentFingerprint = current?.["technicalTermProfileFingerprint"];
+    const canReuseGeneratedFields = currentFingerprint === nextFingerprint;
+    const compatibleFields = {
+      ...(typeof current?.["platform"] === "string" ? { platform: current["platform"] } : {}),
+      ...(typeof current?.["title"] === "string" ? { title: current["title"] } : {}),
+      ...(canReuseGeneratedFields && typeof current?.["model"] === "string" ? { model: current["model"] } : {}),
+    };
+    const next = {
+      ...compatibleFields,
+      ...input.patch,
+      coverPrompts: input.patch.coverPrompts
+        ?? (canReuseGeneratedFields && Array.isArray(current?.["coverPrompts"])
+          ? current["coverPrompts"]
+          : []),
+      illustrationPrompts: input.patch.illustrationPrompts
+        ?? (canReuseGeneratedFields && Array.isArray(current?.["illustrationPrompts"])
+          ? current["illustrationPrompts"]
+          : []),
+    } as PlatformVisualPromptData;
+    delete (next as unknown as Record<string, unknown>)["prompts"];
     await writePromptObjectAtomically(input.promptsPath, next as unknown as Record<string, unknown>);
     return next;
   });

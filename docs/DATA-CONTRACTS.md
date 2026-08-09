@@ -127,7 +127,9 @@ manifest、烧录视频或本地转写临时文件。双语模式只读取已经
 }
 ```
 
-`prompts.json` 的旧版 `string[]`、旧版 `{ "prompts": [...] }` 或缺少 `technicalTermProfileFingerprint` 的对象均视为缓存未命中，必须重建。平台编排器和小红书版式适配器通过同一个按路径串行、临时文件 rename 的写入器合并字段；Dashboard 的上传、编辑和删除也必须使用同一把锁，不能直接做无锁的 read-modify-write。
+`prompts.json` 的旧版 `string[]`、旧版 `{ "prompts": [...] }` 或缺少 `technicalTermProfileFingerprint` 的对象均视为缓存未命中，必须重建。profile 缺失或不匹配时，合并器不得继承旧的 `coverPrompts`、`illustrationPrompts`、`prompts` 或旧 `model`；只保留明确兼容的 `platform`、`title` 字段，并写入新的 profile。平台编排器和小红书版式适配器通过同一个按路径串行、临时文件 rename 的写入器合并字段；Dashboard 的上传、编辑和删除也必须使用同一把锁，不能直接做无锁的 read-modify-write。
+
+视觉提示字段的 owner/skip/merge 契约如下：通用平台编排器是带 LLM 的新鲜封面和插图生成 owner；小红书 adapter 只在 profile 匹配时消费缓存，带 LLM 时才负责生成并 merge 自己的插图字段。小红书 adapter 没有 LLM 且缓存不存在或 profile 不匹配时，只完成排版和预览，跳过提示生成与 `prompts.json` 写入，绝不能用空 prompt 覆盖已有生成结果。Dashboard 必须等待通用编排器完成后再进入小红书 adapter。
 
 #### 如何维护中央术语库
 

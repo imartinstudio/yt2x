@@ -139,4 +139,24 @@ describe("formatXiaohongshuLayout technical terms", () => {
     expect(prompts.illustrationPrompts.length).toBeGreaterThan(0);
     expect(prompts.technicalTermProfileFingerprint).toMatch(/^fnv1a-/u);
   });
+
+  it("does not overwrite stale prompts when the adapter has no LLM", async () => {
+    const articleMd = "# Graph Engineering\n\n## Section\nKnowledge Graph content.";
+    const formatDir = path.join(tmpRoot, "xiaohongshu-format");
+    await mkdir(formatDir, { recursive: true });
+    const stalePrompts = {
+      platform: "xiaohongshu",
+      title: "Graph Engineering",
+      model: "old-model",
+      technicalTermProfileFingerprint: "fnv1a-stale",
+      coverPrompts: [{ label: "封面", prompt: "old cover", size: "1080×1440", filename: "cover.png", name: "旧封面" }],
+      illustrationPrompts: [{ index: 0, text: "Section", prompt: "old illustration", filename: "section-01.png", name: "旧插图" }],
+    };
+    const staleJson = JSON.stringify(stalePrompts, null, 2) + "\n";
+    await writeFile(path.join(formatDir, "prompts.json"), staleJson, "utf8");
+
+    await formatXiaohongshuLayout({ articleDir: tmpRoot, videoId: "no-llm-stale", articleMd });
+
+    await expect(readFile(path.join(formatDir, "prompts.json"), "utf8")).resolves.toBe(staleJson);
+  });
 });

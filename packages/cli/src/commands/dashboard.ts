@@ -675,7 +675,7 @@ export const deleteDashboardPromptImage = async (input: {
 const fileForPlatform = (platform: PlatformKey): string =>
   PLATFORMS.find((item) => item.key === platform)?.primaryFile ?? "article.md";
 
-const handleDashboardRequest = async (
+export const handleDashboardRequest = async (
   req: IncomingMessage,
   res: ServerResponse,
   opts: { articleOutDir: string; downloadsDir: string; indexPath: string; imageGenerator?: ImageGeneratorPort },

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
-import { orchestratePlatformPrompts, previewExistingArticleImages } from "./prompt-orchestrator.js";
+import { mergePlatformVisualPrompts, orchestratePlatformPrompts, previewExistingArticleImages } from "./prompt-orchestrator.js";
 
 let tmpRoot: string;
 
@@ -273,6 +273,32 @@ describe("previewExistingArticleImages", () => {
     expect(result!.coverCount).toBe(1);
     expect(result!.html).toContain("mycover.png");
     expect(result!.html).toContain("封面");
+  });
+});
+
+describe("mergePlatformVisualPrompts cache validity", () => {
+  it.each([
+    ["missing fingerprint", { platform: "xiaohongshu", title: "Source", model: "old-model", coverPrompts: [{ prompt: "old cover" }], illustrationPrompts: [{ index: 0, prompt: "old illustration" }], prompts: ["legacy prompt"] }],
+    ["mismatched fingerprint", { platform: "xiaohongshu", title: "Source", model: "old-model", technicalTermProfileFingerprint: "fnv1a-old", coverPrompts: [{ prompt: "old cover" }], illustrationPrompts: [{ index: 0, prompt: "old illustration" }], prompts: ["legacy prompt"] }],
+  ])("drops stale generated fields from an object with %s", async (_case, current) => {
+    const promptsPath = path.join(tmpRoot, "prompts.json");
+    await writeFile(promptsPath, JSON.stringify(current), "utf8");
+
+    const nextIllustration = { index: 0, text: "new section", prompt: "new illustration", filename: "section-01.png", name: "第一节插图" };
+    const merged = await mergePlatformVisualPrompts({
+      promptsPath,
+      patch: {
+        technicalTermProfileFingerprint: "fnv1a-new",
+        illustrationPrompts: [nextIllustration],
+      },
+    });
+
+    expect(merged.platform).toBe("xiaohongshu");
+    expect(merged.title).toBe("Source");
+    expect(merged.model).toBeUndefined();
+    expect(merged.coverPrompts).toEqual([]);
+    expect(merged.illustrationPrompts).toEqual([nextIllustration]);
+    expect(JSON.stringify(await readFile(promptsPath, "utf8"))).not.toContain("legacy prompt");
   });
 });
 

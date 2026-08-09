@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   buildTechnicalTermDiscoveryPrompt,
   createTechnicalTermDiscoveryCacheRecord,
+  fingerprintTechnicalTermValue,
   parseTechnicalTermDiscoveryResponse,
   parseTechnicalTermDiscoveryCacheRecord,
   recognizeDeterministicTechnicalTerms,
@@ -43,8 +44,12 @@ export const fingerprintTechnicalTermDiscoverySource = (value: string): string =
  */
 export const technicalTermDiscoveryAuditFor = (
   result: TechnicalTermDiscoveryResult,
+  source?: { sourceText: string; sourceTitle?: string; sourceIdentity?: string },
 ): TechnicalTermDiscoveryAudit => Object.freeze({
   promptVersion: TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
+  ...(source === undefined ? {} : {
+    sourceIdentity: source.sourceIdentity ?? technicalTermDiscoverySourceIdentityFor(source),
+  }),
   acceptedCandidates: Object.freeze([...result.accepted]),
   reviewCandidates: Object.freeze([...result.reviewCandidates]),
   warnings: Object.freeze([...result.warnings]),
@@ -60,20 +65,23 @@ export type TechnicalTermDiscoveryCacheKeyInput = {
 export const technicalTermDiscoverySourceIdentityFor = (input: {
   sourceText: string;
   sourceTitle?: string;
-}): string => fingerprintTechnicalTermDiscoverySource(
-  input.sourceTitle?.trim() === "" || input.sourceTitle === undefined
-    ? input.sourceText
-    : `${input.sourceTitle}\n\n${input.sourceText}`,
-);
+}): string => fingerprintTechnicalTermValue({
+  sourceTitle: input.sourceTitle ?? "",
+  sourceText: input.sourceText,
+});
 
 export const technicalTermDiscoveryCacheKeyFor = (input: TechnicalTermDiscoveryCacheKeyInput): string => {
-  return [
-    technicalTermDiscoverySourceIdentityFor(input),
-    input.model,
-    TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
-    input.catalogFingerprint ?? TECHNICAL_TERM_CATALOG_FINGERPRINT,
-  ].join("\u0000");
+  return fingerprintTechnicalTermValue({
+    sourceIdentity: technicalTermDiscoverySourceIdentityFor(input),
+    model: input.model,
+    promptVersion: TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
+    catalogFingerprint: input.catalogFingerprint ?? TECHNICAL_TERM_CATALOG_FINGERPRINT,
+  });
 };
+
+/** Stable target-side location shared by article and visual prompt producers. */
+export const technicalTermDiscoveryCacheDirFor = (targetDir: string): string =>
+  path.join(path.resolve(targetDir), ".cache", "technical-terms");
 
 export const technicalTermDiscoveryCacheFilePath = (cacheDir: string, cacheKey: string): string =>
   path.join(cacheDir, `${sha256Hex(cacheKey)}.json`);
@@ -302,6 +310,27 @@ const writePersistentResult = async (input: {
   await input.cache.write(input.cacheKey, record);
 };
 
+const persistForCallerCache = (
+  pending: Promise<TechnicalTermDiscoveryResult>,
+  input: DiscoverTechnicalTermsInput,
+  cacheKey: string,
+  sourceIdentity: string,
+  catalogFingerprint: string,
+): Promise<TechnicalTermDiscoveryResult> => {
+  if (input.cache === undefined) return pending;
+  return pending.then(async (result) => {
+    await writePersistentResult({
+      cache: input.cache!,
+      cacheKey,
+      sourceIdentity,
+      model: input.model,
+      catalogFingerprint,
+      result,
+    }).catch(() => undefined);
+    return result;
+  });
+};
+
 export const discoverTechnicalTerms = (
   input: DiscoverTechnicalTermsInput,
 ): Promise<TechnicalTermDiscoveryResult> => {
@@ -312,7 +341,15 @@ export const discoverTechnicalTerms = (
   const catalogFingerprint = input.catalogFingerprint ?? TECHNICAL_TERM_CATALOG_FINGERPRINT;
   const key = technicalTermDiscoveryCacheKeyFor(input);
   const existing = completedDiscoveryCache.get(key);
-  if (existing !== undefined) return existing;
+  if (existing !== undefined) {
+    return persistForCallerCache(
+      existing,
+      input,
+      key,
+      technicalTermDiscoverySourceIdentityFor(input),
+      catalogFingerprint,
+    );
+  }
 
   const pending = (async (): Promise<TechnicalTermDiscoveryResult> => {
     const sourceIdentity = technicalTermDiscoverySourceIdentityFor(input);

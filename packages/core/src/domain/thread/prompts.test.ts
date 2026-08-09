@@ -38,11 +38,9 @@ describe("THREAD_X_SYSTEM_PROMPT", () => {
     });
     expect(prompt).toMatch(/Simplified Chinese \(zh-CN\)/);
     expect(prompt).toMatch(/Translate Traditional Chinese/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/Prompt Engineering/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/Context Engineering/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/Graph Engineering/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/Knowledge Graph/);
-    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/Agent Graph/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/源材料中实际出现的术语/);
+    expect(THREAD_X_SYSTEM_PROMPT).toMatch(/运行时会追加本次源材料的 active terms/);
+    expect(THREAD_X_SYSTEM_PROMPT).not.toMatch(/Prompt Engineering/);
   });
 
   it("requires labeled tweet structure and content-derived length", () => {

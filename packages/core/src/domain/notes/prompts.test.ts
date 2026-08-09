@@ -41,12 +41,9 @@ describe("getNotesSystemPrompt", () => {
   it("requires English technical terms to remain verbatim", () => {
     const prompt = getNotesSystemPrompt();
     expect(prompt).toMatch(/必须按原文逐字保留/);
-    expect(prompt).toMatch(/Prompt Engineering/);
-    expect(prompt).toMatch(/Context Engineering/);
-    expect(prompt).toMatch(/Graph Engineering/);
-    expect(prompt).toMatch(/Knowledge Graph/);
-    expect(prompt).toMatch(/Agent Graph/);
-    expect(prompt).toMatch(/Graph 的基本词汇/);
+    expect(prompt).toMatch(/源材料中实际出现的术语/);
+    expect(prompt).not.toMatch(/本次源材料没有命中目录术语/);
+    expect(prompt).not.toMatch(/Prompt Engineering/);
     expect(prompt).toMatch(/不得翻译、音译或本地化/);
   });
 
@@ -162,8 +159,9 @@ describe("buildNotesUserPrompt", () => {
     expect(prompt).not.toMatch(/Output in English/);
     expect(prompt).toMatch(/Output in Simplified Chinese \(zh-CN\)/);
     expect(prompt).toMatch(/Translate Traditional Chinese/);
-    expect(prompt).toMatch(/Prompt Engineering/);
+    expect(prompt).toMatch(/源材料中实际出现的术语/);
     expect(prompt).toMatch(/必须按原文逐字保留/);
+    expect(prompt).not.toMatch(/没有命中目录术语/);
   });
 
   it("includes English output instruction when outputLanguage is 'en'", () => {

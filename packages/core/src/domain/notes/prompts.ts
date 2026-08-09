@@ -1,9 +1,10 @@
-import { buildTechnicalTermPromptRule } from "../technical-term-catalog.js";
+import { TECHNICAL_TERM_GENERAL_RULE } from "../technical-term-catalog.js";
 import type { NotesPromptInput, NotesPromptOptions, YouTubeMetadata } from "./types.js";
 
-
-
-const getTechnicalTermsRule = (lang: "zh" | "en"): string => buildTechnicalTermPromptRule(lang);
+const NOTES_TECHNICAL_TERMS_RULE = [
+  TECHNICAL_TERM_GENERAL_RULE,
+  "运行时由调用方追加本次源材料的 active terms；不要把未激活目录词当作本次输出要求。",
+].join("\n");
 
 export const getNotesSystemPrompt = (options: NotesPromptOptions = {}): string => {
   const lang = options.outputLanguage ?? "zh";
@@ -75,7 +76,7 @@ Processed: <YYYY-MM-DD>
 
 Rules:
 - ${langRule}
-- ${getTechnicalTermsRule(lang)}
+- ${NOTES_TECHNICAL_TERMS_RULE}
 - Translate the H1 title semantically — do NOT apply prefix/suffix rules like "别再只看结论："
 - The H1 title is the single most important field. It must be a faithful semantic translation of the original video title, not a marketing rewrite.
 - Brand and product names in the original title must remain unchanged in the H1; keep the original spelling and never translate the name into a localized substitute.
@@ -157,8 +158,8 @@ export const buildNotesUserPrompt = (
   const lang = options.outputLanguage ?? "zh";
   const langHint =
     lang === "en"
-      ? `Generate the structured-notes.md document following the schema. Output in English. ${getTechnicalTermsRule(lang)} Output ONLY the markdown document — no wrapper text, no code fences around the output.`
-      : `Generate the structured-notes.md document following the schema. Output in Simplified Chinese (zh-CN). Translate Traditional Chinese and ordinary non-Chinese source material into Simplified Chinese. Traditional Chinese output is forbidden. This is a hard requirement. ${getTechnicalTermsRule(lang)} Output ONLY the markdown document — no wrapper text, no code fences around the output.`;
+      ? `Generate the structured-notes.md document following the schema. Output in English. ${NOTES_TECHNICAL_TERMS_RULE} Output ONLY the markdown document — no wrapper text, no code fences around the output.`
+      : `Generate the structured-notes.md document following the schema. Output in Simplified Chinese (zh-CN). Translate Traditional Chinese and ordinary non-Chinese source material into Simplified Chinese. Traditional Chinese output is forbidden. This is a hard requirement. ${NOTES_TECHNICAL_TERMS_RULE} Output ONLY the markdown document — no wrapper text, no code fences around the output.`;
 
   sections.push("");
   sections.push(langHint);

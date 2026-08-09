@@ -1,8 +1,9 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
+import { clearTechnicalTermDiscoveryCaches } from "../technical-terms/discovery.js";
 import { mergePlatformVisualPrompts, orchestratePlatformPrompts, previewExistingArticleImages } from "./prompt-orchestrator.js";
 
 let tmpRoot: string;
@@ -408,6 +409,13 @@ describe("orchestratePlatformPrompts technical terms", () => {
       coverPrompts: Array<Record<string, string>>;
       illustrationPrompts: Array<Record<string, string>>;
       technicalTermProfileFingerprint: string;
+      technicalTermDiscovery: {
+        promptVersion: string;
+        sourceIdentity: string;
+        acceptedCandidates: unknown[];
+        reviewCandidates: unknown[];
+        warnings: unknown[];
+      };
     };
     const persistedText = JSON.stringify(prompts);
     expect(persistedText).toContain("Graph Engineering");
@@ -418,6 +426,13 @@ describe("orchestratePlatformPrompts technical terms", () => {
     expect(persistedText).toContain("配图");
     expect(persistedText).not.toContain("图工程连接知识图谱");
     expect(prompts.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
+    expect(prompts.technicalTermDiscovery).toMatchObject({
+      promptVersion: expect.any(String),
+      sourceIdentity: expect.stringMatching(/^sha256-[0-9a-f]{64}$/u),
+      acceptedCandidates: expect.any(Array),
+      reviewCandidates: expect.any(Array),
+      warnings: expect.any(Array),
+    });
 
     const preview = await readFile(path.join(result.outputDir, "orchestrate.html"), "utf8");
     expect(preview).toContain("Graph Engineering");
@@ -425,7 +440,51 @@ describe("orchestratePlatformPrompts technical terms", () => {
     expect(preview).toContain("Latent Workspace Routing");
     expect(preview).toContain("流程图");
     expect(requests.filter((request) => request.messages[0]?.content.includes("严格的源级专业术语发现器"))).toHaveLength(1);
-    expect(requests.filter((request) => request.messages[0]?.content.includes("专业术语定向修复器"))).toHaveLength(1);
+    expect(requests.filter((request) => request.messages[0]?.content.includes("专业术语定向修复器"))).toHaveLength(0);
+  });
+
+  it("reads the target-side discovery cache after in-memory caches are cleared", async () => {
+    const articleMd = "# Graph Engineering\n\nGraph Engineering connects the workflow.";
+    const firstRequests: ChatRequest[] = [];
+    const firstLlm: LlmPort = {
+      chat: async (request) => {
+        firstRequests.push(request);
+        const system = request.messages[0]?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) return { content: "[]", model: "visual-cache", finishReason: "stop" };
+        if (system.includes("Create a cover image-generation prompt")) return { content: "Graph Engineering cover", model: "visual-cache", finishReason: "stop" };
+        return {
+          content: JSON.stringify([{ index: 1, filename: "visual.png", name: "视觉", prompt: "Graph Engineering workflow" }]),
+          model: "visual-cache",
+          finishReason: "stop",
+        };
+      },
+    };
+
+    await orchestratePlatformPrompts({
+      articleDir: tmpRoot,
+      videoId: "visual-cold-cache",
+      articleMd,
+      platform: "x",
+      llm: firstLlm,
+      llmModel: "visual-cache-model",
+    });
+    expect(firstRequests.filter((request) => request.messages[0]?.content.includes("严格的源级专业术语发现器"))).toHaveLength(1);
+
+    clearTechnicalTermDiscoveryCaches();
+    const secondLlm: LlmPort = {
+      chat: vi.fn(async () => { throw new Error("cold visual cache was not read"); }),
+    };
+    await orchestratePlatformPrompts({
+      articleDir: tmpRoot,
+      videoId: "visual-cold-cache",
+      articleMd,
+      platform: "x",
+      llm: secondLlm,
+      llmModel: "visual-cache-model",
+    });
+
+    expect(secondLlm.chat).not.toHaveBeenCalled();
+    clearTechnicalTermDiscoveryCaches();
   });
 
   it.each(["wechat", "bilibili"] as const)("guards %s visual fields including label, name, and filename", async (platform) => {

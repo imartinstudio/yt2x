@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AvailableVisual, ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
 import {
@@ -5,6 +8,7 @@ import {
   validateArticleTopicHashtags,
   validateArticleVisualPlan,
 } from "./generator.js";
+import { clearTechnicalTermDiscoveryCaches as clearDiscoveryCaches } from "../technical-terms/discovery.js";
 import type { StructuredNotesArtifacts } from "./file-store.js";
 
 const fakeArtifacts: StructuredNotesArtifacts = {
@@ -68,6 +72,54 @@ describe("generateXArticleContent", () => {
     expect(result.content).not.toContain("提示工程、上下文工程和图工程");
     expect(result.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
     expect(llm.chat).toHaveBeenCalledTimes(3);
+    expect(result.technicalTermDiscovery).toMatchObject({
+      promptVersion: expect.any(String),
+      sourceIdentity: expect.stringMatching(/^sha256-[0-9a-f]{64}$/u),
+      acceptedCandidates: expect.any(Array),
+      reviewCandidates: expect.any(Array),
+      warnings: expect.any(Array),
+    });
+  });
+
+  it("uses the target-side persistent discovery cache after a cold in-memory restart", async () => {
+    const cacheDir = await mkdtemp(path.join(tmpdir(), "yt2x-article-term-cache-"));
+    try {
+      const artifacts: StructuredNotesArtifacts = {
+        ...fakeArtifacts,
+        videoId: "article-cold-cache",
+        structuredNotesMd: "# Latent Workspace Routing\n\nLatent Workspace Routing keeps agent state.",
+        metadata: { id: "article-cold-cache", title: "Latent Workspace Routing" },
+      };
+      const firstLlm = makeLlm(
+        () => ({ content: "# 标题\n\n正文\n\n#AI #Agent #Workflow", model: "m", finishReason: "stop" }),
+        JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+      );
+      await generateXArticleContent({
+        llm: firstLlm,
+        model: "article-cache-model",
+        artifacts,
+        technicalTermDiscoveryCacheDir: cacheDir,
+      });
+      expect(firstLlm.chat).toHaveBeenCalledTimes(2);
+
+      clearDiscoveryCaches();
+      const secondLlm = makeLlm(
+        () => ({ content: "# 标题\n\n冷启动后正文\n\n#AI #Agent #Workflow", model: "m", finishReason: "stop" }),
+        "[]",
+      );
+      const result = await generateXArticleContent({
+        llm: secondLlm,
+        model: "article-cache-model",
+        artifacts,
+        technicalTermDiscoveryCacheDir: cacheDir,
+      });
+
+      expect(secondLlm.chat).toHaveBeenCalledTimes(1);
+      expect(result.technicalTermDiscovery.sourceIdentity).toMatch(/^sha256-[0-9a-f]{64}$/u);
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+      clearDiscoveryCaches();
+    }
   });
 
   it("sends article system prompt and X user sections", async () => {

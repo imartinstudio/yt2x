@@ -6,6 +6,7 @@ export {
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
   technicalTermDiscoveryCacheFilePath,
+  technicalTermDiscoveryCacheDirFor,
   technicalTermDiscoveryCacheKeyFor,
   technicalTermDiscoverySourceIdentityFor,
   fingerprintTechnicalTermDiscoverySource,

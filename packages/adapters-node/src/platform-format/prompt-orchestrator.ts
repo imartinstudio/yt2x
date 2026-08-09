@@ -9,9 +9,11 @@ import {
   type TechnicalTermGuard,
 } from "@yt2x/core";
 import {
+  createFileTechnicalTermDiscoveryCacheStore,
   discoverTechnicalTerms,
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
+  technicalTermDiscoveryCacheDirFor,
 } from "../technical-terms/discovery.js";
 import type { PlatformFormatInput, PlatformFormatResult } from "./types.js";
 
@@ -20,6 +22,8 @@ export type PlatformVisualPromptData = {
   title?: string;
   model?: string;
   technicalTermProfileFingerprint: string;
+  /** 新写入的 prompts.json 带有审计；旧文件读取时允许缺失。 */
+  technicalTermDiscovery?: ReturnType<typeof technicalTermDiscoveryAuditFor>;
   coverPrompts: Array<{ label: string; prompt: string; size: string; filename: string; name: string }>;
   illustrationPrompts: Array<{ index: number; text: string; prompt: string; filename: string; name: string }>;
 };
@@ -118,10 +122,18 @@ export const createPlatformTechnicalTermContext = async (input: {
   llmModel: string;
   title: string;
   body: string;
+  technicalTermDiscoveryCacheDir?: string;
 }): Promise<PlatformTechnicalTermContext> => {
   const discovery = await discoverTechnicalTerms({
     llm: input.llm,
     model: input.llmModel,
+    sourceText: input.body,
+    sourceTitle: input.title,
+    ...(input.technicalTermDiscoveryCacheDir === undefined
+      ? {}
+      : { cache: createFileTechnicalTermDiscoveryCacheStore(input.technicalTermDiscoveryCacheDir) }),
+  });
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, {
     sourceText: input.body,
     sourceTitle: input.title,
   });
@@ -129,7 +141,7 @@ export const createPlatformTechnicalTermContext = async (input: {
     sourceText: input.body,
     sourceTitle: input.title,
     discoveredTerms: discovery.accepted,
-    discovery: technicalTermDiscoveryAuditFor(discovery),
+    discovery: discoveryAudit,
     artifact: "visual-prompt",
   });
   return { guard, prepared: guard.prepare({ title: input.title, body: input.body }) };
@@ -881,6 +893,7 @@ export const orchestratePlatformPrompts = async (
     llmModel: input.llmModel,
     title,
     body,
+    technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(outputDir),
   });
   const preparedArticle = termContext.prepared.value;
 
@@ -1066,6 +1079,7 @@ export const orchestratePlatformPrompts = async (
     context: termContext,
     value: {
       technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
+      technicalTermDiscovery: termContext.guard.profile.discovery,
       coverPrompts,
       illustrationPrompts,
     },
@@ -1079,6 +1093,7 @@ export const orchestratePlatformPrompts = async (
     title,
     model: input.llmModel,
     technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
+    technicalTermDiscovery: termContext.guard.profile.discovery,
     coverPrompts,
     illustrationPrompts,
   };

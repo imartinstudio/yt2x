@@ -6,6 +6,7 @@ import {
   finalizePlatformVisualPrompts,
   mergePlatformVisualPrompts,
 } from "./prompt-orchestrator.js";
+import { technicalTermDiscoveryCacheDirFor } from "../technical-terms/discovery.js";
 import type { PlatformFormatInput, PlatformFormatResult, XiaohongshuMetadata } from "./types.js";
 
 const METADATA_FILE = "xiaohongshu-format/xiaohongshu-metadata.json";
@@ -224,6 +225,7 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
       llmModel: input.llmModel,
       title,
       body,
+      technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(outputDir),
     })
     : (() => {
       const guard = createTechnicalTermGuard({ sourceText: body, sourceTitle: title, artifact: "visual-prompt" });
@@ -313,6 +315,7 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
         title,
         ...(input.llmModel === undefined ? {} : { model: input.llmModel }),
         technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
+        technicalTermDiscovery: termContext.guard.profile.discovery,
         illustrationPrompts: sectionPrompts.map((prompt, index) => ({
           index,
           text: sections[index] ?? "",

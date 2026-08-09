@@ -266,9 +266,38 @@ describe("technical term catalog", () => {
       },
     ]);
 
+    const activeBase = createTechnicalTermGuard({
+      sourceText: "Base Term is active.",
+      catalog: baseCatalog,
+    }).profile.profileFingerprint;
+    const activeWithUnrelatedEntry = createTechnicalTermGuard({
+      sourceText: "Base Term is active.",
+      catalog: extendedCatalog,
+    }).profile.profileFingerprint;
+
     expect(visual).not.toBe(content);
     expect(changedSource).not.toBe(content);
     expect(extendedCatalog.fingerprint).not.toBe(baseCatalog.fingerprint);
+    expect(activeWithUnrelatedEntry).toBe(activeBase);
+  });
+
+  it("exposes an explicit unit scope and counts repeated occurrences inside that unit", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Graph Engineering appears twice: Graph Engineering.",
+    });
+    const unit = guard.scopeUnit({
+      sourceText: "Graph Engineering appears twice: Graph Engineering.",
+      unitId: "cue-1",
+    });
+
+    expect(unit.profile.occurrences.filter((occurrence) => occurrence.canonical === "Graph Engineering"))
+      .toHaveLength(2);
+    expect(unit.validate("Graph Engineering appears once.")).toEqual([
+      expect.objectContaining({
+        code: "missing-canonical-term",
+        canonical: "Graph Engineering",
+      }),
+    ]);
   });
 
   it("scopes contextual Graph recovery to the source translation unit", () => {

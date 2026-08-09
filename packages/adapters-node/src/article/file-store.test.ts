@@ -85,12 +85,24 @@ describe("writeNativeArticleBundle", () => {
       generatedAt: new Date().toISOString(),
       durationMs: 1,
       technicalTermProfileFingerprint: "fnv1a-test",
+      technicalTermDiscovery: {
+        promptVersion: "technical-term-discovery-v1",
+        sourceIdentity: "sha256-source",
+        acceptedCandidates: [],
+        reviewCandidates: [],
+        warnings: [],
+      },
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "# A\n\nok", run);
     expect(await readFile(w.articlePath, "utf8")).toBe("# A\n\nok");
-    const parsed = JSON.parse(await readFile(w.runPath, "utf8")) as { model: string; technicalTermProfileFingerprint: string };
+    const parsed = JSON.parse(await readFile(w.runPath, "utf8")) as {
+      model: string;
+      technicalTermProfileFingerprint: string;
+      technicalTermDiscovery: { sourceIdentity: string };
+    };
     expect(parsed.model).toBe("m");
     expect(parsed.technicalTermProfileFingerprint).toBe("fnv1a-test");
+    expect(parsed.technicalTermDiscovery.sourceIdentity).toBe("sha256-source");
   });
 
   it("returns null when file exists without --force", async () => {

@@ -1474,7 +1474,7 @@ Add a screenshot and a flow chart.
     expect(callCount).toBe(3);
     expect(systemPrompts[0]).toContain("源级专业术语发现器");
     expect(systemPrompts[1]).toContain("Latent Workspace Routing");
-    expect(systemPrompts[2]).toContain("Latent Workspace Routing");
+    expect(systemPrompts[2]).not.toContain("Latent Workspace Routing");
     expect(translated).toHaveLength(31);
     expect(translated[0]?.text.join(" ")).toContain("Latent Workspace Routing");
     expect(translated[30]).toMatchObject({

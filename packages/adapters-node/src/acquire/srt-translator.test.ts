@@ -119,7 +119,7 @@ Add a screenshot and a flow chart.
     expect(prompts[0]).toContain("Graph Engineering");
     expect(prompts[0]).toContain("Latent Workspace Routing");
     expect(prompts[1]).toContain("Graph Engineering");
-    expect(prompts[1]).toContain("Latent Workspace Routing");
+    expect(prompts[1]).not.toContain("Latent Workspace Routing");
     expect(result).toContain("Knowledge Graph");
     expect(result).toContain("Latent Workspace Routing");
   });
@@ -276,6 +276,45 @@ Vector Memory Routing stores context.
         end: "00:00:04,000",
         text: ["什么时候值得用图"],
       },
+    ]);
+  });
+
+  it("derives a unit-scoped guard for a technical Graph cue and a visual graph cue", async () => {
+    const source = [
+      "1",
+      "00:00:01,000 --> 00:00:02,000",
+      "Graph is a technical concept.",
+      "",
+      "2",
+      "00:00:03,000 --> 00:00:04,000",
+      "This graph diagram has a basic vocabulary.",
+      "",
+    ].join("\n");
+    const guard = createTechnicalTermGuard({
+      sourceText: "Graph is a technical concept. This graph diagram has a basic vocabulary.",
+    });
+    const llm: LlmPort = {
+      chat: async (): Promise<ChatResponse> => ({
+        content: JSON.stringify([
+          { index: 1, text: "图是一个技术概念。" },
+          { index: 2, text: "图的基本词汇。" },
+        ]),
+        model: "test",
+        finishReason: "stop",
+      }),
+    };
+
+    const { srt: result } = await translateSrt(source, {
+      llm,
+      model: "test",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      technicalTermGuard: guard,
+    });
+
+    expect(parseSubtitleBlocks(result).map((cue) => cue.text[0])).toEqual([
+      "Graph 是一个技术概念。",
+      "图的基本词汇。",
     ]);
   });
 

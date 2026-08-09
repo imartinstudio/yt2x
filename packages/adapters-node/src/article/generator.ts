@@ -11,6 +11,7 @@ import {
   type TechnicalTermGuard,
 } from "@yt2x/core";
 import {
+  createFileTechnicalTermDiscoveryCacheStore,
   discoverTechnicalTerms,
   repairTechnicalTermViolations,
   technicalTermDiscoveryAuditFor,
@@ -26,6 +27,8 @@ export type GenerateXArticleInput = {
   /** 可用截图列表；null/[] 表示无可用截图 */
   availableVisuals?: AvailableVisual[] | null;
   signal?: AbortSignal;
+  /** 目标侧持久化 discovery cache；不得指向 files/downloads。 */
+  technicalTermDiscoveryCacheDir?: string;
 };
 
 export type GenerateXArticleResult = {
@@ -38,6 +41,7 @@ export type GenerateXArticleResult = {
   videoId: string;
   durationMs: number;
   technicalTermProfileFingerprint: string;
+  technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
 };
 
 const FENCE_RE = /^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -251,19 +255,23 @@ export const generateXArticleContent = async (
     model: input.model,
     sourceText,
     sourceTitle,
+    ...(input.technicalTermDiscoveryCacheDir === undefined
+      ? {}
+      : { cache: createFileTechnicalTermDiscoveryCacheStore(input.technicalTermDiscoveryCacheDir) }),
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
   const guard = createTechnicalTermGuard({
     sourceText,
     sourceTitle,
     discoveredTerms: discovery.accepted,
-    discovery: technicalTermDiscoveryAuditFor(discovery),
+    discovery: discoveryAudit,
   });
   const titleGuard = createTechnicalTermGuard({
     sourceText: sourceTitle,
     sourceTitle,
     discoveredTerms: discovery.accepted,
-    discovery: technicalTermDiscoveryAuditFor(discovery),
+    discovery: discoveryAudit,
   });
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
@@ -402,6 +410,7 @@ export const generateXArticleContent = async (
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
     technicalTermProfileFingerprint: prepared.profileFingerprint,
+    technicalTermDiscovery: discoveryAudit,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

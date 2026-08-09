@@ -5,6 +5,7 @@ import {
   pickArticleCoverFromCandidates,
   type ArticleVisualPlanItem,
   type AvailableVisual,
+  type TechnicalTermDiscoveryAudit,
   type VisualSuggestion,
   type YouTubeMetadata,
 } from "@yt2x/core";
@@ -30,6 +31,8 @@ export type NativeArticleRunRecord = {
   generatedAt: string;
   durationMs: number;
   technicalTermProfileFingerprint: string;
+  /** 新记录写入审计；旧 run.json 读取方可继续忽略该字段。 */
+  technicalTermDiscovery?: TechnicalTermDiscoveryAudit;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
 };
 

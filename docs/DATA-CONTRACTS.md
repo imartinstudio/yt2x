@@ -105,14 +105,16 @@ manifest、烧录视频或本地转写临时文件。双语模式只读取已经
 
 ### 3.1 术语档案与可追踪指纹
 
-所有会生成文字、JSON 字段或视觉提示的目标，都从中央目录和本次源材料的动态发现结果创建同一份 `TechnicalTermProfile`。它的 `profileFingerprint` 必须随可复用产物保存，并参与缓存命中判断：目录条目、别名、策略、源文本、已批准的动态术语或发现规则版本变化时，旧产物不可静默复用。
+所有会生成文字、JSON 字段或视觉提示的目标，都从中央目录和本次源材料的动态发现结果创建同一份 `TechnicalTermProfile`。它的 `profileFingerprint` 必须随可复用产物保存，并参与缓存命中判断：实际激活条目的策略、源文本、已批准的动态术语或发现规则版本变化时，旧产物不可静默复用；未激活的无关目录条目不应让 profile 过度失效。中央目录的全局 SHA-256 fingerprint 只用于 discovery cache record 的兼容校验。
 
 当前已落盘的指纹字段如下：
 
 - `run.json.technicalTermProfileFingerprint`：主文章生成所使用的术语档案。
+- `run.json.technicalTermDiscovery`：主文章使用的可序列化 discovery 审计，包括 `promptVersion`、结构化 `sourceIdentity`、`acceptedCandidates`、`reviewCandidates` 和 `warnings`；旧 `run.json` 缺少该字段时仍可读取。
 - `full.bilingual.semantic.json.technicalTermProfileFingerprint`：语义双语字幕的源级档案；与源字幕 SHA、翻译规则版本和模型一起校验。
 - `dub/dub-script.json.technicalTermProfileFingerprint`：配音稿的源级档案；当前 `dub-script.json` schema 为 **version 3**，旧版 2（以及更早版本）必须视为缓存未命中并重新生成。
 - `<platform>-format/prompts.json.technicalTermProfileFingerprint`：平台视觉提示包的档案；封面、插图、`name`、`filename`、`label` 和 `prompt` 等嵌套字段写入前统一校验。
+- `<platform>-format/prompts.json.technicalTermDiscovery`：视觉提示使用的同一份 discovery 审计；旧 `prompts.json` 缺少该字段时按旧 schema 读取，但不会凭旧指纹静默复用新 profile。
 
 视觉提示包使用单一对象 schema：
 
@@ -122,6 +124,13 @@ manifest、烧录视频或本地转写临时文件。双语模式只读取已经
   "title": "<source title>",
   "model": "<model>",
   "technicalTermProfileFingerprint": "sha256-<64-hex-fingerprint>",
+  "technicalTermDiscovery": {
+    "promptVersion": "technical-term-discovery-v1",
+    "sourceIdentity": "sha256-<64-hex-fingerprint>",
+    "acceptedCandidates": [],
+    "reviewCandidates": [],
+    "warnings": []
+  },
   "coverPrompts": [],
   "illustrationPrompts": []
 }

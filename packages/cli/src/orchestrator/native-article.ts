@@ -21,6 +21,7 @@ import {
   writeNativeVideoShortBundle,
   writePlatformArticleBundle,
   writeVisualSuggestions,
+  technicalTermDiscoveryCacheDirFor,
 } from "@yt2x/adapters-node";
 import {
   checkArticleQuality,
@@ -244,6 +245,9 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           model: llm.model,
           artifacts,
           availableVisuals,
+          technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(
+            path.join(articleOutDir, artifacts.videoId),
+          ),
         });
 
         // 渲染图片：复制截图到文章 images/ 并替换路径
@@ -269,6 +273,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             generatedAt: new Date().toISOString(),
             durationMs: result.durationMs,
             technicalTermProfileFingerprint: result.technicalTermProfileFingerprint,
+            technicalTermDiscovery: result.technicalTermDiscovery,
             ...(result.usage !== undefined ? { usage: result.usage } : {}),
           },
           { force: flags.force === true, notesVideoDir: videoDir, sourceVideoUrl: url },

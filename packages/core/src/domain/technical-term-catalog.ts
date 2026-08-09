@@ -40,6 +40,8 @@ export type TechnicalTermDiscoveryWarningRecord = {
  */
 export type TechnicalTermDiscoveryAudit = {
   promptVersion: string;
+  /** Stable identity of the source title/text used for discovery; optional for legacy reads. */
+  sourceIdentity?: string;
   acceptedCandidates: readonly DiscoveredTechnicalTerm[];
   reviewCandidates: readonly DiscoveredTechnicalTerm[];
   warnings: readonly TechnicalTermDiscoveryWarningRecord[];
@@ -90,6 +92,11 @@ export type TechnicalTermSourceUnit = {
   unitId?: string;
 };
 
+/** A unit scope must carry an explicit stable id so callers cannot accidentally validate a whole source. */
+export type TechnicalTermScopedSourceUnit = Omit<TechnicalTermSourceUnit, "unitId"> & {
+  unitId: string;
+};
+
 export type TechnicalTermRestoration = {
   placeholders: readonly { token: string; canonical: string }[];
 };
@@ -111,6 +118,8 @@ export type TechnicalTermGuard = {
   prepare<T>(value: T): PreparedTechnicalTermValue<T>;
   finalize<T>(value: T, restoration: TechnicalTermRestoration): FinalizedTechnicalTermValue<T>;
   validate<T>(value: T): readonly TechnicalTermViolation[];
+  /** 从父档案派生一个必须按 unitId 与 occurrence count 校验的 cue/field/translation-unit 作用域。 */
+  scopeUnit(sourceUnit: TechnicalTermScopedSourceUnit): TechnicalTermGuard;
   /** 从同一源级 profile 派生一个 cue/field/translation-unit 作用域。 */
   scope(sourceUnit: TechnicalTermSourceUnit | string, sourceTitle?: string): TechnicalTermGuard;
 };
@@ -577,8 +586,11 @@ const createProfile = (
   discovery: TechnicalTermDiscoveryAudit | undefined,
   sourceUnitId: string | undefined,
 ): TechnicalTermProfile => {
+  const sourceIdentity = discovery?.sourceIdentity
+    ?? fingerprintTechnicalTermValue({ sourceTitle, sourceText });
   const discoveryAudit: TechnicalTermDiscoveryAudit = {
     promptVersion: discovery?.promptVersion ?? "unspecified",
+    sourceIdentity,
     acceptedCandidates: Object.freeze([...(discovery?.acceptedCandidates ?? discoveredTerms)]),
     reviewCandidates: Object.freeze([...(discovery?.reviewCandidates ?? [])]),
     warnings: Object.freeze([...(discovery?.warnings ?? [])]),
@@ -618,6 +630,7 @@ const createProfile = (
     occurrences: base.occurrences,
     discovery: Object.freeze({
       promptVersion: discoveryAudit.promptVersion,
+      sourceIdentity,
       acceptedCandidates: Object.freeze(discoveryAudit.acceptedCandidates.map((candidate) => Object.freeze({ ...candidate }))),
       reviewCandidates: Object.freeze(discoveryAudit.reviewCandidates.map((candidate) => Object.freeze({ ...candidate }))),
       warnings: Object.freeze(discoveryAudit.warnings.map((warning) => Object.freeze({ ...warning }))),
@@ -625,11 +638,12 @@ const createProfile = (
     ...(sourceUnitId === undefined ? {} : { sourceUnitId }),
     profileFingerprint: fingerprintTechnicalTermValue({
       sourceFingerprint,
-      entries: mergedEntries,
+      activeEntries: mergedEntries,
       occurrences: base.occurrences,
-      catalogFingerprint: termCatalog.fingerprint,
       artifact,
-      discovery: discoveryAudit,
+      discoveryVersion: discoveryAudit.promptVersion,
+      sourceIdentity,
+      acceptedCandidates: discoveryAudit.acceptedCandidates,
       sourceUnitId,
     }),
   });
@@ -839,6 +853,17 @@ export const createTechnicalTermGuard = ({
     },
     validate<T>(value: T): readonly TechnicalTermViolation[] {
       return validateValue(value);
+    },
+    scopeUnit(sourceUnit: TechnicalTermScopedSourceUnit): TechnicalTermGuard {
+      return createTechnicalTermGuard({
+        sourceText: sourceUnit.sourceText,
+        ...(sourceUnit.sourceTitle === undefined ? {} : { sourceTitle: sourceUnit.sourceTitle }),
+        discoveredTerms: profile.discovery.acceptedCandidates,
+        discovery: profile.discovery,
+        artifact,
+        catalog: termCatalog,
+        sourceUnitId: sourceUnit.unitId,
+      });
     },
     scope(sourceUnit: TechnicalTermSourceUnit | string, scopedSourceTitle = ""): TechnicalTermGuard {
       const normalizedUnit = typeof sourceUnit === "string"

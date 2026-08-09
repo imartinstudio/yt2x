@@ -63,15 +63,41 @@ const buildRepairPrompt = (sourceLang: string, targetLang: string, missingIndice
 const appendTermRule = (prompt: string, guard: TechnicalTermGuard | undefined): string =>
   guard === undefined ? prompt : appendTechnicalTermRuleToSystemPrompt(prompt, guard.prepare([]).promptRule);
 
+const scopedUnitGuard = (
+  parent: TechnicalTermGuard,
+  blocks: readonly TextBlock[],
+  unitId: string,
+): TechnicalTermGuard => parent.scopeUnit({
+  sourceText: joinedCueText(blocks),
+  unitId,
+});
+
 const translateBatch = async (
   blocks: TextBlock[],
   opts: SrtTranslatorOptions,
   repairMode = false,
   guard?: TechnicalTermGuard,
 ): Promise<TextBlock[]> => {
-  const payload = blocks.map((b) => ({ index: b.index, text: b.text }));
-  const prepared = guard?.prepare(payload);
-  const userPrompt = JSON.stringify(prepared?.value ?? payload);
+  const rangeGuard = guard === undefined
+    ? undefined
+    : scopedUnitGuard(
+      guard,
+      blocks,
+      `srt:${repairMode ? "repair" : "batch"}:${blocks.map((block) => block.index).join(",")}`,
+    );
+  const scopedUnits = guard === undefined
+    ? undefined
+    : blocks.map((block) => {
+      const unitGuard = scopedUnitGuard(
+        guard,
+        [block],
+        `srt:${repairMode ? "repair" : "cue"}:${block.index}`,
+      );
+      return { block, guard: unitGuard, prepared: unitGuard.prepare({ index: block.index, text: block.text }) };
+    });
+  const payload = scopedUnits?.map((unit) => unit.prepared.value)
+    ?? blocks.map((b) => ({ index: b.index, text: b.text }));
+  const userPrompt = JSON.stringify(payload);
 
   const baseSystemPrompt = repairMode
     ? buildRepairPrompt(
@@ -80,7 +106,7 @@ const translateBatch = async (
         blocks.map((b) => b.index),
       )
     : buildSystemPrompt(opts.sourceLang, opts.targetLang);
-  const systemPrompt = appendTermRule(baseSystemPrompt, guard);
+  const systemPrompt = appendTermRule(baseSystemPrompt, rangeGuard);
 
   const resp = await opts.llm.chat({
     model: opts.model,
@@ -137,9 +163,13 @@ const translateBatch = async (
     throw new Error("translation response contains no requested blocks");
   }
 
-  return prepared === undefined
+  return scopedUnits === undefined
     ? dedupedResults
-    : guard!.finalize(dedupedResults, prepared.restoration).value;
+    : dedupedResults.map((result) => {
+      const unit = scopedUnits.find((candidate) => candidate.block.index === result.index);
+      if (unit === undefined) return result;
+      return unit.guard.finalize(result, unit.prepared.restoration).value;
+    });
 };
 
 const batchTranslateAll = async (
@@ -221,19 +251,6 @@ const cueRangeForSpan = (
   return { start: first.index, end: last.index };
 };
 
-const exactCount = (value: string, needle: string): number => {
-  if (needle.length === 0) return 0;
-  let count = 0;
-  let cursor = 0;
-  while (cursor <= value.length - needle.length) {
-    const found = value.indexOf(needle, cursor);
-    if (found < 0) break;
-    count += 1;
-    cursor = found + needle.length;
-  }
-  return count;
-};
-
 const termRepairRanges = (
   blocks: readonly TextBlock[],
   translated: readonly TextBlock[],
@@ -241,8 +258,6 @@ const termRepairRanges = (
   violations: readonly { canonical?: string }[],
 ): CueIndexRange[] => {
   const sourceRanges = cueRanges(blocks);
-  const translatedRanges = cueRanges(translated);
-  const translatedJoined = joinedCueText(translated);
   const ranges: CueIndexRange[] = [];
   const add = (range: CueIndexRange | undefined): void => {
     if (range === undefined) return;
@@ -251,30 +266,29 @@ const termRepairRanges = (
     }
   };
 
-  for (const occurrence of guard.profile.occurrences.filter((item) => item.source === "sourceText")) {
+  const sourceOccurrences = guard.profile.occurrences.filter((item) => item.source === "sourceText");
+  const checkedRanges = new Set<string>();
+  for (const occurrence of sourceOccurrences) {
     const sourceRange = cueRangeForSpan(sourceRanges, occurrence.start, occurrence.end);
     if (sourceRange === undefined) continue;
-    const targetStart = translatedRanges.find((range) => range.index === sourceRange.start)?.start;
-    const targetEnd = translatedRanges.find((range) => range.index === sourceRange.end)?.end;
-    if (targetStart === undefined || targetEnd === undefined) continue;
-    const targetText = translatedJoined.slice(targetStart, targetEnd);
-    if (exactCount(targetText, occurrence.canonical) !== 1) add(sourceRange);
+    const rangeKey = `${sourceRange.start}-${sourceRange.end}`;
+    if (checkedRanges.has(rangeKey)) continue;
+    checkedRanges.add(rangeKey);
+    const sourceRangeBlocks = blocks.filter((block) =>
+      block.index >= sourceRange.start && block.index <= sourceRange.end,
+    );
+    const targetRangeBlocks = translated.filter((block) =>
+      block.index >= sourceRange.start && block.index <= sourceRange.end,
+    );
+    const rangeGuard = scopedUnitGuard(guard, sourceRangeBlocks, `srt:validate:${rangeKey}`);
+    const rangeViolations = rangeGuard.validate(joinedCueText(targetRangeBlocks));
+    if (rangeViolations.length > 0) add(sourceRange);
   }
 
-  const expectedCounts = new Map<string, number>();
-  for (const occurrence of guard.profile.occurrences) {
-    if (occurrence.source === "sourceText") {
-      expectedCounts.set(occurrence.canonical, (expectedCounts.get(occurrence.canonical) ?? 0) + 1);
-    }
-  }
-  for (const [canonical, expected] of expectedCounts) {
-    if (exactCount(translatedJoined, canonical) !== expected) {
-      const occurrence = guard.profile.occurrences.find((item) =>
-        item.source === "sourceText" && item.canonical === canonical,
-      );
-      add(occurrence === undefined
-        ? undefined
-        : cueRangeForSpan(sourceRanges, occurrence.start, occurrence.end));
+  if (sourceOccurrences.length > 0 && ranges.length === 0 && violations.length > 0) {
+    const firstOccurrence = sourceOccurrences[0];
+    if (firstOccurrence !== undefined) {
+      add(cueRangeForSpan(sourceRanges, firstOccurrence.start, firstOccurrence.end));
     }
   }
 
@@ -283,6 +297,35 @@ const termRepairRanges = (
     end: blocks.at(-1)?.index ?? blocks[0]?.index ?? 1,
   });
   return ranges;
+};
+
+const finalizeTranslatedBlocks = (
+  sourceBlocks: readonly TextBlock[],
+  translated: readonly TextBlock[],
+  guard: TechnicalTermGuard,
+): { blocks: TextBlock[]; violations: ReturnType<TechnicalTermGuard["validate"]> } => {
+  const sourceByIndex = new Map(sourceBlocks.map((block) => [block.index, block]));
+  const perCueResults = translated.map((block) => {
+    const source = sourceByIndex.get(block.index) ?? block;
+    const cueGuard = scopedUnitGuard(guard, [source], `srt:final-cue:${block.index}`);
+    return {
+      block: cueGuard.finalize(block.text, { placeholders: [] }),
+      cueGuard,
+      source,
+    };
+  });
+  const finalizedBlocks = perCueResults.map(({ block: finalized, source }) => ({
+    index: source.index,
+    text: finalized.value,
+  }));
+  const rangeGuard = scopedUnitGuard(
+    guard,
+    sourceBlocks,
+    `srt:final-range:${sourceBlocks.map((block) => block.index).join(",")}`,
+  );
+  const joined = rangeGuard.finalize(joinedCueText(finalizedBlocks), { placeholders: [] });
+  const perCueViolations = perCueResults.flatMap(({ block: finalized }) => finalized.violations);
+  return { blocks: finalizedBlocks, violations: [...perCueViolations, ...joined.violations] };
 };
 
 const mergeTranslatedBlocks = (
@@ -330,21 +373,6 @@ const postProcessSrt = async (finalSrt: string, sourceSrt: string): Promise<stri
     // If preservation fails, keep original SRT
   }
   return output;
-};
-
-const finalizeTranslatedBlocks = (
-  translated: readonly TextBlock[],
-  guard: TechnicalTermGuard,
-): { blocks: TextBlock[]; violations: ReturnType<TechnicalTermGuard["validate"]> } => {
-  // Validate the joined transcript so a term split over adjacent cues remains
-  // contiguous for the guard. Per-cue finalization still restores complete
-  // terms without changing cue boundaries or timestamps.
-  const blocks = translated.map((block) => ({
-    ...block,
-    text: guard.finalize(block.text, { placeholders: [] }).value,
-  }));
-  const joined = guard.finalize(joinedCueText(blocks), { placeholders: [] });
-  return { blocks, violations: joined.violations };
 };
 
 export const translateSrt = async (
@@ -504,7 +532,7 @@ export const translateSrt = async (
   // Finalize the complete source profile only after all language and homoglyph
   // post-processors have run. This is also where forbidden Chinese translations
   // are restored before the range-level check below.
-  let finalized = finalizeTranslatedBlocks(translated, technicalTermGuard);
+  let finalized = finalizeTranslatedBlocks(blocks, translated, technicalTermGuard);
   translated.length = 0;
   translated.push(...finalized.blocks);
 
@@ -530,7 +558,7 @@ export const translateSrt = async (
       }));
       translated.length = 0;
       translated.push(...repairedBlocks);
-      finalized = finalizeTranslatedBlocks(translated, technicalTermGuard);
+      finalized = finalizeTranslatedBlocks(blocks, translated, technicalTermGuard);
       translated.length = 0;
       translated.push(...finalized.blocks);
     }

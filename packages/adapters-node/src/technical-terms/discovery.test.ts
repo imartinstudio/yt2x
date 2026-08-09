@@ -20,6 +20,7 @@ import {
   technicalTermDiscoveryAuditFor,
   technicalTermDiscoveryCacheFilePath,
   technicalTermDiscoveryCacheKeyFor,
+  technicalTermDiscoverySourceIdentityFor,
 } from "./discovery.js";
 
 const response = (content: string): ChatResponse => ({
@@ -47,15 +48,32 @@ describe("source-level technical term discovery", () => {
       warnings: [{ code: "provider-warning", message: "review the candidate" }],
     };
 
-    const audit: TechnicalTermDiscoveryAudit = technicalTermDiscoveryAuditFor(result);
+    const audit: TechnicalTermDiscoveryAudit = technicalTermDiscoveryAuditFor(result, {
+      sourceTitle: "Technical source",
+      sourceText: "Graph Engineering is active.",
+    });
 
-    expect(audit).toEqual({
+    expect(audit).toMatchObject({
       promptVersion: TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
       acceptedCandidates: result.accepted,
       reviewCandidates: result.reviewCandidates,
       warnings: result.warnings,
     });
+    expect(audit).toHaveProperty("sourceIdentity", expect.stringMatching(/^sha256-[0-9a-f]{64}$/u));
     expect(JSON.parse(JSON.stringify(audit))).toEqual(audit);
+  });
+
+  it("uses structured source identity so title and body boundaries cannot collide", () => {
+    const first = technicalTermDiscoverySourceIdentityFor({
+      sourceTitle: "a",
+      sourceText: "b\n\nc",
+    });
+    const second = technicalTermDiscoverySourceIdentityFor({
+      sourceTitle: "a\n\nb",
+      sourceText: "c",
+    });
+
+    expect(first).not.toBe(second);
   });
 
   it("caches in-flight and completed discovery by source and model", async () => {
@@ -226,6 +244,47 @@ describe("source-level technical term discovery", () => {
 
       expect(second).toEqual(first);
       expect(secondLlm.chat).not.toHaveBeenCalled();
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+      clearTechnicalTermDiscoveryCaches();
+    }
+  });
+
+  it("writes a successful result to a later caller cache when single-flight started without one", async () => {
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-term-cache-"));
+    try {
+      const cache = createFileTechnicalTermDiscoveryCacheStore(cacheDir);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const llm: LlmPort = {
+        chat: vi.fn(async () => {
+          await gate;
+          return response(JSON.stringify([
+            { sourceText: "Single Flight Protocol", confidence: "high", category: "ai" },
+          ]));
+        }),
+      };
+      const baseInput = {
+        llm,
+        model: "single-flight-later-cache-model",
+        sourceText: "A source about Single Flight Protocol.",
+      };
+
+      const first = discoverTechnicalTerms(baseInput);
+      const second = discoverTechnicalTerms({ ...baseInput, cache });
+      release();
+      await Promise.all([first, second]);
+      clearTechnicalTermDiscoveryCaches();
+
+      const cacheReaderLlm: LlmPort = {
+        chat: vi.fn(async () => { throw new Error("persistent single-flight cache was not written"); }),
+      };
+      const cached = await discoverTechnicalTerms({ ...baseInput, llm: cacheReaderLlm, cache });
+
+      expect(cached.accepted).toEqual([
+        { sourceText: "Single Flight Protocol", confidence: "high", category: "ai" },
+      ]);
+      expect(cacheReaderLlm.chat).not.toHaveBeenCalled();
     } finally {
       await rm(cacheDir, { recursive: true, force: true });
       clearTechnicalTermDiscoveryCaches();

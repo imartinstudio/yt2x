@@ -148,6 +148,7 @@ describe("executeNativeArticle", () => {
       durationMs: 1,
       content: "# 新文章\n\n正文",
       visualPlan: [],
+      technicalTermProfileFingerprint: "fnv1a-task3",
     });
 
     const code = await executeNativeArticle({
@@ -163,6 +164,13 @@ describe("executeNativeArticle", () => {
 
     expect(code).toBe(0);
     expect(generateXArticleContentMock).toHaveBeenCalled();
+    expect(writeNativeArticleBundleMock).toHaveBeenCalledWith(
+      articleOutDir,
+      videoId,
+      "# 新文章\n\n正文",
+      expect.objectContaining({ technicalTermProfileFingerprint: "fnv1a-task3" }),
+      expect.any(Object),
+    );
   });
 
   it("skips thread generation when x-thread.md already exists and --force is not set", async () => {

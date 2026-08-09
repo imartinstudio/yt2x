@@ -268,6 +268,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             finishReason: result.finishReason,
             generatedAt: new Date().toISOString(),
             durationMs: result.durationMs,
+            technicalTermProfileFingerprint: result.technicalTermProfileFingerprint,
             ...(result.usage !== undefined ? { usage: result.usage } : {}),
           },
           { force: flags.force === true, notesVideoDir: videoDir, sourceVideoUrl: url },

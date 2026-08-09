@@ -29,6 +29,7 @@ export type NativeArticleRunRecord = {
   finishReason: string;
   generatedAt: string;
   durationMs: number;
+  technicalTermProfileFingerprint: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
 };
 

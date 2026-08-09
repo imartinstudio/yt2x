@@ -1,16 +1,20 @@
 import { readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  appendTechnicalTermRuleToSystemPrompt,
   CLIP_POST_CALL_TO_ACTION,
   CLIP_POST_SYSTEM_PROMPT,
+  createTechnicalTermGuard,
   deriveSeriesName,
-  restoreProtectedTechnicalTermsInValue,
+  hasHardTechnicalTermViolations,
+  type FinalizedTechnicalTermValue,
   type ClipPostList,
   type DeconstructManifest,
   type GeneratePostsInput,
   type LlmPort,
 } from "@yt2x/core";
 import { ClipPostListSchema } from "@yt2x/core";
+import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
 
 export type GeneratePostsRunnerInput = {
   llm: LlmPort;
@@ -107,30 +111,60 @@ export const generateClipsPosts = async (
     video: c.video,
   }));
 
-  const userPrompt = buildPostUserPrompt({
+  const sourceText = `${articleMd}\n${JSON.stringify(clipsInput)}`;
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle: articleTitle,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const guard = createTechnicalTermGuard({
+    sourceText,
+    sourceTitle: articleTitle,
+    discoveredTerms: discovery.accepted,
+  });
+  const prepared = guard.prepare({
     articleTitle,
     seriesName,
     articlePath: manifest.source.articlePath,
     clips: clipsInput,
   });
+  const preparedUserPrompt = buildPostUserPrompt(prepared.value);
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(CLIP_POST_SYSTEM_PROMPT, prepared.promptRule);
 
   const _t0 = Date.now();
   const resp = await input.llm.chat({
     model: input.model,
     messages: [
-      { role: "system", content: CLIP_POST_SYSTEM_PROMPT },
-      { role: "user", content: userPrompt },
+      { role: "system", content: systemPrompt },
+      { role: "user", content: preparedUserPrompt },
     ],
     temperature: 0.4,
     maxTokens: 8192,
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
 
-  const parsed = restoreProtectedTechnicalTermsInValue(
+  let finalized: FinalizedTechnicalTermValue<ClipPostList> = guard.finalize(
     parseClipPosts(resp.content),
-    articleMd,
-    articleTitle,
+    prepared.restoration,
   );
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    finalized = await repairTechnicalTermViolations({
+      llm: input.llm,
+      model: input.model,
+      guard,
+      currentValue: finalized.value,
+      restoration: prepared.restoration,
+      violations: finalized.violations,
+      parseResponse: parseClipPosts,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    });
+  }
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+  }
+  const parsed = finalized.value;
 
   // Write all candidates' copy into manifest JSON
   const total = parsed.posts.length;

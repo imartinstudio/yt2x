@@ -84,11 +84,13 @@ describe("writeNativeArticleBundle", () => {
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "# A\n\nok", run);
     expect(await readFile(w.articlePath, "utf8")).toBe("# A\n\nok");
-    const parsed = JSON.parse(await readFile(w.runPath, "utf8")) as { model: string };
+    const parsed = JSON.parse(await readFile(w.runPath, "utf8")) as { model: string; technicalTermProfileFingerprint: string };
     expect(parsed.model).toBe("m");
+    expect(parsed.technicalTermProfileFingerprint).toBe("fnv1a-test");
   });
 
   it("returns null when file exists without --force", async () => {
@@ -101,6 +103,7 @@ describe("writeNativeArticleBundle", () => {
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     await writeNativeArticleBundle(articleRoot, "v1", "one", run);
     const result = await writeNativeArticleBundle(articleRoot, "v1", "two", run);
@@ -117,6 +120,7 @@ describe("writeNativeArticleBundle", () => {
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
       notesVideoDir: path.join(notesRoot, "v1"),
@@ -139,6 +143,7 @@ describe("writeNativeArticleBundle", () => {
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
       notesVideoDir: dir,
@@ -161,6 +166,7 @@ describe("writeNativeArticleBundle", () => {
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const body = "# **标题**\n\n导语。\n\n## **第一节**\n\n正文。\n\n#话题一 #话题二 #TopicThree";
     const w = await writeNativeArticleBundle(articleRoot, "v1", body, run, {
@@ -203,6 +209,7 @@ describe("writeNativeArticleBundle cover fallback", () => {
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
       notesVideoDir: dir,
@@ -225,6 +232,7 @@ describe("writeNativeArticleBundle cover fallback", () => {
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
       notesVideoDir: dir,

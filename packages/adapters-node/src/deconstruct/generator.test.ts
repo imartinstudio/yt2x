@@ -272,7 +272,7 @@ describe("runDeconstruct technical term restoration", () => {
       await mkdir(videoDir, { recursive: true });
       await writeFile(
         path.join(articleDir, "article.md"),
-        "# Graph Engineering（图工程）\n\n## Graph 的基本词汇\n\nKnowledge Graph 和 Agent Graph。",
+        "# Prompt Engineering and Graph Engineering（图工程）\n\n## Graph 的基本词汇\n\nPrompt Engineering、Context Engineering、Knowledge Graph、Agent Graph 和 Latent Workspace Routing。",
         "utf8",
       );
       await writeFile(path.join(videoDir, "full.mp4"), "", "utf8");
@@ -282,34 +282,64 @@ describe("runDeconstruct technical term restoration", () => {
         "utf8",
       );
 
+      const responses = [
+        JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+        JSON.stringify({
+          sections: [{
+            id: "section-1",
+            title: "图工程",
+            summary: "图的基本词汇",
+            article_section: "知识图谱 vs 代理图谱",
+            angle: "tutorial",
+            risk: "low",
+            timecodes: {
+              start: "00:00:00",
+              end: "00:00:10",
+              startSec: 0,
+              endSec: 10,
+              durationSec: 10,
+            },
+            scores: {
+              counter_intuitiveness: 3,
+              shareability: 3,
+              practical_value: 3,
+              visual_appeal: 3,
+              composite: 3,
+            },
+            key_quote: "什么时候值得用图",
+            video_script: "构建你的第一个图",
+          }],
+        }),
+        JSON.stringify({
+          sections: [{
+            id: "section-1",
+            title: "Graph Engineering",
+            summary: "Graph 的基本词汇",
+            article_section: "Knowledge Graph vs Agent Graph",
+            angle: "tutorial",
+            risk: "low",
+            timecodes: {
+              start: "00:00:00",
+              end: "00:00:10",
+              startSec: 0,
+              endSec: 10,
+              durationSec: 10,
+            },
+            scores: {
+              counter_intuitiveness: 3,
+              shareability: 3,
+              practical_value: 3,
+              visual_appeal: 3,
+              composite: 3,
+            },
+            key_quote: "什么时候值得用 Graph",
+            video_script: "构建你的第一个 Graph；Prompt Engineering、Context Engineering 和 Latent Workspace Routing。",
+          }],
+        }),
+      ];
       const llm: LlmPort = {
         chat: async () => ({
-          content: JSON.stringify({
-            sections: [{
-              id: "section-1",
-              title: "图工程",
-              summary: "图的基本词汇",
-              article_section: "知识图谱 vs 代理图谱",
-              angle: "tutorial",
-              risk: "low",
-              timecodes: {
-                start: "00:00:00",
-                end: "00:00:10",
-                startSec: 0,
-                endSec: 10,
-                durationSec: 10,
-              },
-              scores: {
-                counter_intuitiveness: 3,
-                shareability: 3,
-                practical_value: 3,
-                visual_appeal: 3,
-                composite: 3,
-              },
-              key_quote: "什么时候值得用图",
-              video_script: "构建你的第一个图",
-            }],
-          }),
+          content: responses.shift()!,
           model: "test-model",
           finishReason: "stop",
         }),
@@ -321,7 +351,7 @@ describe("runDeconstruct technical term restoration", () => {
       expect(candidate.summary).toBe("Graph 的基本词汇");
       expect(candidate.article_section).toBe("Knowledge Graph vs Agent Graph");
       expect(candidate.key_quote).toBe("什么时候值得用 Graph");
-      expect(candidate.video_script).toBe("构建你的第一个 Graph");
+      expect(candidate.video_script).toContain("构建你的第一个 Graph");
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }

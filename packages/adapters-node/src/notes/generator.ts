@@ -1,9 +1,13 @@
 import {
+  appendTechnicalTermRuleToSystemPrompt,
+  createTechnicalTermGuard,
+  hasHardTechnicalTermViolations,
   getNotesSystemPrompt,
   buildNotesUserPrompt,
-  restoreProtectedTechnicalTermsInContent,
+  type FinalizedTechnicalTermValue,
   type LlmPort,
 } from "@yt2x/core";
+import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
 import type { VideoDirArtifacts } from "./file-store.js";
 
 export type GenerateNotesInput = {
@@ -38,18 +42,58 @@ export const generateNotesContent = async (
   input: GenerateNotesInput,
 ): Promise<GenerateNotesResult> => {
   const promptOpts = { outputLanguage: input.outputLanguage ?? "zh" as const };
-  const userPrompt = buildNotesUserPrompt({
+  const sourceText = `${input.artifacts.chunksMd}\n${input.artifacts.timestampedCuesMd}`;
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle: input.artifacts.metadata.title ?? "",
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const guard = createTechnicalTermGuard({
+    sourceText,
+    sourceTitle: input.artifacts.metadata.title ?? "",
+    discoveredTerms: discovery.accepted,
+  });
+  const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
     chunksMd: input.artifacts.chunksMd,
     timestampedCuesMd: input.artifacts.timestampedCuesMd,
     screenshots: input.artifacts.screenshots ?? null,
-  }, promptOpts);
+  });
+  const userPrompt = buildNotesUserPrompt(prepared.value, promptOpts);
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(
+    getNotesSystemPrompt(promptOpts),
+    prepared.promptRule,
+  );
+
+  const finalize = async (
+    value: string,
+  ): Promise<FinalizedTechnicalTermValue<string>> => {
+    let finalized = guard.finalize(value, prepared.restoration);
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      finalized = await repairTechnicalTermViolations({
+        llm: input.llm,
+        model: input.model,
+        guard,
+        currentValue: finalized.value,
+        restoration: prepared.restoration,
+        violations: finalized.violations,
+        parseResponse: (content) => stripCodeFenceWrapper(content.trim()),
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+    }
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+    }
+    return finalized;
+  };
 
   const t0 = Date.now();
   const resp = await input.llm.chat({
     model: input.model,
     messages: [
-      { role: "system", content: getNotesSystemPrompt(promptOpts) },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
     temperature: input.temperature ?? 0.3,
@@ -67,11 +111,7 @@ export const generateNotesContent = async (
   } catch {
     // Keep original content if import/processing fails
   }
-  content = restoreProtectedTechnicalTermsInContent(
-    content,
-    `${input.artifacts.chunksMd}\n${input.artifacts.timestampedCuesMd}`,
-    input.artifacts.metadata.title,
-  );
+  content = (await finalize(content)).value;
 
   const result: GenerateNotesResult = {
     content,

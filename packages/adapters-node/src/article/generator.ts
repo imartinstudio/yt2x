@@ -1,12 +1,16 @@
 import {
   ARTICLE_X_SYSTEM_PROMPT,
+  appendTechnicalTermRuleToSystemPrompt,
   buildArticleUserPrompt,
-  restoreProtectedTechnicalTermsInContent,
-  restoreProtectedTechnicalTermsInTitle,
+  createTechnicalTermGuard,
+  hasHardTechnicalTermViolations,
   type AvailableVisual,
   type ArticleVisualPlanItem,
+  type FinalizedTechnicalTermValue,
   type LlmPort,
+  type TechnicalTermGuard,
 } from "@yt2x/core";
+import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
 import type { StructuredNotesArtifacts } from "./file-store.js";
 
 export type GenerateXArticleInput = {
@@ -29,6 +33,7 @@ export type GenerateXArticleResult = {
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
   durationMs: number;
+  technicalTermProfileFingerprint: string;
 };
 
 const FENCE_RE = /^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -57,6 +62,7 @@ const restoreFaithfulChineseTitle = (
   content: string,
   structuredNotesMd: string,
   sourceTitle: unknown,
+  guard: TechnicalTermGuard,
 ): string => {
   const notesTitle = structuredNotesMd.match(MARKDOWN_H1_TEXT_RE)?.[1]
     ?.trim()
@@ -64,11 +70,10 @@ const restoreFaithfulChineseTitle = (
     .trim();
   const fallbackTitle = typeof sourceTitle === "string" ? sourceTitle.trim() : "";
   const candidateTitle = notesTitle?.length ? notesTitle : fallbackTitle;
-  const title = restoreProtectedTechnicalTermsInTitle(
+  const title = guard.finalize(
     restoreProtectedProductNames(candidateTitle, fallbackTitle),
-    structuredNotesMd,
-    fallbackTitle,
-  );
+    { placeholders: [] },
+  ).value;
   if (title.length === 0) return content;
   return content.replace(ARTICLE_H1_RE, `# **${title}**`);
 };
@@ -235,18 +240,36 @@ export const validateArticleVisualPlan = (
 export const generateXArticleContent = async (
   input: GenerateXArticleInput,
 ): Promise<GenerateXArticleResult> => {
-  const userPrompt = buildArticleUserPrompt(
-    {
-      metadata: input.artifacts.metadata,
-      structuredNotesMd: input.artifacts.structuredNotesMd,
-      availableVisuals: input.availableVisuals ?? null,
-    },
-    { platform: "x" },
-  );
+  const sourceText = input.artifacts.structuredNotesMd;
+  const sourceTitle = input.artifacts.metadata.title ?? "";
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const guard = createTechnicalTermGuard({
+    sourceText,
+    sourceTitle,
+    discoveredTerms: discovery.accepted,
+  });
+  const titleGuard = createTechnicalTermGuard({
+    sourceText: sourceTitle,
+    sourceTitle,
+    discoveredTerms: discovery.accepted,
+  });
+  const prepared = guard.prepare({
+    metadata: input.artifacts.metadata,
+    structuredNotesMd: input.artifacts.structuredNotesMd,
+    availableVisuals: input.availableVisuals ?? null,
+  });
+  const userPrompt = buildArticleUserPrompt(prepared.value, { platform: "x" });
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(ARTICLE_X_SYSTEM_PROMPT, prepared.promptRule);
 
   const t0 = Date.now();
   const messages = [
-    { role: "system" as const, content: ARTICLE_X_SYSTEM_PROMPT },
+    { role: "system" as const, content: systemPrompt },
     { role: "user" as const, content: userPrompt },
   ];
   let resp = await input.llm.chat({
@@ -331,16 +354,39 @@ export const generateXArticleContent = async (
   } catch {
     // If conversion fails, keep original content
   }
-  content = restoreProtectedTechnicalTermsInContent(
-    content,
-    input.artifacts.structuredNotesMd,
-    input.artifacts.metadata.title,
-  );
   content = restoreFaithfulChineseTitle(
     content,
     input.artifacts.structuredNotesMd,
     input.artifacts.metadata.title,
+    titleGuard,
   );
+
+  const finalize = async (
+    value: string,
+  ): Promise<FinalizedTechnicalTermValue<string>> => {
+    let finalized = guard.finalize(value, prepared.restoration);
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      finalized = await repairTechnicalTermViolations({
+        llm: input.llm,
+        model: input.model,
+        guard,
+        currentValue: finalized.value,
+        restoration: prepared.restoration,
+        violations: finalized.violations,
+        parseResponse: (raw) => normalizeCommandStyleTopicHashtags(
+          stripTrailingSourceAttribution(stripCodeFenceWrapper(raw.trim())),
+        ),
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+    }
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+    }
+    return finalized;
+  };
+  content = (await finalize(content)).value;
+  validateArticleTopicHashtags(content);
+  visualPlan = validateArticleVisualPlan(content, input.availableVisuals);
 
   const result: GenerateXArticleResult = {
     content,
@@ -349,6 +395,7 @@ export const generateXArticleContent = async (
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
+    technicalTermProfileFingerprint: prepared.profileFingerprint,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

@@ -1,13 +1,17 @@
 import { z } from "zod";
 import {
+  appendTechnicalTermRuleToSystemPrompt,
   buildPlatformArticleUserPrompt,
+  createTechnicalTermGuard,
   getPlatformArticleSystemPrompt,
-  restoreProtectedTechnicalTermsInValue,
+  hasHardTechnicalTermViolations,
+  type FinalizedTechnicalTermValue,
   type LlmPort,
   type PlatformArticleTarget,
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import { parseJsonWithRepairs } from "../llm/parse-json.js";
+import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
 
 export type GeneratePlatformArticleInput = {
   llm: LlmPort;
@@ -113,19 +117,31 @@ export const parseGeneratedPlatformArticleJson = (
 export const generatePlatformArticleContent = async (
   input: GeneratePlatformArticleInput,
 ): Promise<GeneratePlatformArticleResult> => {
-  const userPrompt = buildPlatformArticleUserPrompt(
-    {
-      metadata: input.artifacts.metadata,
-      articleMd: input.articleMd,
-      ...(input.timestampedCuesMd !== undefined ? { timestampedCuesMd: input.timestampedCuesMd } : {}),
-    },
-    { target: input.target },
+  const sourceText = [input.artifacts.structuredNotesMd, input.articleMd, input.timestampedCuesMd ?? ""].join("\n");
+  const sourceTitle = input.artifacts.metadata.title ?? "";
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const guard = createTechnicalTermGuard({ sourceText, sourceTitle, discoveredTerms: discovery.accepted });
+  const prepared = guard.prepare({
+    metadata: input.artifacts.metadata,
+    articleMd: input.articleMd,
+    ...(input.timestampedCuesMd !== undefined ? { timestampedCuesMd: input.timestampedCuesMd } : {}),
+  });
+  const userPrompt = buildPlatformArticleUserPrompt(prepared.value, { target: input.target });
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(
+    getPlatformArticleSystemPrompt(input.target),
+    prepared.promptRule,
   );
 
   const request = {
     model: input.model,
     messages: [
-      { role: "system" as const, content: getPlatformArticleSystemPrompt(input.target) },
+      { role: "system" as const, content: systemPrompt },
       { role: "user" as const, content: userPrompt },
     ],
     temperature: input.temperature ?? 0.5,
@@ -147,6 +163,28 @@ export const generatePlatformArticleContent = async (
     platformArticle = parseGeneratedPlatformArticleJson(resp.content, input.target);
   }
 
+  const finalize = async (
+    value: GeneratedPlatformArticle,
+  ): Promise<FinalizedTechnicalTermValue<GeneratedPlatformArticle>> => {
+    let finalized = guard.finalize(value, prepared.restoration);
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      finalized = await repairTechnicalTermViolations({
+        llm: input.llm,
+        model: input.model,
+        guard,
+        currentValue: finalized.value,
+        restoration: prepared.restoration,
+        violations: finalized.violations,
+        parseResponse: (content) => parseGeneratedPlatformArticleJson(content, input.target),
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+    }
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+    }
+    return finalized;
+  };
+
   // Post-process: fix common LLM CJK homoglyph errors (e.g. 幺→么) in text fields
   try {
     const { fixLlmHomoglyphs } = await import("../acquire/simplify-chinese.js");
@@ -165,11 +203,7 @@ export const generatePlatformArticleContent = async (
   } catch {
     // Keep original if import/processing fails
   }
-  platformArticle = restoreProtectedTechnicalTermsInValue(
-    platformArticle,
-    input.artifacts.structuredNotesMd,
-    input.artifacts.metadata.title,
-  );
+  platformArticle = (await finalize(platformArticle)).value;
 
   const result: GeneratePlatformArticleResult = {
     platformArticle,

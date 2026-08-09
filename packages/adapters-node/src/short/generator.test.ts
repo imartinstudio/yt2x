@@ -18,9 +18,38 @@ const shortJson = JSON.stringify({
 
 const makeLlm = (
   respond: (req: ChatRequest) => ChatResponse | Promise<ChatResponse>,
-): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(respond(req))) });
+  discoveryResponse = "[]",
+): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(
+  req.messages[0]?.content.includes("术语发现器")
+    ? { content: discoveryResponse, model: "m", finishReason: "stop" }
+    : respond(req),
+)) });
 
 describe("generateXShortContent", () => {
+  it("guards short-post JSON and repairs catalog plus discovered terms once", async () => {
+    const responses = [
+      JSON.stringify({ text: "提示工程、上下文工程和图工程连接知识图谱与代理图谱，潜在工作区路由也有用。图片和图表。", angle: "technical", risk: "low" }),
+      JSON.stringify({ text: "Prompt Engineering、Context Engineering 和 Graph Engineering 连接 Knowledge Graph 与 Agent Graph，Latent Workspace Routing 也有用。图片和图表。", angle: "technical", risk: "low" }),
+    ];
+    const llm = makeLlm(
+      () => ({ content: responses.shift()!, model: "m", finishReason: "stop" }),
+      JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+    );
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "Prompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph、Latent Workspace Routing",
+      metadata: { id: "short-term-guard", title: "Prompt Engineering" },
+    };
+
+    const result = await generateXShortContent({ llm, model: "task3-short", artifacts });
+
+    expect(result.shortPost.text).toContain("Prompt Engineering");
+    expect(result.shortPost.text).toContain("Latent Workspace Routing");
+    expect(result.shortPost.text).toContain("图片和图表");
+    expect(result.shortPost.text).not.toContain("提示工程");
+    expect(llm.chat).toHaveBeenCalledTimes(3);
+  });
+
   it("sends short system prompt and parses JSON", async () => {
     const llm = makeLlm((req) => {
       expect(req.messages[0]!.content).toMatch(/X（Twitter）/);

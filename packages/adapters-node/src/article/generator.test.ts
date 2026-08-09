@@ -10,13 +10,18 @@ import type { StructuredNotesArtifacts } from "./file-store.js";
 const fakeArtifacts: StructuredNotesArtifacts = {
   videoDir: "/tmp/v",
   videoId: "vid",
-  structuredNotesMd: "# Notes\n\n- point",
+  structuredNotesMd: "# Notes\n\n- point\n\nCodex",
   metadata: { id: "vid", title: "Hello" },
 };
 
 const makeLlm = (
   respond: (req: ChatRequest) => ChatResponse | Promise<ChatResponse>,
-): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(respond(req))) });
+  discoveryResponse = "[]",
+): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(
+  req.messages[0]?.content.includes("术语发现器")
+    ? { content: discoveryResponse, model: "m", finishReason: "stop" }
+    : respond(req),
+)) });
 
 const sampleVisuals: AvailableVisual[] = [
   {
@@ -29,6 +34,32 @@ const sampleVisuals: AvailableVisual[] = [
 ];
 
 describe("generateXArticleContent", () => {
+  it("guards article markdown and repairs catalog plus discovered terms once", async () => {
+    const responses = [
+      "# 标题\n\n提示工程、上下文工程和图工程会连接知识图谱与代理图谱，潜在工作区路由也很重要。\n\n#AI #Agent #Workflow",
+      "# Prompt Engineering\n\nPrompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph、Latent Workspace Routing。图片、图表和图文不应误报。\n\n#AI #Agent #Workflow",
+    ];
+    const llm = makeLlm(
+      () => ({ content: responses.shift()!, model: "m", finishReason: "stop" }),
+      JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+    );
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      videoId: "article-term-guard",
+      structuredNotesMd: "# Prompt Engineering\n\nPrompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph、Latent Workspace Routing",
+      metadata: { id: "article-term-guard", title: "Prompt Engineering" },
+    };
+
+    const result = await generateXArticleContent({ llm, model: "task3-article", artifacts });
+
+    expect(result.content).toContain("Prompt Engineering");
+    expect(result.content).toContain("Latent Workspace Routing");
+    expect(result.content).toContain("图片、图表和图文");
+    expect(result.content).not.toContain("提示工程、上下文工程和图工程");
+    expect(result.technicalTermProfileFingerprint).toMatch(/^fnv1a-/);
+    expect(llm.chat).toHaveBeenCalledTimes(3);
+  });
+
   it("sends article system prompt and X user sections", async () => {
     const llm = makeLlm((req) => {
       expect(req.messages[0]!.content).toMatch(/X（Twitter）/);
@@ -230,7 +261,7 @@ describe("generateXArticleContent", () => {
 
   it("normalizes command-style topic hashtags into X-compatible tags", async () => {
     const llm = makeLlm(() => ({
-      content: "# T\n\nbody\n\n#/wayfinder #/research #to-spec #to-tickets",
+      content: "# T\n\nbody\n\n#/wayfinder #/research #to-spec #to-tickets #Codex",
       model: "m",
       finishReason: "stop",
     }));
@@ -238,7 +269,7 @@ describe("generateXArticleContent", () => {
     const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
 
     expect(llm.chat).toHaveBeenCalledTimes(1);
-    expect(r.content).toBe("# **Notes**\n\nbody\n\n#Wayfinder #Research #ToSpec #ToTickets");
+    expect(r.content).toBe("# **Notes**\n\nbody\n\n#Wayfinder #Research #ToSpec #ToTickets #Codex");
   });
 
   it("repairs screenshot refs placed between list items", async () => {

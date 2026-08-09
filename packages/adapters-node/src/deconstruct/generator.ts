@@ -1,17 +1,21 @@
 import { mkdir, readFile, readdir, stat, symlink } from "node:fs/promises";
 import path from "node:path";
 import {
+  appendTechnicalTermRuleToSystemPrompt,
   buildDeconstructUserPrompt,
+  createTechnicalTermGuard,
   DECONSTRUCT_SYSTEM_PROMPT,
   DeconstructLlmOutputSchema,
+  hasHardTechnicalTermViolations,
   type DeconstructInput,
   type DeconstructLlmOutput,
+  type FinalizedTechnicalTermValue,
   type LlmPort,
   type SectionCandidate,
   estimateTokenCount,
   checkTokenBudget,
-  restoreProtectedTechnicalTermsInValue,
 } from "@yt2x/core";
+import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
 
 export type RunDeconstructInput = {
   llm: LlmPort;
@@ -170,15 +174,31 @@ export const runDeconstruct = async (
 
   // Condense SRT from ~40K tokens down to ~4-6K tokens (saves ~85%)
   const condensedSrt = condenseSrtContent(artifacts.srtContent);
-  const userPrompt = buildDeconstructUserPrompt({
+  const sourceText = `${artifacts.articleMd}\n${condensedSrt}`;
+  const sourceTitle = videoTitle ?? "";
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const guard = createTechnicalTermGuard({
+    sourceText,
+    sourceTitle,
+    discoveredTerms: discovery.accepted,
+  });
+  const prepared = guard.prepare({
     articleMd: artifacts.articleMd,
     srtContent: condensedSrt,
     videoTitle,
     videoDurationSec: artifacts.durationSec,
   });
+  const userPrompt = buildDeconstructUserPrompt(prepared.value);
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(DECONSTRUCT_SYSTEM_PROMPT, prepared.promptRule);
 
   // Pre-flight token budget check
-  const estimatedTokens = estimateTokenCount(DECONSTRUCT_SYSTEM_PROMPT) + estimateTokenCount(userPrompt);
+  const estimatedTokens = estimateTokenCount(systemPrompt) + estimateTokenCount(userPrompt);
   const budgetWarning = checkTokenBudget(estimatedTokens, input.model);
   if (budgetWarning !== null) {
     // Log warning but don't block — LLM may still handle it
@@ -189,7 +209,7 @@ export const runDeconstruct = async (
   const resp = await input.llm.chat({
     model: input.model,
     messages: [
-      { role: "system", content: DECONSTRUCT_SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
     temperature: 0.1,
@@ -197,11 +217,26 @@ export const runDeconstruct = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
 
-  const parsed = restoreProtectedTechnicalTermsInValue(
+  let finalized: FinalizedTechnicalTermValue<DeconstructLlmOutput> = guard.finalize(
     parseDeconstructLlmOutput(resp.content),
-    artifacts.articleMd,
-    videoTitle ?? "",
+    prepared.restoration,
   );
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    finalized = await repairTechnicalTermViolations({
+      llm: input.llm,
+      model: input.model,
+      guard,
+      currentValue: finalized.value,
+      restoration: prepared.restoration,
+      violations: finalized.violations,
+      parseResponse: parseDeconstructLlmOutput,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    });
+  }
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+  }
+  const parsed = finalized.value;
   const result: RunDeconstructResult = {
     candidates: parsed,
     input: artifacts,

@@ -14,9 +14,38 @@ const fakeArtifacts: VideoDirArtifacts = {
 
 const makeLlm = (
   respond: (req: ChatRequest) => ChatResponse | Promise<ChatResponse>,
-): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(respond(req))) });
+  discoveryResponse = "[]",
+): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(
+  req.messages[0]?.content.includes("术语发现器")
+    ? { content: discoveryResponse, model: "m", finishReason: "stop" }
+    : respond(req),
+)) });
 
 describe("generateNotesContent", () => {
+  it("guards catalog and discovered terms with one targeted repair", async () => {
+    const responses = [
+      "# 标题\n\n提示工程、上下文工程和图工程会处理知识图谱与代理图谱；潜在工作区路由也很重要。图片、图表和图文不应误报。",
+      "# Prompt Engineering\n\nPrompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph 和 Latent Workspace Routing 都必须保留。图片、图表和图文不应误报。",
+    ];
+    const llm = makeLlm(
+      () => ({ content: responses.shift()!, model: "m", finishReason: "stop" }),
+      JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+    );
+    const artifacts: VideoDirArtifacts = {
+      ...fakeArtifacts,
+      chunksMd: "Prompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph、Latent Workspace Routing",
+      metadata: { id: "notes-term-guard", title: "Prompt Engineering" },
+    };
+
+    const result = await generateNotesContent({ llm, model: "task3-notes", artifacts });
+
+    expect(result.content).toContain("Prompt Engineering");
+    expect(result.content).toContain("Latent Workspace Routing");
+    expect(result.content).toContain("图片、图表和图文");
+    expect(result.content).not.toContain("提示工程、上下文工程和图工程");
+    expect(llm.chat).toHaveBeenCalledTimes(3);
+  });
+
   it("sends a system + user message and returns trimmed content", async () => {
     const llm = makeLlm((req) => {
       expect(req.messages).toHaveLength(2);

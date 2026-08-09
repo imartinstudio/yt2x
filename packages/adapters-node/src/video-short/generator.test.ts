@@ -16,9 +16,36 @@ const fakeArtifacts: StructuredNotesArtifacts = {
 };
 
 describe("generateXVideoShortContent", () => {
+  it("guards video-short JSON and repairs catalog plus discovered terms once", async () => {
+    const responses = [
+      JSON.stringify({ text: "提示工程、上下文工程和图工程连接知识图谱与代理图谱，潜在工作区路由也很重要。图片和图表。" }),
+      JSON.stringify({ text: "Prompt Engineering、Context Engineering 和 Graph Engineering 连接 Knowledge Graph 与 Agent Graph，Latent Workspace Routing 也很重要。图片和图表。" }),
+    ];
+    const llm: LlmPort = {
+      chat: async (req) => req.messages[0]!.content.includes("术语发现器")
+        ? { content: JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]), model: "m", finishReason: "stop" }
+        : { content: responses.shift()!, model: "m", finishReason: "stop" },
+    };
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "Prompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph、Latent Workspace Routing",
+      metadata: { id: "video-short-term-guard", title: "Prompt Engineering" },
+    };
+
+    const result = await generateXVideoShortContent({ llm, model: "task3-video-short", artifacts });
+
+    expect(result.videoShortPost.text).toContain("Prompt Engineering");
+    expect(result.videoShortPost.text).toContain("Latent Workspace Routing");
+    expect(result.videoShortPost.text).toContain("图片和图表");
+    expect(result.videoShortPost.text).not.toContain("提示工程");
+  });
+
   it("requests a bounded non-thinking JSON completion", async () => {
     const llm: LlmPort = {
       chat: async (req: ChatRequest) => {
+        if (req.messages[0]!.content.includes("术语发现器")) {
+          return { content: "[]", model: "deepseek-v4-pro", finishReason: "stop" };
+        }
         expect(req.reasoningMode).toBe("disabled");
         expect(req.jsonMode).toBe(true);
         expect(req.maxTokens).toBe(2048);
@@ -46,11 +73,13 @@ describe("generateXVideoShortContent", () => {
       metadata: { id: "vid", title: "Why Graph Engineering" },
     };
     const llm: LlmPort = {
-      chat: async () => ({
-        content: JSON.stringify({ text: "图工程把知识图谱和代理图谱连接起来。" }),
-        model: "m",
-        finishReason: "stop",
-      }),
+      chat: async (req) => req.messages[0]!.content.includes("术语发现器")
+        ? { content: "[]", model: "m", finishReason: "stop" }
+        : {
+          content: JSON.stringify({ text: "图工程把知识图谱和代理图谱连接起来。" }),
+          model: "m",
+          finishReason: "stop",
+        },
     };
 
     const result = await generateXVideoShortContent({ llm, model: "m", artifacts });

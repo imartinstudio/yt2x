@@ -1,13 +1,17 @@
 import { z } from "zod";
 import {
+  appendTechnicalTermRuleToSystemPrompt,
   buildVideoShortUserPrompt,
+  createTechnicalTermGuard,
+  hasHardTechnicalTermViolations,
   VIDEO_SHORT_X_SYSTEM_PROMPT,
-  restoreProtectedTechnicalTermsInValue,
   type GeneratedVideoShortPost,
+  type FinalizedTechnicalTermValue,
   type LlmPort,
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import { parseJsonWithRepairs, salvageLooseJsonTextField, stripJsonFenceWrapper } from "../llm/parse-json.js";
+import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
 
 export type GenerateXVideoShortInput = {
   llm: LlmPort;
@@ -59,13 +63,14 @@ export const parseGeneratedVideoShortPostJson = (jsonText: string): GeneratedVid
 const chatVideoShort = async (
   input: GenerateXVideoShortInput,
   userPrompt: string,
+  systemPrompt: string,
   temperature: number,
   maxTokens: number,
 ): Promise<{ content: string; model: string; finishReason: string; usage?: GenerateXVideoShortResult["usage"] }> => {
   const resp = await input.llm.chat({
     model: input.model,
     messages: [
-      { role: "system", content: VIDEO_SHORT_X_SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
     temperature,
@@ -80,19 +85,28 @@ const chatVideoShort = async (
 export const generateXVideoShortContent = async (
   input: GenerateXVideoShortInput,
 ): Promise<GenerateXVideoShortResult> => {
-  const userPrompt = buildVideoShortUserPrompt(
-    {
-      metadata: input.artifacts.metadata,
-      structuredNotesMd: input.artifacts.structuredNotesMd,
-    },
-    { platform: "x" },
-  );
+  const sourceText = input.artifacts.structuredNotesMd;
+  const sourceTitle = input.artifacts.metadata.title ?? "";
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const guard = createTechnicalTermGuard({ sourceText, sourceTitle, discoveredTerms: discovery.accepted });
+  const prepared = guard.prepare({
+    metadata: input.artifacts.metadata,
+    structuredNotesMd: input.artifacts.structuredNotesMd,
+  });
+  const userPrompt = buildVideoShortUserPrompt(prepared.value, { platform: "x" });
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(VIDEO_SHORT_X_SYSTEM_PROMPT, prepared.promptRule);
 
   const t0 = Date.now();
   const maxTokens = input.maxTokens ?? 2048;
   const temperature = input.temperature ?? 0.6;
 
-  let resp = await chatVideoShort(input, userPrompt, temperature, maxTokens);
+  let resp = await chatVideoShort(input, userPrompt, systemPrompt, temperature, maxTokens);
   let videoShortPost: GeneratedVideoShortPost;
   try {
     videoShortPost = parseGeneratedVideoShortPostJson(resp.content);
@@ -100,7 +114,7 @@ export const generateXVideoShortContent = async (
     const repairResp = await input.llm.chat({
       model: input.model,
       messages: [
-        { role: "system", content: VIDEO_SHORT_X_SYSTEM_PROMPT },
+        { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
         { role: "assistant", content: resp.content },
         { role: "user", content: JSON_REPAIR_USER_PROMPT },
@@ -122,11 +136,26 @@ export const generateXVideoShortContent = async (
   } catch {
     // Keep original if import/processing fails
   }
-  videoShortPost = restoreProtectedTechnicalTermsInValue(
+  let finalized: FinalizedTechnicalTermValue<GeneratedVideoShortPost> = guard.finalize(
     videoShortPost,
-    input.artifacts.structuredNotesMd,
-    input.artifacts.metadata.title,
+    prepared.restoration,
   );
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    finalized = await repairTechnicalTermViolations({
+      llm: input.llm,
+      model: input.model,
+      guard,
+      currentValue: finalized.value,
+      restoration: prepared.restoration,
+      violations: finalized.violations,
+      parseResponse: parseGeneratedVideoShortPostJson,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    });
+  }
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+  }
+  videoShortPost = finalized.value;
 
   const result: GenerateXVideoShortResult = {
     videoShortPost,

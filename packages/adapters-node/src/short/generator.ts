@@ -1,14 +1,18 @@
 import { z } from "zod";
 import {
+  appendTechnicalTermRuleToSystemPrompt,
   buildShortUserPrompt,
+  createTechnicalTermGuard,
+  hasHardTechnicalTermViolations,
   SHORT_X_SYSTEM_PROMPT,
-  restoreProtectedTechnicalTermsInValue,
   type AvailableVisual,
+  type FinalizedTechnicalTermValue,
   type GeneratedShortPost,
   type LlmPort,
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import { parseJsonWithRepairs, salvageLooseJsonTextField } from "../llm/parse-json.js";
+import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
 
 export type GenerateXShortInput = {
   llm: LlmPort;
@@ -95,20 +99,29 @@ export const parseGeneratedShortPostJson = (jsonText: string): GeneratedShortPos
 export const generateXShortContent = async (
   input: GenerateXShortInput,
 ): Promise<GenerateXShortResult> => {
-  const userPrompt = buildShortUserPrompt(
-    {
-      metadata: input.artifacts.metadata,
-      structuredNotesMd: input.artifacts.structuredNotesMd,
-      availableVisuals: input.availableVisuals ?? null,
-    },
-    { platform: "x" },
-  );
+  const sourceText = input.artifacts.structuredNotesMd;
+  const sourceTitle = input.artifacts.metadata.title ?? "";
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const guard = createTechnicalTermGuard({ sourceText, sourceTitle, discoveredTerms: discovery.accepted });
+  const prepared = guard.prepare({
+    metadata: input.artifacts.metadata,
+    structuredNotesMd: input.artifacts.structuredNotesMd,
+    availableVisuals: input.availableVisuals ?? null,
+  });
+  const userPrompt = buildShortUserPrompt(prepared.value, { platform: "x" });
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(SHORT_X_SYSTEM_PROMPT, prepared.promptRule);
 
   const t0 = Date.now();
   const resp = await input.llm.chat({
     model: input.model,
     messages: [
-      { role: "system", content: SHORT_X_SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
     temperature: input.temperature ?? 0.55,
@@ -125,11 +138,23 @@ export const generateXShortContent = async (
   } catch {
     // Keep original if import/processing fails
   }
-  shortPost = restoreProtectedTechnicalTermsInValue(
-    shortPost,
-    input.artifacts.structuredNotesMd,
-    input.artifacts.metadata.title,
-  );
+  let finalized: FinalizedTechnicalTermValue<GeneratedShortPost> = guard.finalize(shortPost, prepared.restoration);
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    finalized = await repairTechnicalTermViolations({
+      llm: input.llm,
+      model: input.model,
+      guard,
+      currentValue: finalized.value,
+      restoration: prepared.restoration,
+      violations: finalized.violations,
+      parseResponse: parseGeneratedShortPostJson,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    });
+  }
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+  }
+  shortPost = finalized.value;
 
   // 验证 visual 只引用 available_visuals 中存在的截图
   if (shortPost.visual !== undefined) {

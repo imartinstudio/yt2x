@@ -1,13 +1,17 @@
 import { z } from "zod";
 import {
+  appendTechnicalTermRuleToSystemPrompt,
   buildThreadUserPrompt,
+  createTechnicalTermGuard,
+  hasHardTechnicalTermViolations,
   THREAD_X_SYSTEM_PROMPT,
-  restoreProtectedTechnicalTermsInValue,
   type AvailableVisual,
+  type FinalizedTechnicalTermValue,
   type GeneratedThread,
   type LlmPort,
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
+import { discoverTechnicalTerms, repairTechnicalTermViolations } from "../technical-terms/discovery.js";
 
 export type GenerateXThreadInput = {
   llm: LlmPort;
@@ -149,20 +153,29 @@ export const parseGeneratedThreadJson = (raw: string): GeneratedThread => {
 export const generateXThreadContent = async (
   input: GenerateXThreadInput,
 ): Promise<GenerateXThreadResult> => {
-  const userPrompt = buildThreadUserPrompt(
-    {
-      metadata: input.artifacts.metadata,
-      structuredNotesMd: input.artifacts.structuredNotesMd,
-      availableVisuals: input.availableVisuals ?? null,
-    },
-    { platform: "x" },
-  );
+  const sourceText = input.artifacts.structuredNotesMd;
+  const sourceTitle = input.artifacts.metadata.title ?? "";
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const guard = createTechnicalTermGuard({ sourceText, sourceTitle, discoveredTerms: discovery.accepted });
+  const prepared = guard.prepare({
+    metadata: input.artifacts.metadata,
+    structuredNotesMd: input.artifacts.structuredNotesMd,
+    availableVisuals: input.availableVisuals ?? null,
+  });
+  const userPrompt = buildThreadUserPrompt(prepared.value, { platform: "x" });
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(THREAD_X_SYSTEM_PROMPT, prepared.promptRule);
 
   const t0 = Date.now();
   const resp = await input.llm.chat({
     model: input.model,
     messages: [
-      { role: "system", content: THREAD_X_SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
     temperature: input.temperature ?? 0.55,
@@ -180,11 +193,23 @@ export const generateXThreadContent = async (
   } catch {
     // Keep original if import/processing fails
   }
-  thread = restoreProtectedTechnicalTermsInValue(
-    thread,
-    input.artifacts.structuredNotesMd,
-    input.artifacts.metadata.title,
-  );
+  let finalized: FinalizedTechnicalTermValue<GeneratedThread> = guard.finalize(thread, prepared.restoration);
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    finalized = await repairTechnicalTermViolations({
+      llm: input.llm,
+      model: input.model,
+      guard,
+      currentValue: finalized.value,
+      restoration: prepared.restoration,
+      violations: finalized.violations,
+      parseResponse: parseGeneratedThreadJson,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    });
+  }
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+  }
+  thread = finalized.value;
 
   // 验证 visuals 只引用 available_visuals 中存在的截图
   if (thread.visuals !== undefined && thread.visuals.length > 0) {

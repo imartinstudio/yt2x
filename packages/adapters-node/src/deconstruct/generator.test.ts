@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   filterValidSections,
   toSlug,
@@ -13,9 +13,12 @@ import {
   splitOversizedSections,
   parseDeconstructLlmOutput,
   runDeconstruct,
+  readDeconstructArtifacts,
   deconstructCacheIdentityFor,
 } from "./generator.js";
 import { deriveSeriesName, formatClipPostSeriesTitle, type LlmPort } from "@yt2x/core";
+import { contentTechnicalTermSourceFingerprintFor } from "../content-cache.js";
+import type * as ContentCacheModule from "../content-cache.js";
 
 describe("deconstructCacheIdentityFor", () => {
   it("changes for SRT, video bytes, duration, model, and selection while canonicalizing the video path", async () => {
@@ -75,6 +78,117 @@ describe("deconstructCacheIdentityFor", () => {
       expect(changedSelection.sourceFingerprint).not.toBe(changedVideo.sourceFingerprint);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(() => {
+    vi.doUnmock("../content-cache.js");
+    vi.resetModules();
+  });
+
+  it("does not stale when only the clip-post prompt version changes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-identity-clip-post-isolation-"));
+    try {
+      const videoPath = path.join(root, "source.mp4");
+      await writeFile(videoPath, "video-a", "utf8");
+      const artifacts = {
+        articleDir: root,
+        articleMd: "# Isolation\n\nArticle source.",
+        srtContent: "1\n00:00:00,000 --> 00:00:01,000\nFirst source.\n",
+        videoPath,
+        videoId: "clip-post-isolation",
+        durationSec: 60,
+      };
+
+      vi.resetModules();
+      vi.doMock("../content-cache.js", async () => {
+        const actual = await vi.importActual<typeof ContentCacheModule>("../content-cache.js");
+        return {
+          ...actual,
+          CONTENT_PROMPT_VERSIONS: { ...actual.CONTENT_PROMPT_VERSIONS, clipPost: "clip-post-v-original" },
+        };
+      });
+      const originalModule = await import("./generator.js");
+      const before = await originalModule.deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 1,
+      });
+
+      vi.resetModules();
+      vi.doMock("../content-cache.js", async () => {
+        const actual = await vi.importActual<typeof ContentCacheModule>("../content-cache.js");
+        return {
+          ...actual,
+          CONTENT_PROMPT_VERSIONS: { ...actual.CONTENT_PROMPT_VERSIONS, clipPost: "clip-post-v-bumped" },
+        };
+      });
+      const bumpedModule = await import("./generator.js");
+      const after = await bumpedModule.deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 1,
+      });
+
+      expect(after.sourceFingerprint).toBe(before.sourceFingerprint);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the same sourceTitle fallback as runDeconstruct's discovery audit when article.md has no H1", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-no-title-"));
+    try {
+      const videoDir = path.join(articleDir, "video");
+      await mkdir(videoDir, { recursive: true });
+      await writeFile(
+        path.join(articleDir, "article.md"),
+        "No heading here, just prose about the topic.",
+        "utf8",
+      );
+      await writeFile(path.join(videoDir, "full.mp4"), "video", "utf8");
+      await writeFile(path.join(videoDir, "full.zh.srt"), "1\n00:00:00,000 --> 00:00:01,000\nHello.\n", "utf8");
+
+      const output = JSON.stringify({
+        sections: [{
+          id: "section-1",
+          title: "Section",
+          summary: "Section summary",
+          article_section: "",
+          angle: "tutorial",
+          risk: "low",
+          timecodes: { start: "00:00:00", end: "00:00:01", startSec: 0, endSec: 1, durationSec: 1 },
+          scores: { counter_intuitiveness: 3, shareability: 3, practical_value: 3, visual_appeal: 3, composite: 3 },
+          key_quote: "Hello",
+          video_script: "Hello",
+        }],
+      });
+      const llm: LlmPort = {
+        chat: async (request) => ({
+          content: request.messages[0]?.content.includes("术语发现器") ? "[]" : output,
+          model: "resolved-model",
+          finishReason: "stop",
+        }),
+      };
+
+      const artifacts = await readDeconstructArtifacts(articleDir);
+      const cacheIdentity = await deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 0,
+      });
+      const result = await runDeconstruct({
+        llm,
+        model: "requested-model",
+        articleDir,
+        artifacts,
+        cacheIdentity,
+      });
+
+      const expectedKnownFingerprint = contentTechnicalTermSourceFingerprintFor(
+        cacheIdentity.candidateSourceText,
+        cacheIdentity.sourceTitle,
+      );
+      expect(result.candidateTechnicalTerms.discoveryAudit.sourceIdentity).toBe(expectedKnownFingerprint);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
     }
   });
 });

@@ -6,15 +6,162 @@ import { createTechnicalTermGuard, type DeconstructManifest, type LlmPort } from
 import { technicalTermDiscoveryAuditFor } from "../technical-terms/discovery.js";
 import {
   CONTENT_PROMPT_VERSIONS,
-  contentSourceFingerprintFor,
+  contentTechnicalTermSourceFingerprintFor,
   contentTargetMetadataPathFor,
   createContentTargetMetadata,
+  readContentTargetMetadata,
   writeContentTargetMetadata,
 } from "../content-cache.js";
 import { writeDeconstructOutput } from "./file-store.js";
-import { generateClipsPosts, writeSelectedPostFiles } from "./post-generator.js";
+import {
+  generateClipsPosts,
+  selectedClipPostCacheIdentityFor,
+  writeSelectedPostFiles,
+} from "./post-generator.js";
 
 describe("generateClipsPosts", () => {
+  it("builds clip-post cache identity from selected source contexts only", () => {
+    const manifest: DeconstructManifest = {
+      v: 1,
+      source: { videoId: "selected-cache", articlePath: "../article.md", durationSec: 60 },
+      generatedAt: "2026-08-09T00:00:00.000Z",
+      candidateCount: 2,
+      clips: [{
+        id: "clip-1",
+        slug: "selected",
+        title: "Graph Engineering",
+        type: "insight",
+        angle: "tutorial",
+        risk: "low",
+        selected: true,
+        text: "Graph Engineering",
+        timecodes: { start: "00:00:00", end: "00:00:10", startSec: 0, endSec: 10, durationSec: 10 },
+        video: "candidate-1-selected.mp4",
+        sourceContext: { title: "Graph Engineering", summary: "selected source" },
+      }, {
+        id: "clip-2",
+        slug: "unselected",
+        title: "Context Engineering",
+        type: "insight",
+        angle: "tutorial",
+        risk: "low",
+        selected: false,
+        timecodes: { start: "00:00:10", end: "00:00:20", startSec: 10, endSec: 20, durationSec: 10 },
+        video: "candidate-2-unselected.mp4",
+        sourceContext: { title: "Context Engineering", summary: "unselected source" },
+      }],
+    };
+
+    const first = selectedClipPostCacheIdentityFor("Article", manifest);
+    const changedUnselected = selectedClipPostCacheIdentityFor("Article", {
+      ...manifest,
+      clips: [manifest.clips[0]!, {
+        ...manifest.clips[1]!,
+        sourceContext: { title: "Prompt Engineering", summary: "changed unselected source" },
+      }],
+    });
+
+    expect(first.sourceText).toContain("Graph Engineering");
+    expect(first.sourceText).not.toContain("Context Engineering");
+    expect(changedUnselected.sourceFingerprint).toBe(first.sourceFingerprint);
+  });
+
+  it("writes a clip-post profile fingerprint reconstructible from the same selected scope used for cache freshness even when a selected clip has no text yet", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-empty-text-selected-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "empty-text-selected", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-08-09T00:00:00.000Z",
+        candidateCount: 2,
+        clips: [{
+          id: "clip-1",
+          slug: "with-text",
+          title: "With Text",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: true,
+          text: "已经生成的正文，Agents 会持续构建 loops。",
+          timecodes: { start: "00:00:00", end: "00:00:10", startSec: 0, endSec: 10, durationSec: 10 },
+          video: "candidate-1-with-text.mp4",
+          sourceContext: {
+            title: "With Text",
+            summary: "已经生成的正文来源",
+            keyQuote: "",
+            videoScript: "",
+            articleSection: "",
+            articleBody: "",
+          },
+        }, {
+          id: "clip-2",
+          slug: "no-text",
+          title: "No Text",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: true,
+          timecodes: { start: "00:00:10", end: "00:00:20", startSec: 10, endSec: 20, durationSec: 10 },
+          video: "candidate-2-no-text.mp4",
+          sourceContext: {
+            title: "No Text",
+            summary: "还没生成正文的候选片段独有描述",
+            keyQuote: "",
+            videoScript: "",
+            articleSection: "",
+            articleBody: "",
+          },
+        }],
+      };
+      const guard = createTechnicalTermGuard({ sourceText: "With Text\nNo Text\n已经生成的正文来源\n还没生成正文的候选片段独有描述" });
+      const discoveryAudit = {
+        promptVersion: "technical-term-discovery-v1",
+        sourceIdentity: "sha256-test",
+        acceptedCandidates: [],
+        reviewCandidates: [],
+        warnings: [],
+      };
+      const technicalTerms = {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "Article",
+        discoveredTerms: [],
+        discoveryAudit,
+        model: "model-a",
+        requestedModel: "model-a",
+        resolvedModel: "model-a",
+        sourceFingerprint: "source-fp",
+        promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
+      };
+
+      await writeSelectedPostFiles(manifest, articleDir, technicalTerms);
+
+      const bundleDir = clipsDir;
+      const persistedManifest = JSON.parse(
+        await readFile(path.join(bundleDir, "clips-manifest.json"), "utf8"),
+      ) as DeconstructManifest;
+      const metadata = await readContentTargetMetadata(contentTargetMetadataPathFor(bundleDir, "clip-post"));
+      expect(metadata).toBeDefined();
+
+      const selectedIdentity = selectedClipPostCacheIdentityFor(technicalTerms.articleTitle, persistedManifest);
+      const rebuiltGuard = createTechnicalTermGuard({
+        sourceText: selectedIdentity.sourceText,
+        sourceTitle: technicalTerms.articleTitle,
+        discoveredTerms: metadata!.technicalTermDiscovery.acceptedCandidates,
+        discovery: metadata!.technicalTermDiscovery,
+      });
+
+      // 与 isContentTargetMetadataFresh 内部重建 guard 的方式完全一致：如果这里不相等，
+      // 说明 finalGuard 用来源文本比 known/required fingerprint 对应的文本更宽，
+      // clip-post 缓存永远无法命中。
+      expect(rebuiltGuard.profile.profileFingerprint).toBe(metadata!.technicalTermProfileFingerprint);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
   it("derives final term filtering from the active profile instead of a Graph allowlist", async () => {
     const implementation = await readFile(new URL("./post-generator.ts", import.meta.url), "utf8");
 
@@ -174,15 +321,18 @@ describe("generateClipsPosts", () => {
         "片段\n章节",
         "先看视频，再阅读下方完整/分步指南，学习如何为你的 Agents 构建 loops。",
       ].join("\n");
+      const selectedIdentity = selectedClipPostCacheIdentityFor("标题", manifest);
       const guard = createTechnicalTermGuard({ sourceText: finalSourceText, sourceTitle: "标题", discovery: audit });
       const metadataPath = contentTargetMetadataPathFor(articleDir, "clip-post");
       await writeContentTargetMetadata(metadataPath, createContentTargetMetadata({
         target: "clip-post",
-        sourceFingerprint: contentSourceFingerprintFor({ articleTitle: "标题", articleMd, clips }),
+        sourceFingerprint: selectedIdentity.sourceFingerprint,
         model: "test-model",
         promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
         technicalTermProfileFingerprint: guard.profile.profileFingerprint,
         technicalTermDiscovery: audit,
+        technicalTermKnownSourceFingerprint: contentTechnicalTermSourceFingerprintFor(finalSourceText, "标题"),
+        technicalTermRequiredSourceFingerprint: contentTechnicalTermSourceFingerprintFor(finalSourceText, "标题"),
       }));
       const postPath = path.join(clipsDir, "post-1-cached.md");
       await writeFile(postPath, "旧成功帖子。\n", "utf8");
@@ -779,65 +929,4 @@ describe("generateClipsPosts", () => {
     }
   });
 
-  it("keeps the old direct bundle readable when the generation commit is interrupted", async () => {
-    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-direct-atomic-"));
-    try {
-      const clipsDir = path.join(articleDir, "x-format", "clips");
-      await mkdir(clipsDir, { recursive: true });
-      const oldManifest = "{\"generation\":\"old\"}\n";
-      const oldPost = "old post\n";
-      const oldMetadata = "{\"generation\":\"old\"}\n";
-      await writeFile(path.join(clipsDir, "clips-manifest.json"), oldManifest, "utf8");
-      await writeFile(path.join(clipsDir, "post-1-old.md"), oldPost, "utf8");
-      await mkdir(path.join(clipsDir, ".content-metadata"), { recursive: true });
-      await writeFile(path.join(clipsDir, ".content-metadata", "clip-post.json"), oldMetadata, "utf8");
-      const manifest: DeconstructManifest = {
-        v: 1,
-        source: { videoId: "direct-atomic", articlePath: "../article.md", durationSec: 60 },
-        generatedAt: "2026-08-09T00:00:00.000Z",
-        candidateCount: 1,
-        clips: [{
-          id: "clip-1",
-          slug: "new",
-          title: "新片段",
-          type: "insight",
-          angle: "tutorial",
-          risk: "low",
-          selected: true,
-          text: "新文案。",
-          timecodes: { start: "00:00:01", end: "00:00:11", startSec: 1, endSec: 11, durationSec: 10 },
-          video: "clip-1-new.mp4",
-        }],
-      };
-      const guard = createTechnicalTermGuard({ sourceText: "新片段" });
-
-      await expect(writeSelectedPostFiles(manifest, articleDir, {
-        guard,
-        restoration: { placeholders: [] },
-        articleTitle: "新文章",
-        discoveredTerms: [],
-        sourceFingerprint: "sha256-new-source",
-        profileFingerprint: guard.profile.profileFingerprint,
-        discoveryAudit: {
-          promptVersion: "technical-term-discovery-v1",
-          sourceIdentity: "sha256-new-source",
-          acceptedCandidates: [],
-          reviewCandidates: [],
-          warnings: [],
-        },
-        requestedModel: "requested-model",
-        resolvedModel: "resolved-model",
-        promptVersion: "native-clip-post-v2",
-      }, {
-        commit: async () => { throw new Error("commit interrupted"); },
-      })).rejects.toThrow("commit interrupted");
-
-      await expect(readFile(path.join(clipsDir, "clips-manifest.json"), "utf8")).resolves.toBe(oldManifest);
-      await expect(readFile(path.join(clipsDir, "post-1-old.md"), "utf8")).resolves.toBe(oldPost);
-      await expect(readFile(path.join(clipsDir, ".content-metadata", "clip-post.json"), "utf8")).resolves.toBe(oldMetadata);
-      await expect(readFile(path.join(clipsDir, "post-1-new.md"), "utf8")).rejects.toThrow();
-    } finally {
-      await rm(articleDir, { recursive: true, force: true });
-    }
-  });
 });

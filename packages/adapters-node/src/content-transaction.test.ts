@@ -1,13 +1,13 @@
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireContentTargetLock,
   atomicWriteUtf8,
+  canonicalContentTargetLockPathFor,
   contentTargetLockPathFor,
   replaceDirectoryAtomically,
-  resolveContentBundleDir,
   withContentTargetLock,
 } from "./content-transaction.js";
 import { writeNativeArticleBundle } from "./article/file-store.js";
@@ -36,7 +36,7 @@ describe("content target transaction helpers", () => {
     const articleDir = path.join(root, videoId);
     const release = await acquireContentTargetLock(articleDir, "native-content");
     const articleWrite = writeNativeArticleBundle(root, videoId, "article-generation", {
-      v: 1,
+      v: 3,
       platform: "x",
       videoId,
       model: "model",
@@ -144,57 +144,95 @@ describe("content target transaction helpers", () => {
     await expect(readdir(path.dirname(target))).resolves.toEqual(["body.md"]);
   });
 
-  it("replaces a staged bundle as one directory generation and rolls back an interrupted commit", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "yt2x-content-directory-"));
+  it("swaps a staged bundle into the target and restores the previous one when the commit fails", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "yt2x-bundle-swap-"));
     roots.push(root);
-    const target = path.join(root, "clips");
-    const staged = path.join(root, ".stage-unique");
+    const target = path.join(root, "x-format", "clips");
     await mkdir(target, { recursive: true });
+    await writeFile(path.join(target, "clips-manifest.json"), "old", "utf8");
+    await writeFile(path.join(target, "stale-post.md"), "stale", "utf8");
+
+    const staged = path.join(root, "stage-1");
     await mkdir(staged, { recursive: true });
-    await writeFile(path.join(target, "body.md"), "old", "utf8");
-    await writeFile(path.join(target, "metadata.json"), "old-generation", "utf8");
-    await writeFile(path.join(staged, "body.md"), "new", "utf8");
-    await writeFile(path.join(staged, "metadata.json"), "new-generation", "utf8");
-
+    await writeFile(path.join(staged, "clips-manifest.json"), "new", "utf8");
     await replaceDirectoryAtomically(staged, target);
-    await expect(readFile(path.join(target, "body.md"), "utf8")).resolves.toBe("new");
-    await expect(readFile(path.join(target, "metadata.json"), "utf8")).resolves.toBe("new-generation");
-    expect((await lstat(target)).isSymbolicLink()).toBe(true);
 
-    const nextStage = path.join(root, ".stage-next");
-    await mkdir(nextStage, { recursive: true });
-    await writeFile(path.join(nextStage, "body.md"), "newest", "utf8");
-    let pointerRenameCount = 0;
-    await expect(replaceDirectoryAtomically(nextStage, target, {
+    // 交付物直接躺在公开目录里，上一版残留被整体换掉。
+    expect((await readdir(target)).sort()).toEqual(["clips-manifest.json"]);
+    expect(await readFile(path.join(target, "clips-manifest.json"), "utf8")).toBe("new");
+    expect((await lstat(target)).isDirectory()).toBe(true);
+
+    const failing = path.join(root, "stage-2");
+    await mkdir(failing, { recursive: true });
+    await writeFile(path.join(failing, "clips-manifest.json"), "never", "utf8");
+    let calls = 0;
+    await expect(replaceDirectoryAtomically(failing, target, {
       rename: async (from, to) => {
-        pointerRenameCount += 1;
-        if (pointerRenameCount === 2) throw new Error("pointer commit interrupted");
-        const { rename } = await import("node:fs/promises");
+        calls += 1;
+        if (calls === 2) throw new Error("simulated commit failure");
         await rename(from, to);
       },
-    })).rejects.toThrow("pointer commit interrupted");
-    await expect(readFile(path.join(target, "body.md"), "utf8")).resolves.toBe("new");
-    expect((await lstat(target)).isSymbolicLink()).toBe(true);
+    })).rejects.toThrow("simulated commit failure");
 
-    const interruptedTarget = path.join(root, "interrupted");
-    const interruptedStage = path.join(root, ".stage-interrupted");
-    await mkdir(interruptedTarget, { recursive: true });
-    await mkdir(interruptedStage, { recursive: true });
-    await writeFile(path.join(interruptedTarget, "body.md"), "stable", "utf8");
-    await writeFile(path.join(interruptedStage, "body.md"), "candidate", "utf8");
-    let renameCount = 0;
-    await expect(replaceDirectoryAtomically(interruptedStage, interruptedTarget, {
-      rename: async (from, to) => {
-        renameCount += 1;
-        if (renameCount === 2) {
-          const readableDir = await resolveContentBundleDir(interruptedTarget);
-          await expect(readFile(path.join(readableDir, "body.md"), "utf8")).resolves.toBe("stable");
-          throw new Error("commit interrupted");
-        }
-        const { rename } = await import("node:fs/promises");
-        await rename(from, to);
-      },
-    })).rejects.toThrow("commit interrupted");
-    await expect(readFile(path.join(interruptedTarget, "body.md"), "utf8")).resolves.toBe("stable");
+    // 回滚后旧内容原样回到目标位置，不留半成品。
+    expect(await readFile(path.join(target, "clips-manifest.json"), "utf8")).toBe("new");
+    expect(await stat(failing).catch(() => undefined)).toBeUndefined();
+    expect((await readdir(path.join(root, "x-format"))).sort()).toEqual(["clips"]);
+  });
+
+});
+
+describe("canonical content target locks", () => {
+  it("gives the same lock to an aliased symlink path and the real path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "yt2x-content-alias-lock-"));
+    roots.push(root);
+    const realDir = path.join(root, "real", "article");
+    await mkdir(realDir, { recursive: true });
+    const aliasRoot = path.join(root, "files");
+    await symlink(path.join(root, "real"), aliasRoot, "dir");
+    const aliasDir = path.join(aliasRoot, "article");
+
+    await expect(canonicalContentTargetLockPathFor(aliasDir, "deconstruct")).resolves.toBe(
+      await canonicalContentTargetLockPathFor(realDir, "deconstruct"),
+    );
+
+    const release = await acquireContentTargetLock(realDir, "deconstruct");
+    try {
+      await expect(acquireContentTargetLock(aliasDir, "deconstruct", {
+        timeoutMs: 60,
+        pollMs: 5,
+      })).rejects.toThrow(/Timed out acquiring content target lock/);
+    } finally {
+      await release();
+    }
+
+    const releaseAlias = await acquireContentTargetLock(aliasDir, "deconstruct", { timeoutMs: 200, pollMs: 5 });
+    await releaseAlias();
+  });
+
+  it("canonicalizes a not-yet-created root through its nearest existing ancestor", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "yt2x-content-alias-missing-lock-"));
+    roots.push(root);
+    await mkdir(path.join(root, "real"), { recursive: true });
+    await symlink(path.join(root, "real"), path.join(root, "files"), "dir");
+    const missingReal = path.join(root, "real", "pending", "x-format", "clips");
+    const missingAlias = path.join(root, "files", "pending", "x-format", "clips");
+
+    await expect(canonicalContentTargetLockPathFor(missingAlias, "deconstruct")).resolves.toBe(
+      await canonicalContentTargetLockPathFor(missingReal, "deconstruct"),
+    );
+    await expect(canonicalContentTargetLockPathFor(missingAlias, "deconstruct")).resolves.toContain(
+      path.join("pending", "x-format", "clips"),
+    );
+
+    const release = await acquireContentTargetLock(missingReal, "deconstruct");
+    try {
+      await expect(acquireContentTargetLock(missingAlias, "deconstruct", {
+        timeoutMs: 60,
+        pollMs: 5,
+      })).rejects.toThrow(/Timed out acquiring content target lock/);
+    } finally {
+      await release();
+    }
   });
 });

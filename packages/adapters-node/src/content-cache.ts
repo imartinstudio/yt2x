@@ -7,7 +7,7 @@ import {
 } from "@yt2x/core";
 import { atomicWriteUtf8 } from "./content-transaction.js";
 
-export const CONTENT_METADATA_SCHEMA_VERSION = 2 as const;
+export const CONTENT_METADATA_SCHEMA_VERSION = 3 as const;
 
 /**
  * 每个内容目标独立维护 prompt 版本。版本变化会让旧产物安全失效，避免
@@ -33,16 +33,31 @@ export type ContentTargetMetadata = {
   promptVersion: string;
   technicalTermProfileFingerprint: string;
   technicalTermDiscovery: TechnicalTermDiscoveryAudit;
+  technicalTermKnownSourceFingerprint: string;
+  technicalTermRequiredSourceFingerprint: string;
+  technicalTermScope: "full" | "scoped";
   seedFingerprint?: string;
   generatedAt: string;
 };
 
-export type ContentTargetMetadataInput = Omit<ContentTargetMetadata, "v" | "generatedAt" | "requestedModel" | "resolvedModel"> & {
+export type ContentTargetMetadataInput = Omit<
+  ContentTargetMetadata,
+  | "v"
+  | "generatedAt"
+  | "requestedModel"
+  | "resolvedModel"
+  | "technicalTermKnownSourceFingerprint"
+  | "technicalTermRequiredSourceFingerprint"
+  | "technicalTermScope"
+> & {
   /** 新记录使用 requestedModel；model 仅用于迁移旧调用方，写盘时不会保留。 */
   requestedModel?: string;
   resolvedModel?: string;
   model?: string;
   generatedAt?: string;
+  technicalTermKnownSourceFingerprint?: string;
+  technicalTermRequiredSourceFingerprint?: string;
+  technicalTermScope?: "full" | "scoped";
 };
 
 export type ContentTargetCacheExpectation = {
@@ -52,14 +67,22 @@ export type ContentTargetCacheExpectation = {
   /** 兼容旧调用方；cache key 只会取 requestedModel。 */
   model?: string;
   promptVersion: string;
-  sourceText: string;
+  sourceText?: string;
+  knownSourceText?: string;
+  requiredSourceText?: string;
   sourceTitle?: string;
+  technicalTermScope?: "full" | "scoped";
   seedFingerprint?: string;
   requiredFiles: readonly string[];
 };
 
 export const contentSourceFingerprintFor = (source: unknown): string =>
   fingerprintTechnicalTermValue(source);
+
+export const contentTechnicalTermSourceFingerprintFor = (
+  sourceText: string,
+  sourceTitle = "",
+): string => fingerprintTechnicalTermValue({ sourceText, sourceTitle });
 
 export const structuredNotesContentSourceFor = (input: {
   metadata: unknown;
@@ -133,6 +156,7 @@ export const createContentTargetMetadata = (
   if (requestedModel === undefined || requestedModel.length === 0) {
     throw new Error(`Content target metadata for "${input.target}" requires requestedModel.`);
   }
+  const discoverySourceIdentity = input.technicalTermDiscovery.sourceIdentity ?? "";
   return {
     v: CONTENT_METADATA_SCHEMA_VERSION,
     target: input.target,
@@ -142,6 +166,11 @@ export const createContentTargetMetadata = (
     promptVersion: input.promptVersion,
     technicalTermProfileFingerprint: input.technicalTermProfileFingerprint,
     technicalTermDiscovery: input.technicalTermDiscovery,
+    technicalTermKnownSourceFingerprint:
+      input.technicalTermKnownSourceFingerprint ?? discoverySourceIdentity,
+    technicalTermRequiredSourceFingerprint:
+      input.technicalTermRequiredSourceFingerprint ?? discoverySourceIdentity,
+    technicalTermScope: input.technicalTermScope ?? "full",
     ...(input.seedFingerprint === undefined ? {} : { seedFingerprint: input.seedFingerprint }),
     generatedAt: input.generatedAt ?? new Date().toISOString(),
   };
@@ -178,18 +207,56 @@ const isMetadata = (value: unknown): value is ContentTargetMetadata =>
   && typeof value.resolvedModel === "string"
   && typeof value.promptVersion === "string"
   && typeof value.technicalTermProfileFingerprint === "string"
+  && typeof value.technicalTermKnownSourceFingerprint === "string"
+  && typeof value.technicalTermRequiredSourceFingerprint === "string"
+  && (value.technicalTermScope === "full" || value.technicalTermScope === "scoped")
+  && typeof value.generatedAt === "string"
+  && hasDiscoveryAudit(value.technicalTermDiscovery)
+  && (value.seedFingerprint === undefined || typeof value.seedFingerprint === "string");
+
+/**
+ * v3 之前（schema v2）没有落盘 known/required source 与 scope 字段的目标。
+ * 只有 full-scope 目标可以安全迁移：v2 时代它们本来就用整份 discovery source
+ * 校验（known === required === discovery.sourceIdentity，scope="full"），这正是
+ * `createContentTargetMetadata` 至今仍在用的 fallback 逻辑，迁移只是把它落回磁盘。
+ * scoped 目标（x-thread / x-short / x-video-short）在 v2 里没有 required 层信息，
+ * 无法安全重建，必须继续判 stale，逼一次真实重新生成来补齐两层身份。
+ */
+const FULL_SCOPE_MIGRATABLE_TARGETS: readonly string[] = [
+  "article",
+  "notes",
+  "deconstruct-run",
+  "clip-post",
+];
+
+const isFullScopeMigratableTarget = (target: string): boolean =>
+  FULL_SCOPE_MIGRATABLE_TARGETS.includes(target) || target.startsWith("platform-article-");
+
+const isLegacyV2Metadata = (
+  value: unknown,
+): value is Omit<ContentTargetMetadata, "v" | "technicalTermKnownSourceFingerprint" | "technicalTermRequiredSourceFingerprint" | "technicalTermScope"> & { v: 2 } =>
+  isRecord(value)
+  && value.v === 2
+  && typeof value.target === "string"
+  && typeof value.sourceFingerprint === "string"
+  && typeof value.requestedModel === "string"
+  && typeof value.resolvedModel === "string"
+  && typeof value.promptVersion === "string"
+  && typeof value.technicalTermProfileFingerprint === "string"
   && typeof value.generatedAt === "string"
   && hasDiscoveryAudit(value.technicalTermDiscovery)
   && (value.seedFingerprint === undefined || typeof value.seedFingerprint === "string");
 
 const migrateMetadata = (value: unknown): ContentTargetMetadata | undefined => {
   if (isMetadata(value)) return value;
-  if (!isRecord(value) || value.v !== 1 || typeof value.model !== "string") return undefined;
+  if (!isLegacyV2Metadata(value) || !isFullScopeMigratableTarget(value.target)) return undefined;
+  const discoverySourceIdentity = value.technicalTermDiscovery.sourceIdentity ?? "";
   const migrated: unknown = {
     ...value,
     v: CONTENT_METADATA_SCHEMA_VERSION,
-    requestedModel: value.model,
-    resolvedModel: value.model,
+    technicalTermKnownSourceFingerprint: discoverySourceIdentity,
+    technicalTermRequiredSourceFingerprint: discoverySourceIdentity,
+    technicalTermScope: "full",
   };
   return isMetadata(migrated) ? migrated : undefined;
 };
@@ -223,12 +290,20 @@ export const isContentTargetMetadataFresh = async (
 ): Promise<boolean> => {
   const normalizedMetadata = migrateMetadata(metadata);
   const expectedRequestedModel = expected.requestedModel ?? expected.model;
+  const knownSourceText = expected.knownSourceText ?? expected.sourceText ?? "";
+  const requiredSourceText = expected.requiredSourceText ?? expected.sourceText ?? "";
+  const technicalTermScope = expected.technicalTermScope ?? "full";
   if (normalizedMetadata === undefined
     || expectedRequestedModel === undefined
     || normalizedMetadata.target !== expected.target
     || normalizedMetadata.sourceFingerprint !== expected.sourceFingerprint
     || normalizedMetadata.requestedModel !== expectedRequestedModel
     || normalizedMetadata.promptVersion !== expected.promptVersion
+    || normalizedMetadata.technicalTermKnownSourceFingerprint
+      !== contentTechnicalTermSourceFingerprintFor(knownSourceText, expected.sourceTitle)
+    || normalizedMetadata.technicalTermRequiredSourceFingerprint
+      !== contentTechnicalTermSourceFingerprintFor(requiredSourceText, expected.sourceTitle)
+    || normalizedMetadata.technicalTermScope !== technicalTermScope
     || (expected.seedFingerprint !== undefined && normalizedMetadata.seedFingerprint !== expected.seedFingerprint)) {
     return false;
   }
@@ -241,11 +316,14 @@ export const isContentTargetMetadataFresh = async (
     return false;
   }
 
-  const guard = createTechnicalTermGuard({
-    sourceText: expected.sourceText,
+  const fullGuard = createTechnicalTermGuard({
+    sourceText: knownSourceText,
     ...(expected.sourceTitle === undefined ? {} : { sourceTitle: expected.sourceTitle }),
     discoveredTerms: normalizedMetadata.technicalTermDiscovery.acceptedCandidates,
     discovery: normalizedMetadata.technicalTermDiscovery,
   });
+  const guard = technicalTermScope === "scoped"
+    ? fullGuard.scope(requiredSourceText, expected.sourceTitle)
+    : fullGuard;
   return guard.profile.profileFingerprint === normalizedMetadata.technicalTermProfileFingerprint;
 };

@@ -108,9 +108,11 @@ export const deconstructCacheIdentityFor = async (
     srtSha256,
     videoId: artifacts.videoId,
     videoSourceIdentity,
+    // 注意：不要在这里加入 CONTENT_PROMPT_VERSIONS.clipPost —— deconstruct-run 身份只应由
+    // 候选识别自身的输入决定，clip-post 的 prompt 版本变化有独立的 selected-clip-post 缓存身份
+    // 负责失效，两者混在一起会让候选识别（全流程最贵的一次 LLM 调用）无谓重跑。
     promptVersions: {
       candidate: CONTENT_PROMPT_VERSIONS.deconstruct,
-      clipPost: CONTENT_PROMPT_VERSIONS.clipPost,
       discovery: TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION,
     },
     technicalTermStaticIdentity: TECHNICAL_TERM_CATALOG_FINGERPRINT,
@@ -267,7 +269,10 @@ export const runDeconstruct = async (
   // Condense SRT from ~40K tokens down to ~4-6K tokens (saves ~85%)
   const condensedSrt = condenseSrtContent(artifacts.srtContent);
   const sourceText = `${artifacts.articleMd}\n${condensedSrt}`;
-  const sourceTitle = videoTitle ?? "";
+  // 必须和 deconstructCacheIdentityFor 的 sourceTitle 回退一致，否则 article.md 没有
+  // H1 标题时两处算出的 technicalTermKnownSourceFingerprint 永远对不上，deconstruct-run
+  // 缓存永久 miss。
+  const sourceTitle = videoTitle ?? artifacts.videoId;
   const discovery = await discoverTechnicalTerms({
     llm: input.llm,
     model: input.model,

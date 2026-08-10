@@ -30,8 +30,12 @@ const mocks = vi.hoisted(() => ({
   readContentTargetMetadata: vi.fn(),
   isContentTargetMetadataFresh: vi.fn(),
   replaceDirectoryAtomically: vi.fn(async () => {}),
-  clipPostSourceFingerprintFor: vi.fn(() => "source-fingerprint"),
+  resolveContentBundleDir: vi.fn(async (dir: string) => dir),
   clipPostSourceTextFor: vi.fn(() => "source-text"),
+  selectedClipPostCacheIdentityFor: vi.fn(() => ({
+    sourceText: "selected-source-text",
+    sourceFingerprint: "selected-source-fingerprint",
+  })),
   clipsInputForManifest: vi.fn(() => []),
   filterValidSections: vi.fn(),
   validateClipEndings: vi.fn(),
@@ -73,9 +77,16 @@ describe("runDeconstructCommand", () => {
 
   it("reuses the generation technical-term profile for the selected-post rewrite", async () => {
     const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-cli-deconstruct-terms-"));
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       const clipsDir = path.join(articleDir, "x-format", "clips");
       await mkdir(clipsDir, { recursive: true });
+      // 提交后 finalClipsDir 已经被铺回机制填上这一代的全部交付物；resolveContentBundleDir
+      // 在这里模拟真实的「解析出的路径带一次性 generation UUID」，用来断言 CLI 打印给用户
+      // 看的路径必须是稳定的公开 root，而不是每次都不同的 generation 路径。
+      mocks.resolveContentBundleDir.mockImplementation(
+        async (dir: string) => path.join(dir, ".generations", "generation-fake-uuid"),
+      );
       const manifest = {
         v: 1,
         source: { videoId: "profile-pass", articlePath: "../article.md", durationSec: 60 },
@@ -142,12 +153,20 @@ describe("runDeconstructCommand", () => {
         }),
       );
       expect(mocks.createContentTargetMetadata).toHaveBeenCalledWith(expect.objectContaining({
-        target: "deconstruct",
+        target: "deconstruct-run",
         sourceFingerprint: "candidate-source-fingerprint",
         technicalTermProfileFingerprint: "candidate-profile",
         technicalTermDiscovery: expect.objectContaining({ sourceIdentity: "candidate-audit" }),
       }));
+
+      // 提交后的铺回机制已经让公开 root 直接可见交付物，CLI 打印给用户的路径必须
+      // 是稳定的 clipsDir，不能带一次性的 generation UUID。
+      const loggedLines = consoleLogSpy.mock.calls.map((call) => call.join(" "));
+      expect(loggedLines.some((line) => line.includes(`${clipsDir}/clips-manifest.json`))).toBe(true);
+      expect(loggedLines.some((line) => line.includes("generation-fake-uuid"))).toBe(false);
     } finally {
+      consoleLogSpy.mockRestore();
+      mocks.resolveContentBundleDir.mockImplementation(async (dir: string) => dir);
       await rm(articleDir, { recursive: true, force: true });
     }
   });
@@ -190,7 +209,7 @@ describe("runDeconstructCommand", () => {
       });
       mocks.contentTargetMetadataPathFor.mockReturnValue(path.join(clipsDir, ".content-metadata", "deconstruct.json"));
       mocks.readContentTargetMetadata
-        .mockResolvedValueOnce({ target: "deconstruct" })
+        .mockResolvedValueOnce({ target: "deconstruct-run" })
         .mockResolvedValueOnce({ target: "clip-post" });
       mocks.isContentTargetMetadataFresh
         .mockResolvedValueOnce(true)
@@ -208,9 +227,9 @@ describe("runDeconstructCommand", () => {
         { requestedModel: "test-model", selectCount: 1 },
       );
       expect(mocks.isContentTargetMetadataFresh).toHaveBeenNthCalledWith(1,
-        { target: "deconstruct" },
+        { target: "deconstruct-run" },
         expect.objectContaining({
-          target: "deconstruct",
+          target: "deconstruct-run",
           sourceFingerprint: "candidate-source-fingerprint",
           sourceText: "candidate source text",
         }),

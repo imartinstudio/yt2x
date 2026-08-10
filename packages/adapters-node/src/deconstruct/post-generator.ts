@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   appendTechnicalTermRuleToSystemPrompt,
@@ -28,13 +28,14 @@ import {
 import {
   CONTENT_PROMPT_VERSIONS,
   contentSourceFingerprintFor,
+  contentTechnicalTermSourceFingerprintFor,
   contentTargetMetadataPathFor,
   createContentTargetMetadata,
   isContentTargetMetadataFresh,
   readContentTargetMetadata,
   writeContentTargetMetadata,
 } from "../content-cache.js";
-import { replaceDirectoryAtomically, withContentTargetLock } from "../content-transaction.js";
+import { withContentTargetLock } from "../content-transaction.js";
 
 export type GeneratePostsRunnerInput = {
   llm: LlmPort;
@@ -96,16 +97,6 @@ export const clipPostSourceTextFor = (
   articleMd: string,
   manifest: DeconstructManifest,
 ): string => `${articleMd}\n${JSON.stringify(clipsInputForManifest(manifest))}`;
-
-export const clipPostSourceFingerprintFor = (
-  articleTitle: string,
-  articleMd: string,
-  manifest: DeconstructManifest,
-): string => contentSourceFingerprintFor({
-  articleTitle,
-  articleMd,
-  clips: clipsInputForManifest(manifest),
-});
 
 /**
  * Build user prompt for all candidate clips.
@@ -190,11 +181,12 @@ export const generateClipsPosts = async (
 
   const sourceText = clipPostSourceTextFor(articleMd, manifest);
   const selected = manifest.clips.filter((clip) => clip.selected === true && Boolean(clip.text));
-  const selectedSourceText = selectedClipPostSourceText(selected, articleTitle, sourceTextByClipId);
-  const sourceFingerprint = clipPostSourceFingerprintFor(articleTitle, articleMd, manifest);
+  const selectedCacheIdentity = selectedClipPostCacheIdentityFor(articleTitle, manifest, sourceTextByClipId);
+  const selectedSourceText = selectedCacheIdentity.sourceText;
+  const sourceFingerprint = selectedCacheIdentity.sourceFingerprint;
   const bundleMetadataPath = contentTargetMetadataPathFor(clipsDir, "clip-post");
   const legacyMetadataPath = contentTargetMetadataPathFor(input.articleDir, "clip-post");
-  const selectedPostPaths = selected.map((clip, index) => selectedPostPathFor(input.articleDir, clip, index));
+  const selectedPostPaths = selected.map((clip, index) => selectedPostPathFor(clipsDir, clip, index));
   if (input.persist !== false) {
     const bundleMetadata = await readContentTargetMetadata(bundleMetadataPath);
     const existingMetadata = bundleMetadata ?? await readContentTargetMetadata(legacyMetadataPath);
@@ -380,8 +372,6 @@ export const writeSelectedPostFiles = async (
     clipsDir?: string;
     metadataPath?: string;
     lock?: boolean;
-    transaction?: boolean;
-    commit?: typeof replaceDirectoryAtomically;
   } = {},
 ): Promise<string[]> => {
   if (options.lock !== false) {
@@ -393,33 +383,14 @@ export const writeSelectedPostFiles = async (
     ));
   }
   const clipsDir = options.clipsDir ?? path.join(articleDir, "x-format", "clips");
-  if (options.transaction !== false) {
-    const stageDir = path.join(
-      path.dirname(clipsDir),
-      "." + path.basename(clipsDir) + "-write-stage-" + randomUUID(),
-    );
-    await mkdir(path.dirname(stageDir), { recursive: true });
-    try {
-      await cp(clipsDir, stageDir, { recursive: true, dereference: true }).catch(async (err: unknown) => {
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-        await mkdir(stageDir, { recursive: true });
-      });
-      const stagedPaths = await writeSelectedPostFiles(manifest, articleDir, technicalTerms, {
-        clipsDir: stageDir,
-        metadataPath: contentTargetMetadataPathFor(stageDir, "clip-post"),
-        lock: false,
-        transaction: false,
-      });
-      await (options.commit ?? replaceDirectoryAtomically)(stageDir, clipsDir);
-      return stagedPaths.map((postPath) => path.join(clipsDir, path.basename(postPath)));
-    } finally {
-      await rm(stageDir, { recursive: true, force: true }).catch(() => {});
-    }
-  }
   const manifestPath = path.join(clipsDir, "clips-manifest.json");
   const postPaths: string[] = [];
 
-  const selected = manifest.clips.filter((c) => c.selected === true);
+  // 必须和 selectedClipPostCacheIdentityFor 的过滤条件一致（selected && 有 text）。
+  // 否则 finalGuard 用来构建 sourceText 的 selected 集合会比 known/required
+  // fingerprint 对应的集合更宽，profileFingerprint 永远无法从磁盘重建，clip-post
+  // 缓存永久 miss。
+  const selected = manifest.clips.filter((c) => c.selected === true && Boolean(c.text));
 
   const restoration = technicalTerms.restoration;
   const youtubeUrl = `https://www.youtube.com/watch?v=${manifest.source.videoId}`;
@@ -442,6 +413,12 @@ export const writeSelectedPostFiles = async (
     discoveredTerms: technicalTerms.discoveredTerms,
     ...(technicalTerms.discoveryAudit === undefined ? {} : { discovery: technicalTerms.discoveryAudit }),
   });
+  const selectedCacheIdentity = selectedClipPostCacheIdentityFor(
+    technicalTerms.articleTitle,
+    manifest,
+    technicalTerms.sourceTextByClipId,
+    technicalTerms,
+  );
 
   // 每个选中片段单独派生 source scope，避免片段 A 的术语被片段 B 的正文
   // “至少出现一次”而掩盖。此处只在内存中组装和校验，之后才接触旧文件。
@@ -535,12 +512,20 @@ export const writeSelectedPostFiles = async (
         stagedMetadataPath,
         createContentTargetMetadata({
           target: "clip-post",
-          sourceFingerprint: technicalTerms.sourceFingerprint,
+          sourceFingerprint: selectedCacheIdentity.sourceFingerprint,
           requestedModel: technicalTerms.requestedModel,
           resolvedModel: technicalTerms.resolvedModel ?? technicalTerms.requestedModel,
           promptVersion: technicalTerms.promptVersion,
           technicalTermProfileFingerprint: finalGuard.profile.profileFingerprint,
           technicalTermDiscovery: technicalTerms.discoveryAudit,
+          technicalTermKnownSourceFingerprint: contentTechnicalTermSourceFingerprintFor(
+            selectedCacheIdentity.sourceText,
+            technicalTerms.articleTitle,
+          ),
+          technicalTermRequiredSourceFingerprint: contentTechnicalTermSourceFingerprintFor(
+            selectedCacheIdentity.sourceText,
+            technicalTerms.articleTitle,
+          ),
         }),
       );
     }
@@ -550,7 +535,7 @@ export const writeSelectedPostFiles = async (
     }
     await rename(path.join(stageDir, "clips-manifest.json"), manifestPath);
     if (stagedMetadataPath !== undefined) {
-      const metadataPath = options.metadataPath ?? contentTargetMetadataPathFor(articleDir, "clip-post");
+      const metadataPath = options.metadataPath ?? contentTargetMetadataPathFor(clipsDir, "clip-post");
       await mkdir(path.dirname(metadataPath), { recursive: true });
       await rename(stagedMetadataPath, metadataPath);
     }
@@ -630,6 +615,20 @@ const sourceTextForSelectedClip = (
     ?? [clip.title, clip.articleSection ?? ""].join("\n");
 };
 
+/**
+ * 没有 in-memory `technicalTerms`（即从磁盘 manifest 重建身份，如 CLI 缓存命中检查）
+ * 时使用的候选源文本回退。必须和 `sourceTextForSelectedClip` 在 `clip.sourceContext`
+ * 存在时保持一致 —— 否则从磁盘重建的 sourceText 会比生成时实际使用的文本更「贫瘠」，
+ * 导致 profileFingerprint 永远无法从 metadata 精确重建，缓存永远不命中。
+ */
+const clipSourceTextForSelection = (
+  clip: DeconstructManifest["clips"][number],
+  sourceTextByClipId?: Readonly<Record<string, string>>,
+): string => {
+  if (clip.sourceContext !== undefined) return sourceContextText(clip.sourceContext);
+  return sourceTextByClipId?.[clip.id] ?? [clip.title, clip.articleSection ?? ""].join("\n");
+};
+
 const selectedClipPostSourceText = (
   selected: readonly DeconstructManifest["clips"][number][],
   articleTitle: string,
@@ -638,18 +637,18 @@ const selectedClipPostSourceText = (
 ): string => [
   articleTitle,
   ...selected.map((clip) => technicalTerms === undefined
-    ? sourceTextByClipId?.[clip.id] ?? [clip.title, clip.articleSection ?? ""].join("\n")
+    ? clipSourceTextForSelection(clip, sourceTextByClipId)
     : sourceTextForSelectedClip(clip, technicalTerms)),
   CLIP_POST_CALL_TO_ACTION,
 ].join("\n");
 
 const selectedPostPathFor = (
-  articleDir: string,
+  clipsDir: string,
   clip: DeconstructManifest["clips"][number],
   index: number,
 ): string => {
   const slug = clip.slug || clip.id;
-  return path.join(articleDir, "x-format", "clips", `post-${index + 1}-${slug}.md`);
+  return path.join(clipsDir, `post-${index + 1}-${slug}.md`);
 };
 
 const sourceContextText = (
@@ -662,6 +661,37 @@ const sourceContextText = (
   sourceContext.articleSection,
   sourceContext.articleBody,
 ].filter(Boolean).join("\n");
+
+export const selectedClipPostCacheIdentityFor = (
+  articleTitle: string,
+  manifest: DeconstructManifest,
+  sourceTextByClipId?: Readonly<Record<string, string>>,
+  technicalTerms?: ClipPostTechnicalTerms,
+): { sourceText: string; sourceFingerprint: string } => {
+  const selected = manifest.clips.filter((clip) => clip.selected === true && Boolean(clip.text));
+  const sourceText = selectedClipPostSourceText(
+    selected,
+    articleTitle,
+    sourceTextByClipId,
+    technicalTerms,
+  );
+  return {
+    sourceText,
+    sourceFingerprint: contentSourceFingerprintFor({
+      articleTitle,
+      selected: selected.map((clip) => ({
+        id: clip.id,
+        angle: clip.angle,
+        video: clip.video,
+        durationSec: clip.timecodes.durationSec,
+        sourceText: technicalTerms === undefined
+          ? clipSourceTextForSelection(clip, sourceTextByClipId)
+          : sourceTextForSelectedClip(clip, technicalTerms),
+      })),
+      callToAction: CLIP_POST_CALL_TO_ACTION,
+    }),
+  };
+};
 
 const extractArticleSection = (articleMd: string, sectionTitle: string | undefined): string => {
   const target = sectionTitle?.trim();

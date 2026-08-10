@@ -77,7 +77,7 @@ describe("writeNativeArticleBundle", () => {
   it("writes article.md and run.json atomically", async () => {
     await seedNotesVideo("v1");
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
@@ -108,7 +108,7 @@ describe("writeNativeArticleBundle", () => {
   it("returns null when file exists without --force", async () => {
     await seedNotesVideo("v1");
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
@@ -125,7 +125,7 @@ describe("writeNativeArticleBundle", () => {
   it("copies cover from screenshots when notesVideoDir passed", async () => {
     await seedNotesVideo("v1", { shot: Buffer.from([0x52, 0x49, 0x46, 0x46]) });
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
@@ -148,7 +148,7 @@ describe("writeNativeArticleBundle", () => {
     await writeFile(path.join(screenshotsDir, "youtube_cover.jpg"), Buffer.from([0xff, 0xd8, 0xff]));
 
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
@@ -171,7 +171,7 @@ describe("writeNativeArticleBundle", () => {
       clip: Buffer.from("fake mp4"),
     });
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
@@ -214,7 +214,7 @@ describe("writeNativeArticleBundle cover fallback", () => {
     await writeFile(path.join(screenshotsDir, "contact_sheet.jpg"), Buffer.from([0xff, 0xd8]));
 
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
@@ -237,7 +237,7 @@ describe("writeNativeArticleBundle cover fallback", () => {
     await writeFile(path.join(screenshotsDir, "scene_03.webp"), Buffer.from([0x52, 0x49]));
 
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",

@@ -24,7 +24,9 @@ import {
   acquireContentTargetLock,
   technicalTermDiscoveryCacheDirFor,
   CONTENT_PROMPT_VERSIONS,
+  CONTENT_METADATA_SCHEMA_VERSION,
   contentSourceFingerprintFor,
+  contentTechnicalTermSourceFingerprintFor,
   contentTargetMetadataPathFor,
   createContentTargetMetadata,
   isContentTargetMetadataFresh,
@@ -92,6 +94,12 @@ type ContentResultMetadata = {
 const contentMetadataForResult = (
   target: string,
   result: ContentResultMetadata,
+  sources: {
+    knownSourceText: string;
+    requiredSourceText: string;
+    sourceTitle: string;
+    scope: "full" | "scoped";
+  },
 ): ContentTargetMetadata | undefined => {
   if (result.sourceFingerprint === undefined
     || result.promptVersion === undefined
@@ -105,6 +113,15 @@ const contentMetadataForResult = (
     promptVersion: result.promptVersion,
     technicalTermProfileFingerprint: result.technicalTermProfileFingerprint,
     technicalTermDiscovery: result.technicalTermDiscovery,
+    technicalTermKnownSourceFingerprint: contentTechnicalTermSourceFingerprintFor(
+      sources.knownSourceText,
+      sources.sourceTitle,
+    ),
+    technicalTermRequiredSourceFingerprint: contentTechnicalTermSourceFingerprintFor(
+      sources.requiredSourceText,
+      sources.sourceTitle,
+    ),
+    technicalTermScope: sources.scope,
   });
 };
 
@@ -112,14 +129,20 @@ const contentCacheHit = async (input: {
   metadataPath: string;
   expectation: Omit<ContentTargetCacheExpectation, "requiredFiles" | "sourceText" | "sourceTitle">;
   sourceText: string;
+  knownSourceText?: string;
+  requiredSourceText?: string;
   sourceTitle: string;
+  technicalTermScope?: "full" | "scoped";
   requiredFiles: readonly string[];
 }): Promise<boolean> => {
   const metadata = await readContentTargetMetadata(input.metadataPath);
   return isContentTargetMetadataFresh(metadata, {
     ...input.expectation,
     sourceText: input.sourceText,
+    ...(input.knownSourceText === undefined ? {} : { knownSourceText: input.knownSourceText }),
+    ...(input.requiredSourceText === undefined ? {} : { requiredSourceText: input.requiredSourceText }),
     sourceTitle: input.sourceTitle,
+    ...(input.technicalTermScope === undefined ? {} : { technicalTermScope: input.technicalTermScope }),
     requiredFiles: input.requiredFiles,
   });
 };
@@ -272,6 +295,9 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       let articleDirForStatus: string | undefined;
       let resultFile: string | undefined;
       let sourceArticleMd: string | undefined;
+      const structuredKnownSourceText = artifacts.structuredNotesMd;
+      const structuredRequiredSourceText = summarySourceTextFor(artifacts.structuredNotesMd);
+      const structuredSourceTitle = artifacts.metadata.title ?? "";
 
       // 读取 scene_manifest.json → available_visuals（所有格式共享）
       const sceneManifestPath = path.join(videoDir, "screenshots", "scene_manifest.json");
@@ -302,8 +328,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             requestedModel: llm.model,
             promptVersion: CONTENT_PROMPT_VERSIONS.article,
           },
-          sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
-          sourceTitle: artifacts.metadata.title ?? "",
+          sourceText: structuredKnownSourceText,
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredKnownSourceText,
+          sourceTitle: structuredSourceTitle,
+          technicalTermScope: "full",
           requiredFiles: [articlePath, runPath],
         });
         if (articleShouldSkip) {
@@ -340,7 +369,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           artifacts.videoId,
           renderedContent,
           {
-            v: 1,
+            v: CONTENT_METADATA_SCHEMA_VERSION,
             platform: "x",
             videoId: artifacts.videoId,
             target: "article",
@@ -352,6 +381,15 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             durationMs: result.durationMs,
             technicalTermProfileFingerprint: result.technicalTermProfileFingerprint,
             technicalTermDiscovery: result.technicalTermDiscovery,
+            technicalTermKnownSourceFingerprint: contentTechnicalTermSourceFingerprintFor(
+              structuredKnownSourceText,
+              structuredSourceTitle,
+            ),
+            technicalTermRequiredSourceFingerprint: contentTechnicalTermSourceFingerprintFor(
+              structuredKnownSourceText,
+              structuredSourceTitle,
+            ),
+            technicalTermScope: "full",
             sourceFingerprint: result.sourceFingerprint,
             promptVersion: result.promptVersion,
             ...(result.usage !== undefined ? { usage: result.usage } : {}),
@@ -366,8 +404,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
               sourceFingerprint: articleSourceFingerprint,
               requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.article,
-              sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
-              sourceTitle: artifacts.metadata.title ?? "",
+              sourceText: structuredKnownSourceText,
+              knownSourceText: structuredKnownSourceText,
+              requiredSourceText: structuredKnownSourceText,
+              sourceTitle: structuredSourceTitle,
+              technicalTermScope: "full",
               requiredFiles: [articlePath, runPath],
             },
           },
@@ -432,8 +473,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             requestedModel: llm.model,
             promptVersion: CONTENT_PROMPT_VERSIONS.xThread,
           },
-          sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
-          sourceTitle: artifacts.metadata.title ?? "",
+          sourceText: structuredRequiredSourceText,
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          technicalTermScope: "scoped",
           requiredFiles: [threadPath, path.join(articleDir, "x-format", "x-hooks.json"), threadMetadataPath],
         });
         if (xthreadShouldSkip) {
@@ -446,7 +490,12 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           availableVisuals,
           technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(articleDir),
         });
-        const threadMetadata = contentMetadataForResult("x-thread", result);
+        const threadMetadata = contentMetadataForResult("x-thread", result, {
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          scope: "scoped",
+        });
         const written = await writeNativeThreadBundle(
           articleOutDir,
           artifacts.videoId,
@@ -459,8 +508,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
               sourceFingerprint: structuredSourceFingerprint,
               requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.xThread,
-              sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
-              sourceTitle: artifacts.metadata.title ?? "",
+              sourceText: structuredRequiredSourceText,
+              knownSourceText: structuredKnownSourceText,
+              requiredSourceText: structuredRequiredSourceText,
+              sourceTitle: structuredSourceTitle,
+              technicalTermScope: "scoped",
               requiredFiles: [threadPath, path.join(articleDir, "x-format", "x-hooks.json"), threadMetadataPath],
             },
             ...(threadMetadata === undefined ? {} : { cacheMetadata: threadMetadata }),
@@ -509,8 +561,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             requestedModel: llm.model,
             promptVersion: CONTENT_PROMPT_VERSIONS.xShort,
           },
-          sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
-          sourceTitle: artifacts.metadata.title ?? "",
+          sourceText: structuredRequiredSourceText,
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          technicalTermScope: "scoped",
           requiredFiles: [shortPath, shortMetadataPath],
         });
         if (xshortShouldSkip) {
@@ -523,7 +578,12 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           availableVisuals,
           technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(articleDir),
         });
-        const shortMetadata = contentMetadataForResult("x-short", result);
+        const shortMetadata = contentMetadataForResult("x-short", result, {
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          scope: "scoped",
+        });
         const written = await writeNativeShortBundle(
           articleOutDir,
           artifacts.videoId,
@@ -536,8 +596,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
               sourceFingerprint: structuredSourceFingerprint,
               requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.xShort,
-              sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
-              sourceTitle: artifacts.metadata.title ?? "",
+              sourceText: structuredRequiredSourceText,
+              knownSourceText: structuredKnownSourceText,
+              requiredSourceText: structuredRequiredSourceText,
+              sourceTitle: structuredSourceTitle,
+              technicalTermScope: "scoped",
               requiredFiles: [shortPath, shortMetadataPath],
             },
             ...(shortMetadata === undefined ? {} : { cacheMetadata: shortMetadata }),
@@ -584,8 +647,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
             requestedModel: llm.model,
             promptVersion: CONTENT_PROMPT_VERSIONS.xVideoShort,
           },
-          sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
-          sourceTitle: artifacts.metadata.title ?? "",
+          sourceText: structuredRequiredSourceText,
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          technicalTermScope: "scoped",
           requiredFiles: [videoShortPath, videoShortMetadataPath],
         });
         if (xvideoshortShouldSkip) {
@@ -598,7 +664,12 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           availableVisuals: null,
           technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(articleDir),
         });
-        const videoShortMetadata = contentMetadataForResult("x-video-short", result);
+        const videoShortMetadata = contentMetadataForResult("x-video-short", result, {
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          scope: "scoped",
+        });
         const written = await writeNativeVideoShortBundle(
           articleOutDir,
           artifacts.videoId,
@@ -611,8 +682,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
               sourceFingerprint: videoShortSourceFingerprint,
               requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.xVideoShort,
-              sourceText: summarySourceTextFor(artifacts.structuredNotesMd),
-              sourceTitle: artifacts.metadata.title ?? "",
+              sourceText: structuredRequiredSourceText,
+              knownSourceText: structuredKnownSourceText,
+              requiredSourceText: structuredRequiredSourceText,
+              sourceTitle: structuredSourceTitle,
+              technicalTermScope: "scoped",
               requiredFiles: [videoShortPath, videoShortMetadataPath],
             },
             ...(videoShortMetadata === undefined ? {} : { cacheMetadata: videoShortMetadata }),
@@ -698,7 +772,12 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           ...(timestampedCuesMd !== undefined ? { timestampedCuesMd } : {}),
           technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(articleDir),
         });
-        const platformMetadata = contentMetadataForResult(`platform-article-${platformTarget}`, result);
+        const platformMetadata = contentMetadataForResult(`platform-article-${platformTarget}`, result, {
+          knownSourceText: platformSourceText,
+          requiredSourceText: platformSourceText,
+          sourceTitle: structuredSourceTitle,
+          scope: "full",
+        });
         const written = await writePlatformArticleBundle(
           articleOutDir,
           artifacts.videoId,

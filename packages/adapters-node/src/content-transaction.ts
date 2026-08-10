@@ -3,9 +3,9 @@ import {
   lstat,
   mkdir,
   readFile,
+  realpath,
   rename as fsRename,
   rm,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -29,8 +29,42 @@ const DEFAULT_LOCK_POLL_MS = 25;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * 仅做词法解析的锁路径，用于展示和同一 root 的命名空间断言。
+ * 真正取锁必须走 {@link canonicalContentTargetLockPathFor}。
+ */
 export const contentTargetLockPathFor = (targetDir: string, _target: string): string =>
   path.join(path.resolve(targetDir), ".content-locks", "bundle.lock");
+
+/**
+ * 把路径解析成不受符号链接别名影响的规范身份：
+ * 已存在的部分用 realpath，未创建的部分作为后缀原样拼回。
+ */
+export const canonicalContentTargetPath = async (targetDir: string): Promise<string> => {
+  const resolved = path.resolve(targetDir);
+  const suffix: string[] = [];
+  let current = resolved;
+  while (true) {
+    try {
+      const real = await realpath(current);
+      return suffix.length === 0 ? real : path.join(real, ...[...suffix].reverse());
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return resolved;
+    suffix.push(path.basename(current));
+    current = parent;
+  }
+};
+
+/** 锁身份：符号链接别名与真实路径必须得到同一把锁。 */
+export const canonicalContentTargetLockPathFor = async (
+  targetDir: string,
+  _target: string,
+): Promise<string> =>
+  path.join(await canonicalContentTargetPath(targetDir), ".content-locks", "bundle.lock");
 
 const isProcessAlive = (pid: number): boolean => {
   try {
@@ -72,7 +106,7 @@ export const acquireContentTargetLock = async (
   target: string,
   options: ContentTargetLockOptions = {},
 ): Promise<() => Promise<void>> => {
-  const lockPath = contentTargetLockPathFor(targetDir, target);
+  const lockPath = await canonicalContentTargetLockPathFor(targetDir, target);
   const parentDir = path.dirname(lockPath);
   const timeoutMs = options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
   const staleMs = options.staleMs ?? DEFAULT_LOCK_STALE_MS;
@@ -152,31 +186,14 @@ const lstatIfExists = async (filePath: string): Promise<Awaited<ReturnType<typeo
   }
 };
 
-const migrationMarkerPathFor = (targetDir: string): string =>
-  path.join(path.dirname(targetDir), "." + path.basename(targetDir) + ".migration.json");
-
-/** Resolve the current bundle, including the tiny first-migration rename window. */
-export const resolveContentBundleDir = async (targetDir: string): Promise<string> => {
-  try {
-    await lstat(targetDir);
-    return targetDir;
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-  }
-  const marker = JSON.parse(await readFile(migrationMarkerPathFor(targetDir), "utf8")) as {
-    fallbackDir?: unknown;
-  };
-  if (typeof marker.fallbackDir !== "string") {
-    throw new Error("Invalid content bundle migration marker for \"" + targetDir + "\"");
-  }
-  await lstat(marker.fallbackDir);
-  return marker.fallbackDir;
-};
-
 /**
- * 把 staged bundle 移入不可变版本目录，再以一次 rename 原子切换目标符号链接。
- * 既有实体目录会在目标锁内迁移成首个版本；失败时恢复旧目录。所有旧读取路径
- * 仍可通过 targetDir 透明访问当前 generation。
+ * 把 staged bundle 一次性换入 targetDir：先把旧目录挪到临时备份名，再把 staged
+ * 改名成 targetDir，最后删掉备份。任一步失败都会把备份挪回原位，不会留下半成品。
+ *
+ * 换入过程中 targetDir 有一个两次 rename 之间的极短不存在窗口。yt2x 是单用户本地
+ * CLI：所有写入方都在同一把 target 锁内串行，读取方是命令结束之后的人或脚本，
+ * 因此不为这个窗口做进一步处理。曾经用「符号链接 root」和「不可变版本目录 +
+ * 原子指针 + 硬链接铺回 + 有界 GC」来消除它，引入的复杂度和缺陷远超收益。
  */
 export const replaceDirectoryAtomically = async (
   stagedDir: string,
@@ -184,69 +201,32 @@ export const replaceDirectoryAtomically = async (
   options: { rename?: DirectoryRename } = {},
 ): Promise<void> => {
   const rename = options.rename ?? fsRename;
-  const targetParent = path.dirname(targetDir);
-  const targetName = path.basename(targetDir);
-  const versionsDir = path.join(targetParent, "." + targetName + "-bundles");
-  const generationDir = path.join(versionsDir, "generation-" + process.pid + "-" + randomUUID());
-  const pointerPath = path.join(targetParent, "." + targetName + ".pointer-" + process.pid + "-" + randomUUID());
-  const pointerTarget = path.relative(targetParent, generationDir);
-  const targetEntry = await lstatIfExists(targetDir);
-  const legacyDir = targetEntry !== undefined && !targetEntry.isSymbolicLink()
-    ? path.join(versionsDir, "legacy-" + process.pid + "-" + randomUUID())
-    : undefined;
-  const migrationMarkerPath = migrationMarkerPathFor(targetDir);
-
-  if (targetEntry !== undefined && !targetEntry.isDirectory() && !targetEntry.isSymbolicLink()) {
-    throw new Error("Cannot replace content bundle at non-directory target \"" + targetDir + "\"");
+  const root = path.resolve(targetDir);
+  const existing = await lstatIfExists(root);
+  if (existing !== undefined && !existing.isDirectory()) {
+    throw new Error(`Cannot replace content bundle at non-directory target "${root}"`);
   }
+  const backupDir = path.join(
+    path.dirname(root),
+    `.${path.basename(root)}.previous-${process.pid}-${randomUUID()}`,
+  );
 
-  await mkdir(versionsDir, { recursive: true });
-  let stagedMoved = false;
-  let legacyMoved = false;
-  let pointerCommitted = false;
+  await mkdir(path.dirname(root), { recursive: true });
+  let backedUp = false;
+  let committed = false;
   try {
-    await rename(stagedDir, generationDir);
-    stagedMoved = true;
-    await symlink(pointerTarget, pointerPath, "dir");
-
-    if (legacyDir !== undefined) {
-      await atomicWriteUtf8(migrationMarkerPath, JSON.stringify({ fallbackDir: legacyDir }) + "\n");
-      await rename(targetDir, legacyDir);
-      legacyMoved = true;
+    if (existing !== undefined) {
+      await rename(root, backupDir);
+      backedUp = true;
     }
-
-    try {
-      await rename(pointerPath, targetDir);
-      pointerCommitted = true;
-    } catch (err: unknown) {
-      if (legacyMoved && legacyDir !== undefined) {
-        try {
-          await rename(legacyDir, targetDir);
-          legacyMoved = false;
-        } catch (restoreError: unknown) {
-          throw new AggregateError(
-            [err, restoreError],
-            "Content bundle commit and rollback both failed for \"" + targetDir + "\"",
-          );
-        }
-      }
-      throw err;
-    }
-
-    // Keep previous immutable generations readable for readers that resolved
-    // the migration fallback immediately before the pointer switch. A later
-    // maintenance pass may garbage-collect generations outside active runs.
+    await rename(stagedDir, root);
+    committed = true;
   } finally {
-    await rm(pointerPath, { force: true }).catch(() => {});
-    if (!pointerCommitted && stagedMoved) {
-      await rm(generationDir, { recursive: true, force: true }).catch(() => {});
-    }
-    if (!stagedMoved) {
+    if (committed) {
+      if (backedUp) await rm(backupDir, { recursive: true, force: true }).catch(() => {});
+    } else {
       await rm(stagedDir, { recursive: true, force: true }).catch(() => {});
+      if (backedUp) await rename(backupDir, root).catch(() => {});
     }
-    if (!pointerCommitted && legacyMoved && legacyDir !== undefined) {
-      await rename(legacyDir, targetDir).catch(() => {});
-    }
-    await rm(migrationMarkerPath, { force: true }).catch(() => {});
   }
 };

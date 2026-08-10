@@ -9,8 +9,12 @@ import {
   type VisualSuggestion,
   type YouTubeMetadata,
 } from "@yt2x/core";
-import type { ContentTargetCacheExpectation } from "../content-cache.js";
-import { isContentTargetMetadataFresh, readContentTargetMetadata } from "../content-cache.js";
+import {
+  type ContentTargetCacheExpectation,
+  type CONTENT_METADATA_SCHEMA_VERSION,
+  isContentTargetMetadataFresh,
+  readContentTargetMetadata,
+} from "../content-cache.js";
 import { atomicWriteUtf8, withContentTargetLock } from "../content-transaction.js";
 
 /**
@@ -26,7 +30,8 @@ export type StructuredNotesArtifacts = {
 };
 
 export type NativeArticleRunRecord = {
-  v: 1;
+  /** 读侧（readContentTargetMetadata）只认 CONTENT_METADATA_SCHEMA_VERSION；写 v:1 的记录永远读不回。 */
+  v: typeof CONTENT_METADATA_SCHEMA_VERSION;
   platform: "x";
   videoId: string;
   /** 旧 run.json 的 model 保留为可选迁移字段。 */
@@ -37,6 +42,9 @@ export type NativeArticleRunRecord = {
   generatedAt: string;
   durationMs: number;
   technicalTermProfileFingerprint: string;
+  technicalTermKnownSourceFingerprint?: string;
+  technicalTermRequiredSourceFingerprint?: string;
+  technicalTermScope?: "full" | "scoped";
   target?: string;
   sourceFingerprint?: string;
   promptVersion?: string;

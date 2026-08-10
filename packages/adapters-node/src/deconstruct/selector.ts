@@ -1,7 +1,7 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { DeconstructManifest, SectionCandidate } from "@yt2x/core";
-import { resolveContentBundleDir } from "../content-transaction.js";
+import { atomicWriteUtf8, withContentTargetLock } from "../content-transaction.js";
 
 export type SelectClipsInput = {
   articleDir: string;
@@ -98,18 +98,23 @@ export const applyClipSelection = (
   return { manifest: updated, kept: keptCount, removed: removedCount };
 };
 
+/**
+ * 在与写入方相同的 `deconstruct` 锁内应用选中状态。manifest 用 temp+rename 覆盖，
+ * 并发读取方不会看到截断到一半的 JSON。
+ */
 export const selectClips = async (input: SelectClipsInput): Promise<SelectClipsResult> => {
-  const clipsDir = await resolveContentBundleDir(path.join(input.articleDir, "x-format", "clips"));
-  const manifestPath = path.join(clipsDir, "clips-manifest.json");
-  const raw = await readFile(manifestPath, "utf8");
-  const manifest: DeconstructManifest = JSON.parse(raw);
-  const selected = applyClipSelection(manifest, input.keep);
+  const clipsDir = path.join(input.articleDir, "x-format", "clips");
+  return withContentTargetLock(input.articleDir, "deconstruct", async () => {
+    const manifestPath = path.join(clipsDir, "clips-manifest.json");
+    const manifest: DeconstructManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    const selected = applyClipSelection(manifest, input.keep);
 
-  await writeFile(manifestPath, JSON.stringify(selected.manifest, null, 2) + "\n", "utf8");
+    await atomicWriteUtf8(manifestPath, JSON.stringify(selected.manifest, null, 2) + "\n");
 
-  return {
-    manifestPath,
-    kept: selected.kept,
-    removed: selected.removed,
-  };
+    return {
+      manifestPath,
+      kept: selected.kept,
+      removed: selected.removed,
+    };
+  });
 };

@@ -7,8 +7,6 @@ import {
   acquireContentTargetLock,
   atomicWriteUtf8,
   assertClipPublishReadiness,
-  clipPostSourceFingerprintFor,
-  clipPostSourceTextFor,
   contentTargetMetadataPathFor,
   createContentTargetMetadata,
   isContentTargetMetadataFresh,
@@ -25,9 +23,10 @@ import {
   selectTopUniqueArticleSections,
   generateClipsPosts,
   writeSelectedPostFiles,
+  selectedClipPostCacheIdentityFor,
   writeReports,
 } from "@yt2x/adapters-node";
-import { CLIP_POST_CALL_TO_ACTION, type DeconstructManifest } from "@yt2x/core";
+import type { DeconstructManifest } from "@yt2x/core";
 import { resolveLlmConfig, defaultCliLlmProvider } from "../config/env.js";
 import { logger } from "../logger.js";
 
@@ -71,14 +70,14 @@ export const runDeconstructCommand = async (
     .catch(() => undefined);
   if (existingManifest !== undefined) {
     const articleTitle = artifacts.articleMd.match(/^#\s+(.+)$/m)?.[1] ?? artifacts.videoId;
-    const clipPostSourceFingerprint = clipPostSourceFingerprintFor(articleTitle, artifacts.articleMd, existingManifest);
-    const candidateMetadataPath = contentTargetMetadataPathFor(finalClipsDir, "deconstruct");
+    const selectedClipPostIdentity = selectedClipPostCacheIdentityFor(articleTitle, existingManifest);
+    const candidateMetadataPath = contentTargetMetadataPathFor(finalClipsDir, "deconstruct-run");
     const clipPostMetadataPath = contentTargetMetadataPathFor(finalClipsDir, "clip-post");
-    const expectedSourceText = `${clipPostSourceTextFor(artifacts.articleMd, existingManifest)}\n${CLIP_POST_CALL_TO_ACTION}`;
+    const expectedSourceText = selectedClipPostIdentity.sourceText;
     const candidateMetadata = await readContentTargetMetadata(candidateMetadataPath);
     const clipPostMetadata = await readContentTargetMetadata(clipPostMetadataPath);
     const candidateFresh = await isContentTargetMetadataFresh(candidateMetadata, {
-      target: "deconstruct",
+      target: "deconstruct-run",
       sourceFingerprint: cacheIdentity.sourceFingerprint,
       requestedModel,
       promptVersion: CONTENT_PROMPT_VERSIONS.deconstruct,
@@ -91,7 +90,7 @@ export const runDeconstructCommand = async (
     });
     const clipPostFresh = await isContentTargetMetadataFresh(clipPostMetadata, {
       target: "clip-post",
-      sourceFingerprint: clipPostSourceFingerprint,
+      sourceFingerprint: selectedClipPostIdentity.sourceFingerprint,
       requestedModel,
       promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
       sourceText: expectedSourceText,
@@ -233,9 +232,9 @@ export const runDeconstructCommand = async (
   const writeStagedBundleMetadata = async (): Promise<void> => {
     const terms = result.candidateTechnicalTerms;
     await writeContentTargetMetadata(
-      contentTargetMetadataPathFor(stageClipsDir, "deconstruct"),
+      contentTargetMetadataPathFor(stageClipsDir, "deconstruct-run"),
       createContentTargetMetadata({
-        target: "deconstruct",
+        target: "deconstruct-run",
         sourceFingerprint: terms.sourceFingerprint,
         requestedModel: terms.requestedModel,
         resolvedModel: terms.resolvedModel,
@@ -276,7 +275,6 @@ export const runDeconstructCommand = async (
         clipsDir: stageClipsDir,
         metadataPath: contentTargetMetadataPathFor(stageClipsDir, "clip-post"),
         lock: false,
-        transaction: false,
       },
     );
 
@@ -315,6 +313,8 @@ export const runDeconstructCommand = async (
     }
 
     await replaceDirectoryAtomically(stageClipsDir, finalClipsDir);
+    // 提交后 finalClipsDir（稳定公开 root）已经通过硬链接铺回了这一代的全部交付物，
+    // 直接用它做展示路径——不带 generation UUID，用户能记住、能写进脚本。
     const publishedPostPaths = selectedPostPaths.map((postPath) => path.join(finalClipsDir, path.basename(postPath)));
 
     // Generate reports (now with post text populated)
@@ -377,7 +377,7 @@ export const runDeconstructCommand = async (
 /** 从磁盘读取当前 manifest，生成两份审核报告 */
 const generateReports = async (articleDir: string, articleMd: string): Promise<void> => {
   try {
-    const manifestPath = `${articleDir}/x-format/clips/clips-manifest.json`;
+    const manifestPath = path.join(articleDir, "x-format", "clips", "clips-manifest.json");
     const manifest = JSON.parse(
       await import("node:fs/promises").then((m) => m.readFile(manifestPath, "utf8")),
     );

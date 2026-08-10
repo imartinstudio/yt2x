@@ -81,3 +81,32 @@
 - `git diff --check`：通过。
 
 按要求未运行全量测试、真实 provider、真实媒体或 `files/` 流程；未修改字幕、Dashboard 和 XHS。
+
+## Round 3
+
+状态：DONE（收尾，Remediation C/D 按用户要求暂停）
+
+### 保留的修复
+
+1. **content metadata schema v2 → v3**：持久化 `technicalTermKnownSourceFingerprint`、`technicalTermRequiredSourceFingerprint`、`technicalTermScope`，freshness 用它们精确重建生成时的双层 guard。thread/short/video-short 走 `scoped`，article/platform-article/notes/deconstruct-run/clip-post 走 `full`。full-scope target 的 v2 记录可迁移（`known = required = discovery.sourceIdentity`），scoped target 无法重建 required 层，仍判 stale。
+2. **deconstruct 缓存身份分离**：`deconstruct` target 更名 `deconstruct-run`，只由候选输入身份决定；`selectedClipPostCacheIdentityFor()` 只由选中片段构成 clip-post 身份。两者在任何 provider 创建之前分别比较。`deconstructCacheIdentityFor` 不再混入 `promptVersions.clipPost`。
+3. **clip-post 重建缺陷**：`selectedClipPostCacheIdentityFor` 的 `sourceText` 此前忽略 `clip.sourceContext` 而 `sourceFingerprint` 使用它，生产环境 clip-post 缓存永不命中。抽出 `clipSourceTextForSelection` 统一两侧。
+4. **guard 与身份过滤条件统一**：`finalGuard` 与 `selectedClipPostCacheIdentityFor` 都用 `selected === true && Boolean(clip.text)`，消除空 text 片段导致的指纹错位与 post 文件编号跳号。
+5. **锁身份规范化**：`canonicalContentTargetPath` 对已存在部分做 realpath、未创建部分作后缀拼回，`files/...` 符号链接与真实路径得到同一把锁。
+6. 小修：`sourceTitle` 回退统一为 videoId；`NativeArticleRunRecord.v` 收紧；删除死代码 `clipPostSourceFingerprintFor`。
+
+### 主动放弃的方向
+
+Round 3 中途曾按前一轮审查意见实现「稳定实体 root + 不可变 `.generations` + 原子 `.active-generation` 指针 + 硬链接铺回 + 有界 GC」，用于消除 bundle 换入时 root 的短暂不存在窗口。该方案共约 300 行，并连续两轮独立审查中引入新的正确性缺陷（硬链接 staging 上 `writeFile` 的 `O_TRUNC` 穿透改写已发布 generation；pending-sweep 删除当前铺回在 root 上的交付物；公开 clips 目录对用户显示为空）。
+
+评估后整体移除：yt2x 是单用户本地 CLI，所有 bundle 写入方都在同一把 target 锁内串行，读取方是命令结束后的人或脚本，该窗口不构成实际风险，而消除它的机制成本与缺陷率远高于收益。`replaceDirectoryAtomically` 回到「旧目录改名备份 → staged 改名换入 → 删除备份，失败则把备份改回」的简单换入，`x-format/clips/` 恢复为普通目录，交付物直接可见。
+
+### 验证
+
+- 全量 `pnpm test`：133 files / 1640 tests passed。
+- `pnpm run typecheck`：通过。
+- `git diff --check`：通过。
+- `pnpm run check:downloads`：clean。
+- 改动文件定向 `eslint` 与 `prettier --check`：通过。
+
+未运行真实 provider、TTS、ffmpeg 或媒体流程；未写入 `files/downloads/`；未修改字幕、Dashboard、XHS。

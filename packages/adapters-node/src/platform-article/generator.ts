@@ -20,6 +20,7 @@ import {
 import {
   CONTENT_PROMPT_VERSIONS,
   contentSourceFingerprintFor,
+  knownSourceTextWithMetadata,
   platformArticleContentSourceFor,
 } from "../content-cache.js";
 
@@ -147,12 +148,15 @@ export const generatePlatformArticleContent = async (
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
   const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
-  const guard = createTechnicalTermGuard({
-    sourceText,
+  // 已知范围要覆盖 prepare() 递给模型的全部材料：metadata 也在 prompt 里，
+  // 只在其中出现的词（作者名、频道名、简介里的产品名）不该被判成凭空造词。
+  const fullGuard = createTechnicalTermGuard({
+    sourceText: knownSourceTextWithMetadata(input.artifacts.metadata, sourceText),
     sourceTitle,
     discoveredTerms: discovery.accepted,
     discovery: discoveryAudit,
   });
+  const guard = fullGuard.scope(sourceText, sourceTitle);
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
     articleMd: input.articleMd,

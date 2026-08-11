@@ -16,6 +16,7 @@ import {
   CONTENT_PROMPT_VERSIONS,
   contentSourceFingerprintFor,
   notesContentSourceFor,
+  notesKnownSourceTextFor,
 } from "../content-cache.js";
 import type { VideoDirArtifacts } from "./file-store.js";
 
@@ -69,12 +70,16 @@ export const generateNotesContent = async (
   // 审计必须带上 sourceIdentity：内容缓存用它写 known/required 源指纹，
   // 缺了就退化成空串，笔记每次都会重算。
   const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
-  const guard = createTechnicalTermGuard({
-    sourceText,
+  // 已知范围必须覆盖 prepare() 递给模型的全部材料，否则只在 metadata 里出现的词
+  // （作者名、频道名）一旦被写进输出就会被判成凭空造词。必需范围仍然只有转录，
+  // 所以 metadata 里的词是"允许出现、不要求出现"。
+  const fullGuard = createTechnicalTermGuard({
+    sourceText: notesKnownSourceTextFor(input.artifacts),
     sourceTitle,
     discoveredTerms: discovery.accepted,
     discovery: discoveryAudit,
   });
+  const guard = fullGuard.scope(sourceText, sourceTitle);
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
     chunksMd: input.artifacts.chunksMd,

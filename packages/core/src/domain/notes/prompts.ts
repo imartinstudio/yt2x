@@ -113,6 +113,18 @@ export const stripHeavyMetadata = (meta: YouTubeMetadata): YouTubeMetadata => {
 };
 
 /**
+ * 模型在 prompt 里实际看到的 metadata 文本。
+ *
+ * 所有 prompt builder 都用它，术语守卫也用它算已知范围——两边必须是同一份字符串。
+ * 模型看得见的材料就不算"凭空加入"：作者名、频道名这类只出现在 metadata 里的词，
+ * 如果不算进已知范围，输出一提到就会被判成造词（真实踩过：转录里一次没念全名的
+ * "Matt Pocock" 只在 metadata.channel 里）。它们只进"已知"不进"必需"，
+ * 所以也不会反过来要求每篇产物都提到作者。
+ */
+export const metadataPromptText = (meta: YouTubeMetadata): string =>
+  JSON.stringify(stripHeavyMetadata(meta), null, 2);
+
+/**
  * 构造 notes 阶段的 user prompt。
  * 纯函数，便于单测；输入即是已解析的素材，不再做任何 IO。
  */
@@ -120,12 +132,10 @@ export const buildNotesUserPrompt = (
   input: NotesPromptInput,
   options: NotesPromptOptions = {},
 ): string => {
-  const meta = stripHeavyMetadata(input.metadata);
-
   const sections: string[] = [];
   sections.push("## Metadata");
   sections.push("```json");
-  sections.push(JSON.stringify(meta, null, 2));
+  sections.push(metadataPromptText(input.metadata));
   sections.push("```");
 
   sections.push("");

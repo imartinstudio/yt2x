@@ -3,7 +3,9 @@ import path from "node:path";
 import {
   createTechnicalTermGuard,
   fingerprintTechnicalTermValue,
+  metadataPromptText,
   type TechnicalTermDiscoveryAudit,
+  type YouTubeMetadata,
 } from "@yt2x/core";
 import { atomicWriteUtf8 } from "./content-transaction.js";
 
@@ -105,6 +107,37 @@ export const notesContentSourceFor = (input: {
   timestampedCuesMd: input.timestampedCuesMd,
   screenshots: input.screenshots ?? null,
 });
+
+/**
+ * 派生产物的术语已知范围：prompt 里可见的 metadata + 上游正文。
+ *
+ * 每个 generator 都把 `stripHeavyMetadata(metadata)` 塞进 user prompt，所以作者名、
+ * 频道名、简介里的产品名都是模型"看得见的材料"。已知范围不覆盖它们的话，输出一提到
+ * 就会被判成凭空造词。它们只进已知范围、不进必需范围，所以也不会反过来要求每篇产物
+ * 都提到作者。
+ */
+export const knownSourceTextWithMetadata = (
+  metadata: YouTubeMetadata,
+  ...sources: readonly string[]
+): string => [metadataPromptText(metadata), ...sources].join("\n");
+
+/** notes 要求输出携带的范围：只有转录，metadata 不在其中。 */
+export const notesRequiredSourceTextFor = (input: {
+  chunksMd: string;
+  timestampedCuesMd: string;
+}): string => `${input.chunksMd}\n${input.timestampedCuesMd}`;
+
+/**
+ * notes 的术语已知范围：模型在 prompt 里看得见的全部材料 = metadata + 转录。
+ *
+ * 生成器和内容缓存必须用同一个函数算，否则缓存重建出来的 profile 指纹对不上，
+ * notes 会每次重算。
+ */
+export const notesKnownSourceTextFor = (input: {
+  metadata: YouTubeMetadata;
+  chunksMd: string;
+  timestampedCuesMd: string;
+}): string => knownSourceTextWithMetadata(input.metadata, notesRequiredSourceTextFor(input));
 
 /**
  * 摘要型内容只把源材料中明确的摘要/提纲/要点区段作为 active source scope。

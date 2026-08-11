@@ -27,6 +27,7 @@ import {
   CONTENT_METADATA_SCHEMA_VERSION,
   contentSourceFingerprintFor,
   contentTechnicalTermSourceFingerprintFor,
+  knownSourceTextWithMetadata,
   contentTargetMetadataPathFor,
   createContentTargetMetadata,
   isContentTargetMetadataFresh,
@@ -295,7 +296,11 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
       let articleDirForStatus: string | undefined;
       let resultFile: string | undefined;
       let sourceArticleMd: string | undefined;
-      const structuredKnownSourceText = artifacts.structuredNotesMd;
+      // 已知范围要覆盖 prompt 里可见的 metadata；必需范围仍然只有 notes 正文。
+      const structuredKnownSourceText = knownSourceTextWithMetadata(
+        artifacts.metadata,
+        artifacts.structuredNotesMd,
+      );
       const structuredRequiredSourceText = summarySourceTextFor(artifacts.structuredNotesMd);
       const structuredSourceTitle = artifacts.metadata.title ?? "";
 
@@ -730,6 +735,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
         const timestampedCuesPath = path.join(videoDir, "timestamped-cues.md");
         const timestampedCuesMd = await readFile(timestampedCuesPath, "utf8").catch(() => undefined);
         const platformSourceText = [artifacts.structuredNotesMd, sourceArticleMd, timestampedCuesMd ?? ""].join("\n");
+        const platformKnownSourceText = knownSourceTextWithMetadata(artifacts.metadata, platformSourceText);
         const platformSourceFingerprint = contentSourceFingerprintFor(platformArticleContentSourceFor({
           metadata: artifacts.metadata,
           structuredNotesMd: artifacts.structuredNotesMd,
@@ -751,7 +757,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
               promptVersion: CONTENT_PROMPT_VERSIONS.platformArticle,
             },
             sourceText: platformSourceText,
+            knownSourceText: platformKnownSourceText,
+            requiredSourceText: platformSourceText,
             sourceTitle: artifacts.metadata.title ?? "",
+            technicalTermScope: "scoped",
             requiredFiles: [
               platformArticlePath,
               path.join(articleDir, `${platformTarget}-format`, `${platformTarget}-metadata.json`),
@@ -773,10 +782,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(articleDir),
         });
         const platformMetadata = contentMetadataForResult(`platform-article-${platformTarget}`, result, {
-          knownSourceText: platformSourceText,
+          knownSourceText: platformKnownSourceText,
           requiredSourceText: platformSourceText,
           sourceTitle: structuredSourceTitle,
-          scope: "full",
+          scope: "scoped",
         });
         const written = await writePlatformArticleBundle(
           articleOutDir,
@@ -791,7 +800,10 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
               requestedModel: llm.model,
               promptVersion: CONTENT_PROMPT_VERSIONS.platformArticle,
               sourceText: platformSourceText,
+              knownSourceText: platformKnownSourceText,
+              requiredSourceText: platformSourceText,
               sourceTitle: artifacts.metadata.title ?? "",
+              technicalTermScope: "scoped",
               requiredFiles: [],
             },
             ...(platformMetadata === undefined ? {} : { cacheMetadata: platformMetadata }),

@@ -7,8 +7,11 @@ import {
   CONTENT_PROMPT_VERSIONS,
   contentSourceFingerprintFor,
   contentTargetMetadataPathFor,
+  contentTechnicalTermSourceFingerprintFor,
   createContentTargetMetadata,
   notesContentSourceFor,
+  notesKnownSourceTextFor,
+  notesRequiredSourceTextFor,
   readContentTargetMetadata,
 } from "@yt2x/adapters-node";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -54,13 +57,17 @@ describe("executeNativeNotes", () => {
 
     const source = notesContentSourceFor({ metadata, chunksMd, timestampedCuesMd, screenshots: null });
     const sourceFingerprint = contentSourceFingerprintFor(source);
-    const sourceText = `${chunksMd}\n${timestampedCuesMd}`;
+    const artifacts = { metadata, chunksMd, timestampedCuesMd };
+    const knownSourceText = notesKnownSourceTextFor(artifacts);
+    const sourceText = notesRequiredSourceTextFor(artifacts);
     const sourceTitle = metadata.title;
     const audit = technicalTermDiscoveryAuditFor(
       { accepted: [], reviewCandidates: [], warnings: [] },
       { sourceText, sourceTitle },
     );
-    const guard = createTechnicalTermGuard({ sourceText, sourceTitle, discovery: audit });
+    // 已知范围含 prompt 可见的 metadata，必需范围只有转录——缓存判定按 scoped profile 重建
+    const guard = createTechnicalTermGuard({ sourceText: knownSourceText, sourceTitle, discovery: audit })
+      .scope(sourceText, sourceTitle);
     const metadataPath = contentTargetMetadataPathFor(videoDir, "notes");
     await writeFile(path.join(videoDir, "process-status.json"), "{}", "utf8");
     await mkdir(path.dirname(metadataPath), { recursive: true });
@@ -72,6 +79,11 @@ describe("executeNativeNotes", () => {
       promptVersion: CONTENT_PROMPT_VERSIONS.notes,
       technicalTermProfileFingerprint: guard.profile.profileFingerprint,
       technicalTermDiscovery: audit,
+      technicalTermKnownSourceFingerprint:
+        contentTechnicalTermSourceFingerprintFor(knownSourceText, sourceTitle),
+      technicalTermRequiredSourceFingerprint:
+        contentTechnicalTermSourceFingerprintFor(sourceText, sourceTitle),
+      technicalTermScope: "scoped",
     })), "utf8");
 
     generateNotesContentMock.mockResolvedValue({

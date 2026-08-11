@@ -48,6 +48,28 @@ describe("generateNotesContent", () => {
     expect(llm.chat).toHaveBeenCalledTimes(2);
   });
 
+  it("does not treat a term the prompt metadata carries as invented", async () => {
+    // 真实踩过：转录里一次没念全名，作者名只在 metadata.channel 里，
+    // 模型照着 prompt 写进笔记，却被判成凭空造词。
+    const llm = makeLlm(() => ({
+      content: "# 标题\n\n这期由 Matt Pocock 讲解。",
+      model: "m",
+      finishReason: "stop",
+    }));
+    const artifacts: VideoDirArtifacts = {
+      ...fakeArtifacts,
+      chunksMd: "Skills, skills, skills. We have yet more skills for you.",
+      timestampedCuesMd: "00:00 — skills",
+      metadata: { id: "notes-metadata-scope", title: "New Skills", channel: "Matt Pocock" },
+    };
+
+    const result = await generateNotesContent({ llm, model: "m", artifacts });
+
+    expect(result.content).toContain("Matt Pocock");
+    // 只进"已知"不进"必需"：没提到作者也不该失败
+    expect(llm.chat).toHaveBeenCalledTimes(2);
+  });
+
   it("reports a discovery audit identity so the notes cache can be reconstructed", async () => {
     const llm = makeLlm(() => ({ content: "# Title\n\nbody", model: "m", finishReason: "stop" }));
 

@@ -1,4 +1,4 @@
-import { stripHeavyMetadata } from "../notes/prompts.js";
+import { metadataPromptText } from "../notes/prompts.js";
 import type { ShortPromptInput, ShortPromptOptions } from "./types.js";
 import {
   SHARED_LANG_ZH_CN,
@@ -94,11 +94,10 @@ export const buildShortUserPrompt = (
     throw new Error(`Unsupported short platform: ${String(platform)}`);
   }
 
-  const meta = stripHeavyMetadata(input.metadata);
   const sections: string[] = [];
   sections.push("## Video metadata (JSON)");
   sections.push("```json");
-  sections.push(JSON.stringify(meta, null, 2));
+  sections.push(metadataPromptText(input.metadata));
   sections.push("```");
 
   const visuals = input.availableVisuals ?? null;

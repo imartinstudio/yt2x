@@ -1,4 +1,4 @@
-import { stripHeavyMetadata } from "../notes/prompts.js";
+import { metadataPromptText } from "../notes/prompts.js";
 import {
   getPlatformArticleSpec,
   type PlatformArticleSpec,
@@ -140,7 +140,6 @@ export const buildPlatformArticleUserPrompt = (
   input: PlatformArticlePromptInput,
   options: PlatformArticlePromptOptions,
 ): string => {
-  const meta = stripHeavyMetadata(input.metadata);
   const canonicalTitle = getCanonicalTitleSeed(input);
   const protectedTerms = extractProtectedTitleTerms(
     [
@@ -153,7 +152,7 @@ export const buildPlatformArticleUserPrompt = (
   const sections: string[] = [];
   sections.push("## Video metadata (JSON)");
   sections.push("```json");
-  sections.push(JSON.stringify(meta, null, 2));
+  sections.push(metadataPromptText(input.metadata));
   sections.push("```");
   sections.push("");
   sections.push("## Unified title constraints");

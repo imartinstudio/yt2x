@@ -5,7 +5,9 @@ import type * as AdaptersNode from "@yt2x/adapters-node";
 import {
   CONTENT_PROMPT_VERSIONS,
   contentSourceFingerprintFor,
+  contentTechnicalTermSourceFingerprintFor,
   createContentTargetMetadata,
+  knownSourceTextWithMetadata,
   structuredNotesContentSourceFor,
   summarySourceTextFor,
 } from "@yt2x/adapters-node";
@@ -90,9 +92,13 @@ describe("executeNativeArticle", () => {
       { accepted: [], reviewCandidates: [], warnings: [] },
       { sourceText, sourceTitle: metadata.title },
     );
-    // 文章只把摘要范围当作必需范围，缓存判定必须用同一个 scoped profile
-    const guard = createTechnicalTermGuard({ sourceText, sourceTitle: metadata.title, discovery: audit })
-      .scope(summarySourceTextFor(sourceText), metadata.title);
+    // 已知范围含 prompt 可见的 metadata，必需范围只有摘要——缓存判定必须用同一个 scoped profile
+    const knownSourceText = knownSourceTextWithMetadata(metadata, sourceText);
+    const guard = createTechnicalTermGuard({
+      sourceText: knownSourceText,
+      sourceTitle: metadata.title,
+      discovery: audit,
+    }).scope(summarySourceTextFor(sourceText), metadata.title);
     const sourceFingerprint = contentSourceFingerprintFor(structuredNotesContentSourceFor({
       metadata,
       structuredNotesMd: sourceText,
@@ -109,6 +115,10 @@ describe("executeNativeArticle", () => {
       promptVersion: CONTENT_PROMPT_VERSIONS.article,
       technicalTermProfileFingerprint: guard.profile.profileFingerprint,
       technicalTermDiscovery: audit,
+      technicalTermKnownSourceFingerprint:
+        contentTechnicalTermSourceFingerprintFor(knownSourceText, metadata.title),
+      technicalTermRequiredSourceFingerprint:
+        contentTechnicalTermSourceFingerprintFor(summarySourceTextFor(sourceText), metadata.title),
       technicalTermScope: "scoped",
     });
     await writeFile(path.join(articleDir, "run.json"), JSON.stringify({

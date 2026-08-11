@@ -16,7 +16,10 @@ import {
   contentTargetMetadataPathFor,
   createContentTargetMetadata,
   isContentTargetMetadataFresh,
+  contentTechnicalTermSourceFingerprintFor,
   notesContentSourceFor,
+  notesKnownSourceTextFor,
+  notesRequiredSourceTextFor,
   readContentTargetMetadata,
   type ContentTargetCacheExpectation,
 } from "@yt2x/adapters-node";
@@ -124,13 +127,21 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
       });
       const sourceFingerprint = contentSourceFingerprintFor(source);
       const metadataPath = contentTargetMetadataPathFor(videoDir, "notes");
+      // 已知范围含 prompt 可见的 metadata，必需范围只有转录——两者不同，
+      // 所以 scope 是 "scoped"，且必须和 generator 用同一对 helper 计算。
+      const knownSourceText = notesKnownSourceTextFor(artifacts);
+      const requiredSourceText = notesRequiredSourceTextFor(artifacts);
+      const sourceTitle = artifacts.metadata.title ?? "";
       const cacheExpectation: ContentTargetCacheExpectation = {
         target: "notes",
         sourceFingerprint,
         requestedModel: llm.model,
         promptVersion: CONTENT_PROMPT_VERSIONS.notes,
-        sourceText: `${artifacts.chunksMd}\n${artifacts.timestampedCuesMd}`,
-        sourceTitle: artifacts.metadata.title ?? "",
+        sourceText: requiredSourceText,
+        knownSourceText,
+        requiredSourceText,
+        sourceTitle,
+        technicalTermScope: "scoped",
         requiredFiles: [path.join(videoDir, "structured-notes.md"), metadataPath],
       };
       if (flags.force !== true) {
@@ -160,6 +171,11 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
         promptVersion: result.promptVersion,
         technicalTermProfileFingerprint: result.technicalTermProfileFingerprint,
         technicalTermDiscovery: result.technicalTermDiscovery,
+        technicalTermKnownSourceFingerprint:
+          contentTechnicalTermSourceFingerprintFor(knownSourceText, sourceTitle),
+        technicalTermRequiredSourceFingerprint:
+          contentTechnicalTermSourceFingerprintFor(requiredSourceText, sourceTitle),
+        technicalTermScope: "scoped",
       });
       const written = await writeStructuredNotes(videoDir, result.content, {
         force: flags.force === true,

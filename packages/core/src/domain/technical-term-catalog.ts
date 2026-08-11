@@ -532,19 +532,33 @@ const findProfileMatches = (
     });
     return { selected, covered };
   };
-  const sourceMatches = selectLongestMatches(
-    allEntries
-      .flatMap((candidate) => matchesForEntry(sourceText, candidate, "sourceText"))
-      .filter((match) => isActiveGraphMatch(match, sourceText)),
+  // 上下文型术语（Graph）在源里出现、但周围没有技术词时不激活。这类匹配仍然是
+  // "源材料里出现过的词"，只是不作为术语要求保护——所以归入 covered：允许输出使用，
+  // 不要求携带，也不算凭空造词。少了这一步，源侧和输出侧就成了两套判定：源里的
+  // "questions are really like a graph" 不算技术上下文，中文输出里同一个词周围
+  // 恰好命中技术词就被判成造词。
+  const partitionByContext = (all: TermMatch[], text: string): { active: TermMatch[]; inactive: TermMatch[] } => ({
+    active: all.filter((match) => isActiveGraphMatch(match, text)),
+    inactive: all.filter((match) => !isActiveGraphMatch(match, text)),
+  });
+  const sourceByContext = partitionByContext(
+    allEntries.flatMap((candidate) => matchesForEntry(sourceText, candidate, "sourceText")),
+    sourceText,
   );
-  const titleMatches = selectLongestMatches(
-    allEntries
-      .flatMap((candidate) => matchesForEntry(sourceTitle, candidate, "sourceTitle"))
-      .filter((match) => isActiveGraphMatch(match, sourceTitle)),
+  const titleByContext = partitionByContext(
+    allEntries.flatMap((candidate) => matchesForEntry(sourceTitle, candidate, "sourceTitle")),
+    sourceTitle,
   );
+  const sourceMatches = selectLongestMatches(sourceByContext.active);
+  const titleMatches = selectLongestMatches(titleByContext.active);
   return {
     matches: [...sourceMatches.selected, ...titleMatches.selected],
-    covered: [...sourceMatches.covered, ...titleMatches.covered],
+    covered: [
+      ...sourceMatches.covered,
+      ...titleMatches.covered,
+      ...sourceByContext.inactive,
+      ...titleByContext.inactive,
+    ],
   };
 };
 

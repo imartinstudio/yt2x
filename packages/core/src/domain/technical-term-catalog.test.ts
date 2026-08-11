@@ -298,6 +298,17 @@ describe("technical term catalog", () => {
     );
   });
 
+  it("does not call a contextual term invented when the source used it non-technically", () => {
+    // 源里说的就是同一个意思，只是周围没有 node/edge/schema 这类技术词，所以没被激活；
+    // 中文输出里同一个词周围恰好命中了技术上下文，不该因此被判成造词。
+    const guard = createTechnicalTermGuard({
+      sourceText: "these questions are really like a graph, so follow this graph to answer them",
+    });
+
+    expect(guard.profile.entries.map((term) => term.canonical)).not.toContain("Graph");
+    expect(guard.validate("把问题组织成 Graph 结构，按节点顺序回答。")).toEqual([]);
+  });
+
   it("still rejects an invented term used outside a URL", () => {
     const guard = createTechnicalTermGuard({ sourceText: "Graph Engineering explained." });
 

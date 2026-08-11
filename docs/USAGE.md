@@ -34,6 +34,52 @@ pnpm yt2x dub --video-id <videoId> --python-path /path/to/your/python3
 
 配音链路在**任何计费调用之前**先探测 demucs，缺了直接失败并提示上面这条命令——不会静默降级交出一个背景音被抹掉的成片。
 
+### YouTube 字幕与 PO token
+
+YouTube 现在把相当一部分字幕轨挡在 **PO token** 后面，**cookies 不解决这个问题**（那是另一套证明）。表现是 acquire 直接失败：
+
+```
+no subtitles were downloaded (manual and automatic attempts produced no new files)
+missing required artifacts: chunks.md, timestamped-cues.md
+```
+
+确认是不是这个原因，直接问 yt-dlp：
+
+```bash
+yt-dlp --list-subs --cookies-from-browser chrome "<视频 URL>"
+# WARNING: ... missing subtitles languages because a PO token was not provided
+```
+
+这是**按视频**的——有的视频还留着一条不需要 token 的轨，有的一条都不留，所以症状表现为"时好时坏"。
+
+装 [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) 让 yt-dlp 自动生成 token。要求 yt-dlp ≥ 2025.05.22、Node ≥ 20，用 **script 模式**（不需要常驻服务，每次取 token 起一个短进程）：
+
+```bash
+# 1. provider 源码。路径必须是这个——它是插件默认的 server_home，
+#    装在别处就得给 yt-dlp 传 --extractor-args，而 yt2x 没有透传这个参数的口子
+git clone --single-branch --branch 1.3.1 \
+  https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git ~/bgutil-ytdlp-pot-provider
+cd ~/bgutil-ytdlp-pot-provider/server && npm ci && npx tsc
+
+# 2. yt-dlp 插件（同一 release 的 zip）
+mkdir -p ~/.config/yt-dlp/plugins
+curl -sL -o /tmp/bgutil-plugin.zip \
+  https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/download/1.3.1/bgutil-ytdlp-pot-provider.zip
+unzip -oq /tmp/bgutil-plugin.zip -d ~/.config/yt-dlp/plugins/bgutil-ytdlp-pot-provider
+```
+
+验证（应当列出大量语言，而不是 `has no automatic captions`）：
+
+```bash
+yt-dlp --list-subs --cookies-from-browser chrome "<视频 URL>"
+```
+
+日志里的 `Error reaching GET http://127.0.0.1:4416/ping` 是插件先试 HTTP 模式失败后落到 script 模式，不影响结果。
+
+装好之后 YouTube 会把**几百种机器翻译轨**一并放出来，所以自动字幕的取轨顺序是「视频原语言 → 英文 → 中文」（`acquire/yt-dlp.ts`）：中文自动字幕是 ASR 之后再机翻的二手结果，质量明显低于原声轨 + 本仓库自己的 LLM 翻译。需要固定语言时用 `--sub-langs`。
+
+**不装也能跑**：YouTube 一个字幕文件都拿不到时，acquire 会退到本地转录（`acquire/prepare-youtube-video.ts`），这条路需要 `whisper-cli`（`brew install whisper-cpp`）和模型文件 `~/.cache/whisper-models/ggml-base.bin`（可用 `WHISPER_MODEL` 覆盖），并且视频本体必须已下载——加了 `--no-download-video` 就没有音频可转。缺任何一项都只记 warning，acquire 仍按"没有字幕"失败。
+
 ## 安装
 
 ```bash

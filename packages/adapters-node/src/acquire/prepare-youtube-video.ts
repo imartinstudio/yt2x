@@ -14,7 +14,7 @@ import { ensureOfficialYoutubeThumbnail, fetchVideoMetadata, type YtDlpOptions }
 import type { LlmPort } from "@yt2x/core";
 import type { AcquireProgressCallbacks } from "./acquire-progress.js";
 import { downloadVideoClip, type VideoClipManifest, type VideoClipOptions } from "./video-clip.js";
-import { runSubtitlePipeline, type VideoSubtitleOptions } from "./video-subtitles.js";
+import { prepareSourceSubtitle, runSubtitlePipeline, type VideoSubtitleOptions } from "./video-subtitles.js";
 
 export type PrepareYoutubeVideoOptions = {
   url: string;
@@ -299,7 +299,39 @@ export const prepareYoutubeVideo = async (
 
   const videoOnly = opts.videoClip?.videoOnly === true;
   if (!videoOnly) {
-  const subtitle = await chooseSubtitleFile(videoDir, videoLanguage);
+  let subtitle = await chooseSubtitleFile(videoDir, videoLanguage);
+  // YouTube 一个字幕文件都没给（PO token 拦截、直播回放、纯音乐视频……）时，本地转录
+  // 是唯一的兜底。这段以前挂在上面的 subtitle-zh 阶段里，而 `--deliver none` 会把那
+  // 整段关掉——于是纯图文路径既没有字幕来源，`--from transcribe` 也变成了空转参数。
+  // 兜底只需要 video/full.mp4 与 whisper-cli，任一缺失都降级为 warning，不改变
+  // 「没有字幕就 acquire 失败」的既有结论。
+  if (subtitle === null) {
+    try {
+      await access(path.join(videoDir, "video", "full.mp4"));
+      const transcribed = await timedStep(opts, "transcribe-fallback", timingsMs, () =>
+        prepareSourceSubtitle({
+          videoDir,
+          source: "transcribe",
+          sourceLang: videoLanguage,
+          targetLang: opts.videoSubtitles?.targetLang ?? "zh-CN",
+          runner: opts.runner,
+          ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+        }),
+      );
+      // 转录失败时 prepareSourceSubtitle 把原因收进 manifest.warnings 后照常返回，
+      // 只是不带 sourceSubtitle——所以这里必须看返回值，不能假定它成功了。
+      result.warnings.push(...transcribed.manifest.warnings ?? []);
+      if (transcribed.sourceSubtitle === undefined) {
+        result.warnings.push("local transcription fallback produced no subtitle");
+      } else {
+        subtitle = transcribed.sourceSubtitle;
+        result.warnings.push("no YouTube subtitles; used local transcription instead");
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      result.warnings.push(`local transcription fallback failed: ${message}`);
+    }
+  }
   if (subtitle !== null) {
     result.subtitle = subtitle;
     try {

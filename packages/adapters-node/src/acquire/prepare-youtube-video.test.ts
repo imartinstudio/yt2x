@@ -46,6 +46,10 @@ const outputDirFromYtDlpArgs = (args: readonly string[]): string | null => {
 const createMockRunner = (opts: {
   subtitleFileName?: string;
   failVideoClip?: boolean;
+  /** false 时 yt-dlp 一个字幕文件都不产出，用来模拟 PO token / 无字幕视频 */
+  writeSubtitles?: boolean;
+  /** true 时 whisper-cli 会产出 SRT，用来模拟本地转录可用 */
+  transcribe?: boolean;
   onRun?: (spec: ProcessSpec) => void;
 }): ProcessRunner => {
   const subtitleName = opts.subtitleFileName ?? "fixture.en.srt";
@@ -74,7 +78,7 @@ const createMockRunner = (opts: {
         (args.includes("--write-subs") || args.includes("--write-auto-subs"))
       ) {
         const videoDir = outputDirFromYtDlpArgs(args);
-        if (videoDir !== null && !subtitleWritten) {
+        if (videoDir !== null && !subtitleWritten && opts.writeSubtitles !== false) {
           const { copyFile, mkdir } = await import("node:fs/promises");
           await mkdir(videoDir, { recursive: true });
           await copyFile(
@@ -110,6 +114,18 @@ const createMockRunner = (opts: {
       }
 
       if (spec.command === "ffmpeg") {
+        return baseProcessResult(spec);
+      }
+
+      if (spec.command === "whisper-cli") {
+        if (opts.transcribe !== true) {
+          return baseProcessResult(spec, { exitCode: 1, stderr: "whisper-cli not available" });
+        }
+        const ofIdx = args.indexOf("-of");
+        const { copyFile, mkdir } = await import("node:fs/promises");
+        const target = `${args[ofIdx + 1]!}.srt`;
+        await mkdir(path.dirname(target), { recursive: true });
+        await copyFile(path.join(FIXTURES_DIR, "sample-en.srt"), target);
         return baseProcessResult(spec);
       }
 
@@ -211,6 +227,57 @@ describe("prepareYoutubeVideo (integration, mocked yt-dlp)", () => {
     expect(manualPass).toBeDefined();
     const args = manualPass!.args ?? [];
     expect(args[args.indexOf("--sub-langs") + 1]).toBe("zh-CN,zh-Hans,zh,zh-Hant,zh-TW,en");
+  });
+
+  it("tries the video's own language before Chinese when falling back to automatic captions", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-auto-order-"));
+    const calls: ProcessSpec[] = [];
+    // 一个字幕都不写：让自动字幕回落把整张语言表跑完，才能断言顺序
+    const runner = createMockRunner({ writeSubtitles: false, onRun: (spec) => calls.push(spec) });
+
+    await prepareYoutubeVideo({
+      url: "https://www.youtube.com/watch?v=testVideo12",
+      outDir,
+      maxWords: 900,
+      keyframes: 0,
+      sceneThreshold: 0.35,
+      sceneMinGap: 12,
+      runner,
+      timeoutMs: 60_000,
+    });
+
+    const autoLangs = calls
+      .filter((c) => c.command === "yt-dlp" && (c.args ?? []).includes("--write-auto-subs"))
+      .map((c) => {
+        const args = c.args ?? [];
+        return args[args.indexOf("--sub-langs") + 1];
+      });
+
+    // 开了 PO token 之后 YouTube 会把几百种机翻轨全部放出来，所以"首个命中即返回"
+    // 的这张表，第一项决定了最终拿到的是原声还是机翻。
+    expect(autoLangs[0]).toBe("en");
+    expect(autoLangs.indexOf("en")).toBeLessThan(autoLangs.indexOf("zh-CN"));
+  });
+
+  it("falls back to local transcription when YouTube yields no subtitles", async () => {
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-transcribe-fallback-"));
+    const runner = createMockRunner({ writeSubtitles: false, transcribe: true });
+
+    const result = await prepareYoutubeVideo({
+      url: "https://www.youtube.com/watch?v=testVideo12",
+      outDir,
+      maxWords: 900,
+      keyframes: 0,
+      sceneThreshold: 0.35,
+      sceneMinGap: 12,
+      runner,
+      timeoutMs: 60_000,
+      videoClip: { enabled: true, durationSeconds: 300 },
+    });
+
+    expect(result.ok).toBe(true);
+    const chunks = await readFile(path.join(outDir, "testVideo12", "chunks.md"), "utf8");
+    expect(chunks).toContain("Chunk 1");
   });
 
   it("passes --proxy and --cookies-from-browser to yt-dlp", async () => {

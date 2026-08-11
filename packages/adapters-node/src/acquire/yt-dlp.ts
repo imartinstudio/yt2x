@@ -115,10 +115,16 @@ export const downloadSubtitlesTwoPhase = async (
     return { manualOk: true, autoOk: false };
   }
 
-  // 自动字幕回退策略：优先尝试简体中文自动字幕，再回退繁体、视频语言和英文
+  // 自动字幕回退策略：先要视频原声那一轨，再退英文，最后才是中文。
+  //
+  // 这张表是"首个命中即返回"的，所以第一项直接决定最终拿到什么。YouTube 的中文自动
+  // 字幕是「ASR + 机器翻译」的二手结果（Matt Pocock→"Matt PCO"、codex→"编解码器"），
+  // 而原声轨只经过 ASR，交给本仓库自己的 LLM 翻译质量明显更高。以前中文排在最前也
+  // 不常出事，是因为没有 PO token 时机翻轨大多拿不到；配上 PO token provider 之后
+  // YouTube 会把几百种机翻语言全部放出来，第一项必然命中，中文优先就变成了必然踩坑。
   const autoFallbacks = [...new Set([
+    primaryAutoLang, "en",
     "zh-CN", "zh-Hans", "zh", "zh-Hant", "zh-TW",
-    primaryAutoLang, "en"
   ])];
 
   for (const subLang of autoFallbacks) {

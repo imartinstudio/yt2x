@@ -16,7 +16,7 @@ const fakeArtifacts: StructuredNotesArtifacts = {
 };
 
 describe("generateXVideoShortContent", () => {
-  it("guards video-short JSON and repairs catalog plus discovered terms once", async () => {
+  it("recovers catalog terms in video-short JSON without demanding the discovered term", async () => {
     const responses = [
       JSON.stringify({ text: "提示工程、上下文工程和图工程连接知识图谱与代理图谱，潜在工作区路由也很重要。图片和图表。" }),
       JSON.stringify({ text: "Prompt Engineering、Context Engineering 和 Graph Engineering 连接 Knowledge Graph 与 Agent Graph，Latent Workspace Routing 也很重要。图片和图表。" }),
@@ -35,9 +35,11 @@ describe("generateXVideoShortContent", () => {
     const result = await generateXVideoShortContent({ llm, model: "task3-video-short", artifacts });
 
     expect(result.videoShortPost.text).toContain("Prompt Engineering");
-    expect(result.videoShortPost.text).toContain("Latent Workspace Routing");
+    expect(result.videoShortPost.text).toContain("Knowledge Graph");
     expect(result.videoShortPost.text).toContain("图片和图表");
     expect(result.videoShortPost.text).not.toContain("提示工程");
+    // 发现词只保护不强制
+    expect(result.videoShortPost.text).toContain("潜在工作区路由");
   });
 
   it("requests a bounded non-thinking JSON completion", async () => {

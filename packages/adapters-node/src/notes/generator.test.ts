@@ -22,13 +22,13 @@ const makeLlm = (
 )) });
 
 describe("generateNotesContent", () => {
-  it("guards catalog and discovered terms with one targeted repair", async () => {
-    const responses = [
-      "# 标题\n\n提示工程、上下文工程和图工程会处理知识图谱与代理图谱；潜在工作区路由也很重要。图片、图表和图文不应误报。",
-      "# 标题\n\nPrompt Engineering、Context Engineering 和 Graph Engineering 会处理 Knowledge Graph 与 Agent Graph；Latent Workspace Routing 也很重要。图片、图表和图文不应误报。",
-    ];
+  it("recovers catalog terms from forbidden Chinese without demanding the discovered term", async () => {
     const llm = makeLlm(
-      () => ({ content: responses.shift()!, model: "m", finishReason: "stop" }),
+      () => ({
+        content: "# 标题\n\n提示工程、上下文工程和图工程会处理知识图谱与代理图谱；潜在工作区路由也很重要。图片、图表和图文不应误报。",
+        model: "m",
+        finishReason: "stop",
+      }),
       JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
     );
     const artifacts: VideoDirArtifacts = {
@@ -40,10 +40,20 @@ describe("generateNotesContent", () => {
     const result = await generateNotesContent({ llm, model: "task3-notes", artifacts });
 
     expect(result.content).toContain("Prompt Engineering");
-    expect(result.content).toContain("Latent Workspace Routing");
+    expect(result.content).toContain("Knowledge Graph");
     expect(result.content).toContain("图片、图表和图文");
     expect(result.content).not.toContain("提示工程、上下文工程和图工程");
-    expect(llm.chat).toHaveBeenCalledTimes(3);
+    // 发现词只保护不强制：模型没保留它，不再触发修复回合
+    expect(result.content).toContain("潜在工作区路由");
+    expect(llm.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a discovery audit identity so the notes cache can be reconstructed", async () => {
+    const llm = makeLlm(() => ({ content: "# Title\n\nbody", model: "m", finishReason: "stop" }));
+
+    const result = await generateNotesContent({ llm, model: "m", artifacts: fakeArtifacts });
+
+    expect(result.technicalTermDiscovery.sourceIdentity).toMatch(/^sha256-[0-9a-f]{64}$/u);
   });
 
   it("sends a system + user message and returns trimmed content", async () => {

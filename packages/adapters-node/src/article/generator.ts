@@ -20,6 +20,7 @@ import {
   CONTENT_PROMPT_VERSIONS,
   contentSourceFingerprintFor,
   structuredNotesContentSourceFor,
+  summarySourceTextFor,
 } from "../content-cache.js";
 import type { StructuredNotesArtifacts } from "./file-store.js";
 
@@ -276,9 +277,10 @@ export const generateXArticleContent = async (
     discoveredTerms: discovery.accepted,
     discovery: discoveryAudit,
   });
-  // A long-form article is faithful to the complete notes contract. Unlike
-  // thread/short summaries, detailed sections remain required source scope.
-  const guard = fullGuard;
+  // 完整 notes 仍是已知范围（详细章节里的术语允许出现），但只有摘要范围里的术语
+  // 才要求文章必须携带——长文是重写而不是逐条转录，逼它塞进每一个转录术语只会
+  // 制造无法修复的失败。
+  const guard = fullGuard.scope(summarySourceTextFor(sourceText), sourceTitle);
   const titleGuard = fullGuard.scope(sourceTitle, sourceTitle);
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,

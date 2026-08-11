@@ -224,9 +224,93 @@ describe("technical term catalog", () => {
     expect(summaryGuard.validate("Graph Engineering 与 Context Engineering")).toEqual([]);
   });
 
+  it("treats a term inside a URL as a citation, not as invented usage", () => {
+    const guard = createTechnicalTermGuard({ sourceText: "Graph Engineering explained." });
+
+    expect(guard.validate(
+      "Graph Engineering 讲解\nSource: https://www.youtube.com/watch?v=b8SV4U6fEIc",
+    )).toEqual([]);
+    expect(guard.validate(
+      "Graph Engineering 讲解，见[原视频](https://www.youtube.com/watch?v=b8SV4U6fEIc)。",
+    )).toEqual([]);
+  });
+
+  it("does not require a term that only appears inside a source URL", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Graph Engineering 讲解见 https://www.youtube.com/watch?v=b8SV4U6fEIc 。",
+    });
+
+    expect(guard.profile.entries.map((term) => term.canonical)).not.toContain("YouTube");
+    expect(guard.validate("Graph Engineering 的要点。")).toEqual([]);
+  });
+
+  it("allows a shorter catalog term covered by a longer active term", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Claude Code 会在 auto mode 下继续工作。",
+      discoveredTerms: [{ sourceText: "Claude Code", confidence: "high", category: "product" }],
+    });
+    const active = guard.profile.entries.map((term) => term.canonical);
+
+    expect(active).toContain("Claude Code");
+    expect(active).not.toContain("Claude");
+    expect(guard.validate("Claude Code 很好用，Claude 这个品牌也一样。")).toEqual([]);
+  });
+
+  it("recovers transliterated product names back to the brand spelling", () => {
+    const guard = createTechnicalTermGuard({ sourceText: "Claude 和 YouTube 都在源材料里出现。" });
+
+    const finalized = guard.finalize("克劳德的视频发在油管上。", { placeholders: [] });
+
+    expect(finalized.value).toBe("Claude 的视频发在 YouTube 上。");
+    expect(finalized.violations).toEqual([]);
+  });
+
+  it("leaves ordinary Chinese words alone even when the same-named product is active", () => {
+    // Cursor→光标、Agents→代理 这类词在中文里另有日常含义，故意不设为禁译词：
+    // 一旦设了，正文里合法的"光标/代理"会被静默改写成产品名。
+    const guard = createTechnicalTermGuard({ sourceText: "Cursor 和 Agents 都在源材料里出现。" });
+
+    const finalized = guard.finalize("把光标移到行尾，再让代理接手。", { placeholders: [] });
+
+    expect(finalized.value).toBe("把光标移到行尾，再让代理接手。");
+    expect(finalized.violations).toEqual([]);
+  });
+
+  it("requires full term coverage only from a 1:1 unit scope", () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Graph Engineering 依赖 approval fatigue 这种日常说法。",
+      discoveredTerms: [{ sourceText: "approval fatigue", confidence: "high", category: "domain" }],
+    });
+
+    // 术语用到了就必须保持原文——prepare 用占位符挡住翻译
+    const prepared = guard.prepare("approval fatigue 是核心问题。");
+    expect(prepared.value).not.toContain("approval fatigue");
+    // 重写类产物漏讲术语是编辑取舍，不是术语错误
+    expect(guard.validate("这期讲的是审批负担。")).toEqual([]);
+    // 但用了被禁的中文译法仍然要报
+    expect(guard.validate("这期讲的是图工程。")).toContainEqual(
+      expect.objectContaining({ code: "forbidden-translation", canonical: "Graph Engineering" }),
+    );
+    // 逐句翻译是 1:1 映射：源单元里的术语必须落进译文
+    expect(guard.scopeUnit({ sourceText: "approval fatigue 很常见。", unitId: "cue:1" })
+      .validate("审批负担很常见。")).toContainEqual(
+      expect.objectContaining({ code: "missing-canonical-term", canonical: "approval fatigue" }),
+    );
+  });
+
+  it("still rejects an invented term used outside a URL", () => {
+    const guard = createTechnicalTermGuard({ sourceText: "Graph Engineering explained." });
+
+    expect(guard.validate("Graph Engineering 这期 YouTube 视频很好。")).toContainEqual(
+      expect.objectContaining({ code: "invented-canonical-term", canonical: "YouTube" }),
+    );
+  });
+
   it("does not join separate fields into a discovered canonical term", () => {
     const guard = createTechnicalTermGuard({
       sourceText: "AI Agent\nKnowledge\nGraph",
+      // unit 作用域下发现词必须落地，缺失才会暴露"跨字段拼接"这个问题
+      sourceUnitId: "unit-1",
       discoveredTerms: [{ sourceText: "Knowledge Graph", confidence: "high", category: "ai-agent" }],
     });
     const violations = guard.validate({ title: "AI Agent", first: "Knowledge", second: "Graph" });

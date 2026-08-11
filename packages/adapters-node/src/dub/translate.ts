@@ -17,6 +17,7 @@ import {
   type LlmPort,
   type TechnicalTermGuard,
   type TechnicalTermRestoration,
+  type TechnicalTermViolation,
   type SpeechRateModel,
   type Utterance,
 } from "@yt2x/core";
@@ -74,6 +75,18 @@ export type TranslateUtterancesResult = {
 
 type ParsedLine = { index: number; text: string };
 
+/**
+ * 一条候选译文经术语守卫处理后的结果。
+ *
+ * `violations` 非空表示这一版仍然违规：初译/补齐两轮**照样收下**——一行把术语说
+ * 成中文，也好过一段静音；后续 tighten / expand / glossary / speakable 几轮则拒绝
+ * 用它去覆盖已有译文。谁能接受违规版本由调用点自己决定，这里只如实报告。
+ */
+type AcceptedDubCandidate = {
+  text: string;
+  violations: readonly TechnicalTermViolation[];
+};
+
 type PreparedDubUtterance = {
   utterance: Utterance;
   preparedUtterance: Utterance;
@@ -94,6 +107,9 @@ const scopeDubTechnicalTermGuard = (
   sourceText: string,
 ): TechnicalTermGuard => createTechnicalTermGuard({
   sourceText,
+  // 每句配音都是 1:1 翻译单元：显式声明 unit 作用域，源句里的术语必须落进译文。
+  // 不声明就会退化成重写类产物的宽松判定（漏讲术语不算错）。
+  sourceUnitId: `dub-utterance:${sourceText}`,
   discoveredTerms: guard.profile.entries
     .filter((entry) => termOccursInSource(entry.sourceText, sourceText))
     .map((entry) => ({
@@ -186,17 +202,29 @@ export const translateUtterances = async (
       restoration: prepared.restoration,
     });
   }
-  const technicalTermRepairState = { used: false };
+  /**
+   * 每条话语单元各自一次定向修复名额。
+   *
+   * 曾经是整次调用共用的一个布尔量，含义变成「每部片一次」：第一条违规行用掉名额
+   * 之后，后续每条违规行都拿不到修复、直接被判丢弃。真实全片 621 个单元里 69 个
+   * （其中 81% 含受保护术语）就是这样静默消失的，最后被门禁的 dropped-utterances
+   * 拦停。改成按 index 记账，恢复引入时写明的「每条候选一次有界修复」语义。
+   */
+  const repairedIndices = new Set<number>();
   const acceptDubCandidate = async (
     utterance: Utterance,
     text: string,
-  ): Promise<string | null> => {
+  ): Promise<AcceptedDubCandidate | null> => {
     const prepared = preparedByUtterance.get(utterance.index);
     if (prepared === undefined) return null;
     const finalized = prepared.guard.finalize(text, prepared.restoration);
-    if (!hasHardTechnicalTermViolations(finalized.violations)) return finalized.value;
-    if (technicalTermRepairState.used) return null;
-    technicalTermRepairState.used = true;
+    if (!hasHardTechnicalTermViolations(finalized.violations)) {
+      return { text: finalized.value, violations: [] };
+    }
+    if (repairedIndices.has(utterance.index)) {
+      return { text: finalized.value, violations: finalized.violations };
+    }
+    repairedIndices.add(utterance.index);
     const repaired = await repairTechnicalTermViolations({
       llm: input.llm,
       model: input.model,
@@ -210,7 +238,11 @@ export const translateUtterances = async (
       },
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
-    return hasHardTechnicalTermViolations(repaired.violations) ? null : repaired.value;
+    // 修复没成功就留着原译文，不拿一个同样违规的版本盖掉另一个——与本文件
+    // glossary / speakable 两轮补救的处置一致。
+    return hasHardTechnicalTermViolations(repaired.violations)
+      ? { text: finalized.value, violations: finalized.violations }
+      : { text: repaired.value, violations: [] };
   };
 
   if (total === 0) {
@@ -220,6 +252,16 @@ export const translateUtterances = async (
       technicalTermProfileFingerprint: technicalTermGuard.profile.profileFingerprint,
     };
   }
+
+  // 收下但仍带术语违规的行；末尾如实报出来，让门禁/人工知道该复核哪几条。
+  const unresolvedViolations = new Set<number>();
+  const acceptIntoScript = async (utterance: Utterance, text: string): Promise<void> => {
+    const accepted = await acceptDubCandidate(utterance, text);
+    if (accepted === null) return;
+    translated.set(utterance.index, accepted.text);
+    if (accepted.violations.length > 0) unresolvedViolations.add(utterance.index);
+    else unresolvedViolations.delete(utterance.index);
+  };
 
   let done = 0;
   for (let i = 0; i < total; i += BATCH_SIZE) {
@@ -232,8 +274,7 @@ export const translateUtterances = async (
         promptRule,
       )) {
         const utterance = input.utterances.find((candidate) => candidate.index === line.index);
-        const accepted = utterance === undefined ? null : await acceptDubCandidate(utterance, line.text);
-        if (accepted !== null) translated.set(line.index, accepted);
+        if (utterance !== undefined) await acceptIntoScript(utterance, line.text);
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -257,8 +298,7 @@ export const translateUtterances = async (
         promptRule,
       )) {
         const utterance = input.utterances.find((candidate) => candidate.index === line.index);
-        const accepted = utterance === undefined ? null : await acceptDubCandidate(utterance, line.text);
-        if (accepted !== null) translated.set(line.index, accepted);
+        if (utterance !== undefined) await acceptIntoScript(utterance, line.text);
       }
       warnings.push(`repaired ${translated.size - before}/${missing.length} missing lines`);
     } catch (err: unknown) {
@@ -317,10 +357,11 @@ export const translateUtterances = async (
         const utterance = input.utterances.find((candidate) => candidate.index === line.index);
         if (utterance === undefined) continue;
         const accepted = await acceptDubCandidate(utterance, line.text);
-        if (accepted === null) continue;
+        if (accepted === null || accepted.violations.length > 0) continue;
         // 只在真的更短时替换：重译偶尔会更长，那一版没有价值
-        if (accepted.length < translated.get(line.index)!.length) {
-          translated.set(line.index, accepted);
+        if (accepted.text.length < translated.get(line.index)!.length) {
+          translated.set(line.index, accepted.text);
+          unresolvedViolations.delete(line.index);
           tightened += 1;
         }
       }
@@ -378,10 +419,11 @@ export const translateUtterances = async (
         const utterance = input.utterances.find((candidate) => candidate.index === line.index);
         if (utterance === undefined) continue;
         const accepted = await acceptDubCandidate(utterance, line.text);
-        if (accepted === null) continue;
+        if (accepted === null || accepted.violations.length > 0) continue;
         // 只在真的更长时替换：重译偶尔仍给出同样短的版本，那一版没有价值
-        if (accepted.length > translated.get(line.index)!.length) {
-          translated.set(line.index, accepted);
+        if (accepted.text.length > translated.get(line.index)!.length) {
+          translated.set(line.index, accepted.text);
+          unresolvedViolations.delete(line.index);
           expanded += 1;
         }
       }
@@ -441,11 +483,12 @@ export const translateUtterances = async (
         const entry = byIndex.get(line.index);
         if (entry === undefined) continue;
         const accepted = await acceptDubCandidate(entry.utterance, line.text);
-        if (accepted === null) continue;
+        if (accepted === null || accepted.violations.length > 0) continue;
         // 只在新译文真的把缺失术语补回来时才替换，否则保留原译文——不用一个
         // "同样丢词"的版本去覆盖一个已知丢词的版本，门禁该拦的还是拦得住。
-        if (findMissingProtectedTerms(entry.utterance.text, accepted).length === 0) {
-          translated.set(line.index, accepted);
+        if (findMissingProtectedTerms(entry.utterance.text, accepted.text).length === 0) {
+          translated.set(line.index, accepted.text);
+          unresolvedViolations.delete(line.index);
           repaired += 1;
         }
       }
@@ -512,10 +555,12 @@ export const translateUtterances = async (
         if (
           utterance !== undefined &&
           accepted !== null &&
-          !isTelegraphicChinese(accepted) &&
-          findMissingProtectedTerms(utterance.text, accepted).length === 0
+          accepted.violations.length === 0 &&
+          !isTelegraphicChinese(accepted.text) &&
+          findMissingProtectedTerms(utterance.text, accepted.text).length === 0
         ) {
-          translated.set(line.index, accepted);
+          translated.set(line.index, accepted.text);
+          unresolvedViolations.delete(line.index);
           speakable += 1;
         }
       }
@@ -524,6 +569,16 @@ export const translateUtterances = async (
       const message = err instanceof Error ? err.message : String(err);
       warnings.push(`speakable repair pass failed: ${message}`);
     }
+  }
+
+  // 收下了但术语仍不达标的行：内容在、发音可能把专名念成中文。如实报出来，别让
+  // 它混在「一切正常」里——门禁的 glossary 检查在配音链路是 advisory（见
+  // bilingual-gate.ts），这条 warning 是它在翻译阶段的对应物。
+  const unresolved = [...unresolvedViolations].sort((a, b) => a - b);
+  if (unresolved.length > 0) {
+    warnings.push(
+      `kept ${unresolved.length}/${total} lines with unresolved technical-term violations: index ${unresolved.join(", ")}`,
+    );
   }
 
   const lines: DubTranslatedLine[] = input.utterances

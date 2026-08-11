@@ -26,13 +26,13 @@ const makeLlm = (
 )) });
 
 describe("generateXShortContent", () => {
-  it("guards short-post JSON and repairs catalog plus discovered terms once", async () => {
-    const responses = [
-      JSON.stringify({ text: "提示工程、上下文工程和图工程连接知识图谱与代理图谱，潜在工作区路由也有用。图片和图表。", angle: "technical", risk: "low" }),
-      JSON.stringify({ text: "Prompt Engineering、Context Engineering 和 Graph Engineering 连接 Knowledge Graph 与 Agent Graph，Latent Workspace Routing 也有用。图片和图表。", angle: "technical", risk: "low" }),
-    ];
+  it("recovers catalog terms in short-post JSON without demanding the discovered term", async () => {
     const llm = makeLlm(
-      () => ({ content: responses.shift()!, model: "m", finishReason: "stop" }),
+      () => ({
+        content: JSON.stringify({ text: "提示工程、上下文工程和图工程连接知识图谱与代理图谱，潜在工作区路由也有用。图片和图表。", angle: "technical", risk: "low" }),
+        model: "m",
+        finishReason: "stop",
+      }),
       JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
     );
     const artifacts: StructuredNotesArtifacts = {
@@ -44,10 +44,12 @@ describe("generateXShortContent", () => {
     const result = await generateXShortContent({ llm, model: "task3-short", artifacts });
 
     expect(result.shortPost.text).toContain("Prompt Engineering");
-    expect(result.shortPost.text).toContain("Latent Workspace Routing");
+    expect(result.shortPost.text).toContain("Knowledge Graph");
     expect(result.shortPost.text).toContain("图片和图表");
     expect(result.shortPost.text).not.toContain("提示工程");
-    expect(llm.chat).toHaveBeenCalledTimes(3);
+    // 发现词只保护不强制
+    expect(result.shortPost.text).toContain("潜在工作区路由");
+    expect(llm.chat).toHaveBeenCalledTimes(2);
   });
 
   it("sends short system prompt and parses JSON", async () => {
@@ -94,12 +96,13 @@ describe("generateXShortContent", () => {
     );
   });
 
-  it("revalidates after removing an invalid visual instead of letting the visual hide a missing term", async () => {
+  it("validates what actually ships: a removed visual's caption cannot fail the post", async () => {
     const artifacts: StructuredNotesArtifacts = {
       ...fakeArtifacts,
       structuredNotesMd: "Graph Engineering 是这里必须保留的专业术语。",
       metadata: { id: "short-final-validation", title: "Graph Engineering" },
     };
+    // 无效 visual 会被摘掉，它 caption 里的禁用译法不该连累正文
     const llm = makeLlm(() => ({
       content: JSON.stringify({
         text: "这里只保留普通正文。",
@@ -111,12 +114,11 @@ describe("generateXShortContent", () => {
       finishReason: "stop",
     }));
 
-    await expect(generateXShortContent({
-      llm,
-      model: "m",
-      artifacts,
-      availableVisuals: [],
-    })).rejects.toThrow(/Graph/u);
+    const result = await generateXShortContent({ llm, model: "m", artifacts, availableVisuals: [] });
+
+    expect(result.shortPost.visual).toBeUndefined();
+    expect(result.shortPost.text).toBe("这里只保留普通正文。");
+    expect(llm.chat).toHaveBeenCalledTimes(2);
   });
 
   it("allows a summary to omit terms that are only in an unselected detailed source section", async () => {

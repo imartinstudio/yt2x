@@ -58,18 +58,22 @@ export const generateNotesContent = async (
 ): Promise<GenerateNotesResult> => {
   const promptOpts = { outputLanguage: input.outputLanguage ?? "zh" as const };
   const sourceText = `${input.artifacts.chunksMd}\n${input.artifacts.timestampedCuesMd}`;
+  const sourceTitle = input.artifacts.metadata.title ?? "";
   const discovery = await discoverTechnicalTerms({
     llm: input.llm,
     model: input.model,
     sourceText,
-    sourceTitle: input.artifacts.metadata.title ?? "",
+    sourceTitle,
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
+  // 审计必须带上 sourceIdentity：内容缓存用它写 known/required 源指纹，
+  // 缺了就退化成空串，笔记每次都会重算。
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
   const guard = createTechnicalTermGuard({
     sourceText,
-    sourceTitle: input.artifacts.metadata.title ?? "",
+    sourceTitle,
     discoveredTerms: discovery.accepted,
-    discovery: technicalTermDiscoveryAuditFor(discovery),
+    discovery: discoveryAudit,
   });
   const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
@@ -145,7 +149,7 @@ export const generateNotesContent = async (
     })),
     promptVersion: CONTENT_PROMPT_VERSIONS.notes,
     technicalTermProfileFingerprint: guard.profile.profileFingerprint,
-    technicalTermDiscovery: technicalTermDiscoveryAuditFor(discovery),
+    technicalTermDiscovery: discoveryAudit,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

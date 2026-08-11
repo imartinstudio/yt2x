@@ -7,6 +7,7 @@ import {
   contentSourceFingerprintFor,
   createContentTargetMetadata,
   structuredNotesContentSourceFor,
+  summarySourceTextFor,
 } from "@yt2x/adapters-node";
 import {
   createTechnicalTermGuard,
@@ -89,7 +90,9 @@ describe("executeNativeArticle", () => {
       { accepted: [], reviewCandidates: [], warnings: [] },
       { sourceText, sourceTitle: metadata.title },
     );
-    const guard = createTechnicalTermGuard({ sourceText, sourceTitle: metadata.title, discovery: audit });
+    // 文章只把摘要范围当作必需范围，缓存判定必须用同一个 scoped profile
+    const guard = createTechnicalTermGuard({ sourceText, sourceTitle: metadata.title, discovery: audit })
+      .scope(summarySourceTextFor(sourceText), metadata.title);
     const sourceFingerprint = contentSourceFingerprintFor(structuredNotesContentSourceFor({
       metadata,
       structuredNotesMd: sourceText,
@@ -106,6 +109,7 @@ describe("executeNativeArticle", () => {
       promptVersion: CONTENT_PROMPT_VERSIONS.article,
       technicalTermProfileFingerprint: guard.profile.profileFingerprint,
       technicalTermDiscovery: audit,
+      technicalTermScope: "scoped",
     });
     await writeFile(path.join(articleDir, "run.json"), JSON.stringify({
       ...run,

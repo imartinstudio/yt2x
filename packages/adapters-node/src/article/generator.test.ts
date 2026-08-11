@@ -38,7 +38,7 @@ const sampleVisuals: AvailableVisual[] = [
 ];
 
 describe("generateXArticleContent", () => {
-  it("guards article markdown and repairs catalog plus discovered terms once", async () => {
+  it("recovers catalog terms in article markdown without demanding the discovered term", async () => {
     const llm = makeLlm(
       (req) => {
         if (req.messages[0]?.content.includes("术语定向修复器")) {
@@ -67,11 +67,13 @@ describe("generateXArticleContent", () => {
     const result = await generateXArticleContent({ llm, model: "task3-article", artifacts });
 
     expect(result.content).toContain("Prompt Engineering");
-    expect(result.content).toContain("Latent Workspace Routing");
+    expect(result.content).toContain("Knowledge Graph");
     expect(result.content).toContain("图片、图表和图文");
     expect(result.content).not.toContain("提示工程、上下文工程和图工程");
     expect(result.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
-    expect(llm.chat).toHaveBeenCalledTimes(3);
+    // 发现词只保护不强制：不再为它跑修复回合
+    expect(result.content).toContain("潜在工作区路由");
+    expect(llm.chat).toHaveBeenCalledTimes(2);
     expect(result.technicalTermDiscovery).toMatchObject({
       promptVersion: expect.any(String),
       sourceIdentity: expect.stringMatching(/^sha256-[0-9a-f]{64}$/u),
@@ -81,12 +83,7 @@ describe("generateXArticleContent", () => {
     });
   });
 
-  it("rejects omission of a detailed-note term required by the long-form article contract", async () => {
-    const llm = makeLlm(() => ({
-        content: "# 标题\n\nGraph Engineering 摘要。\n\n#AI #Agent #Workflow",
-        model: "m",
-        finishReason: "stop",
-      }));
+  it("keeps a detailed-note term optional but still rejects its forbidden translation", async () => {
     const artifacts: StructuredNotesArtifacts = {
       ...fakeArtifacts,
       structuredNotesMd: [
@@ -96,13 +93,28 @@ describe("generateXArticleContent", () => {
         "## Detailed Notes",
         "Context Engineering is a detailed long-form section.",
       ].join("\n"),
-      metadata: { id: "article-full-scope", title: "Graph Engineering" },
+      metadata: { id: "article-summary-scope", title: "Graph Engineering" },
     };
 
-    await expect(generateXArticleContent({ llm, model: "m", artifacts })).rejects.toThrow(
-      "输出缺少源术语 Context Engineering",
+    const omittingLlm = makeLlm(() => ({
+      content: "# 标题\n\nGraph Engineering 摘要。\n\n#AI #Agent #Workflow",
+      model: "m",
+      finishReason: "stop",
+    }));
+    const result = await generateXArticleContent({ llm: omittingLlm, model: "m", artifacts });
+    expect(result.content).toContain("Graph Engineering");
+    expect(omittingLlm.chat).toHaveBeenCalledTimes(2);
+
+    const translatingLlm = makeLlm(() => ({
+      content: "# 标题\n\nGraph Engineering 摘要与上下文工程。\n\n#AI #Agent #Workflow",
+      model: "m",
+      finishReason: "stop",
+    }));
+    await expect(generateXArticleContent({ llm: translatingLlm, model: "m", artifacts })).rejects.toThrow(
+      "Context Engineering",
     );
-    expect(llm.chat).toHaveBeenCalledTimes(3);
+    // discovery 已被上一轮缓存，这两次是正文生成 + 一次定向修复尝试
+    expect(translatingLlm.chat).toHaveBeenCalledTimes(2);
   });
 
   it("uses the target-side persistent discovery cache after a cold in-memory restart", async () => {

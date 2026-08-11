@@ -461,8 +461,10 @@ describe("targeted technical term repair", () => {
     },
   ])("accepts a $name repair when only the missing term changes", async ({ currentValue, repairedValue, parseResponse }) => {
     const { llm } = fakeLlm(typeof repairedValue === "string" ? repairedValue : JSON.stringify(repairedValue));
+    // unit 作用域（逐句/逐片段）才要求发现词必须落地，这里正是要制造一个可修复的缺失
     const termGuard = createTechnicalTermGuard({
       sourceText: "Latent Workspace Routing",
+      sourceUnitId: "unit-1",
       discoveredTerms: [{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }],
     });
     const violations = termGuard.validate(currentValue);

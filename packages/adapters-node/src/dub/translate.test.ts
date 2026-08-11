@@ -355,6 +355,83 @@ describe("translateUtterances", () => {
     expect(warnings.join(" ")).not.toMatch(/glossary repair pass failed/u);
   });
 
+  it("gives every violating utterance its own repair attempt, not one for the whole video", async () => {
+    // 回归：修复名额曾是整次调用共用的一个布尔量，第一条违规行用掉之后，后续每条
+    // 违规行都直接被丢弃。真实全片 621 个单元里 69 个（其中 81% 含受保护术语）就是
+    // 这样静默消失的。
+    const repairSystems: string[] = [];
+    const llm: LlmPort = {
+      chat: async (req) => {
+        const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
+        if (system.includes("专业术语定向修复器")) {
+          repairSystems.push(system);
+          return {
+            content: `Grill Me ${"占位符，".repeat(8)}`,
+            model: req.model,
+            finishReason: "stop" as const,
+          };
+        }
+        const items = JSON.parse(req.messages.find((m) => m.role === "user")?.content ?? "[]") as {
+          index: number;
+        }[];
+        // 两条都用满预算，但都漏掉了保护术语 "Grill Me"
+        return {
+          content: JSON.stringify(items.map((i) => ({ index: i.index, text: "占位符，".repeat(8) }))),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+    const { lines } = await translateUtterances({
+      llm,
+      model: "m",
+      utterances: [
+        utt(1, 9_000, "my grill me skills are great"),
+        utt(2, 9_000, "your grill me skills are better"),
+      ],
+    });
+    expect(lines.map((l) => l.index)).toEqual([1, 2]);
+    expect(lines.every((l) => l.text.includes("Grill Me"))).toBe(true);
+    expect(repairSystems).toHaveLength(2);
+  });
+
+  it("keeps a translation whose terms could not be repaired instead of dropping the line", async () => {
+    // 一行把 Grill Me 说成中文，也好过一段静音：内容还在，门禁的 glossary 检查照样
+    // 报得出来（配音链路已把它降为 advisory，见 bilingual-gate.ts）。
+    const llm: LlmPort = {
+      chat: async (req) => {
+        const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
+        // 修复轮也交不出术语
+        if (system.includes("专业术语定向修复器")) {
+          return { content: "占位符，占位符", model: req.model, finishReason: "stop" as const };
+        }
+        const items = JSON.parse(req.messages.find((m) => m.role === "user")?.content ?? "[]") as {
+          index: number;
+        }[];
+        return {
+          content: JSON.stringify(items.map((i) => ({ index: i.index, text: "占位符，占位符" }))),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+    const { lines, warnings } = await translateUtterances({
+      llm,
+      model: "m",
+      utterances: [utt(1, 9_000, "my grill me skills are great")],
+    });
+    expect(lines.map((l) => l.index)).toEqual([1]);
+    expect(lines[0]?.text).toContain("占位符");
+    expect(warnings.join(" ")).toMatch(/unresolved technical-term violations.*index 1/u);
+    expect(warnings.join(" ")).not.toMatch(/no translation for index 1/u);
+  });
+
   it("keeps the previous translation when the glossary repair retry still drops the term", async () => {
     let call = 0;
     const llm: LlmPort = {
@@ -379,8 +456,11 @@ describe("translateUtterances", () => {
       utterances: [utt(1, 1_700, "my grill me skills are great")],
     });
     expect(call).toBe(3);
-    expect(lines).toEqual([]);
-    expect(warnings.join(" ")).toMatch(/no translation for index 1/u);
+    // 补漏两轮都没把术语补回来，但译文本身留着——丢弃会换来一段静音，而静音既没
+    // 内容也不比错译更容易发现。
+    expect(lines.map((l) => l.text)).toEqual(["占位符"]);
+    expect(warnings.join(" ")).toMatch(/unresolved technical-term violations.*index 1/u);
+    expect(warnings.join(" ")).not.toMatch(/no translation for index 1/u);
   });
 
   it("does not run the glossary repair pass when no protected term was dropped", async () => {

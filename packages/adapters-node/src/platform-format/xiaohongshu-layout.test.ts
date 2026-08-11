@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 describe("formatXiaohongshuLayout technical terms", () => {
-  it("guards generated prompts and preserves ordinary image labels", async () => {
+  it("recovers catalog terms in generated prompts and preserves ordinary image labels", async () => {
     const requests: ChatRequest[] = [];
     const response = (content: string): ChatResponse => ({ content, model: "task7-xhs", finishReason: "stop" });
     const llm: LlmPort = {
@@ -65,14 +65,15 @@ describe("formatXiaohongshuLayout technical terms", () => {
 
     expect(promptText).toContain("Graph Engineering");
     expect(promptText).toContain("Knowledge Graph");
-    expect(promptText).toContain("Latent Workspace Routing");
+    // 发现词只保护不强制：模型没保留它，不再触发修复回合
+    expect(promptText).toContain("潜在工作区路由");
     expect(promptText).toContain("配图");
     expect(promptText).toContain("流程图");
     expect(promptText).not.toContain("图工程和知识图谱");
     expect(prompts.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
     expect(await readFile(path.join(result.outputDir, "article.html"), "utf8")).toContain("Latent Workspace Routing");
     expect(requests.filter((request) => request.messages[0]?.content.includes("严格的源级专业术语发现器"))).toHaveLength(1);
-    expect(requests.filter((request) => request.messages[0]?.content.includes("专业术语定向修复器"))).toHaveLength(1);
+    expect(requests.filter((request) => request.messages[0]?.content.includes("专业术语定向修复器"))).toHaveLength(0);
   });
 
   it("invalidates legacy and stale prompt caches instead of treating them as hits", async () => {

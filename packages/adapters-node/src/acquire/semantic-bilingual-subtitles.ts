@@ -115,7 +115,9 @@ const scopeTechnicalTermGuard = (
       confidence: "high" as const,
       category: "domain" as const,
     }));
-  return createTechnicalTermGuard({ sourceText, discoveredTerms });
+  // 每条 cue 都是 1:1 翻译单元：显式声明 unit 作用域，源句里的发现词必须落进译文，
+  // 否则会退化成摘要级的宽松判定。
+  return createTechnicalTermGuard({ sourceText, discoveredTerms, sourceUnitId: `bilingual-cue:${sourceText}` });
 };
 
 const finalizeSemanticText = async (input: {

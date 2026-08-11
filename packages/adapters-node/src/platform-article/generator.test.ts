@@ -28,25 +28,16 @@ const xiaohongshuJson = JSON.stringify({
 });
 
 describe("generatePlatformArticleContent", () => {
-  it("guards all nested platform article fields and repairs once", async () => {
-    const responses = [
-      JSON.stringify({
-        target: "xiaohongshu",
-        title: "提示工程和图工程",
-        body: "上下文工程连接知识图谱与代理图谱，也包含潜在工作区路由。",
-        tags: ["图工程", "知识图谱", "代理图谱"],
-        cover: { headline: "图工程", subhead: "知识图谱", visual_prompt: "图片、图表和图文" },
-      }),
-      JSON.stringify({
-        target: "xiaohongshu",
-        title: "Prompt Engineering 和 Graph Engineering",
-        body: "Context Engineering 连接 Knowledge Graph 与 Agent Graph，也包含 Latent Workspace Routing。",
-        tags: ["Graph Engineering", "Knowledge Graph", "Agent Graph"],
-        cover: { headline: "Graph Engineering", subhead: "Knowledge Graph", visual_prompt: "图片、图表和图文" },
-      }),
-    ];
+  it("recovers catalog terms in nested platform fields without demanding the discovered term", async () => {
+    const response = JSON.stringify({
+      target: "xiaohongshu",
+      title: "提示工程和图工程",
+      body: "上下文工程连接知识图谱与代理图谱，也包含潜在工作区路由。",
+      tags: ["图工程", "知识图谱", "代理图谱"],
+      cover: { headline: "图工程", subhead: "知识图谱", visual_prompt: "图片、图表和图文" },
+    });
     const llm = makeLlm(
-      () => ({ content: responses.shift()!, model: "m", finishReason: "stop" }),
+      () => ({ content: response, model: "m", finishReason: "stop" }),
       JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
     );
     const artifacts: StructuredNotesArtifacts = {
@@ -64,10 +55,12 @@ describe("generatePlatformArticleContent", () => {
     });
 
     expect(JSON.stringify(result.platformArticle)).toContain("Prompt Engineering");
-    expect(JSON.stringify(result.platformArticle)).toContain("Latent Workspace Routing");
+    expect(JSON.stringify(result.platformArticle)).toContain("Knowledge Graph");
     expect(JSON.stringify(result.platformArticle)).toContain("图片、图表和图文");
     expect(JSON.stringify(result.platformArticle)).not.toContain("提示工程");
-    expect(llm.chat).toHaveBeenCalledTimes(3);
+    // 发现词只保护不强制
+    expect(JSON.stringify(result.platformArticle)).toContain("潜在工作区路由");
+    expect(llm.chat).toHaveBeenCalledTimes(2);
   });
 
   it("sends platform prompt and parses JSON", async () => {

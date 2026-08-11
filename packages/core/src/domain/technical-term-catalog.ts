@@ -80,6 +80,12 @@ export type TechnicalTermOccurrence = {
 export type TechnicalTermProfile = {
   sourceFingerprint: string;
   entries: readonly ResolvedTechnicalTerm[];
+  /**
+   * 被更长的激活术语盖住的短术语（源里写的是 Claude Code，Claude 就落在这里）。
+   * 它们确实出现在源材料中，只是不作为独立术语要求输出携带——所以允许出现，
+   * 但不进 entries、不参与"缺少源术语"判定。
+   */
+  coveredCanonicals: readonly string[];
   occurrences: readonly TechnicalTermOccurrence[];
   discovery: TechnicalTermDiscoveryAudit;
   sourceUnitId?: string;
@@ -370,21 +376,36 @@ const INITIAL_CATALOG: readonly TechnicalTermEntry[] = [
   entry("Grill Me", ["product"], "preserve", { aliases: ["grill me"] }),
   entry("Grill with Docs", ["product"], "preserve", { aliases: ["grill with docs"] }),
   entry("2PRD", ["product"], "preserve", { aliases: ["2prd"] }),
-  entry("Codex", ["product"], "preserve", { aliases: ["codex"] }),
-  entry("Claude", ["product"], "preserve", { aliases: ["claude"] }),
-  entry("ChatGPT", ["product"], "preserve", { aliases: ["chatgpt"] }),
+  // 产品名的禁译词只收"一旦出现必然是误译"的音译/意译，绝不收中文里另有日常
+  // 含义的词。禁译词会在 finalize 里被静默改写成品牌名，收错一个（Cursor→光标、
+  // Agents→代理、Discord→不和）就会把正文里合法的中文改坏。
+  entry("Codex", ["product"], "preserve", { aliases: ["codex"], forbiddenZh: ["法典"] }),
+  entry("Claude", ["product"], "preserve", { aliases: ["claude"], forbiddenZh: ["克劳德"] }),
+  entry("ChatGPT", ["product"], "preserve", { aliases: ["chatgpt"], forbiddenZh: ["聊天GPT"] }),
   entry("GPT", ["product"], "preserve", { aliases: ["gpt"] }),
-  entry("OpenAI", ["product"], "preserve", { aliases: ["openai"] }),
-  entry("Gemini", ["product"], "preserve", { aliases: ["gemini"] }),
-  entry("DeepSeek", ["product"], "preserve", { aliases: ["deepseek"] }),
+  entry("OpenAI", ["product"], "preserve", {
+    aliases: ["openai"],
+    forbiddenZh: ["开放人工智能", "开放AI"],
+  }),
+  entry("Gemini", ["product"], "preserve", {
+    aliases: ["gemini"],
+    forbiddenZh: ["双子星", "双子座"],
+  }),
+  entry("DeepSeek", ["product"], "preserve", { aliases: ["deepseek"], forbiddenZh: ["深度搜索"] }),
   entry("Cursor", ["product"], "preserve", { aliases: ["cursor"] }),
-  entry("GitHub Copilot", ["product"], "preserve", { aliases: ["github copilot"] }),
-  entry("Plan Mode", ["product"], "preserve", { aliases: ["plan mode"] }),
+  entry("GitHub Copilot", ["product"], "preserve", {
+    aliases: ["github copilot"],
+    forbiddenZh: ["GitHub 副驾驶", "GitHub副驾驶"],
+  }),
+  entry("Plan Mode", ["product"], "preserve", {
+    aliases: ["plan mode"],
+    forbiddenZh: ["计划模式", "规划模式"],
+  }),
   entry("Agents", ["product"], "preserve", { aliases: ["agents"] }),
   entry("PRD", ["product"], "preserve", { aliases: ["prd"] }),
   entry("Air Coding Cohort", ["product"], "preserve", { aliases: ["air coding cohort"] }),
   entry("Shape Up", ["product"], "preserve", { aliases: ["shape up"] }),
-  entry("YouTube", ["product"], "preserve", { aliases: ["youtube"] }),
+  entry("YouTube", ["product"], "preserve", { aliases: ["youtube"], forbiddenZh: ["油管", "优兔"] }),
   entry("Discord", ["product"], "preserve", { aliases: ["discord"] }),
   entry("Matt Pocock", ["person"], "preserve", { aliases: ["matt pocock"] }),
   entry("Ryan Singer", ["person"], "preserve", { aliases: ["ryan singer"] }),
@@ -425,6 +446,22 @@ const findActualSourceText = (text: string, candidate: string): string | undefin
   return match?.[1];
 };
 
+const URL_RE = /https?:\/\/[^\s)>\]"'）】」』]+/giu;
+
+/**
+ * 链接只是引用来源，不是术语用法：`youtube.com` 里的 YouTube 既不激活术语，
+ * 也不满足保留要求，更不算凭空造词。源侧、输出侧三处判定必须用同一条规则，
+ * 否则只在 URL 里出现的术语会永远"缺失"、回引源链接会被判成"凭空加入"。
+ */
+const urlSpansOf = (text: string): readonly (readonly [number, number])[] =>
+  [...text.matchAll(URL_RE)].map((match) => [match.index, match.index + match[0].length] as const);
+
+const isInsideUrl = (
+  spans: readonly (readonly [number, number])[],
+  start: number,
+  end: number,
+): boolean => spans.some(([from, to]) => start >= from && end <= to);
+
 const matchesForEntry = (
   text: string,
   entryToMatch: TechnicalTermEntry,
@@ -442,7 +479,9 @@ const matchesForEntry = (
       source,
     });
   }
-  return matches;
+  if (matches.length === 0) return matches;
+  const spans = urlSpansOf(text);
+  return spans.length === 0 ? matches : matches.filter((match) => !isInsideUrl(spans, match.start, match.end));
 };
 
 const isTechnicalGraphContext = (text: string, start: number, end: number): boolean => {
@@ -466,7 +505,7 @@ const findProfileMatches = (
   sourceTitle: string,
   discoveredTerms: readonly DiscoveredTechnicalTerm[],
   catalogEntries: readonly TechnicalTermEntry[],
-): TermMatch[] => {
+): { matches: TermMatch[]; covered: TermMatch[] } => {
   const discoveredEntries = discoveredTerms
     .filter((candidate) => candidate.confidence === "high")
     .filter((candidate, index, all) =>
@@ -482,9 +521,17 @@ const findProfileMatches = (
     })
     .filter((candidate): candidate is TechnicalTermEntry => candidate !== undefined);
   const allEntries = [...catalogEntries, ...discoveredEntries];
-  const selectLongestMatches = (matches: TermMatch[]): TermMatch[] => [...matches]
-    .sort((a, b) => b.sourceText.length - a.sourceText.length || a.start - b.start)
-    .filter((match, index, all) => all.slice(0, index).every((selected) => !overlaps(match, selected)));
+  const selectLongestMatches = (matches: TermMatch[]): { selected: TermMatch[]; covered: TermMatch[] } => {
+    const ranked = [...matches]
+      .sort((a, b) => b.sourceText.length - a.sourceText.length || a.start - b.start);
+    const selected: TermMatch[] = [];
+    const covered: TermMatch[] = [];
+    ranked.forEach((match, index) => {
+      const free = ranked.slice(0, index).every((earlier) => !overlaps(match, earlier));
+      (free ? selected : covered).push(match);
+    });
+    return { selected, covered };
+  };
   const sourceMatches = selectLongestMatches(
     allEntries
       .flatMap((candidate) => matchesForEntry(sourceText, candidate, "sourceText"))
@@ -495,7 +542,10 @@ const findProfileMatches = (
       .flatMap((candidate) => matchesForEntry(sourceTitle, candidate, "sourceTitle"))
       .filter((match) => isActiveGraphMatch(match, sourceTitle)),
   );
-  return [...sourceMatches, ...titleMatches];
+  return {
+    matches: [...sourceMatches.selected, ...titleMatches.selected],
+    covered: [...sourceMatches.covered, ...titleMatches.covered],
+  };
 };
 
 const resolvedFromMatches = (matches: readonly TermMatch[]): TechnicalTermProfile => {
@@ -522,6 +572,7 @@ const resolvedFromMatches = (matches: readonly TermMatch[]): TechnicalTermProfil
   return {
     sourceFingerprint: "",
     entries,
+    coveredCanonicals: [],
     occurrences,
     discovery: {
       promptVersion: "unspecified",
@@ -595,7 +646,7 @@ const createProfile = (
     reviewCandidates: Object.freeze([...(discovery?.reviewCandidates ?? [])]),
     warnings: Object.freeze([...(discovery?.warnings ?? [])]),
   };
-  const matches = findProfileMatches(
+  const { matches, covered } = findProfileMatches(
     sourceText,
     sourceTitle,
     discovery?.acceptedCandidates ?? discoveredTerms,
@@ -623,10 +674,13 @@ const createProfile = (
     ...base.entries,
     ...contextual.entries.filter((term) => !base.entries.some((existing) => existing.canonical === term.canonical)),
   ]);
+  const coveredCanonicals = Object.freeze([...new Set(covered.map((match) => match.entry.canonical))]
+    .filter((canonical) => !mergedEntries.some((term) => term.canonical === canonical)));
   const sourceFingerprint = fingerprintTechnicalTermValue({ sourceText, sourceTitle, sourceUnitId });
   return Object.freeze({
     sourceFingerprint,
     entries: mergedEntries,
+    coveredCanonicals,
     occurrences: base.occurrences,
     discovery: Object.freeze({
       promptVersion: discoveryAudit.promptVersion,
@@ -639,6 +693,7 @@ const createProfile = (
     profileFingerprint: fingerprintTechnicalTermValue({
       sourceFingerprint,
       activeEntries: mergedEntries,
+      coveredCanonicals,
       occurrences: base.occurrences,
       artifact,
       discoveryVersion: discoveryAudit.promptVersion,
@@ -773,16 +828,12 @@ export const createTechnicalTermGuard = ({
     });
   };
 
-  const countTermOccurrences = (text: string, term: string): number =>
-    [...text.matchAll(termPattern([term], "giu"))]
-      .filter((match) => {
-        const start = match.index ?? 0;
-        const lineStart = Math.max(text.lastIndexOf("\n", start), text.lastIndexOf(" ", start)) + 1;
-        const lineEndCandidate = text.slice(start).search(/[\s]/u);
-        const lineEnd = lineEndCandidate < 0 ? text.length : start + lineEndCandidate;
-        return !/^https?:\/\/[^\s]+$/iu.test(text.slice(lineStart, lineEnd));
-      })
-      .length;
+  const countTermOccurrences = (text: string, term: string): number => {
+    const matches = [...text.matchAll(termPattern([term], "giu"))];
+    if (matches.length === 0) return 0;
+    const spans = urlSpansOf(text);
+    return matches.filter((match) => !isInsideUrl(spans, match.index, match.index + match[0].length)).length;
+  };
 
   const validateValue = <T>(value: T): readonly TechnicalTermViolation[] => {
     const violations: TechnicalTermViolation[] = [];
@@ -819,7 +870,10 @@ export const createTechnicalTermGuard = ({
             canonical: term.canonical,
             message: `输出使用了 ${forbidden}，应保留 ${term.canonical}；源中出现 ${expectedCount} 次。`,
           });
-        } else {
+        } else if (profile.sourceUnitId !== undefined) {
+          // "必须携带"只对 1:1 映射成立：逐句翻译、逐片段帖的输出要覆盖源单元的
+          // 全部术语。notes/article/thread/short 这些是重写，漏讲某个术语是正常的
+          // 编辑取舍，不是术语错误——那里只保"用到了不许译坏、不许凭空造词"。
           violations.push({
             code: "missing-canonical-term",
             canonical: term.canonical,
@@ -841,7 +895,10 @@ export const createTechnicalTermGuard = ({
         });
       }
     }
-    const activeCanonicals = new Set(fullProfile.entries.map((term) => term.canonical));
+    const activeCanonicals = new Set([
+      ...fullProfile.entries.map((term) => term.canonical),
+      ...fullProfile.coveredCanonicals,
+    ]);
     const unexpectedMatches = termCatalog.entries
       .flatMap((candidate) => matchesForEntry(combinedText, candidate, "sourceText"))
       .filter((match) => isActiveGraphMatch(match, combinedText))

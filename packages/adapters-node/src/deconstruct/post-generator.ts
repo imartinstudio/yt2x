@@ -431,6 +431,9 @@ export const writeSelectedPostFiles = async (
     ].join("\n");
     const clipGuard = createTechnicalTermGuard({
       sourceText: clipSourceText,
+      // 片段帖是这一段素材的 1:1 呈现而不是摘要，所以按 unit 作用域校验：
+      // 源片段里的发现词必须落进帖子，不能像长文那样"允许不复述"。
+      sourceUnitId: clip.id,
       discoveredTerms: technicalTerms.discoveredTerms,
       ...(technicalTerms.discoveryAudit === undefined ? {} : { discovery: technicalTerms.discoveryAudit }),
     });

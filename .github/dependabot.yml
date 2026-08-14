@@ -6,6 +6,15 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    # TypeScript 7 是 Go 原生编译器（tsgo），typescript-eslint 还装不上：即使是
+    # 最新的 8.67.0 和 canary，peerDependencies.typescript 仍然是 >=4.8.4 <6.1.0。
+    # 上游 #12518 已按 not planned 关闭，#10940 挂着 blocked by external API 标签、
+    # 无 PR 无时间表；稳定的编译器编程接口要等 TypeScript 7.1。
+    # 不挡住的话 dependabot 每周都会重开一个必然 CI 失败的 PR（见已关闭的 #158）。
+    # typescript-eslint 宣布支持 TS 7 后删掉这段。
+    ignore:
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
     groups:
       dev-dependencies:
         dependency-type: development

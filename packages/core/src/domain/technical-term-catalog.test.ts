@@ -309,6 +309,21 @@ describe("technical term catalog", () => {
     expect(guard.validate("把问题组织成 Graph 结构，按节点顺序回答。")).toEqual([]);
   });
 
+  it("leaves slash commands and hyphenated slugs intact", () => {
+    // 斜杠命令是一个整体 token。连字符两侧当边界的话，grill 会命中 /grill-me 的前半截
+    // 被替换成"追问"，Agents 会把 /writing-for-agents 改成 /writing-for-Agents。
+    const guard = createTechnicalTermGuard({
+      sourceText: "You can grill the spec, and Agents will follow it.",
+    });
+
+    const finalized = guard.finalize(
+      "运行 /grill-me 与 /writing-for-agents 两个命令。",
+      { placeholders: [] },
+    );
+
+    expect(finalized.value).toBe("运行 /grill-me 与 /writing-for-agents 两个命令。");
+  });
+
   it("still rejects an invented term used outside a URL", () => {
     const guard = createTechnicalTermGuard({ sourceText: "Graph Engineering explained." });
 

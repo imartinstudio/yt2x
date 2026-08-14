@@ -428,12 +428,26 @@ export const TECHNICAL_TERM_CATALOG_FINGERPRINT = catalog.fingerprint;
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/**
+ * 词边界。连字符和下划线算 token 的一部分，不算边界——短横线 slug 是一个整体，不能
+ * 从中间切开：否则 `grill` 会命中 `/grill-me` 的前半截被换成"追问"，`Agents` 会把
+ * `/writing-for-agents` 改写成 `/writing-for-Agents`。
+ *
+ * 斜杠**不在**其中：`Claude/Codex` 这种「或」的写法两侧都是完整术语，把 `/` 当作
+ * token 内部字符会让它们双双失配。区分 slug 和「或」的是连字符，不是斜杠。
+ * canonical 自身含连字符（Retrieval-Augmented Generation）不受影响，边界只看首尾两侧。
+ */
+const TERM_BOUNDARY_CHARS = "A-Za-z0-9_-";
+
 const termPattern = (terms: readonly string[], flags: string): RegExp => {
   const alternatives = [...new Set(terms)]
     .sort((a, b) => b.length - a.length)
     .map(escapeRegExp)
     .join("|");
-  return new RegExp(`(?<![A-Za-z0-9])(${alternatives})(?![A-Za-z0-9])`, flags);
+  return new RegExp(
+    `(?<![${TERM_BOUNDARY_CHARS}])(${alternatives})(?![${TERM_BOUNDARY_CHARS}])`,
+    flags,
+  );
 };
 
 const findActualSourceText = (text: string, candidate: string): string | undefined => {

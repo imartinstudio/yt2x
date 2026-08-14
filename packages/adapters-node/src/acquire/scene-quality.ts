@@ -18,7 +18,7 @@ export const assessFrameQuality = async (
   imagePath: string,
   opts: QualityCheckOptions,
 ): Promise<VisualQuality> => {
-  let blur: BlurLevel = "unknown";
+  let blur: BlurLevel;
   let blurScore: number | undefined;
 
   // 检查文件是否存在且非空

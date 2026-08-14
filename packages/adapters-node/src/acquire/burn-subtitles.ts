@@ -483,7 +483,7 @@ export const burnSubtitles = async (opts: BurnSubtitlesOptions): Promise<void> =
       : err instanceof Error
         ? err.message
         : String(err);
-    throw new Error(`subtitle PNG rendering failed: ${detail}`);
+    throw new Error(`subtitle PNG rendering failed: ${detail}`, { cause: err });
   }
 
   if (renderResult.exitCode !== 0) {
@@ -530,7 +530,7 @@ Image.new("RGBA", (${vw}, ${maxH}), (0, 0, 0, 0)).save("${blankPath}")
       : err instanceof Error
         ? err.message
         : String(err);
-    throw new Error(`failed to create blank PNG: ${detail}`);
+    throw new Error(`failed to create blank PNG: ${detail}`, { cause: err });
   }
 
   // 5. Optional static watermark PNG (same generator and placement as bilingual burn).

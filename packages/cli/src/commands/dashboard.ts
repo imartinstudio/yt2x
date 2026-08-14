@@ -419,7 +419,7 @@ const formatWechatForDashboard = async (
     const wechatImagesDir = path.join(articleDir, "wechat-format", "images");
 
     // Validate x-article exists and has images
-    let xArticleText = "";
+    let xArticleText: string;
     try { xArticleText = await readFile(xArticlePath, "utf8"); } catch {
       throw new Error("没有找到 X 长文。请先运行 X 文章流水线。");
     }
@@ -929,7 +929,7 @@ export const handleDashboardRequest = async (
     const llm = createLlmAdapter(cfg);
     const model = cfg.defaultModel!;
 
-    let articleMdLocal = "";
+    let articleMdLocal: string;
     try { articleMdLocal = await readFile(path.join(articleDir, "article.md"), "utf8"); } catch { return "no-article"; }
 
     const downloadsDir = path.resolve(opts.downloadsDir);

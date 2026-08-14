@@ -159,7 +159,7 @@ export const parseGeneratedThreadJson = (raw: string): GeneratedThread => {
     parsed = JSON.parse(stripJsonFenceWrapper(raw.trim()));
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Thread LLM response is not valid JSON: ${message}`);
+    throw new Error(`Thread LLM response is not valid JSON: ${message}`, { cause: err });
   }
 
   const result = GeneratedThreadSchema.safeParse(parsed);

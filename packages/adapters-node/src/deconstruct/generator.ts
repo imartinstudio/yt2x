@@ -375,7 +375,7 @@ export const parseDeconstructLlmOutput = (raw: string): DeconstructLlmOutput => 
     parsed = JSON.parse(stripJsonFenceWrapper(raw.trim()));
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Deconstruct LLM response is not valid JSON: ${message}`);
+    throw new Error(`Deconstruct LLM response is not valid JSON: ${message}`, { cause: err });
   }
 
   // Pre-process: fill null/default values for skipped sections so Zod validation passes

@@ -879,7 +879,7 @@ export const executeNativePublish = async (flags: PublishFlags): Promise<number>
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error({ coverPath, err: message }, "Cover upload failed; aborting publish");
-        throw new Error(`Cover image upload failed for ${coverPath}: ${message}`);
+        throw new Error(`Cover image upload failed for ${coverPath}: ${message}`, { cause: err });
       }
     }
 

@@ -47,6 +47,7 @@ export const findArticleArtifacts = async (input: {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
         `article.md not found in ${articleDir}. Run \`pnpm yt2x article --video-id ${input.videoId}\` first.`,
+        { cause: err },
       );
     }
     throw err;
@@ -75,6 +76,7 @@ const resolveFlatArticleDir = async (videoRoot: string, videoId: string): Promis
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
         `No article for video "${videoId}" under ${videoRoot}. Run \`pnpm yt2x article --video-id ${videoId}\` first.`,
+        { cause: err },
       );
     }
     throw err;

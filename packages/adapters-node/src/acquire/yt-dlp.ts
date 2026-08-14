@@ -192,7 +192,7 @@ export const ensureOfficialYoutubeThumbnail = async (
     return undefined;
   }
 
-  let names: string[] = [];
+  let names: string[];
   try {
     names = await readdir(screenshotsDir);
   } catch {

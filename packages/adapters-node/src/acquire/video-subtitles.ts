@@ -1420,7 +1420,7 @@ export const runSubtitlePipeline = async (
   if (opts.force) {
     await rm(zhSrtPath).catch(() => {});
   }
-  let hasZhSrt = false;
+  let hasZhSrt: boolean;
   try {
     await access(zhSrtPath);
     hasZhSrt = true;
@@ -1579,7 +1579,7 @@ export const runSubtitlePipeline = async (
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       if (mustHaveSubtitles) {
-        throw new Error(`Chinese subtitle translation failed: ${message}`);
+        throw new Error(`Chinese subtitle translation failed: ${message}`, { cause: err });
       }
       warnings.push(`Chinese subtitle translation failed: ${message}`);
     }
@@ -1775,7 +1775,7 @@ export const runSubtitlePipeline = async (
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       if (bilingualMode === "burned" || bilingualMode === "all") {
-        throw new Error(`bilingual subtitle generation failed: ${message}`);
+        throw new Error(`bilingual subtitle generation failed: ${message}`, { cause: err });
       }
       warnings.push(`bilingual subtitle generation failed: ${message}`);
     }

@@ -87,7 +87,7 @@ export const readStructuredNotesArtifacts = async (videoDir: string): Promise<St
     metadata = JSON.parse(metadataRaw!) as YouTubeMetadata;
   } catch (e: unknown) {
     const m = e instanceof Error ? e.message : String(e);
-    throw new Error('metadata.json in "' + videoDir + '" is not valid JSON: ' + m);
+    throw new Error('metadata.json in "' + videoDir + '" is not valid JSON: ' + m, { cause: e });
   }
   return {
     videoDir,

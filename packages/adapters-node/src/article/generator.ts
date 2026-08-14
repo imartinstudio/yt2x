@@ -369,7 +369,7 @@ export const generateXArticleContent = async (
     });
     content = stripTrailingSourceAttribution(stripCodeFenceWrapper(resp.content.trim()));
     validateArticleTopicHashtags(content);
-    visualPlan = validateArticleVisualPlan(content, input.availableVisuals);
+    validateArticleVisualPlan(content, input.availableVisuals);
   }
 
   // Post-process: ensure Simplified Chinese and fix common LLM homoglyph errors

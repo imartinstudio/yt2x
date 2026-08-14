@@ -89,8 +89,8 @@ export const formatWechatCovers = async (input: PlatformFormatInput): Promise<Pl
   let imagesGenerated = 0;
   const files: string[] = [];
 
-  let headline = "";
-  let visualPrompt = "";
+  let headline: string;
+  let visualPrompt: string;
   if (metadata !== null) {
     headline = metadata.cover.headline || metadata.title;
     visualPrompt = metadata.cover.visual_prompt || metadata.title;

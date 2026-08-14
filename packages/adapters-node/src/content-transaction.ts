@@ -142,7 +142,7 @@ export const acquireContentTargetLock = async (
         continue;
       }
       if (Date.now() - startedAt >= timeoutMs) {
-        throw new Error(`Timed out acquiring content target lock for "${target}" under "${targetDir}"`);
+        throw new Error(`Timed out acquiring content target lock for "${target}" under "${targetDir}"`, { cause: err });
       }
       await sleep(pollMs);
     }

@@ -30,7 +30,7 @@ export const assertArticleDraftImagesExist = async (parsed: ArticleDraftParseRes
       await stat(item.path);
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(`X Article ${item.role} was not found: ${item.path}`);
+        throw new Error(`X Article ${item.role} was not found: ${item.path}`, { cause: err });
       }
       throw err;
     }

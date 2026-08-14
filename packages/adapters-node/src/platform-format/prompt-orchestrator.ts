@@ -593,7 +593,7 @@ export const previewExistingArticleImages = async (
     '<div class="uploaded-image-actions"><button class="ph-upload-btn" onclick="selectPromptImage(this)">替换图片</button><input class="ph-upload-input" type="file" accept="image/jpeg,image/png,image/webp" data-prompt-id="' + _esc(promptId) + '" onchange="uploadPromptImage(this)" /><button class="ph-del-btn" onclick="deletePromptImage(\'' + _esc(promptId) + '\')">删除图片</button></div>';
 
   const isXhs = platform === "xiaohongshu";
-  let sectionHtml = "";
+  let sectionHtml: string;
 
   if (isXhs) {
     // ── XHS layout: image gallery (top) + longform article (bottom) ──

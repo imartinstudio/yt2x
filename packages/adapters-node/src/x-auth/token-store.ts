@@ -97,7 +97,7 @@ export const createTokenStore = (filePath: string = defaultCredentialsPath()): T
       parsed = JSON.parse(raw);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`credentials file is not valid JSON: ${message}`);
+      throw new Error(`credentials file is not valid JSON: ${message}`, { cause: err });
     }
     // zod 推导的 optional 字段类型为 `T | undefined`，与 core 的
     // `exactOptionalPropertyTypes` 字段（缺席）在运行时同义但在 TS 静态层不互兼。

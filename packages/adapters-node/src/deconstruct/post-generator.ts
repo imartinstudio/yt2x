@@ -720,7 +720,7 @@ const parseClipPosts = (raw: string): ClipPostList => {
     parsed = JSON.parse(stripFence(raw));
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Clip posts LLM response is not JSON: ${msg}`);
+    throw new Error(`Clip posts LLM response is not JSON: ${msg}`, { cause: err });
   }
   const result = ClipPostListSchema.safeParse(parsed);
   if (!result.success) {

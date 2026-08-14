@@ -46,6 +46,11 @@ export default tseslint.config(
         { prefer: "type-imports", fixStyle: "inline-type-imports" },
       ],
       "no-console": "off",
+      // ESLint 10 把这两条并入 recommended。提前显式打开：升级时 CI 不会再突然
+      // 冒出几十个错误，而且 preserve-caught-error 本身就该开——catch 里只留一句
+      // 中文摘要、把原始错误整个丢掉，正是这个仓库最难排查的那类失败。
+      "preserve-caught-error": "error",
+      "no-useless-assignment": "error",
     },
   },
   prettier,

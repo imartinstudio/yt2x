@@ -67,7 +67,7 @@ export const parseGeneratedVideoShortPostJson = (jsonText: string): GeneratedVid
     const salvaged = salvageLooseJsonTextField(raw, "text");
     if (salvaged === null || salvaged.trim().length === 0) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`Video short LLM response is not valid JSON: ${message}`);
+      throw new Error(`Video short LLM response is not valid JSON: ${message}`, { cause: err });
     }
     parsed = { text: salvaged };
   }

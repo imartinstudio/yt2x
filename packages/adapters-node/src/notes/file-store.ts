@@ -74,7 +74,7 @@ export const readVideoArtifacts = async (videoDir: string): Promise<VideoDirArti
     metadata = JSON.parse(metadataRaw!) as YouTubeMetadata;
   } catch (e: unknown) {
     const m = e instanceof Error ? e.message : String(e);
-    throw new Error(`metadata.json in "${videoDir}" is not valid JSON: ${m}`);
+    throw new Error(`metadata.json in "${videoDir}" is not valid JSON: ${m}`, { cause: e });
   }
 
   let screenshots: ScreenshotManifest | null = null;

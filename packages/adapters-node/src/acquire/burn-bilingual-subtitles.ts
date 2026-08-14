@@ -264,7 +264,7 @@ export const burnBilingualSubtitles = async (
     });
   } catch (err: unknown) {
     await rm(renderDir, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`bilingual subtitle PNG rendering failed: ${formatProcessFailure(err)}`);
+    throw new Error(`bilingual subtitle PNG rendering failed: ${formatProcessFailure(err)}`, { cause: err });
   }
 
   if (renderResult.exitCode !== 0) {
@@ -316,7 +316,7 @@ export const burnBilingualSubtitles = async (
     }
   } catch (err: unknown) {
     await rm(renderDir, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`failed to create blank PNGs for bilingual burn: ${formatProcessFailure(err)}`);
+    throw new Error(`failed to create blank PNGs for bilingual burn: ${formatProcessFailure(err)}`, { cause: err });
   }
 
   // 6. Optional static watermark PNG (composited by ffmpeg, not pre-baked frames)
@@ -449,7 +449,6 @@ export const burnBilingualSubtitles = async (
   if (opts.replaceAudioPath !== undefined) {
     ffmpegArgs.push("-i", opts.replaceAudioPath);
     audioMap = `${nextInputIndex}:a`;
-    nextInputIndex += 1;
   }
   ffmpegArgs.push(
     "-filter_complex", filterComplex,
@@ -485,7 +484,7 @@ export const burnBilingualSubtitles = async (
     });
   } catch (err: unknown) {
     await rm(renderDir, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`ffmpeg bilingual subtitle burn failed: ${formatProcessFailure(err)}`);
+    throw new Error(`ffmpeg bilingual subtitle burn failed: ${formatProcessFailure(err)}`, { cause: err });
   }
 
   await rm(renderDir, { recursive: true, force: true }).catch(() => {});

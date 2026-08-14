@@ -91,8 +91,6 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
   }
   const targets = batch.targets;
   const progress = flags.showProgress === false ? undefined : createCommandProgress("notes", targets.length);
-  let exitCode = 1;
-
   logger.info(
     { provider: llm.provider, model: llm.model, targets: targets.length, outDir },
     "yt2x notes (native): starting",
@@ -265,7 +263,7 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
     },
     "yt2x notes (native): done",
   );
-  exitCode = errors.length > 0 ? NATIVE_EXIT.PARTIAL_FAILURE : 0;
+  const exitCode = errors.length > 0 ? NATIVE_EXIT.PARTIAL_FAILURE : 0;
   if (exitCode === 0) {
     progress?.printSummary();
   } else {

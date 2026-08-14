@@ -75,7 +75,7 @@ export const overlayWatermarkOnVideo = async (
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       });
     } catch (err: unknown) {
-      throw new Error(`watermark generation failed: ${formatProcessFailure(err)}`);
+      throw new Error(`watermark generation failed: ${formatProcessFailure(err)}`, { cause: err });
     }
     if (wmResult.exitCode !== 0) {
       throw new Error(`watermark generation failed: ${wmResult.stderr ?? "unknown error"}`);
@@ -127,7 +127,7 @@ export const overlayWatermarkOnVideo = async (
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       });
     } catch (err: unknown) {
-      throw new Error(`ffmpeg watermark overlay failed: ${formatProcessFailure(err)}`);
+      throw new Error(`ffmpeg watermark overlay failed: ${formatProcessFailure(err)}`, { cause: err });
     }
     if (result.exitCode !== 0) {
       const excerpt = (result.stderr ?? "").split("\n").slice(-20).join("\n");

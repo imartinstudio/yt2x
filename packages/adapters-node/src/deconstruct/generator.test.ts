@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   filterValidSections,
   toSlug,
@@ -13,8 +13,185 @@ import {
   splitOversizedSections,
   parseDeconstructLlmOutput,
   runDeconstruct,
+  readDeconstructArtifacts,
+  deconstructCacheIdentityFor,
 } from "./generator.js";
 import { deriveSeriesName, formatClipPostSeriesTitle, type LlmPort } from "@yt2x/core";
+import { contentTechnicalTermSourceFingerprintFor } from "../content-cache.js";
+import type * as ContentCacheModule from "../content-cache.js";
+
+describe("deconstructCacheIdentityFor", () => {
+  it("changes for SRT, video bytes, duration, model, and selection while canonicalizing the video path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-identity-"));
+    try {
+      const videoPath = path.join(root, "source.mp4");
+      const aliasPath = path.join(root, "alias.mp4");
+      await writeFile(videoPath, "video-a", "utf8");
+      await symlink(videoPath, aliasPath);
+      const artifacts = {
+        articleDir: root,
+        articleMd: "# Cache identity\n\nArticle source.",
+        srtContent: "1\n00:00:00,000 --> 00:00:01,000\nFirst source.\n",
+        videoPath,
+        videoId: "cache-identity",
+        durationSec: 60,
+      };
+      const base = await deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 2,
+      });
+      const alias = await deconstructCacheIdentityFor({ ...artifacts, videoPath: aliasPath }, {
+        requestedModel: "requested-model",
+        selectCount: 2,
+      });
+      expect(alias.sourceFingerprint).toBe(base.sourceFingerprint);
+      expect(base.srtSha256).toMatch(/^sha256-[0-9a-f]{64}$/u);
+      expect(base.videoSourceIdentity.contentSha256).toMatch(/^sha256-[0-9a-f]{64}$/u);
+
+      const changedSrt = await deconstructCacheIdentityFor({
+        ...artifacts,
+        srtContent: artifacts.srtContent.replace("First", "Other"),
+      }, { requestedModel: "requested-model", selectCount: 2 });
+      expect(changedSrt.sourceFingerprint).not.toBe(base.sourceFingerprint);
+
+      await writeFile(videoPath, "video-b", "utf8");
+      const changedVideo = await deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 2,
+      });
+      expect(changedVideo.sourceFingerprint).not.toBe(base.sourceFingerprint);
+
+      const changedDuration = await deconstructCacheIdentityFor({ ...artifacts, durationSec: 61 }, {
+        requestedModel: "requested-model",
+        selectCount: 2,
+      });
+      expect(changedDuration.sourceFingerprint).not.toBe(changedVideo.sourceFingerprint);
+      const changedModel = await deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "other-model",
+        selectCount: 2,
+      });
+      expect(changedModel.sourceFingerprint).not.toBe(changedVideo.sourceFingerprint);
+      const changedSelection = await deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 3,
+      });
+      expect(changedSelection.sourceFingerprint).not.toBe(changedVideo.sourceFingerprint);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(() => {
+    vi.doUnmock("../content-cache.js");
+    vi.resetModules();
+  });
+
+  it("does not stale when only the clip-post prompt version changes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-identity-clip-post-isolation-"));
+    try {
+      const videoPath = path.join(root, "source.mp4");
+      await writeFile(videoPath, "video-a", "utf8");
+      const artifacts = {
+        articleDir: root,
+        articleMd: "# Isolation\n\nArticle source.",
+        srtContent: "1\n00:00:00,000 --> 00:00:01,000\nFirst source.\n",
+        videoPath,
+        videoId: "clip-post-isolation",
+        durationSec: 60,
+      };
+
+      vi.resetModules();
+      vi.doMock("../content-cache.js", async () => {
+        const actual = await vi.importActual<typeof ContentCacheModule>("../content-cache.js");
+        return {
+          ...actual,
+          CONTENT_PROMPT_VERSIONS: { ...actual.CONTENT_PROMPT_VERSIONS, clipPost: "clip-post-v-original" },
+        };
+      });
+      const originalModule = await import("./generator.js");
+      const before = await originalModule.deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 1,
+      });
+
+      vi.resetModules();
+      vi.doMock("../content-cache.js", async () => {
+        const actual = await vi.importActual<typeof ContentCacheModule>("../content-cache.js");
+        return {
+          ...actual,
+          CONTENT_PROMPT_VERSIONS: { ...actual.CONTENT_PROMPT_VERSIONS, clipPost: "clip-post-v-bumped" },
+        };
+      });
+      const bumpedModule = await import("./generator.js");
+      const after = await bumpedModule.deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 1,
+      });
+
+      expect(after.sourceFingerprint).toBe(before.sourceFingerprint);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the same sourceTitle fallback as runDeconstruct's discovery audit when article.md has no H1", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-no-title-"));
+    try {
+      const videoDir = path.join(articleDir, "video");
+      await mkdir(videoDir, { recursive: true });
+      await writeFile(
+        path.join(articleDir, "article.md"),
+        "No heading here, just prose about the topic.",
+        "utf8",
+      );
+      await writeFile(path.join(videoDir, "full.mp4"), "video", "utf8");
+      await writeFile(path.join(videoDir, "full.zh.srt"), "1\n00:00:00,000 --> 00:00:01,000\nHello.\n", "utf8");
+
+      const output = JSON.stringify({
+        sections: [{
+          id: "section-1",
+          title: "Section",
+          summary: "Section summary",
+          article_section: "",
+          angle: "tutorial",
+          risk: "low",
+          timecodes: { start: "00:00:00", end: "00:00:01", startSec: 0, endSec: 1, durationSec: 1 },
+          scores: { counter_intuitiveness: 3, shareability: 3, practical_value: 3, visual_appeal: 3, composite: 3 },
+          key_quote: "Hello",
+          video_script: "Hello",
+        }],
+      });
+      const llm: LlmPort = {
+        chat: async (request) => ({
+          content: request.messages[0]?.content.includes("术语发现器") ? "[]" : output,
+          model: "resolved-model",
+          finishReason: "stop",
+        }),
+      };
+
+      const artifacts = await readDeconstructArtifacts(articleDir);
+      const cacheIdentity = await deconstructCacheIdentityFor(artifacts, {
+        requestedModel: "requested-model",
+        selectCount: 0,
+      });
+      const result = await runDeconstruct({
+        llm,
+        model: "requested-model",
+        articleDir,
+        artifacts,
+        cacheIdentity,
+      });
+
+      const expectedKnownFingerprint = contentTechnicalTermSourceFingerprintFor(
+        cacheIdentity.candidateSourceText,
+        cacheIdentity.sourceTitle,
+      );
+      expect(result.candidateTechnicalTerms.discoveryAudit.sourceIdentity).toBe(expectedKnownFingerprint);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("toSlug", () => {
   it("converts Chinese title to slug", () => {
@@ -265,6 +442,52 @@ describe("parseDeconstructLlmOutput null preprocessing", () => {
 });
 
 describe("runDeconstruct technical term restoration", () => {
+  it("allows a candidate summary to omit a known detailed term", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-summary-scope-"));
+    try {
+      const videoDir = path.join(articleDir, "video");
+      await mkdir(videoDir, { recursive: true });
+      await writeFile(path.join(articleDir, "article.md"), [
+        "# Graph Engineering",
+        "## Executive Summary",
+        "Graph Engineering is the main idea.",
+        "## Detailed Notes",
+        "Context Engineering is discussed later.",
+      ].join("\n"), "utf8");
+      await writeFile(path.join(videoDir, "full.mp4"), "video", "utf8");
+      await writeFile(path.join(videoDir, "full.zh.srt"), "", "utf8");
+      const output = JSON.stringify({ sections: [{
+        id: "section-1",
+        title: "Graph Engineering",
+        summary: "Graph Engineering 摘要",
+        article_section: "Executive Summary",
+        angle: "tutorial",
+        risk: "low",
+        timecodes: { start: "00:00:00", end: "00:00:10", startSec: 0, endSec: 10, durationSec: 10 },
+        scores: { counter_intuitiveness: 3, shareability: 3, practical_value: 3, visual_appeal: 3, composite: 3 },
+        key_quote: "Graph Engineering",
+        video_script: "Graph Engineering",
+      }] });
+      const calls: string[] = [];
+      const llm: LlmPort = { chat: async (request) => {
+        calls.push(request.messages[0]?.content ?? "");
+        return {
+          content: request.messages[0]?.content.includes("术语发现器") ? "[]" : output,
+          model: "resolved-model",
+          finishReason: "stop",
+        };
+      } };
+
+      const result = await runDeconstruct({ llm, model: "requested-model", articleDir });
+
+      expect(result.candidates.sections[0]?.summary).toBe("Graph Engineering 摘要");
+      expect(calls).toHaveLength(2);
+      expect(result.candidateTechnicalTerms.discoveryAudit.sourceIdentity).toMatch(/^sha256-/u);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
   it("restores terms in candidate titles, summaries, quotes, and scripts", async () => {
     const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-deconstruct-terms-"));
     try {
@@ -272,7 +495,7 @@ describe("runDeconstruct technical term restoration", () => {
       await mkdir(videoDir, { recursive: true });
       await writeFile(
         path.join(articleDir, "article.md"),
-        "# Graph Engineering（图工程）\n\n## Graph 的基本词汇\n\nKnowledge Graph 和 Agent Graph。",
+        "# Prompt Engineering and Graph Engineering（图工程）\n\n## Graph 的基本词汇\n\nPrompt Engineering、Context Engineering、Knowledge Graph、Agent Graph 和 Latent Workspace Routing。",
         "utf8",
       );
       await writeFile(path.join(videoDir, "full.mp4"), "", "utf8");
@@ -282,34 +505,64 @@ describe("runDeconstruct technical term restoration", () => {
         "utf8",
       );
 
+      const responses = [
+        JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+        JSON.stringify({
+          sections: [{
+            id: "section-1",
+            title: "图工程",
+            summary: "图的基本词汇",
+            article_section: "知识图谱 vs 代理图谱",
+            angle: "tutorial",
+            risk: "low",
+            timecodes: {
+              start: "00:00:00",
+              end: "00:00:10",
+              startSec: 0,
+              endSec: 10,
+              durationSec: 10,
+            },
+            scores: {
+              counter_intuitiveness: 3,
+              shareability: 3,
+              practical_value: 3,
+              visual_appeal: 3,
+              composite: 3,
+            },
+            key_quote: "什么时候值得用图",
+            video_script: "构建你的第一个图",
+          }],
+        }),
+        JSON.stringify({
+          sections: [{
+            id: "section-1",
+            title: "Graph Engineering",
+            summary: "Graph 的基本词汇",
+            article_section: "Knowledge Graph vs Agent Graph",
+            angle: "tutorial",
+            risk: "low",
+            timecodes: {
+              start: "00:00:00",
+              end: "00:00:10",
+              startSec: 0,
+              endSec: 10,
+              durationSec: 10,
+            },
+            scores: {
+              counter_intuitiveness: 3,
+              shareability: 3,
+              practical_value: 3,
+              visual_appeal: 3,
+              composite: 3,
+            },
+            key_quote: "什么时候值得用 Graph",
+            video_script: "构建你的第一个 Graph Prompt Engineering Context Engineering Latent Workspace Routing",
+          }],
+        }),
+      ];
       const llm: LlmPort = {
         chat: async () => ({
-          content: JSON.stringify({
-            sections: [{
-              id: "section-1",
-              title: "图工程",
-              summary: "图的基本词汇",
-              article_section: "知识图谱 vs 代理图谱",
-              angle: "tutorial",
-              risk: "low",
-              timecodes: {
-                start: "00:00:00",
-                end: "00:00:10",
-                startSec: 0,
-                endSec: 10,
-                durationSec: 10,
-              },
-              scores: {
-                counter_intuitiveness: 3,
-                shareability: 3,
-                practical_value: 3,
-                visual_appeal: 3,
-                composite: 3,
-              },
-              key_quote: "什么时候值得用图",
-              video_script: "构建你的第一个图",
-            }],
-          }),
+          content: responses.shift()!,
           model: "test-model",
           finishReason: "stop",
         }),
@@ -321,7 +574,7 @@ describe("runDeconstruct technical term restoration", () => {
       expect(candidate.summary).toBe("Graph 的基本词汇");
       expect(candidate.article_section).toBe("Knowledge Graph vs Agent Graph");
       expect(candidate.key_quote).toBe("什么时候值得用 Graph");
-      expect(candidate.video_script).toBe("构建你的第一个 Graph");
+      expect(candidate.video_script).toContain("构建你的第一个 Graph");
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }

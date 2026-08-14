@@ -1,12 +1,28 @@
 import {
   ARTICLE_X_SYSTEM_PROMPT,
+  appendTechnicalTermRuleToSystemPrompt,
   buildArticleUserPrompt,
-  restoreProtectedTechnicalTermsInContent,
-  restoreProtectedTechnicalTermsInTitle,
+  createTechnicalTermGuard,
+  hasHardTechnicalTermViolations,
   type AvailableVisual,
   type ArticleVisualPlanItem,
+  type FinalizedTechnicalTermValue,
   type LlmPort,
+  type TechnicalTermGuard,
 } from "@yt2x/core";
+import {
+  createFileTechnicalTermDiscoveryCacheStore,
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  knownSourceTextWithMetadata,
+  structuredNotesContentSourceFor,
+  summarySourceTextFor,
+} from "../content-cache.js";
 import type { StructuredNotesArtifacts } from "./file-store.js";
 
 export type GenerateXArticleInput = {
@@ -18,6 +34,8 @@ export type GenerateXArticleInput = {
   /** 可用截图列表；null/[] 表示无可用截图 */
   availableVisuals?: AvailableVisual[] | null;
   signal?: AbortSignal;
+  /** 目标侧持久化 discovery cache；不得指向 files/downloads。 */
+  technicalTermDiscoveryCacheDir?: string;
 };
 
 export type GenerateXArticleResult = {
@@ -25,10 +43,16 @@ export type GenerateXArticleResult = {
   /** 长文生成的配图计划 */
   visualPlan: ArticleVisualPlanItem[];
   model: string;
+  requestedModel: string;
+  resolvedModel: string;
   finishReason: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
   durationMs: number;
+  technicalTermProfileFingerprint: string;
+  technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
+  sourceFingerprint: string;
+  promptVersion: string;
 };
 
 const FENCE_RE = /^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/;
@@ -57,6 +81,7 @@ const restoreFaithfulChineseTitle = (
   content: string,
   structuredNotesMd: string,
   sourceTitle: unknown,
+  guard: TechnicalTermGuard,
 ): string => {
   const notesTitle = structuredNotesMd.match(MARKDOWN_H1_TEXT_RE)?.[1]
     ?.trim()
@@ -64,11 +89,10 @@ const restoreFaithfulChineseTitle = (
     .trim();
   const fallbackTitle = typeof sourceTitle === "string" ? sourceTitle.trim() : "";
   const candidateTitle = notesTitle?.length ? notesTitle : fallbackTitle;
-  const title = restoreProtectedTechnicalTermsInTitle(
+  const title = guard.finalize(
     restoreProtectedProductNames(candidateTitle, fallbackTitle),
-    structuredNotesMd,
-    fallbackTitle,
-  );
+    { placeholders: [] },
+  ).value;
   if (title.length === 0) return content;
   return content.replace(ARTICLE_H1_RE, `# **${title}**`);
 };
@@ -235,18 +259,43 @@ export const validateArticleVisualPlan = (
 export const generateXArticleContent = async (
   input: GenerateXArticleInput,
 ): Promise<GenerateXArticleResult> => {
-  const userPrompt = buildArticleUserPrompt(
-    {
-      metadata: input.artifacts.metadata,
-      structuredNotesMd: input.artifacts.structuredNotesMd,
-      availableVisuals: input.availableVisuals ?? null,
-    },
-    { platform: "x" },
-  );
+  const sourceText = input.artifacts.structuredNotesMd;
+  const sourceTitle = input.artifacts.metadata.title ?? "";
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle,
+    ...(input.technicalTermDiscoveryCacheDir === undefined
+      ? {}
+      : { cache: createFileTechnicalTermDiscoveryCacheStore(input.technicalTermDiscoveryCacheDir) }),
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
+  // 已知范围要覆盖 prepare() 递给模型的全部材料：metadata 也在 prompt 里，
+  // 只在其中出现的词（作者名、频道名、简介里的产品名）不该被判成凭空造词。
+  const fullGuard = createTechnicalTermGuard({
+    sourceText: knownSourceTextWithMetadata(input.artifacts.metadata, sourceText),
+    sourceTitle,
+    discoveredTerms: discovery.accepted,
+    discovery: discoveryAudit,
+  });
+  // 完整 notes 仍是已知范围（详细章节里的术语允许出现），但只有摘要范围里的术语
+  // 才要求文章必须携带——长文是重写而不是逐条转录，逼它塞进每一个转录术语只会
+  // 制造无法修复的失败。
+  const guard = fullGuard.scope(summarySourceTextFor(sourceText), sourceTitle);
+  const titleGuard = fullGuard.scope(sourceTitle, sourceTitle);
+  const prepared = guard.prepare({
+    metadata: input.artifacts.metadata,
+    structuredNotesMd: input.artifacts.structuredNotesMd,
+    availableVisuals: input.availableVisuals ?? null,
+  });
+  const userPrompt = buildArticleUserPrompt(prepared.value, { platform: "x" });
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(ARTICLE_X_SYSTEM_PROMPT, prepared.promptRule);
 
   const t0 = Date.now();
   const messages = [
-    { role: "system" as const, content: ARTICLE_X_SYSTEM_PROMPT },
+    { role: "system" as const, content: systemPrompt },
     { role: "user" as const, content: userPrompt },
   ];
   let resp = await input.llm.chat({
@@ -331,24 +380,57 @@ export const generateXArticleContent = async (
   } catch {
     // If conversion fails, keep original content
   }
-  content = restoreProtectedTechnicalTermsInContent(
-    content,
-    input.artifacts.structuredNotesMd,
-    input.artifacts.metadata.title,
-  );
   content = restoreFaithfulChineseTitle(
     content,
     input.artifacts.structuredNotesMd,
     input.artifacts.metadata.title,
+    titleGuard,
   );
+
+  const finalize = async (
+    value: string,
+  ): Promise<FinalizedTechnicalTermValue<string>> => {
+    let finalized = guard.finalize(value, prepared.restoration);
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      finalized = await repairTechnicalTermViolations({
+        llm: input.llm,
+        model: input.model,
+        guard,
+        currentValue: finalized.value,
+        restoration: prepared.restoration,
+        violations: finalized.violations,
+        parseResponse: (raw) => normalizeCommandStyleTopicHashtags(
+          stripTrailingSourceAttribution(stripCodeFenceWrapper(raw.trim())),
+        ),
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+    }
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+    }
+    return finalized;
+  };
+  content = (await finalize(content)).value;
+  validateArticleTopicHashtags(content);
+  visualPlan = validateArticleVisualPlan(content, input.availableVisuals);
 
   const result: GenerateXArticleResult = {
     content,
     visualPlan,
     model: resp.model,
+    requestedModel: input.model,
+    resolvedModel: resp.model,
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
+    technicalTermProfileFingerprint: prepared.profileFingerprint,
+    technicalTermDiscovery: discoveryAudit,
+    sourceFingerprint: contentSourceFingerprintFor(structuredNotesContentSourceFor({
+      metadata: input.artifacts.metadata,
+      structuredNotesMd: input.artifacts.structuredNotesMd,
+      availableVisuals: input.availableVisuals,
+    })),
+    promptVersion: CONTENT_PROMPT_VERSIONS.article,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

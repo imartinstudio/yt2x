@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
-import { generateDecompositionReport, generateProfessionalReview } from "./report.js";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, it, expect } from "vitest";
+import { generateDecompositionReport, generateProfessionalReview, writeReports } from "./report.js";
+import { replaceDirectoryAtomically } from "../content-transaction.js";
 import type { DeconstructManifest } from "@yt2x/core";
 
 const mockManifest: DeconstructManifest = {
@@ -127,5 +131,37 @@ describe("generateProfessionalReview", () => {
     const report = generateProfessionalReview(mockManifest, "测试");
     expect(report).toContain("文件核验");
     expect(report).toContain("clip-1-hot-take-one.mp4");
+  });
+});
+
+describe("writeReports", () => {
+  const articleDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(articleDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it("writes both reports directly into the public clips directory", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-write-reports-"));
+    articleDirs.push(articleDir);
+    const clipsDir = path.join(articleDir, "x-format", "clips");
+    const staged = path.join(articleDir, "x-format", ".clips-stage");
+    await mkdir(staged, { recursive: true });
+    await writeFile(path.join(staged, "clips-manifest.json"), JSON.stringify(mockManifest), "utf8");
+    await writeFile(path.join(staged, "post-1-hot-take-one.md"), "post body", "utf8");
+    await replaceDirectoryAtomically(staged, clipsDir);
+
+    const result = await writeReports(articleDir, mockManifest, "测试文章");
+
+    const rootDecomposition = await readFile(path.join(clipsDir, "DECOMPOSITION.md"), "utf8");
+    const rootReview = await readFile(path.join(clipsDir, "PROFESSIONAL-REVIEW.md"), "utf8");
+    expect(rootDecomposition).toContain("测试文章");
+    expect(rootReview).toContain("测试文章");
+    expect(result.decompositionPath).toBe(path.join(clipsDir, "DECOMPOSITION.md"));
+    expect(result.reviewPath).toBe(path.join(clipsDir, "PROFESSIONAL-REVIEW.md"));
+
+    // 换入的 bundle 内容不受报告写入影响。
+    await expect(readFile(path.join(clipsDir, "clips-manifest.json"), "utf8")).resolves.toContain("test123");
+    await expect(readFile(path.join(clipsDir, "post-1-hot-take-one.md"), "utf8")).resolves.toBe("post body");
   });
 });

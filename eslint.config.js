@@ -21,6 +21,9 @@ export default tseslint.config(
       "coverage/**",
       "**/.hermes/**",
       ".codex/**",
+      // agent 的 git worktree 是同一个仓库的另一份检出，会被 lint 重复扫一遍，
+      // 且它的分支状态与当前分支无关——那边的报错卡住这边的 pre-push 毫无意义。
+      ".claude/worktrees/**",
     ],
   },
   eslint.configs.recommended,

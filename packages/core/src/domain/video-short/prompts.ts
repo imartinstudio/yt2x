@@ -1,4 +1,4 @@
-import { stripHeavyMetadata } from "../notes/prompts.js";
+import { metadataPromptText } from "../notes/prompts.js";
 import { SHARED_TECHNICAL_TERMS } from "../shared-rules.js";
 import type { VideoShortPromptInput, VideoShortPromptOptions } from "./types.js";
 
@@ -39,11 +39,10 @@ export const buildVideoShortUserPrompt = (
     throw new Error(`Unsupported video short platform: ${String(platform)}`);
   }
 
-  const meta = stripHeavyMetadata(input.metadata);
   const sections: string[] = [];
   sections.push("## Video metadata (JSON)");
   sections.push("```json");
-  sections.push(JSON.stringify(meta, null, 2));
+  sections.push(metadataPromptText(input.metadata));
   sections.push("```");
 
   sections.push("");

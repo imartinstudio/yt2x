@@ -14,6 +14,7 @@ export * from "./domain/visuals/index.js";
 export * from "./domain/token-estimator.js";
 export * from "./domain/shared-rules.js";
 export * from "./domain/technical-terms.js";
+export * from "./domain/technical-term-discovery.js";
 export * from "./ports/x-publish.js";
 export * from "./ports/x-articles-draft.js";
 

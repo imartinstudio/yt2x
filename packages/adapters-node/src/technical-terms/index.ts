@@ -1,0 +1,16 @@
+export {
+  clearTechnicalTermDiscoveryCaches,
+  createFileTechnicalTermDiscoveryCacheStore,
+  discoverTechnicalTerms,
+  getCachedTechnicalTermDiscovery,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+  technicalTermDiscoveryCacheFilePath,
+  technicalTermDiscoveryCacheDirFor,
+  technicalTermDiscoveryCacheKeyFor,
+  technicalTermDiscoverySourceIdentityFor,
+  fingerprintTechnicalTermDiscoverySource,
+  type DiscoverTechnicalTermsInput,
+  type RepairTechnicalTermViolationsInput,
+  type TechnicalTermDiscoveryResult,
+} from "./discovery.js";

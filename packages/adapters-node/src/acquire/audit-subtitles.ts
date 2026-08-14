@@ -5,6 +5,7 @@ import {
   PROTECTED_NAMES,
   visualWidth,
 } from "./semantic-bilingual-subtitles.js";
+import type { TechnicalTermGuard } from "@yt2x/core";
 
 export const SUBTITLE_AUDIT_THRESHOLDS = {
   maxLines: 2,
@@ -64,6 +65,7 @@ export type SubtitleAuditMeasurement = {
 
 export type SubtitleAuditManifest = {
   sourceSha256?: string;
+  technicalTermProfileFingerprint?: string;
 };
 
 export type SubtitleAuditInput = {
@@ -83,6 +85,8 @@ export type SubtitleAuditInput = {
    * 概念）保持逐条显示单元比对，行为与之前完全一致。
    */
   utteranceBoundariesMs?: readonly number[];
+  /** Full-source technical-term profile used by semantic bilingual delivery. */
+  technicalTermGuard?: TechnicalTermGuard;
 };
 
 export type SubtitleAuditResult = {
@@ -465,7 +469,9 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
   // more compact than English) — see
   // docs/superpowers/plans/2026-07-29-subtitle-audit-and-self-calibration.md
   // for the earlier (wrong) version of this rule and why it was removed.
-  const protectedTerms = [...PROTECTED_GLOSSARY_TERMS, ...PROTECTED_NAMES];
+  const protectedTerms = input.technicalTermGuard === undefined
+    ? [...PROTECTED_GLOSSARY_TERMS, ...PROTECTED_NAMES]
+    : [];
   // 术语保护的语义是"同一个话语单元里，英文出现的保护词，中文也要出现"——不是"同一条
   // 显示单元里"。显示单元是话语单元的细分，中英文切分边界不保证对齐（中文按视觉宽度
   // 切、英文按词数占比切），逐条比对会把落在相邻显示单元的术语误判为丢失。有话语单元
@@ -491,6 +497,24 @@ export const auditSubtitleArtifacts = (input: SubtitleAuditInput): SubtitleAudit
           message: `protected term "${term}" is missing from the aligned Chinese cue`,
         });
       }
+    }
+  }
+  if (input.technicalTermGuard !== undefined) {
+    const zhText = zhCues.map((cue) => cue.lines.join(" ")).join(" ");
+    const bilingualZhText = bilingualCues.map((cue) => cue.lines[0] ?? "").join(" ");
+    const zhViolations = input.technicalTermGuard.validate(zhText);
+    const bilingualViolations = input.technicalTermGuard.validate(bilingualZhText);
+    const seen = new Set<string>();
+    for (const violation of [...zhViolations, ...bilingualViolations]) {
+      const key = `${violation.code}:${violation.canonical ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      issues.push({
+        code: "glossary-violation",
+        severity: "content",
+        ...(violation.canonical === undefined ? {} : { text: violation.canonical }),
+        message: violation.message,
+      });
     }
   }
   // Width check against the projection's own budget, independent of layout

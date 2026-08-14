@@ -36,9 +36,46 @@ const threadJson = JSON.stringify({
 
 const makeLlm = (
   respond: (req: ChatRequest) => ChatResponse | Promise<ChatResponse>,
-): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(respond(req))) });
+  discoveryResponse = "[]",
+): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(
+  req.messages[0]?.content.includes("术语发现器")
+    ? { content: discoveryResponse, model: "m", finishReason: "stop" }
+    : respond(req),
+)) });
 
 describe("generateXThreadContent", () => {
+  it("recovers catalog terms in nested thread fields without demanding the discovered term", async () => {
+    const response = JSON.stringify({
+        title: "图工程线程",
+        planning: { core_thesis: "提示工程", conflict: "上下文工程", key_points: ["图工程", "知识图谱", "代理图谱", "术语：潜在工作区路由"], reader_gain: "图片和图表", final_post: "图文总结" },
+        tweets: ["图工程", "知识图谱", "代理图谱", "术语：潜在工作区路由", "图片", "图文"],
+        hooks: [
+          { text: "提示工程", angle: "反直觉", risk: "low" },
+          { text: "上下文工程", angle: "实用收益", risk: "low" },
+          { text: "图工程", angle: "技术洞察", risk: "medium" },
+        ],
+      });
+    const llm = makeLlm(
+      () => ({ content: response, model: "m", finishReason: "stop" }),
+      JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+    );
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "Prompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph、Latent Workspace Routing",
+      metadata: { id: "thread-term-guard", title: "Prompt Engineering" },
+    };
+
+    const result = await generateXThreadContent({ llm, model: "task3-thread", artifacts });
+
+    expect(JSON.stringify(result.thread)).toContain("Prompt Engineering");
+    expect(JSON.stringify(result.thread)).toContain("Knowledge Graph");
+    expect(JSON.stringify(result.thread)).toContain("图片和图表");
+    expect(JSON.stringify(result.thread)).not.toContain("提示工程");
+    // 发现词只保护不强制
+    expect(JSON.stringify(result.thread)).toContain("潜在工作区路由");
+    expect(llm.chat).toHaveBeenCalledTimes(2);
+  });
+
   it("sends thread system prompt and parses JSON", async () => {
     const llm = makeLlm((req) => {
       expect(req.messages[0]!.content).toMatch(/X（Twitter）/);
@@ -101,9 +138,9 @@ describe("generateXThreadContent", () => {
       "Graph Engineering",
       "Knowledge Graph",
       "Agent Graph",
-      "什么时候值得用 Graph",
-      "更大的 Graph",
-      "第一个 Graph",
+      "什么时候值得用图",
+      "更大的图",
+      "第一个图",
     ]);
     expect(result.thread.hooks[0]?.text).toContain("Graph Engineering");
   });

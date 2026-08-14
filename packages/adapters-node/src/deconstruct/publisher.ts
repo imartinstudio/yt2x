@@ -19,7 +19,8 @@ export type PublishClipsResult = {
  * 将已选中的 clip 按顺序发布到 X。
  */
 export const publishClips = async (input: PublishClipsInput): Promise<PublishClipsResult> => {
-  const manifestPath = path.join(input.articleDir, "x-format", "clips", "clips-manifest.json");
+  const clipsDir = path.join(input.articleDir, "x-format", "clips");
+  const manifestPath = path.join(clipsDir, "clips-manifest.json");
   const manifestRaw = await readFile(manifestPath, "utf8");
   const manifest: DeconstructManifest = JSON.parse(manifestRaw);
   await assertClipPublishReadiness(input.articleDir);
@@ -29,7 +30,7 @@ export const publishClips = async (input: PublishClipsInput): Promise<PublishCli
     throw new Error("No selected clips with generated text found. Run `yt2x clips generate` first.");
   }
 
-  const _clipsDir = path.join(input.articleDir, "x-format", "clips");
+  const _clipsDir = clipsDir;
   const _errors: Array<{ clipId: string; error: string }> = [];
   let publishedCount = 0;
 

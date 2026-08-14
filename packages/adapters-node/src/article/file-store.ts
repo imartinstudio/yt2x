@@ -1,13 +1,21 @@
 import type { Dirent } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   pickArticleCoverFromCandidates,
   type ArticleVisualPlanItem,
   type AvailableVisual,
+  type TechnicalTermDiscoveryAudit,
   type VisualSuggestion,
   type YouTubeMetadata,
 } from "@yt2x/core";
+import {
+  type ContentTargetCacheExpectation,
+  type CONTENT_METADATA_SCHEMA_VERSION,
+  isContentTargetMetadataFresh,
+  readContentTargetMetadata,
+} from "../content-cache.js";
+import { atomicWriteUtf8, withContentTargetLock } from "../content-transaction.js";
 
 /**
  * Native article 输出根目录（扁平）：articleOutDir/videoId/article.md
@@ -22,13 +30,27 @@ export type StructuredNotesArtifacts = {
 };
 
 export type NativeArticleRunRecord = {
-  v: 1;
+  /** 读侧（readContentTargetMetadata）只认 CONTENT_METADATA_SCHEMA_VERSION；写 v:1 的记录永远读不回。 */
+  v: typeof CONTENT_METADATA_SCHEMA_VERSION;
   platform: "x";
   videoId: string;
-  model: string;
+  /** 旧 run.json 的 model 保留为可选迁移字段。 */
+  model?: string;
+  requestedModel?: string;
+  resolvedModel?: string;
   finishReason: string;
   generatedAt: string;
   durationMs: number;
+  technicalTermProfileFingerprint: string;
+  technicalTermKnownSourceFingerprint?: string;
+  technicalTermRequiredSourceFingerprint?: string;
+  technicalTermScope?: "full" | "scoped";
+  target?: string;
+  sourceFingerprint?: string;
+  promptVersion?: string;
+  seedFingerprint?: string;
+  /** 新记录写入审计；旧 run.json 读取方可继续忽略该字段。 */
+  technicalTermDiscovery?: TechnicalTermDiscoveryAudit;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
 };
 
@@ -76,11 +98,14 @@ export const readStructuredNotesArtifacts = async (videoDir: string): Promise<St
 };
 
 /**
- * 扫描 notesOutDir：已有 structured-notes.md、且 native article 目录下尚无 article.md。
+ * 扫描 notesOutDir：所有已有 structured-notes.md 的视频目录都返回给上层。
+ *
+ * 是否可以复用 article.md 必须由 native article 编排器根据 source/model/
+ * prompt/profile metadata 判断；仅凭目标文件存在不能把 stale 产物排除在外。
  */
 export const findPendingNativeArticleDirs = async (
   notesOutDir: string,
-  articleOutDir: string,
+  _articleOutDir: string,
 ): Promise<string[]> => {
   let entries: Dirent[];
   try {
@@ -95,9 +120,6 @@ export const findPendingNativeArticleDirs = async (
     const videoDir = path.join(notesOutDir, entry.name);
     const hasNotes = await fileExists(path.join(videoDir, "structured-notes.md"));
     if (!hasNotes) continue;
-    const destArticle = path.join(articleOutDir, entry.name, "article.md");
-    const hasArticle = await fileExists(destArticle);
-    if (hasArticle) continue;
     pending.push(videoDir);
   }
   return pending.sort();
@@ -125,7 +147,13 @@ export const writeNativeArticleBundle = async (
   videoId: string,
   articleMd: string,
   run: NativeArticleRunRecord,
-  options: { force?: boolean; notesVideoDir?: string; sourceVideoUrl?: string } = {},
+  options: {
+    force?: boolean;
+    notesVideoDir?: string;
+    sourceVideoUrl?: string;
+    cacheExpectation?: ContentTargetCacheExpectation;
+    lock?: boolean;
+  } = {},
 ): Promise<WriteNativeArticleResult | null> => {
   if (!isValidVideoId(videoId)) {
     throw new Error(`Invalid videoId: "${videoId}". Expected alphanumeric, hyphens, and underscores only.`);
@@ -134,12 +162,30 @@ export const writeNativeArticleBundle = async (
   const articlePath = path.join(articleDir, "article.md");
   const runPath = path.join(articleDir, "run.json");
 
+  if (options.lock !== false) {
+    return withContentTargetLock(articleDir, "article", () => writeNativeArticleBundle(
+      articleOutDir,
+      videoId,
+      articleMd,
+      run,
+      { ...options, lock: false },
+    ));
+  }
+
   if (options.force !== true) {
-    try {
-      await stat(articlePath);
-      return null;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    if (options.cacheExpectation !== undefined) {
+      const existing = await readContentTargetMetadata(runPath);
+      if (await isContentTargetMetadataFresh(existing, {
+        ...options.cacheExpectation,
+        requiredFiles: [articlePath, runPath],
+      })) return null;
+    } else {
+      try {
+        await stat(articlePath);
+        return null;
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
     }
   }
 
@@ -380,11 +426,4 @@ const fileExists = async (filePath: string): Promise<boolean> => {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw err;
   }
-};
-
-const atomicWriteUtf8 = async (targetPath: string, body: string): Promise<void> => {
-  await mkdir(path.dirname(targetPath), { recursive: true });
-  const tmp = targetPath + "." + String(process.pid) + "." + String(Date.now()) + ".tmp";
-  await writeFile(tmp, body, "utf8");
-  await rename(tmp, targetPath);
 };

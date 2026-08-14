@@ -68,29 +68,30 @@
 
 ## 3. Native article 产物（`files/articles/<videoId>/`）
 
-| 文件                                 | 说明                                             |
-| ------------------------------------ | ------------------------------------------------ |
-| `article.md`                         | 长文章草稿 Markdown；暂不通过 X API 自动发布     |
-| `run.json`                           | 文章生成元数据（模型、耗时、usage 等）           |
-| `x-thread.md`                        | 专门生成的 X 串推 Markdown                       |
-| `x-hooks.json`                       | 串推首推候选                                     |
-| `x-short.md`                         | 单条 X 短帖                                      |
-| `images/cover.*`                     | 可选；从笔记目录 `screenshots/` 复制             |
-| `video/full.*` / `video/clip.*`      | 可选；从采集目录复制完整视频或手动片段供长文引用 |
-| `video/full.en.srt`                  | 双语模式按完整语义句投影后的英文原文字幕         |
-| `video/full.zh.srt`                  | 双语模式按完整语义句投影后的简体中文译文字幕     |
-| `video/full.bilingual.srt`           | 译文在上、原文在下且共享时间轴的交付字幕         |
-| `video/full.bilingual.ass`           | 可选；双语 ASS 版本                              |
-| `video/full.bilingual.semantic.json` | 双语投影、布局指纹、字体回退结果与质量报告       |
-| `video/full.bilingual-burned.mp4`    | 可选；仅在内容和展示质量门都通过后生成           |
-| `x-thread-visuals.json`              | 可选；串推配图计划（v0.2）                       |
-| `x-short-visual.json`                | 可选；短文配图计划（v0.2）                       |
-| `xiaohongshu-article.md`             | 计划；小红书图文笔记适配稿                       |
-| `xiaohongshu-metadata.json`          | 计划；小红书标题、核心标签和封面/配图建议        |
-| `wechat-article.md`                  | 计划；微信公众号 Markdown 长文适配稿             |
-| `wechat-metadata.json`               | 计划；公众号标题候选、摘要、导语和封面图建议     |
-| `bilibili-article.md`                | 计划；哔哩哔哩标题、简介、分区和标签建议         |
-| `bilibili-metadata.json`             | 计划；哔哩哔哩标题、标签和章节时间线草案         |
+| 文件                                 | 说明                                                                                |
+| ------------------------------------ | ----------------------------------------------------------------------------------- |
+| `article.md`                         | 长文章草稿 Markdown；暂不通过 X API 自动发布                                        |
+| `run.json`                           | 文章生成元数据（模型、耗时、usage 等）                                              |
+| `x-thread.md`                        | 专门生成的 X 串推 Markdown                                                          |
+| `x-hooks.json`                       | 串推首推候选                                                                        |
+| `x-short.md`                         | 单条 X 短帖                                                                         |
+| `<platform>-format/prompts.json`     | X、公众号、小红书或 B 站的封面/插图提示包；包含术语档案指纹时只允许在同一档案下复用 |
+| `images/cover.*`                     | 可选；从笔记目录 `screenshots/` 复制                                                |
+| `video/full.*` / `video/clip.*`      | 可选；从采集目录复制完整视频或手动片段供长文引用                                    |
+| `video/full.en.srt`                  | 双语模式按完整语义句投影后的英文原文字幕                                            |
+| `video/full.zh.srt`                  | 双语模式按完整语义句投影后的简体中文译文字幕                                        |
+| `video/full.bilingual.srt`           | 译文在上、原文在下且共享时间轴的交付字幕                                            |
+| `video/full.bilingual.ass`           | 可选；双语 ASS 版本                                                                 |
+| `video/full.bilingual.semantic.json` | 双语投影、布局指纹、字体回退结果与质量报告                                          |
+| `video/full.bilingual-burned.mp4`    | 可选；仅在内容和展示质量门都通过后生成                                              |
+| `x-thread-visuals.json`              | 可选；串推配图计划（v0.2）                                                          |
+| `x-short-visual.json`                | 可选；短文配图计划（v0.2）                                                          |
+| `xiaohongshu-article.md`             | 计划；小红书图文笔记适配稿                                                          |
+| `xiaohongshu-metadata.json`          | 计划；小红书标题、核心标签和封面/配图建议                                           |
+| `wechat-article.md`                  | 计划；微信公众号 Markdown 长文适配稿                                                |
+| `wechat-metadata.json`               | 计划；公众号标题候选、摘要、导语和封面图建议                                        |
+| `bilibili-article.md`                | 计划；哔哩哔哩标题、简介、分区和标签建议                                            |
+| `bilibili-metadata.json`             | 计划；哔哩哔哩标题、标签和章节时间线草案                                            |
 
 `article.md` 落盘时会固定补齐首屏素材与尾注：如果存在 `images/cover.*`，H1 后的第一张图就是封面；如果存在下载视频片段，首个 `##` 小节前会插入引用 `video/clip.*` 的 `<video>`；LLM 正文末尾应输出 3-5 个从主题提取的 X 话题标签，之后再追加固定格式 `👇完整视频：` 与原视频地址。
 
@@ -101,6 +102,57 @@ manifest、烧录视频或本地转写临时文件。双语模式只读取已经
 `semantic-bilingual`；其中记录 `status`、翻译/对齐/断句/布局四阶段状态、源字幕 SHA、
 翻译规则与模型、布局和样式版本、实际解析字体、视频尺寸、
 `videoWidthFraction: 0.8`、三份 SRT 的 SHA 以及质量报告。
+
+### 3.1 术语档案与可追踪指纹
+
+所有会生成文字、JSON 字段或视觉提示的目标，都从中央目录和本次源材料的动态发现结果创建同一份 `TechnicalTermProfile`。它的 `profileFingerprint` 必须随可复用产物保存，并参与缓存命中判断：实际激活条目的策略、源文本、已批准的动态术语或发现规则版本变化时，旧产物不可静默复用；未激活的无关目录条目不应让 profile 过度失效。中央目录的全局 SHA-256 fingerprint 只用于 discovery cache record 的兼容校验。
+
+当前已落盘的指纹字段如下：
+
+- `run.json.technicalTermProfileFingerprint`：主文章生成所使用的术语档案。
+- `run.json.technicalTermDiscovery`：主文章使用的可序列化 discovery 审计，包括 `promptVersion`、结构化 `sourceIdentity`、`acceptedCandidates`、`reviewCandidates` 和 `warnings`；旧 `run.json` 缺少该字段时仍可读取。
+- `full.bilingual.semantic.json.technicalTermProfileFingerprint`：语义双语字幕的源级档案；与源字幕 SHA、翻译规则版本和模型一起校验。
+- `dub/dub-script.json.technicalTermProfileFingerprint`：配音稿的源级档案；当前 `dub-script.json` schema 为 **version 3**，旧版 2（以及更早版本）必须视为缓存未命中并重新生成。
+- `<platform>-format/prompts.json.technicalTermProfileFingerprint`：平台视觉提示包的档案；封面、插图、`name`、`filename`、`label` 和 `prompt` 等嵌套字段写入前统一校验。
+- `<platform>-format/prompts.json.technicalTermDiscovery`：视觉提示使用的同一份 discovery 审计；旧 `prompts.json` 缺少该字段时按旧 schema 读取，但不会凭旧指纹静默复用新 profile。
+
+视觉提示包使用单一对象 schema：
+
+```json
+{
+  "platform": "<platform>",
+  "title": "<source title>",
+  "model": "<model>",
+  "technicalTermProfileFingerprint": "sha256-<64-hex-fingerprint>",
+  "technicalTermDiscovery": {
+    "promptVersion": "technical-term-discovery-v1",
+    "sourceIdentity": "sha256-<64-hex-fingerprint>",
+    "acceptedCandidates": [],
+    "reviewCandidates": [],
+    "warnings": []
+  },
+  "coverPrompts": [],
+  "illustrationPrompts": []
+}
+```
+
+`prompts.json` 的旧版 `string[]`、旧版 `{ "prompts": [...] }` 或缺少 `technicalTermProfileFingerprint` 的对象均视为缓存未命中，必须重建。profile 缺失或不匹配时，合并器不得继承旧的 `coverPrompts`、`illustrationPrompts`、`prompts` 或旧 `model`；只保留明确兼容的 `platform`、`title` 字段，并写入新的 profile。平台编排器和小红书版式适配器通过同一个按路径串行、临时文件 rename 的写入器合并字段；Dashboard 的上传、编辑和删除也必须使用同一把锁，不能直接做无锁的 read-modify-write。
+
+视觉提示字段的 owner/skip/merge 契约如下：通用平台编排器是带 LLM 的新鲜封面和插图生成 owner；小红书 adapter 只在 profile 匹配时消费缓存，带 LLM 时才负责生成并 merge 自己的插图字段。小红书 adapter 没有 LLM 且缓存不存在或 profile 不匹配时，只完成排版和预览，跳过提示生成与 `prompts.json` 写入，绝不能用空 prompt 覆盖已有生成结果。Dashboard 必须等待通用编排器完成后再进入小红书 adapter。
+
+#### 如何维护中央术语库
+
+机器可读唯一事实来源是 `packages/core/src/domain/technical-term-catalog.ts`。添加一个人工确认的术语时，只修改中央目录及其条目测试，不在平台 prompt、字幕、配音或适配器中新增局部数组：
+
+1. `canonical` 填标准输出拼写；`aliases` 只填源材料可能出现的大小写或 ASR 变体。canonical 必须唯一，别名不能与其他条目的 canonical/alias 冲突。
+2. `categories` 至少填写一个领域分类：`ai`、`ai-coding`、`ai-agent`、`product`、`person` 或 `domain`。分类用于提示和审计，不应在调用方复制成枚举白名单。
+3. `policy` 选择 `preserve`、`contextual-preserve` 或 `fixed-zh`。前两者保留 canonical 原文；只有 `fixed-zh` 才填写 `preferredZh`。
+4. `forbiddenZh` 只记录该术语的已知错误中文替代词，并且只能在同一源范围命中该术语时恢复；它不是全局替换表。普通词（例如“图片”“配图”“插图”“流程图”）不得作为 Graph 的错误翻译加入全局规则。
+5. 为每个新条目补一个应命中的正例和一个不应命中的反例，运行目录不变量、相关产物 focused tests、typecheck 和 `git diff --check`。
+
+源材料出现目录中没有的 AI、AI coding 或 AI agent 术语时，源级 discovery 会要求模型返回可在原文中逐字定位的 span。高置信度候选只进入当前运行的 profile，不会自动写回中央目录；中置信度候选进入 warning，低置信度或无法定位的候选丢弃。这样未来术语可以立即在文章、帖子、视觉提示、字幕和 dub 中保持原文，同时不会把一次模型误判永久升级为全仓库规则。人工确认后，再按上述目录流程提交 canonical、aliases、category、policy、forbiddenZh 及测试。
+
+所有后续重写、压缩、补漏和定向 repair 都必须复用初始 profile；格式化、烧录、TTS 和混音模块只消费已通过术语门的上游产物，不再维护第二套术语枚举。
 
 ### 下载目录只读契约（硬性）
 
@@ -232,7 +284,7 @@ scene_manifest.json → available_visuals → LLM visual_plan → 图片渲染 �
 
 `dub-placement.json` 的 `version` 现为 **3**：新增 `runId`（本次协商执行的唯一标识，`crypto.randomUUID()`）与 `generatedAt`（生成时刻，ISO 8601 字符串）——这份报告此前只写不读，也没有任何机制表明它属于哪一次运行；被流程外的手工命令覆写成残缺内容时，只能靠比对文件系统修改时间去猜测，猜错就会把工具问题误判成协商逻辑缺陷（issue #110 的真实事故）。`readDubPlacementReport`（`packages/adapters-node/src/dub/file-store.ts`）新增，用 zod 校验整体形状与 `version` 字面量，口径与 `readDubTimingReport` 一致：残缺或版本不匹配直接拒绝、报错信息定位到具体字段，不返回裸 JSON。目前唯一的读取方是 `yt2x dub-replay` 的协商核对——比对结果会带上盘上报告的 `runId`/`generatedAt`，无论核对通过还是不通过。它同样是中间产物，重跑 `yt2x dub` 即可重新生成，不提供旧版本兼容读取。写入逻辑本身未变——仍由协商执行阶段一次性写盘；本次改动只新增来源标记与读回校验，不加文件锁或只读权限，因为覆写来自流程外操作，用权限对抗它只会给正常调试添堵。
 
-`dub-script.json` 的 `version` 为 **2**：切到本地转录通道后 schema 实质变了——`sourceWords`（词级时间戳文件相对路径）取代了旧版 1 的 `sourceSubtitle`（中文字幕文件路径），`sourceText` 从中文原文变成英文原文，`cueIndices` 的语义从「字幕条 index」变成「话语单元 index」，并新增 `droppedCount`（翻译失败、未进入 `lines` 的话语单元数——门禁据此拦截静默丢句，见下）。`readDubScript`（`packages/adapters-node/src/dub/file-store.ts`）用 zod 校验 `version` 与整体形状，版本不匹配或字段缺失时直接拒绝、不返回裸 JSON；`yt2x dub` 全片模式下读到这类拒绝会当作缓存未命中，记一条 warning 后重新生成，不会静默复用旧链路产物。
+`dub-script.json` 的 `version` 为 **3**：切到本地转录通道后 schema 实质变了——`sourceWords`（词级时间戳文件相对路径）取代了旧版 1 的 `sourceSubtitle`（中文字幕文件路径），`sourceText` 从中文原文变成英文原文，`cueIndices` 的语义从「字幕条 index」变成「话语单元 index」，并新增 `droppedCount`（翻译失败、未进入 `lines` 的话语单元数——门禁据此拦截静默丢句，见下），以及随术语 profile 变化而失效的 `technicalTermProfileFingerprint`。`readDubScript`（`packages/adapters-node/src/dub/file-store.ts`）用 zod 校验 `version` 与整体形状，版本不匹配或字段缺失时直接拒绝、不返回裸 JSON；`yt2x dub` 全片模式下读到这类拒绝会当作缓存未命中，记一条 warning 后重新生成，不会静默复用旧链路产物。
 
 `dub-report.json`（门禁）中的 `info-loss` 是 advisory（不阻断）：把某行译文的字符数与该行**时长预算**（`dubTranslateCharBudget(targetDurationMs)`）相比，标注明显低于预算、疑似过度精简的行，供人工复核；不再拿英文 `sourceText` 与译文的码点数直接相除——跨语言下那个比例天生偏低，会对忠实翻译系统性误判。`droppedCount`（见上）在门禁里是独立的 hard 指标：只要 `dub-script.json` 里 `droppedCount > 0` 即阻断，因为被丢弃的话语单元在成片里只有 BGM、没有配音也没有字幕，必须显式暴露而不是被 `lineCount` 悄悄吸收。
 

@@ -1,13 +1,28 @@
 import { z } from "zod";
 import {
+  appendTechnicalTermRuleToSystemPrompt,
   buildPlatformArticleUserPrompt,
+  createTechnicalTermGuard,
   getPlatformArticleSystemPrompt,
-  restoreProtectedTechnicalTermsInValue,
+  hasHardTechnicalTermViolations,
+  type FinalizedTechnicalTermValue,
   type LlmPort,
   type PlatformArticleTarget,
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import { parseJsonWithRepairs } from "../llm/parse-json.js";
+import {
+  discoverTechnicalTerms,
+  createFileTechnicalTermDiscoveryCacheStore,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  knownSourceTextWithMetadata,
+  platformArticleContentSourceFor,
+} from "../content-cache.js";
 
 export type GeneratePlatformArticleInput = {
   llm: LlmPort;
@@ -19,15 +34,22 @@ export type GeneratePlatformArticleInput = {
   articleMd: string;
   timestampedCuesMd?: string;
   signal?: AbortSignal;
+  technicalTermDiscoveryCacheDir?: string;
 };
 
 export type GeneratePlatformArticleResult = {
   platformArticle: GeneratedPlatformArticle;
   model: string;
+  requestedModel: string;
+  resolvedModel: string;
   finishReason: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
   durationMs: number;
+  technicalTermProfileFingerprint: string;
+  technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
+  sourceFingerprint: string;
+  promptVersion: string;
 };
 
 const CoverSchema = z.object({
@@ -113,19 +135,43 @@ export const parseGeneratedPlatformArticleJson = (
 export const generatePlatformArticleContent = async (
   input: GeneratePlatformArticleInput,
 ): Promise<GeneratePlatformArticleResult> => {
-  const userPrompt = buildPlatformArticleUserPrompt(
-    {
-      metadata: input.artifacts.metadata,
-      articleMd: input.articleMd,
-      ...(input.timestampedCuesMd !== undefined ? { timestampedCuesMd: input.timestampedCuesMd } : {}),
-    },
-    { target: input.target },
+  const sourceText = [input.artifacts.structuredNotesMd, input.articleMd, input.timestampedCuesMd ?? ""].join("\n");
+  const sourceTitle = input.artifacts.metadata.title ?? "";
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle,
+    ...(input.technicalTermDiscoveryCacheDir === undefined ? {} : {
+      cache: createFileTechnicalTermDiscoveryCacheStore(input.technicalTermDiscoveryCacheDir),
+    }),
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
+  // 已知范围要覆盖 prepare() 递给模型的全部材料：metadata 也在 prompt 里，
+  // 只在其中出现的词（作者名、频道名、简介里的产品名）不该被判成凭空造词。
+  const fullGuard = createTechnicalTermGuard({
+    sourceText: knownSourceTextWithMetadata(input.artifacts.metadata, sourceText),
+    sourceTitle,
+    discoveredTerms: discovery.accepted,
+    discovery: discoveryAudit,
+  });
+  const guard = fullGuard.scope(sourceText, sourceTitle);
+  const prepared = guard.prepare({
+    metadata: input.artifacts.metadata,
+    articleMd: input.articleMd,
+    ...(input.timestampedCuesMd !== undefined ? { timestampedCuesMd: input.timestampedCuesMd } : {}),
+  });
+  const userPrompt = buildPlatformArticleUserPrompt(prepared.value, { target: input.target });
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(
+    getPlatformArticleSystemPrompt(input.target),
+    prepared.promptRule,
   );
 
   const request = {
     model: input.model,
     messages: [
-      { role: "system" as const, content: getPlatformArticleSystemPrompt(input.target) },
+      { role: "system" as const, content: systemPrompt },
       { role: "user" as const, content: userPrompt },
     ],
     temperature: input.temperature ?? 0.5,
@@ -147,6 +193,28 @@ export const generatePlatformArticleContent = async (
     platformArticle = parseGeneratedPlatformArticleJson(resp.content, input.target);
   }
 
+  const finalize = async (
+    value: GeneratedPlatformArticle,
+  ): Promise<FinalizedTechnicalTermValue<GeneratedPlatformArticle>> => {
+    let finalized = guard.finalize(value, prepared.restoration);
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      finalized = await repairTechnicalTermViolations({
+        llm: input.llm,
+        model: input.model,
+        guard,
+        currentValue: finalized.value,
+        restoration: prepared.restoration,
+        violations: finalized.violations,
+        parseResponse: (content) => parseGeneratedPlatformArticleJson(content, input.target),
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+    }
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+    }
+    return finalized;
+  };
+
   // Post-process: fix common LLM CJK homoglyph errors (e.g. 幺→么) in text fields
   try {
     const { fixLlmHomoglyphs } = await import("../acquire/simplify-chinese.js");
@@ -165,18 +233,30 @@ export const generatePlatformArticleContent = async (
   } catch {
     // Keep original if import/processing fails
   }
-  platformArticle = restoreProtectedTechnicalTermsInValue(
-    platformArticle,
-    input.artifacts.structuredNotesMd,
-    input.artifacts.metadata.title,
-  );
+  platformArticle = (await finalize(platformArticle)).value;
+  const finalSchemaResult = GeneratedPlatformArticleSchema.safeParse(platformArticle);
+  if (!finalSchemaResult.success) {
+    throw new Error(`Platform article final post-process result does not match expected schema: ${finalSchemaResult.error.message}`);
+  }
 
   const result: GeneratePlatformArticleResult = {
     platformArticle,
     model: resp.model,
+    requestedModel: input.model,
+    resolvedModel: resp.model,
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
+    technicalTermProfileFingerprint: prepared.profileFingerprint,
+    technicalTermDiscovery: discoveryAudit,
+    sourceFingerprint: contentSourceFingerprintFor(platformArticleContentSourceFor({
+      metadata: input.artifacts.metadata,
+      structuredNotesMd: input.artifacts.structuredNotesMd,
+      articleMd: input.articleMd,
+      timestampedCuesMd: input.timestampedCuesMd ?? "",
+      target: input.target,
+    })),
+    promptVersion: CONTENT_PROMPT_VERSIONS.platformArticle,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

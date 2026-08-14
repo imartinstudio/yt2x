@@ -1,6 +1,7 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { DeconstructManifest, SectionCandidate } from "@yt2x/core";
+import { atomicWriteUtf8, withContentTargetLock } from "../content-transaction.js";
 
 export type SelectClipsInput = {
   articleDir: string;
@@ -10,6 +11,12 @@ export type SelectClipsInput = {
 
 export type SelectClipsResult = {
   manifestPath: string;
+  kept: number;
+  removed: number;
+};
+
+export type ApplyClipSelectionResult = {
+  manifest: DeconstructManifest;
   kept: number;
   removed: number;
 };
@@ -47,18 +54,14 @@ export const selectTopUniqueArticleSections = (
     .slice(0, Math.max(0, limit));
 };
 
-/**
- * 从 manifest 中选择保留哪些候选，标记 selected 状态。
- * 不再删除未选中视频——视频裁剪在 selection 之后才进行。
- */
-export const selectClips = async (input: SelectClipsInput): Promise<SelectClipsResult> => {
-  const manifestPath = path.join(input.articleDir, "x-format", "clips", "clips-manifest.json");
-  const raw = await readFile(manifestPath, "utf8");
-  const manifest: DeconstructManifest = JSON.parse(raw);
-
+/** 在内存中应用选中状态，供需要把整条 deconstruct 流程一次性提交的调用方使用。 */
+export const applyClipSelection = (
+  manifest: DeconstructManifest,
+  keep: readonly string[],
+): ApplyClipSelectionResult => {
   // 解析 keep 列表：支持 "clip-1" 格式和 "1" 格式
   const keepSet = new Set<string>();
-  for (const k of input.keep) {
+  for (const k of keep) {
     const trimmed = k.trim();
     if (trimmed.startsWith("clip-") || trimmed.startsWith("candidate-")) {
       keepSet.add(trimmed);
@@ -72,17 +75,16 @@ export const selectClips = async (input: SelectClipsInput): Promise<SelectClipsR
   let removedCount = 0;
 
   // 标记每个候选的 selected 状态，保留所有条目和原始 ID
-  for (const entry of manifest.clips) {
+  const clips = manifest.clips.map((entry) => {
     const match = entry.id.match(/^clip-(\d+)$/);
     const clipKey = match ? `clip-${match[1]}` : entry.id;
     if (keepSet.has(clipKey) || keepSet.has(entry.id) || keepSet.has(entry.slug)) {
-      entry.selected = true;
       keptCount++;
-    } else {
-      entry.selected = false;
-      removedCount++;
+      return { ...entry, selected: true };
     }
-  }
+    removedCount++;
+    return { ...entry, selected: false };
+  });
 
   // 更新 manifest — 保留全部候选，不删视频
   const updated: DeconstructManifest = {
@@ -90,14 +92,29 @@ export const selectClips = async (input: SelectClipsInput): Promise<SelectClipsR
     generatedAt: new Date().toISOString(),
     candidateCount: manifest.candidateCount,
     total: keptCount,
-    clips: manifest.clips,
+    clips,
   };
 
-  await writeFile(manifestPath, JSON.stringify(updated, null, 2) + "\n", "utf8");
+  return { manifest: updated, kept: keptCount, removed: removedCount };
+};
 
-  return {
-    manifestPath,
-    kept: keptCount,
-    removed: removedCount,
-  };
+/**
+ * 在与写入方相同的 `deconstruct` 锁内应用选中状态。manifest 用 temp+rename 覆盖，
+ * 并发读取方不会看到截断到一半的 JSON。
+ */
+export const selectClips = async (input: SelectClipsInput): Promise<SelectClipsResult> => {
+  const clipsDir = path.join(input.articleDir, "x-format", "clips");
+  return withContentTargetLock(input.articleDir, "deconstruct", async () => {
+    const manifestPath = path.join(clipsDir, "clips-manifest.json");
+    const manifest: DeconstructManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    const selected = applyClipSelection(manifest, input.keep);
+
+    await atomicWriteUtf8(manifestPath, JSON.stringify(selected.manifest, null, 2) + "\n");
+
+    return {
+      manifestPath,
+      kept: selected.kept,
+      removed: selected.removed,
+    };
+  });
 };

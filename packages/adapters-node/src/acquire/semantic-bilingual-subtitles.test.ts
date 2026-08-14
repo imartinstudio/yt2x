@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatRequest, LlmPort } from "@yt2x/core";
+import { createTechnicalTermGuard, type ChatRequest, type LlmPort } from "@yt2x/core";
 import { auditSubtitleArtifacts } from "./audit-subtitles.js";
 import { parseSubtitleBlocks } from "./video-subtitles.js";
 import {
@@ -60,6 +60,110 @@ const makePipelineLlm = (translations: Record<string, string>): LlmPort => ({
 });
 
 describe("projectSemanticBilingualSubtitles", () => {
+  it("preserves catalog and discovered terms through phase-one translation and final artifacts", async () => {
+    const sourceSrt = `1
+00:00:00,000 --> 00:00:03,000
+Graph Engineering and Knowledge Graph use Orbit Memory.
+`;
+    const guard = createTechnicalTermGuard({
+      sourceText: "Graph Engineering and Knowledge Graph use Orbit Memory.",
+      discoveredTerms: [{
+        sourceText: "Orbit Memory",
+        confidence: "high",
+        category: "ai-agent",
+      }],
+    });
+    const llm: LlmPort = {
+      chat: vi.fn(async (request: ChatRequest) => {
+        const system = request.messages[0]!.content as string;
+        if (request.jsonMode === true) {
+          return { content: JSON.stringify({ cues: [] }), model: "test", finishReason: "stop" };
+        }
+        if (system.includes("专业术语定向修复器")) {
+          return { content: "Graph Engineering 和 Knowledge Graph 使用 Orbit Memory。", model: "test", finishReason: "stop" };
+        }
+        return { content: "图工程和知识图谱使用了它。", model: "test", finishReason: "stop" };
+      }),
+    };
+
+    const result = await projectSemanticBilingualSubtitles({
+      sourceSrt,
+      llm,
+      model: "test-model",
+      measureLayout: fitMeasurement,
+      technicalTermGuard: guard,
+    });
+
+    expect(result.zhSrt).toContain("Graph Engineering");
+    expect(result.zhSrt).toContain("Knowledge Graph");
+    expect(result.zhSrt).toContain("Orbit Memory");
+    expect(result.bilingualSrt).toContain("Graph Engineering");
+    expect(result.bilingualSrt).toContain("Knowledge Graph");
+    expect(result.bilingualSrt).toContain("Orbit Memory");
+    expect(result.technicalTermProfileFingerprint).toBe(guard.profile.profileFingerprint);
+  });
+
+  it("preserves timing and bilingual cue structure after scoped alignment", async () => {
+    const sourceSrt = `1
+00:00:00,000 --> 00:00:03,000
+Knowledge Graph explains
+
+2
+00:00:03,000 --> 00:00:06,000
+Orbit Memory.
+`;
+    const guard = createTechnicalTermGuard({
+      sourceText: "Knowledge Graph explains Orbit Memory.",
+      discoveredTerms: [{ sourceText: "Orbit Memory", confidence: "high", category: "ai" }],
+    });
+    const llm: LlmPort = {
+      chat: vi.fn(async (request: ChatRequest) => {
+        const userContent = request.messages[1]!.content as string;
+        if (request.jsonMode === true) {
+          const payload = JSON.parse(userContent) as unknown;
+          if (Array.isArray(payload)) {
+            return { content: JSON.stringify({ cues: [] }), model: "test", finishReason: "stop" };
+          }
+          return {
+            content: JSON.stringify({
+              pieces: [
+                { throughCue: 1, text: "Knowledge Graph 第一部分" },
+                { throughCue: 2, text: "Orbit Memory 第二部分" },
+              ],
+            }),
+            model: "test",
+            finishReason: "stop",
+          };
+        }
+        return { content: "Knowledge Graph 第一部分 Orbit Memory 第二部分", model: "test", finishReason: "stop" };
+      }),
+    };
+
+    const result = await projectSemanticBilingualSubtitles({
+      sourceSrt,
+      llm,
+      model: "test-model",
+      measureLayout: fitMeasurement,
+      technicalTermGuard: guard,
+    });
+
+    const en = parseSubtitleBlocks(result.enSrt);
+    const zh = parseSubtitleBlocks(result.zhSrt);
+    const bilingual = parseSubtitleBlocks(result.bilingualSrt);
+    expect(en.map((cue) => [cue.start, cue.end])).toEqual([
+      ["00:00:00,000", "00:00:03,000"],
+      ["00:00:03,000", "00:00:06,000"],
+    ]);
+    expect(zh.map((cue) => cue.text.join(""))).toEqual([
+      "Knowledge Graph 第一部分",
+      "Orbit Memory 第二部分",
+    ]);
+    expect(bilingual.map((cue) => [cue.start, cue.end, cue.text])).toEqual([
+      ["00:00:00,000", "00:00:03,000", ["Knowledge Graph 第一部分", "Knowledge Graph explains"]],
+      ["00:00:03,000", "00:00:06,000", ["Orbit Memory 第二部分", "Orbit Memory."]],
+    ]);
+  });
+
   it("translates a single-sentence source and states the Chinese once in the mono artifact", async () => {
     const sourceSrt = `1
 00:00:00,000 --> 00:00:01,500
@@ -1000,6 +1104,22 @@ describe("requestCompactRewrite", () => {
     const result = await requestCompactRewrite("source text", "原来的长翻译", 2, 20, llm, "test-model");
     expect(result).toBeNull();
   });
+
+  it("restores a preserved term when compaction translates it", async () => {
+    const guard = createTechnicalTermGuard({ sourceText: "Knowledge Graph" });
+    const llm = llmReturning(JSON.stringify({ pieces: ["知识图谱"] }));
+    const result = await requestCompactRewrite(
+      "Knowledge Graph",
+      "Knowledge Graph",
+      1,
+      20,
+      llm,
+      "test-model",
+      undefined,
+      guard,
+    );
+    expect(result).toEqual(["Knowledge Graph"]);
+  });
 });
 
 describe("repairSubtitleArtifacts", () => {
@@ -1291,6 +1411,31 @@ describe("compactDenseBlocks", () => {
     };
 
     const result = await compactDenseBlocks(blocks, llm, "test-model");
+
+    expect(result).toEqual(blocks);
+  });
+
+  it("rejects a discovered-term compaction that translates the term", async () => {
+    const dense = "Orbit Memory先保留这个术语，然后继续说明很多内容。";
+    const blocks = [{
+      start: "00:00:00,000",
+      end: "00:00:02,000",
+      zhText: dense,
+      enText: "Orbit Memory carries the context",
+    }];
+    const guard = createTechnicalTermGuard({
+      sourceText: "Orbit Memory carries the context",
+      discoveredTerms: [{ sourceText: "Orbit Memory", confidence: "high", category: "ai" }],
+    });
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({ text: "这个术语先保留，然后继续说明。" }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await compactDenseBlocks(blocks, llm, "test-model", undefined, guard);
 
     expect(result).toEqual(blocks);
   });
@@ -1734,6 +1879,160 @@ describe("requestContentAlignedSplit", () => {
 
     const result = await requestContentAlignedSplit(cues, "第一段第二段", 20, llm, "test-model");
     expect(result).toBeNull();
+  });
+
+  it("cannot replace a preserved term with Chinese during alignment", async () => {
+    const guard = createTechnicalTermGuard({ sourceText: "Knowledge Graph" });
+    const termCues = [
+      cues[0]!,
+      { ...cues[1]!, text: ["second cue text Knowledge Graph"] },
+    ];
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({ pieces: [{ throughCue: 2, text: "知识图谱很好。" }] }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+    const result = await requestContentAlignedSplit(
+      termCues,
+      "Knowledge Graph 很好。",
+      20,
+      llm,
+      "test-model",
+      undefined,
+      guard,
+    );
+    expect(result).toEqual([{ throughCue: 2, zhText: "Knowledge Graph 很好。" }]);
+  });
+
+  it("rejects an alignment compaction that drops the current sentence term", async () => {
+    const overWidth = `Knowledge Graph${"测".repeat(25)}`;
+    const cuesWithTerm = [
+      { start: "00:00:00,000", end: "00:00:02,000", text: ["first cue"] },
+      { start: "00:00:02,000", end: "00:00:04,000", text: ["second cue Knowledge Graph"] },
+    ];
+    const guard = createTechnicalTermGuard({
+      sourceText: "first cue second cue Knowledge Graph",
+    });
+    const llm: LlmPort = {
+      chat: vi.fn(async (request: ChatRequest) => {
+        const userContent = request.messages[1]!.content as string;
+        if (userContent.includes("pieceCount")) {
+          return {
+            content: JSON.stringify({ pieces: ["压缩后丢失术语"] }),
+            model: "test",
+            finishReason: "stop",
+          };
+        }
+        return {
+          content: JSON.stringify({ pieces: [{ throughCue: 2, text: overWidth }] }),
+          model: "test",
+          finishReason: "stop",
+        };
+      }),
+    };
+
+    const result = await requestContentAlignedSplit(
+      cuesWithTerm,
+      overWidth,
+      20,
+      llm,
+      "test-model",
+      undefined,
+      guard,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.map((piece) => piece.zhText).join("")).toContain("Knowledge Graph");
+    expect(result!.map((piece) => piece.zhText).join("")).not.toContain("压缩后丢失术语");
+    expect(result![result!.length - 1]!.throughCue).toBe(2);
+  });
+
+  it("scopes alignment terms to the current sentence across a multi-sentence profile", async () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Knowledge Graph is first. Orbit Memory is second.",
+      discoveredTerms: [{ sourceText: "Orbit Memory", confidence: "high", category: "ai" }],
+    });
+    const firstSentenceCues = [{
+      start: "00:00:00,000",
+      end: "00:00:02,000",
+      text: ["Knowledge Graph is first."],
+    }];
+    const secondSentenceCues = [{
+      start: "00:00:02,000",
+      end: "00:00:04,000",
+      text: ["Orbit Memory is second."],
+    }];
+    const llm: LlmPort = {
+      chat: vi.fn(async (request: ChatRequest) => {
+        const userContent = request.messages[1]!.content as string;
+        const payload = JSON.parse(userContent) as { cues: { text: string }[] };
+        const source = payload.cues.map((cue) => cue.text).join(" ");
+        return {
+          content: JSON.stringify({
+            pieces: [{
+              throughCue: 1,
+              text: source.includes("Knowledge Graph") ? "Knowledge Graph 第一部分" : "Orbit Memory 第二部分",
+            }],
+          }),
+          model: "test",
+          finishReason: "stop",
+        };
+      }),
+    };
+
+    const first = await requestContentAlignedSplit(
+      firstSentenceCues,
+      "Knowledge Graph 第一部分",
+      20,
+      llm,
+      "test-model",
+      undefined,
+      guard,
+    );
+    const second = await requestContentAlignedSplit(
+      secondSentenceCues,
+      "Orbit Memory 第二部分",
+      20,
+      llm,
+      "test-model",
+      undefined,
+      guard,
+    );
+
+    expect(first).toEqual([{ throughCue: 1, zhText: "Knowledge Graph 第一部分" }]);
+    expect(second).toEqual([{ throughCue: 1, zhText: "Orbit Memory 第二部分" }]);
+  });
+
+  it("does not require a term from another source sentence or restore Graph for natural 图", async () => {
+    const guard = createTechnicalTermGuard({
+      sourceText: "Graph Engineering is first. A separate sentence follows.",
+    });
+    const cues = [{
+      start: "00:00:00,000",
+      end: "00:00:02,000",
+      text: ["A separate sentence follows."],
+    }];
+    const llm: LlmPort = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({ pieces: [{ throughCue: 1, text: "什么时候值得用图" }] }),
+        model: "test",
+        finishReason: "stop",
+      })),
+    };
+
+    const result = await requestContentAlignedSplit(
+      cues,
+      "什么时候值得用图",
+      20,
+      llm,
+      "test-model",
+      undefined,
+      guard,
+    );
+
+    expect(result).toEqual([{ throughCue: 1, zhText: "什么时候值得用图" }]);
   });
 });
 

@@ -14,9 +14,70 @@ const fakeArtifacts: VideoDirArtifacts = {
 
 const makeLlm = (
   respond: (req: ChatRequest) => ChatResponse | Promise<ChatResponse>,
-): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(respond(req))) });
+  discoveryResponse = "[]",
+): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(
+  req.messages[0]?.content.includes("术语发现器")
+    ? { content: discoveryResponse, model: "m", finishReason: "stop" }
+    : respond(req),
+)) });
 
 describe("generateNotesContent", () => {
+  it("recovers catalog terms from forbidden Chinese without demanding the discovered term", async () => {
+    const llm = makeLlm(
+      () => ({
+        content: "# 标题\n\n提示工程、上下文工程和图工程会处理知识图谱与代理图谱；潜在工作区路由也很重要。图片、图表和图文不应误报。",
+        model: "m",
+        finishReason: "stop",
+      }),
+      JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+    );
+    const artifacts: VideoDirArtifacts = {
+      ...fakeArtifacts,
+      chunksMd: "Prompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph、Latent Workspace Routing",
+      metadata: { id: "notes-term-guard", title: "Prompt Engineering" },
+    };
+
+    const result = await generateNotesContent({ llm, model: "task3-notes", artifacts });
+
+    expect(result.content).toContain("Prompt Engineering");
+    expect(result.content).toContain("Knowledge Graph");
+    expect(result.content).toContain("图片、图表和图文");
+    expect(result.content).not.toContain("提示工程、上下文工程和图工程");
+    // 发现词只保护不强制：模型没保留它，不再触发修复回合
+    expect(result.content).toContain("潜在工作区路由");
+    expect(llm.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not treat a term the prompt metadata carries as invented", async () => {
+    // 真实踩过：转录里一次没念全名，作者名只在 metadata.channel 里，
+    // 模型照着 prompt 写进笔记，却被判成凭空造词。
+    const llm = makeLlm(() => ({
+      content: "# 标题\n\n这期由 Matt Pocock 讲解。",
+      model: "m",
+      finishReason: "stop",
+    }));
+    const artifacts: VideoDirArtifacts = {
+      ...fakeArtifacts,
+      chunksMd: "Skills, skills, skills. We have yet more skills for you.",
+      timestampedCuesMd: "00:00 — skills",
+      metadata: { id: "notes-metadata-scope", title: "New Skills", channel: "Matt Pocock" },
+    };
+
+    const result = await generateNotesContent({ llm, model: "m", artifacts });
+
+    expect(result.content).toContain("Matt Pocock");
+    // 只进"已知"不进"必需"：没提到作者也不该失败
+    expect(llm.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a discovery audit identity so the notes cache can be reconstructed", async () => {
+    const llm = makeLlm(() => ({ content: "# Title\n\nbody", model: "m", finishReason: "stop" }));
+
+    const result = await generateNotesContent({ llm, model: "m", artifacts: fakeArtifacts });
+
+    expect(result.technicalTermDiscovery.sourceIdentity).toMatch(/^sha256-[0-9a-f]{64}$/u);
+  });
+
   it("sends a system + user message and returns trimmed content", async () => {
     const llm = makeLlm((req) => {
       expect(req.messages).toHaveLength(2);

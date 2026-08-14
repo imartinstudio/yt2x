@@ -25,10 +25,11 @@ const seedArtifacts = async (): Promise<{ articleRoot: string; videoId: string }
   await writeFile(
     path.join(dubDir, "dub-script.json"),
     JSON.stringify({
-      version: 2,
+      version: 3,
       videoId,
       sourceWords: "video/full.local.en.words.json",
       rewriteModel: "m",
+      technicalTermProfileFingerprint: "fnv1a-replay-profile",
       droppedCount: 0,
       lines,
     }),

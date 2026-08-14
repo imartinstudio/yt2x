@@ -59,6 +59,17 @@ export const DeconstructLlmOutputSchema = z.object({
 
 export type DeconstructLlmOutput = z.infer<typeof DeconstructLlmOutputSchema>;
 
+export const ClipSourceContextSchema = z.object({
+  title: z.string(),
+  summary: z.string(),
+  keyQuote: z.string(),
+  videoScript: z.string(),
+  articleSection: z.string(),
+  articleBody: z.string(),
+});
+
+export type ClipSourceContext = z.infer<typeof ClipSourceContextSchema>;
+
 /** 单个候选的持久化格式（manifest 用） */
 export const ClipEntrySchema = z.object({
   id: z.string(),
@@ -80,6 +91,7 @@ export const ClipEntrySchema = z.object({
   viralHook: z.string().optional(),
   nextTeaser: z.string().optional().describe("下一集预告文案"),
   postTitle: z.string().optional().describe("LLM 生成的帖子标题"),
+  sourceContext: ClipSourceContextSchema.optional().describe("候选片段用于术语发现和最终校验的原始源字段"),
 });
 
 export type ClipEntry = z.infer<typeof ClipEntrySchema>;

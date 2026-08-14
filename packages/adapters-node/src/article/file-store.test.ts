@@ -77,30 +77,45 @@ describe("writeNativeArticleBundle", () => {
   it("writes article.md and run.json atomically", async () => {
     await seedNotesVideo("v1");
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
+      technicalTermDiscovery: {
+        promptVersion: "technical-term-discovery-v1",
+        sourceIdentity: "sha256-source",
+        acceptedCandidates: [],
+        reviewCandidates: [],
+        warnings: [],
+      },
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "# A\n\nok", run);
     expect(await readFile(w.articlePath, "utf8")).toBe("# A\n\nok");
-    const parsed = JSON.parse(await readFile(w.runPath, "utf8")) as { model: string };
+    const parsed = JSON.parse(await readFile(w.runPath, "utf8")) as {
+      model: string;
+      technicalTermProfileFingerprint: string;
+      technicalTermDiscovery: { sourceIdentity: string };
+    };
     expect(parsed.model).toBe("m");
+    expect(parsed.technicalTermProfileFingerprint).toBe("fnv1a-test");
+    expect(parsed.technicalTermDiscovery.sourceIdentity).toBe("sha256-source");
   });
 
   it("returns null when file exists without --force", async () => {
     await seedNotesVideo("v1");
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     await writeNativeArticleBundle(articleRoot, "v1", "one", run);
     const result = await writeNativeArticleBundle(articleRoot, "v1", "two", run);
@@ -110,13 +125,14 @@ describe("writeNativeArticleBundle", () => {
   it("copies cover from screenshots when notesVideoDir passed", async () => {
     await seedNotesVideo("v1", { shot: Buffer.from([0x52, 0x49, 0x46, 0x46]) });
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
       notesVideoDir: path.join(notesRoot, "v1"),
@@ -132,13 +148,14 @@ describe("writeNativeArticleBundle", () => {
     await writeFile(path.join(screenshotsDir, "youtube_cover.jpg"), Buffer.from([0xff, 0xd8, 0xff]));
 
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
       notesVideoDir: dir,
@@ -154,13 +171,14 @@ describe("writeNativeArticleBundle", () => {
       clip: Buffer.from("fake mp4"),
     });
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const body = "# **标题**\n\n导语。\n\n## **第一节**\n\n正文。\n\n#话题一 #话题二 #TopicThree";
     const w = await writeNativeArticleBundle(articleRoot, "v1", body, run, {
@@ -196,13 +214,14 @@ describe("writeNativeArticleBundle cover fallback", () => {
     await writeFile(path.join(screenshotsDir, "contact_sheet.jpg"), Buffer.from([0xff, 0xd8]));
 
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
       notesVideoDir: dir,
@@ -218,13 +237,14 @@ describe("writeNativeArticleBundle cover fallback", () => {
     await writeFile(path.join(screenshotsDir, "scene_03.webp"), Buffer.from([0x52, 0x49]));
 
     const run = {
-      v: 1 as const,
+      v: 3 as const,
       platform: "x" as const,
       videoId: "v1",
       model: "m",
       finishReason: "stop",
       generatedAt: new Date().toISOString(),
       durationMs: 1,
+      technicalTermProfileFingerprint: "fnv1a-test",
     };
     const w = await writeNativeArticleBundle(articleRoot, "v1", "x", run, {
       notesVideoDir: dir,
@@ -266,12 +286,12 @@ describe("writeVisualSuggestions", () => {
 });
 
 describe("findPendingNativeArticleDirs", () => {
-  it("lists dirs with notes but no destination article.md", async () => {
+  it("lists dirs with notes even when a destination article.md already exists", async () => {
     await seedNotesVideo("a");
     await seedNotesVideo("b");
     await mkdir(path.join(articleRoot, "b"), { recursive: true });
     await writeFile(path.join(articleRoot, "b", "article.md"), "done");
     const pending = await findPendingNativeArticleDirs(notesRoot, articleRoot);
-    expect(pending).toEqual([path.join(notesRoot, "a")]);
+    expect(pending).toEqual([path.join(notesRoot, "a"), path.join(notesRoot, "b")]);
   });
 });

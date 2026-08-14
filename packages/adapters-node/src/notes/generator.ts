@@ -1,9 +1,23 @@
 import {
+  appendTechnicalTermRuleToSystemPrompt,
+  createTechnicalTermGuard,
+  hasHardTechnicalTermViolations,
   getNotesSystemPrompt,
   buildNotesUserPrompt,
-  restoreProtectedTechnicalTermsInContent,
+  type FinalizedTechnicalTermValue,
   type LlmPort,
 } from "@yt2x/core";
+import {
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  notesContentSourceFor,
+  notesKnownSourceTextFor,
+} from "../content-cache.js";
 import type { VideoDirArtifacts } from "./file-store.js";
 
 export type GenerateNotesInput = {
@@ -21,10 +35,16 @@ export type GenerateNotesInput = {
 export type GenerateNotesResult = {
   content: string;
   model: string;
+  requestedModel: string;
+  resolvedModel: string;
   finishReason: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
   durationMs: number;
+  sourceFingerprint: string;
+  promptVersion: string;
+  technicalTermProfileFingerprint: string;
+  technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
 };
 
 /**
@@ -38,18 +58,67 @@ export const generateNotesContent = async (
   input: GenerateNotesInput,
 ): Promise<GenerateNotesResult> => {
   const promptOpts = { outputLanguage: input.outputLanguage ?? "zh" as const };
-  const userPrompt = buildNotesUserPrompt({
+  const sourceText = `${input.artifacts.chunksMd}\n${input.artifacts.timestampedCuesMd}`;
+  const sourceTitle = input.artifacts.metadata.title ?? "";
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  // 审计必须带上 sourceIdentity：内容缓存用它写 known/required 源指纹，
+  // 缺了就退化成空串，笔记每次都会重算。
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
+  // 已知范围必须覆盖 prepare() 递给模型的全部材料，否则只在 metadata 里出现的词
+  // （作者名、频道名）一旦被写进输出就会被判成凭空造词。必需范围仍然只有转录，
+  // 所以 metadata 里的词是"允许出现、不要求出现"。
+  const fullGuard = createTechnicalTermGuard({
+    sourceText: notesKnownSourceTextFor(input.artifacts),
+    sourceTitle,
+    discoveredTerms: discovery.accepted,
+    discovery: discoveryAudit,
+  });
+  const guard = fullGuard.scope(sourceText, sourceTitle);
+  const prepared = guard.prepare({
     metadata: input.artifacts.metadata,
     chunksMd: input.artifacts.chunksMd,
     timestampedCuesMd: input.artifacts.timestampedCuesMd,
     screenshots: input.artifacts.screenshots ?? null,
-  }, promptOpts);
+  });
+  const userPrompt = buildNotesUserPrompt(prepared.value, promptOpts);
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(
+    getNotesSystemPrompt(promptOpts),
+    prepared.promptRule,
+  );
+
+  const finalize = async (
+    value: string,
+  ): Promise<FinalizedTechnicalTermValue<string>> => {
+    let finalized = guard.finalize(value, prepared.restoration);
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      finalized = await repairTechnicalTermViolations({
+        llm: input.llm,
+        model: input.model,
+        guard,
+        currentValue: finalized.value,
+        restoration: prepared.restoration,
+        violations: finalized.violations,
+        parseResponse: (content) => stripCodeFenceWrapper(content.trim()),
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+    }
+    if (hasHardTechnicalTermViolations(finalized.violations)) {
+      throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+    }
+    return finalized;
+  };
 
   const t0 = Date.now();
   const resp = await input.llm.chat({
     model: input.model,
     messages: [
-      { role: "system", content: getNotesSystemPrompt(promptOpts) },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
     temperature: input.temperature ?? 0.3,
@@ -67,18 +136,25 @@ export const generateNotesContent = async (
   } catch {
     // Keep original content if import/processing fails
   }
-  content = restoreProtectedTechnicalTermsInContent(
-    content,
-    `${input.artifacts.chunksMd}\n${input.artifacts.timestampedCuesMd}`,
-    input.artifacts.metadata.title,
-  );
+  content = (await finalize(content)).value;
 
   const result: GenerateNotesResult = {
     content,
     model: resp.model,
+    requestedModel: input.model,
+    resolvedModel: resp.model,
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
+    sourceFingerprint: contentSourceFingerprintFor(notesContentSourceFor({
+      metadata: input.artifacts.metadata,
+      chunksMd: input.artifacts.chunksMd,
+      timestampedCuesMd: input.artifacts.timestampedCuesMd,
+      screenshots: input.artifacts.screenshots,
+    })),
+    promptVersion: CONTENT_PROMPT_VERSIONS.notes,
+    technicalTermProfileFingerprint: guard.profile.profileFingerprint,
+    technicalTermDiscovery: discoveryAudit,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

@@ -42,10 +42,11 @@ const WORDS = JSON.stringify([
 ]);
 
 const script: DubScript = {
-  version: 2,
+  version: 3,
   videoId: "<videoId>",
   sourceWords: "video/full.local.en.words.json",
   rewriteModel: "test-model",
+  technicalTermProfileFingerprint: "fnv1a-test-profile",
   lines: [
     {
       index: 1,
@@ -253,7 +254,7 @@ describe("writers", () => {
     await expect(readDubTimingReport(dubDir)).rejects.toThrow(/Invalid dub-timing\.json/);
   });
 
-  it("rejects a pre-PR3 (version 1) dub-script.json instead of silently reusing it", async () => {
+  it("rejects a legacy version-1 dub-script.json instead of silently reusing it", async () => {
     const dubDir = path.join(await tmpRoot(), "dub");
     await mkdir(dubDir, { recursive: true });
     // 旧链路的产物：sourceSubtitle/中文 sourceText，字段形状与新 schema 不兼容。
@@ -268,7 +269,9 @@ describe("writers", () => {
       }),
       "utf8",
     );
-    await expect(readDubScript(dubDir)).rejects.toThrow(/Invalid or incompatible dub-script\.json/);
+    await expect(readDubScript(dubDir)).rejects.toThrow(
+      /legacy dubbing cache from before the current technical-term profile/,
+    );
   });
 
   it("rejects a dub-script.json that fails schema validation even at version 2", async () => {
@@ -280,6 +283,17 @@ describe("writers", () => {
       "utf8",
     );
     await expect(readDubScript(dubDir)).rejects.toThrow(/Invalid or incompatible dub-script\.json/);
+  });
+
+  it("rejects a complete version 2 script as a cache miss after the terminology schema bump", async () => {
+    const dubDir = path.join(await tmpRoot(), "dub");
+    await mkdir(dubDir, { recursive: true });
+    await writeFile(
+      path.join(dubDir, DUB_SCRIPT_FILE),
+      JSON.stringify({ ...script, version: 2 }),
+      "utf8",
+    );
+    await expect(readDubScript(dubDir)).rejects.toThrow(/expected schema version 3/);
   });
 
   it("overwrites an existing artifact atomically", async () => {

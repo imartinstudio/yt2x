@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
 import {
+  createTechnicalTermGuard,
   findProtectedSpans,
+  hasHardTechnicalTermViolations,
   PROTECTED_GLOSSARY_TERMS,
   PROTECTED_NAMES,
   PROTECTED_TERMS,
+  type TechnicalTermGuard,
+  type TechnicalTermRestoration,
   type LlmPort,
 } from "@yt2x/core";
+import { repairTechnicalTermViolations } from "../technical-terms/discovery.js";
 import type { SubtitleAuditIssue } from "./audit-subtitles.js";
 import { parseSubtitleBlocks, serializeSrtBlocks } from "./video-subtitles.js";
 
@@ -45,6 +50,7 @@ export type SemanticBilingualProjection = {
   zhSrt: string;
   bilingualSrt: string;
   sourceSha256: string;
+  technicalTermProfileFingerprint: string;
   groups: SemanticSubtitleGroup[];
 };
 
@@ -62,6 +68,8 @@ export type SemanticProjectionOptions = {
    * installed — the pipeline degrades to the proportional guess.
    */
   wordTimings?: readonly WordTiming[];
+  /** Full-source technical-term guard discovered once by the caller. */
+  technicalTermGuard?: TechnicalTermGuard;
 };
 
 export type SemanticProjectionErrorCode =
@@ -84,6 +92,61 @@ const sha256 = (value: string): string => createHash("sha256").update(value).dig
 
 const normalizeText = (lines: readonly string[]): string =>
   lines.join(" ").replace(/\s+/gu, " ").trim();
+
+type SemanticTextFinalizer = (
+  sourceText: string,
+  candidate: string,
+) => Promise<string | null>;
+
+const scopeTechnicalTermGuard = (
+  guard: TechnicalTermGuard,
+  sourceText: string,
+): TechnicalTermGuard => {
+  const discoveredTerms = guard.profile.entries
+    .filter((entry) => {
+      const pattern = new RegExp(
+        `(?<![A-Za-z0-9])${entry.sourceText.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}(?![A-Za-z0-9])`,
+        "iu",
+      );
+      return pattern.test(sourceText);
+    })
+    .map((entry) => ({
+      sourceText: entry.sourceText,
+      confidence: "high" as const,
+      category: "domain" as const,
+    }));
+  // 每条 cue 都是 1:1 翻译单元：显式声明 unit 作用域，源句里的发现词必须落进译文，
+  // 否则会退化成摘要级的宽松判定。
+  return createTechnicalTermGuard({ sourceText, discoveredTerms, sourceUnitId: `bilingual-cue:${sourceText}` });
+};
+
+const finalizeSemanticText = async (input: {
+  sourceText: string;
+  candidate: string;
+  guard: TechnicalTermGuard;
+  restoration: TechnicalTermRestoration;
+  llm: LlmPort;
+  model: string;
+  signal?: AbortSignal;
+  repairState: { used: boolean };
+}): Promise<string | null> => {
+  const scopedGuard = scopeTechnicalTermGuard(input.guard, input.sourceText);
+  const finalized = scopedGuard.finalize(input.candidate, input.restoration);
+  if (!hasHardTechnicalTermViolations(finalized.violations)) return finalized.value;
+  if (input.repairState.used) return null;
+  input.repairState.used = true;
+  const repaired = await repairTechnicalTermViolations({
+    llm: input.llm,
+    model: input.model,
+    guard: scopedGuard,
+    currentValue: finalized.value,
+    restoration: input.restoration,
+    violations: finalized.violations,
+    parseResponse: (content) => content.trim(),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  });
+  return hasHardTechnicalTermViolations(repaired.violations) ? null : repaired.value;
+};
 
 // ── Concurrency helper (multi-agent worker pool) ──
 
@@ -471,7 +534,15 @@ const nudgeOutOfProtectedSpans = (
   return Math.max(4, Math.min(splitAt, remainingLength - 2));
 };
 
-export const splitLongZh = (zh: string, partCount: number): string[] => {
+const protectedTermsForGuard = (guard: TechnicalTermGuard): string[] => [
+  ...guard.profile.entries.flatMap((term) => [term.canonical, term.sourceText]),
+];
+
+export const splitLongZh = (
+  zh: string,
+  partCount: number,
+  technicalTermGuard?: TechnicalTermGuard,
+): string[] => {
   if (partCount <= 1) return [zh];
   const parts: string[] = [];
   let remaining = zh;
@@ -489,7 +560,14 @@ export const splitLongZh = (zh: string, partCount: number): string[] => {
       }
       if (found) break;
     }
-    splitAt = nudgeOutOfProtectedSpans(splitAt, findProtectedSpans(remaining), remaining.length);
+    splitAt = nudgeOutOfProtectedSpans(
+      splitAt,
+      findProtectedSpans(
+        remaining,
+        technicalTermGuard === undefined ? undefined : protectedTermsForGuard(technicalTermGuard),
+      ),
+      remaining.length,
+    );
     parts.push(remaining.slice(0, splitAt).trim());
     remaining = remaining.slice(splitAt).trim();
   }
@@ -518,19 +596,23 @@ export const visualWidth = (text: string): number => {
  * fallback when no seam exists), so this always terminates and never drops
  * content — every recursive call halves the offending part's width.
  */
-export const enforceHardCeiling = (parts: readonly string[], hardLimit: number): string[] => {
+export const enforceHardCeiling = (
+  parts: readonly string[],
+  hardLimit: number,
+  technicalTermGuard?: TechnicalTermGuard,
+): string[] => {
   const result: string[] = [];
   for (const part of parts) {
     if (visualWidth(part) <= hardLimit) {
       result.push(part);
       continue;
     }
-    const halves = splitLongZh(part, 2);
+    const halves = splitLongZh(part, 2, technicalTermGuard);
     if (halves.length < 2) {
       result.push(part); // unsplittable (e.g. a single unbreakable token)
       continue;
     }
-    result.push(...enforceHardCeiling(halves, hardLimit));
+    result.push(...enforceHardCeiling(halves, hardLimit, technicalTermGuard));
   }
   return result;
 };
@@ -770,8 +852,10 @@ export const requestCompactRewrite = async (
   llm: LlmPort,
   model: string,
   signal?: AbortSignal,
+  technicalTermGuard?: TechnicalTermGuard,
 ): Promise<string[] | null> => {
   try {
+    const prepared = technicalTermGuard?.prepare(currentTranslation);
     const resp = await llm.chat({
       model,
       messages: [
@@ -787,7 +871,11 @@ export const requestCompactRewrite = async (
         },
         {
           role: "user",
-          content: JSON.stringify({ source: sourceText, currentTranslation, pieceCount }),
+          content: JSON.stringify({
+            source: sourceText,
+            currentTranslation: prepared?.value ?? currentTranslation,
+            pieceCount,
+          }),
         },
       ],
       temperature: 0.1,
@@ -801,7 +889,18 @@ export const requestCompactRewrite = async (
     if (!parsed.pieces.every((p): p is string => typeof p === "string" && p.trim().length > 0)) {
       return null;
     }
-    const pieces = parsed.pieces;
+    const pieces = technicalTermGuard === undefined
+      ? parsed.pieces
+      : (() => {
+          const finalized = technicalTermGuard.finalize(
+            parsed.pieces,
+            prepared?.restoration ?? { placeholders: [] },
+          );
+          return hasHardTechnicalTermViolations(finalized.violations)
+            ? null
+            : finalized.value;
+        })();
+    if (pieces === null) return null;
     if (pieces.some((p) => visualWidth(p) > hardLimit)) return null;
     return pieces;
   } catch {
@@ -1000,6 +1099,7 @@ export const mergeBriefBlocks = <T extends MergeableBlock>(
 export const splitWideBlocks = <T extends MergeableBlock>(
   blocks: readonly T[],
   hardLimit: number,
+  technicalTermGuard?: TechnicalTermGuard,
 ): T[] => {
   const result = blocks.map((b) => ({ ...b }));
   // Each part carved out below is distinct content, even when two of them
@@ -1013,8 +1113,9 @@ export const splitWideBlocks = <T extends MergeableBlock>(
     if (width <= hardLimit) continue;
 
     const parts = enforceHardCeiling(
-      splitLongZh(span.zhText, Math.ceil(width / TARGET_CJK)),
+      splitLongZh(span.zhText, Math.ceil(width / TARGET_CJK), technicalTermGuard),
       hardLimit,
+      technicalTermGuard,
     );
     if (parts.length < 2 || span.indices.length < parts.length) continue;
 
@@ -1113,6 +1214,8 @@ export const compactDenseBlocks = async <T extends MergeableBlock>(
   llm: LlmPort,
   model: string,
   signal?: AbortSignal,
+  technicalTermGuard?: TechnicalTermGuard,
+  finalizeText?: SemanticTextFinalizer,
 ): Promise<T[]> => {
   const result = blocks.map((b) => ({ ...b }));
   // Span-based for the same reason mergeBriefBlocks is: a run of consecutive
@@ -1138,17 +1241,31 @@ export const compactDenseBlocks = async <T extends MergeableBlock>(
       signal,
     );
     if (compact === null) continue;
+    const sourceScopedGuard = technicalTermGuard === undefined
+      ? undefined
+      : scopeTechnicalTermGuard(technicalTermGuard, sourceText);
+    const prepared = sourceScopedGuard?.prepare(span.zhText);
+    let acceptedCompact = sourceScopedGuard === undefined
+      ? compact
+      : sourceScopedGuard.finalize(compact, prepared?.restoration ?? { placeholders: [] }).value;
+    if (finalizeText !== undefined) {
+      const repaired = await finalizeText(sourceText, acceptedCompact);
+      if (repaired === null) continue;
+      acceptedCompact = repaired;
+    }
     // A compaction that drops a protected term the current text already has
     // is worse than the cps violation it was trying to fix — content
     // correctness outranks reading speed (matches the audit's own
     // content-vs-presentation severity split). requestCpsCompactRewrite's
     // own prompt asks it not to do this, but real runs occasionally do
     // anyway; reject rather than accept a shorter but term-violating rewrite.
-    const requiredTerms = PROTECTED_TERMS.filter((term) => span.zhText.includes(term));
-    if (requiredTerms.some((term) => !compact.includes(term))) continue;
-    if (visualWidth(compact) < currentWidth) {
+    const requiredTerms = sourceScopedGuard?.profile.entries
+      .filter((term) => span.zhText.includes(term.canonical))
+      .map((term) => term.canonical) ?? PROTECTED_TERMS.filter((term) => span.zhText.includes(term));
+    if (requiredTerms.some((term) => !acceptedCompact.includes(term))) continue;
+    if (visualWidth(acceptedCompact) < currentWidth) {
       for (const idx of span.indices) {
-        result[idx] = { ...result[idx]!, zhText: compact };
+        result[idx] = { ...result[idx]!, zhText: acceptedCompact };
       }
     }
   }
@@ -1229,11 +1346,24 @@ const repairMissingTermsInBlocks = async <T extends MergeableBlock>(
   llm: LlmPort,
   model: string,
   signal?: AbortSignal,
+  technicalTermGuard?: TechnicalTermGuard,
+  repairState: { used: boolean } = { used: false },
 ): Promise<T[]> => {
   const result = blocks.map((b) => ({ ...b }));
   for (const span of buildIdenticalTextSpans(result)) {
     const enText = span.indices.map((idx) => result[idx]!.enText).join(" ");
-    const fixed = await ensureProtectedTermsPreserved(enText, span.zhText, llm, model, signal);
+    const fixed = technicalTermGuard === undefined
+      ? await ensureProtectedTermsPreserved(enText, span.zhText, llm, model, signal)
+      : await finalizeSemanticText({
+          sourceText: enText,
+          candidate: span.zhText,
+          guard: technicalTermGuard,
+          restoration: scopeTechnicalTermGuard(technicalTermGuard, enText).prepare(enText).restoration,
+          llm,
+          model,
+          ...(signal === undefined ? {} : { signal }),
+          repairState,
+        }) ?? span.zhText;
     if (fixed !== span.zhText) {
       for (const idx of span.indices) {
         result[idx] = { ...result[idx]!, zhText: fixed };
@@ -1280,6 +1410,7 @@ export const repairSubtitleArtifacts = async (input: {
   llm: LlmPort;
   model: string;
   signal?: AbortSignal;
+  technicalTermGuard?: TechnicalTermGuard;
 }): Promise<SubtitleRepairResult> => {
   const enCues = parseSubtitleBlocks(input.enSrt);
   const zhCues = parseSubtitleBlocks(input.zhSrt);
@@ -1294,12 +1425,42 @@ export const repairSubtitleArtifacts = async (input: {
     zhText: zhCues[i]!.text.join(" "),
   }));
 
-  let blocks = await repairMissingTermsInBlocks(original, input.llm, input.model, input.signal);
+  const repairState = { used: false };
+  let blocks = await repairMissingTermsInBlocks(
+    original,
+    input.llm,
+    input.model,
+    input.signal,
+    input.technicalTermGuard,
+    repairState,
+  );
   // Before the reading-speed pass: splitting a wide run shortens each cue's
   // text without changing the run's total duration, so cps is measured on
   // what will actually be displayed. Deterministic, so it costs no tokens.
-  blocks = splitWideBlocks(blocks, HARD_CJK);
-  blocks = await compactDenseBlocks(blocks, input.llm, input.model, input.signal);
+  blocks = splitWideBlocks(blocks, HARD_CJK, input.technicalTermGuard);
+  const finalizeText: SemanticTextFinalizer | undefined = input.technicalTermGuard === undefined
+    ? undefined
+    : async (sourceText, candidate) => {
+        const scoped = scopeTechnicalTermGuard(input.technicalTermGuard!, sourceText);
+        return finalizeSemanticText({
+          sourceText,
+          candidate,
+          guard: input.technicalTermGuard!,
+          restoration: scoped.prepare(sourceText).restoration,
+          llm: input.llm,
+          model: input.model,
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+          repairState,
+        });
+      };
+  blocks = await compactDenseBlocks(
+    blocks,
+    input.llm,
+    input.model,
+    input.signal,
+    input.technicalTermGuard,
+    finalizeText,
+  );
   blocks = fixFlashCues(blocks);
 
   const changed = blocks.some(
@@ -1351,9 +1512,16 @@ export const requestContentAlignedSplit = async (
   llm: LlmPort,
   model: string,
   signal?: AbortSignal,
+  technicalTermGuard?: TechnicalTermGuard,
+  finalizeText?: SemanticTextFinalizer,
 ): Promise<ContentAlignedPiece[] | null> => {
   if (cues.length === 0) return null;
   try {
+    const alignmentSourceText = cues.map((cue) => normalizeText(cue.text)).join(" ");
+    const alignmentGuard = technicalTermGuard === undefined
+      ? undefined
+      : scopeTechnicalTermGuard(technicalTermGuard, alignmentSourceText);
+    const prepared = alignmentGuard?.prepare(zhFull);
     const resp = await llm.chat({
       model,
       messages: [
@@ -1388,7 +1556,7 @@ export const requestContentAlignedSplit = async (
         {
           role: "user",
           content: JSON.stringify({
-            zhTranslation: zhFull,
+            zhTranslation: prepared?.value ?? zhFull,
             cues: cues.map((c, i) => ({ idx: i + 1, text: normalizeText(c.text) })),
           }),
         },
@@ -1420,6 +1588,26 @@ export const requestContentAlignedSplit = async (
       prevThrough = throughCue;
     }
     if (prevThrough !== cues.length) return null; // must cover every cue, exactly once
+
+    if (alignmentGuard !== undefined) {
+      const finalized = alignmentGuard.finalize(
+        rawPieces,
+        prepared?.restoration ?? { placeholders: [] },
+      );
+      if (hasHardTechnicalTermViolations(finalized.violations)) return null;
+      for (let index = 0; index < rawPieces.length; index += 1) {
+        rawPieces[index] = {
+          ...rawPieces[index]!,
+          zhText: finalized.value[index]!.zhText,
+        };
+      }
+    } else if (finalizeText !== undefined) {
+      const repaired = await finalizeText(
+        cues.map((cue) => normalizeText(cue.text)).join(" "),
+        rawPieces.map((piece) => piece.zhText).join(""),
+      );
+      if (repaired === null) return null;
+    }
 
     // Guard against gross content drift (dropped or invented text) rather
     // than a genuine split: the reconstructed pieces should be comparable in
@@ -1463,6 +1651,9 @@ export const requestContentAlignedSplit = async (
         .slice(cueCursor, raw.throughCue)
         .map((c) => normalizeText(c.text))
         .join(" ");
+      const pieceGuard = technicalTermGuard === undefined
+        ? undefined
+        : scopeTechnicalTermGuard(technicalTermGuard, pieceSourceText);
       const compact = await requestCompactRewrite(
         pieceSourceText,
         raw.zhText,
@@ -1471,6 +1662,7 @@ export const requestContentAlignedSplit = async (
         llm,
         model,
         signal,
+        pieceGuard,
       );
       const rewritten = compact !== null && compact.length === 1 ? compact[0]! : raw.zhText;
       if (visualWidth(rewritten) <= hardLimit) {
@@ -1481,8 +1673,9 @@ export const requestContentAlignedSplit = async (
 
       const span = raw.throughCue - cueCursor;
       const subParts = enforceHardCeiling(
-        splitLongZh(rewritten, Math.ceil(visualWidth(rewritten) / TARGET_CJK)),
+        splitLongZh(rewritten, Math.ceil(visualWidth(rewritten) / TARGET_CJK), pieceGuard),
         hardLimit,
+        pieceGuard,
       );
       if (subParts.length > 1 && span >= subParts.length) {
         // `allocateCuesByWeight` sums to exactly `span`, so the last
@@ -1559,6 +1752,25 @@ export const projectSemanticBilingualSubtitles = async (
       "source SRT contains no cues",
     );
   }
+  const fullSourceText = cues.map((cue) => normalizeText(cue.text)).join(" ");
+  const technicalTermGuard = opts.technicalTermGuard ?? createTechnicalTermGuard({
+    sourceText: fullSourceText,
+  });
+  const repairState = { used: false };
+  const finalizeText: SemanticTextFinalizer = async (sourceText, candidate) => {
+    const scopedGuard = scopeTechnicalTermGuard(technicalTermGuard, sourceText);
+    const prepared = scopedGuard.prepare(sourceText);
+    return finalizeSemanticText({
+      sourceText,
+      candidate,
+      guard: technicalTermGuard,
+      restoration: prepared.restoration,
+      llm: opts.llm,
+      model: opts.model,
+      ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+      repairState,
+    });
+  };
 
   // YouTube captions may have unsorted/overlapping timestamps. Fix before processing.
   const sortedCues = [...cues].sort(
@@ -1613,6 +1825,8 @@ export const projectSemanticBilingualSubtitles = async (
     sentenceCues,
     TRANSLATION_CONCURRENCY,
     async (sentence) => {
+      const sentenceGuard = scopeTechnicalTermGuard(technicalTermGuard, sentence.enText);
+      const prepared = sentenceGuard.prepare(sentence.enText);
       const resp = await opts.llm.chat({
         model: opts.model,
         messages: [
@@ -1621,9 +1835,7 @@ export const projectSemanticBilingualSubtitles = async (
             content:
               "Translate this English sentence to natural Simplified Chinese. " +
               "Return ONLY the Chinese text — no explanation.\n\n" +
-              "CRITICAL — NEVER translate these, keep exactly as-is:\n" +
-              `${PROTECTED_GLOSSARY_TERMS.join(", ")}\n` +
-              `NEVER translate names: ${PROTECTED_NAMES.join(", ")}\n` +
+              `${prepared.promptRule}\n` +
               "Use conversational Chinese. Use 你 for 'you'. ≤30 Chinese characters.",
           },
           { role: "user", content: sentence.enText },
@@ -1632,13 +1844,17 @@ export const projectSemanticBilingualSubtitles = async (
         maxTokens: 512,
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       });
-      return ensureProtectedTermsPreserved(
-        sentence.enText,
-        resp.content.trim(),
-        opts.llm,
-        opts.model,
-        opts.signal,
-      );
+      const finalized = await finalizeSemanticText({
+        sourceText: sentence.enText,
+        candidate: resp.content.trim(),
+        guard: technicalTermGuard,
+        restoration: prepared.restoration,
+        llm: opts.llm,
+        model: opts.model,
+        ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+        repairState,
+      });
+      return finalized ?? resp.content.trim();
     },
   );
 
@@ -1693,6 +1909,8 @@ export const projectSemanticBilingualSubtitles = async (
         opts.llm,
         opts.model,
         opts.signal,
+        technicalTermGuard,
+        finalizeText,
       );
 
       let parts: string[];
@@ -1709,12 +1927,20 @@ export const projectSemanticBilingualSubtitles = async (
       } else {
         // Content-aligned split unavailable — fall back to the
         // weight-proportional path.
-        parts = enforceHardCeiling(splitLongZh(zhFull, targetPieceCount), HARD_CJK);
+        parts = enforceHardCeiling(
+          splitLongZh(zhFull, targetPieceCount, technicalTermGuard),
+          HARD_CJK,
+          technicalTermGuard,
+        );
         if (workingCues.length < parts.length) {
           // Couldn't grow enough cues for the ideal split — re-target the
           // split to the cue count actually available, still hard-ceiling
           // checked (a naive tail-merge here could recreate an oversized part).
-          parts = enforceHardCeiling(splitLongZh(zhFull, workingCues.length), HARD_CJK);
+          parts = enforceHardCeiling(
+            splitLongZh(zhFull, workingCues.length, technicalTermGuard),
+            HARD_CJK,
+            technicalTermGuard,
+          );
           if (parts.length > workingCues.length) {
             // Even a deterministic recut can't fit the cues actually
             // available — ask the LLM for a more compact rephrasing (BaoCut's
@@ -1728,6 +1954,7 @@ export const projectSemanticBilingualSubtitles = async (
               opts.llm,
               opts.model,
               opts.signal,
+              technicalTermGuard,
             );
             if (rewritten !== null) {
               parts = rewritten;
@@ -1791,11 +2018,18 @@ export const projectSemanticBilingualSubtitles = async (
   // File-wide width backstop: nothing may leave this function over the hard
   // ceiling it splits against. Runs before the reading-speed pass so cps is
   // measured on the text that will actually be displayed.
-  const fittedBlocks = splitWideBlocks(mergedBlocks, HARD_CJK);
+  const fittedBlocks = splitWideBlocks(mergedBlocks, HARD_CJK, technicalTermGuard);
 
   // Whatever still reads too fast after merging (merging alone is capped by
   // the width budget) gets one targeted compact rewrite.
-  const finalBlocks = await compactDenseBlocks(fittedBlocks, opts.llm, opts.model, opts.signal);
+  const finalBlocks = await compactDenseBlocks(
+    fittedBlocks,
+    opts.llm,
+    opts.model,
+    opts.signal,
+    technicalTermGuard,
+    finalizeText,
+  );
 
   // Build per-cue bilingual SRT from valid blocks.
   const bilingualSrt = serializeSrtBlocks(
@@ -1830,6 +2064,7 @@ export const projectSemanticBilingualSubtitles = async (
     zhSrt,
     bilingualSrt,
     sourceSha256,
+    technicalTermProfileFingerprint: technicalTermGuard.profile.profileFingerprint,
     groups: [], // per-cue alignment — no semantic groups to return
   };
 };

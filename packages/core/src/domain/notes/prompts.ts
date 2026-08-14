@@ -1,13 +1,10 @@
+import { TECHNICAL_TERM_GENERAL_RULE } from "../technical-term-catalog.js";
 import type { NotesPromptInput, NotesPromptOptions, YouTubeMetadata } from "./types.js";
 
-const TECHNICAL_TERMS_RULE_ZH =
-  "专业术语保护（硬性规则）：原材料中出现的技术专有名词、方法名、框架名、模型名、产品名、命令、API 名、代码标识和可复制英文 prompt，必须按原文逐字保留，不得翻译、音译或本地化。例如原材料中的 `Prompt Engineering`、`Context Engineering`、`Graph Engineering`、`Knowledge Graph`、`Agent Graph` 必须原样出现；当「图」表示 graph 概念时，必须写成 `Graph`，例如 `Graph 的基本词汇`、`什么时候值得用 Graph`、`构建你的第一个 Graph`。如需中文解释，只能写成 `Prompt Engineering（提示工程）` 这类中英并列形式，不能只写中文术语。不得凭空加入原材料没有的术语。";
-
-const TECHNICAL_TERMS_RULE_EN =
-  "If the source contains technical terms, method names, framework names, model names, product names, commands, API names, code identifiers, or copyable English prompts, preserve their exact original spelling. Never translate, transliterate, or localize them. For example, keep `Prompt Engineering`, `Context Engineering`, `Graph Engineering`, `Knowledge Graph`, and `Agent Graph` verbatim. When “图” refers to the graph concept, write `Graph`, such as `Graph 的基本词汇` or `构建你的第一个 Graph`. Do not introduce terms that are absent from the source.";
-
-const getTechnicalTermsRule = (lang: "zh" | "en"): string =>
-  lang === "en" ? TECHNICAL_TERMS_RULE_EN : TECHNICAL_TERMS_RULE_ZH;
+const NOTES_TECHNICAL_TERMS_RULE = [
+  TECHNICAL_TERM_GENERAL_RULE,
+  "运行时由调用方追加本次源材料的 active terms；不要把未激活目录词当作本次输出要求。",
+].join("\n");
 
 export const getNotesSystemPrompt = (options: NotesPromptOptions = {}): string => {
   const lang = options.outputLanguage ?? "zh";
@@ -79,10 +76,10 @@ Processed: <YYYY-MM-DD>
 
 Rules:
 - ${langRule}
-- ${getTechnicalTermsRule(lang)}
+- ${NOTES_TECHNICAL_TERMS_RULE}
 - Translate the H1 title semantically — do NOT apply prefix/suffix rules like "别再只看结论："
 - The H1 title is the single most important field. It must be a faithful semantic translation of the original video title, not a marketing rewrite.
-- Brand and product names in the original title must remain unchanged in the H1. For example, keep "Claude Design" exactly as "Claude Design"; never translate it as "Claude 设计".
+- Brand and product names in the original title must remain unchanged in the H1; keep the original spelling and never translate the name into a localized substitute.
 - Use ## for major section headings. Do NOT use numbered headings like "## 1. Topic".
 - Include Screenshot References ONLY when screenshots were captured (screenshotsJson is non-null).
 - Include TODO, Reusable Prompts, Technical Plan, Open Questions ONLY when the content genuinely warrants them. Omit sections that would be empty or generic.
@@ -116,6 +113,18 @@ export const stripHeavyMetadata = (meta: YouTubeMetadata): YouTubeMetadata => {
 };
 
 /**
+ * 模型在 prompt 里实际看到的 metadata 文本。
+ *
+ * 所有 prompt builder 都用它，术语守卫也用它算已知范围——两边必须是同一份字符串。
+ * 模型看得见的材料就不算"凭空加入"：作者名、频道名这类只出现在 metadata 里的词，
+ * 如果不算进已知范围，输出一提到就会被判成造词（真实踩过：转录里一次没念全名的
+ * "Matt Pocock" 只在 metadata.channel 里）。它们只进"已知"不进"必需"，
+ * 所以也不会反过来要求每篇产物都提到作者。
+ */
+export const metadataPromptText = (meta: YouTubeMetadata): string =>
+  JSON.stringify(stripHeavyMetadata(meta), null, 2);
+
+/**
  * 构造 notes 阶段的 user prompt。
  * 纯函数，便于单测；输入即是已解析的素材，不再做任何 IO。
  */
@@ -123,12 +132,10 @@ export const buildNotesUserPrompt = (
   input: NotesPromptInput,
   options: NotesPromptOptions = {},
 ): string => {
-  const meta = stripHeavyMetadata(input.metadata);
-
   const sections: string[] = [];
   sections.push("## Metadata");
   sections.push("```json");
-  sections.push(JSON.stringify(meta, null, 2));
+  sections.push(metadataPromptText(input.metadata));
   sections.push("```");
 
   sections.push("");
@@ -161,8 +168,8 @@ export const buildNotesUserPrompt = (
   const lang = options.outputLanguage ?? "zh";
   const langHint =
     lang === "en"
-      ? `Generate the structured-notes.md document following the schema. Output in English. ${getTechnicalTermsRule(lang)} Output ONLY the markdown document — no wrapper text, no code fences around the output.`
-      : `Generate the structured-notes.md document following the schema. Output in Simplified Chinese (zh-CN). Translate Traditional Chinese and ordinary non-Chinese source material into Simplified Chinese. Traditional Chinese output is forbidden. This is a hard requirement. ${getTechnicalTermsRule(lang)} Output ONLY the markdown document — no wrapper text, no code fences around the output.`;
+      ? `Generate the structured-notes.md document following the schema. Output in English. ${NOTES_TECHNICAL_TERMS_RULE} Output ONLY the markdown document — no wrapper text, no code fences around the output.`
+      : `Generate the structured-notes.md document following the schema. Output in Simplified Chinese (zh-CN). Translate Traditional Chinese and ordinary non-Chinese source material into Simplified Chinese. Traditional Chinese output is forbidden. This is a hard requirement. ${NOTES_TECHNICAL_TERMS_RULE} Output ONLY the markdown document — no wrapper text, no code fences around the output.`;
 
   sections.push("");
   sections.push(langHint);

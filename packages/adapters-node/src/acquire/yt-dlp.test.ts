@@ -82,7 +82,7 @@ describe("ensureOfficialYoutubeThumbnail", () => {
 });
 
 describe("downloadSubtitlesTwoPhase", () => {
-  it("tries Simplified Chinese auto subtitles before Traditional Chinese fallbacks", async () => {
+  it("tries the video's own language before falling back to English and Chinese", async () => {
     const calls: ProcessSpec[] = [];
     const runner: ProcessRunner = {
       run: vi.fn(async (spec) => {
@@ -115,6 +115,7 @@ describe("downloadSubtitlesTwoPhase", () => {
         return args[args.indexOf("--sub-langs") + 1];
       });
 
-    expect(autoLangs.slice(0, 5)).toEqual(["zh-CN", "zh-Hans", "zh", "zh-Hant", "zh-TW"]);
+    // 首个命中即返回，所以第一项决定拿到的是原声轨还是 YouTube 机翻轨
+    expect(autoLangs).toEqual(["en", "zh-CN", "zh-Hans", "zh", "zh-Hant", "zh-TW"]);
   });
 });

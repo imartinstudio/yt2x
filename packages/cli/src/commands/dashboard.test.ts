@@ -1,3 +1,4 @@
+import { createServer, type AddressInfo, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -177,5 +178,107 @@ describe("saveDashboardPromptImage", () => {
     expect(deleteDashboardPromptImage).toBeTypeOf("function");
     await deleteDashboardPromptImage!({ articleOutDir, videoId: "video123", platform: "xiaohongshu", promptId: "ill-0" });
     await expect(readFile(path.join(articleDir, "xiaohongshu-article.md"), "utf8")).resolves.not.toContain("prompt-ill-0.jpg");
+  });
+
+  it("keeps stale visual prompts during the real no-LLM Dashboard format path", async () => {
+    const handleDashboardRequest = (dashboard as Record<string, unknown>)["handleDashboardRequest"] as
+      | ((req: IncomingMessage, res: ServerResponse, opts: { articleOutDir: string; downloadsDir: string; indexPath: string }) => Promise<void>)
+      | undefined;
+    expect(handleDashboardRequest).toBeTypeOf("function");
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-dashboard-no-llm-"));
+    const articleOutDir = path.join(root, "articles");
+    const downloadsDir = path.join(root, "downloads");
+    const videoId = "dashboard-stale";
+    const articleDir = path.join(articleOutDir, videoId);
+    const formatDir = path.join(articleDir, "xiaohongshu-format");
+    await mkdir(formatDir, { recursive: true });
+    await mkdir(path.join(downloadsDir, videoId), { recursive: true });
+    await writeFile(path.join(articleDir, "article.md"), "# Graph Engineering\n\n正文。\n", "utf8");
+    await writeFile(path.join(formatDir, "xiaohongshu-article.md"), "# Graph Engineering\n\n**第一节**\n正文。\n", "utf8");
+    await writeFile(path.join(formatDir, "xiaohongshu-metadata.json"), JSON.stringify({
+      target: "xiaohongshu",
+      title: "Graph Engineering",
+      body: "**第一节**\n正文。",
+      tags: [],
+      cover: { headline: "Graph Engineering", visual_prompt: "old cover" },
+    }), "utf8");
+    const stalePrompts = JSON.stringify({
+      platform: "xiaohongshu",
+      title: "Graph Engineering",
+      technicalTermProfileFingerprint: "fnv1a-stale",
+      coverPrompts: [{ label: "封面", prompt: "old cover", size: "1080×1440", filename: "cover.png", name: "旧封面" }],
+      illustrationPrompts: [{ index: 0, text: "第一节", prompt: "old illustration", filename: "section-01.png", name: "旧插图" }],
+    }, null, 2) + "\n";
+    const promptsPath = path.join(formatDir, "prompts.json");
+    await writeFile(promptsPath, stalePrompts, "utf8");
+    const indexPath = path.join(root, "publish-index.json");
+    await writeFile(indexPath, JSON.stringify({}), "utf8");
+
+    const protectedEnvKeys = [
+      "YT2X_LLM_PROVIDER",
+      "YT2X_DEFAULT_LLM_PROVIDER",
+      "DEEPSEEK_API_KEY",
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "MOONSHOT_API_KEY",
+    ];
+    const savedEnv = new Map(protectedEnvKeys.map((key) => [key, process.env[key]]));
+    for (const key of protectedEnvKeys) delete process.env[key];
+
+    const server = createServer((req, res) => {
+      void handleDashboardRequest!(req, res, { articleOutDir, downloadsDir, indexPath });
+    });
+    try {
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address() as AddressInfo;
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/platform-format`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ videoId, platform: "xiaohongshu" }),
+      });
+      expect(response.status).toBe(200);
+      await expect(readFile(promptsPath, "utf8")).resolves.toBe(stalePrompts);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      for (const [key, value] of savedEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("serializes concurrent prompt image updates without dropping fields or filenames", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-dashboard-race-"));
+    const articleOutDir = path.join(root, "articles");
+    const articleDir = path.join(articleOutDir, "race123", "xiaohongshu-format");
+    await mkdir(articleDir, { recursive: true });
+    await writeFile(path.join(articleDir, "prompts.json"), JSON.stringify({
+      platform: "xiaohongshu",
+      technicalTermProfileFingerprint: "fnv1a-race",
+      coverPrompts: [{ label: "封面", prompt: "cover", filename: "cover.png", name: "封面" }],
+      illustrationPrompts: [
+        { index: 0, name: "第一节", prompt: "one" },
+        { index: 1, name: "第二节", prompt: "two" },
+      ],
+    }));
+    await writeFile(path.join(articleDir, "xiaohongshu-article.md"), "# 标题\n\n正文。\n");
+
+    const saveDashboardPromptImage = (dashboard as Record<string, unknown>)["saveDashboardPromptImage"] as
+      | ((input: { articleOutDir: string; videoId: string; platform: string; promptId: string; dataUrl: string }) => Promise<{ file: string }>)
+      | undefined;
+    await Promise.all([
+      saveDashboardPromptImage!({ articleOutDir, videoId: "race123", platform: "xiaohongshu", promptId: "ill-0", dataUrl: "data:image/png;base64,AA==" }),
+      saveDashboardPromptImage!({ articleOutDir, videoId: "race123", platform: "xiaohongshu", promptId: "ill-1", dataUrl: "data:image/png;base64,AQ==" }),
+    ]);
+    const prompts = JSON.parse(await readFile(path.join(articleDir, "prompts.json"), "utf8")) as Record<string, unknown>;
+    expect(prompts.technicalTermProfileFingerprint).toBe("fnv1a-race");
+    expect(prompts.coverPrompts).toEqual(expect.any(Array));
+    expect((prompts.illustrationPrompts as Array<Record<string, unknown>>).map((item) => item.filename)).toEqual([
+      "prompt-ill-0.png",
+      "prompt-ill-1.png",
+    ]);
   });
 });

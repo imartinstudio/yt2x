@@ -12,7 +12,12 @@ const fakeArtifacts: StructuredNotesArtifacts = {
 
 const makeLlm = (
   respond: (req: ChatRequest) => ChatResponse | Promise<ChatResponse>,
-): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(respond(req))) });
+  discoveryResponse = "[]",
+): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(
+  req.messages[0]?.content.includes("术语发现器")
+    ? { content: discoveryResponse, model: "m", finishReason: "stop" }
+    : respond(req),
+)) });
 
 const xiaohongshuJson = JSON.stringify({
   target: "xiaohongshu",
@@ -23,6 +28,41 @@ const xiaohongshuJson = JSON.stringify({
 });
 
 describe("generatePlatformArticleContent", () => {
+  it("recovers catalog terms in nested platform fields without demanding the discovered term", async () => {
+    const response = JSON.stringify({
+      target: "xiaohongshu",
+      title: "提示工程和图工程",
+      body: "上下文工程连接知识图谱与代理图谱，也包含潜在工作区路由。",
+      tags: ["图工程", "知识图谱", "代理图谱"],
+      cover: { headline: "图工程", subhead: "知识图谱", visual_prompt: "图片、图表和图文" },
+    });
+    const llm = makeLlm(
+      () => ({ content: response, model: "m", finishReason: "stop" }),
+      JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+    );
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: "Prompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph、Latent Workspace Routing",
+      metadata: { id: "platform-term-guard", title: "Prompt Engineering" },
+    };
+
+    const result = await generatePlatformArticleContent({
+      llm,
+      model: "task3-platform",
+      target: "xiaohongshu",
+      artifacts,
+      articleMd: "# Prompt Engineering\n\nGraph Engineering 与 Latent Workspace Routing。",
+    });
+
+    expect(JSON.stringify(result.platformArticle)).toContain("Prompt Engineering");
+    expect(JSON.stringify(result.platformArticle)).toContain("Knowledge Graph");
+    expect(JSON.stringify(result.platformArticle)).toContain("图片、图表和图文");
+    expect(JSON.stringify(result.platformArticle)).not.toContain("提示工程");
+    // 发现词只保护不强制
+    expect(JSON.stringify(result.platformArticle)).toContain("潜在工作区路由");
+    expect(llm.chat).toHaveBeenCalledTimes(2);
+  });
+
   it("sends platform prompt and parses JSON", async () => {
     const llm = makeLlm((req) => {
       expect(req.messages[0]!.content).toMatch(/小红书/);
@@ -141,7 +181,7 @@ describe("generatePlatformArticleContent invalid-JSON recovery", () => {
       articleMd: "# Article",
     });
 
-    expect(llm.chat).toHaveBeenCalledTimes(2);
+    expect(llm.chat).toHaveBeenCalledTimes(3);
     expect(result.platformArticle.target).toBe("wechat");
     expect(result.platformArticle.title).toBe("统一主标题");
   });

@@ -5,12 +5,23 @@ import {
   DEFAULT_OUT_DIR,
   findPendingVideoDirs,
   generateNotesContent,
-  isStepDone,
   patchProcessStatus,
   patchStepRunning,
   readVideoArtifacts,
   type ReadArtifactsError,
   writeStructuredNotes,
+  CONTENT_PROMPT_VERSIONS,
+  acquireContentTargetLock,
+  contentSourceFingerprintFor,
+  contentTargetMetadataPathFor,
+  createContentTargetMetadata,
+  isContentTargetMetadataFresh,
+  contentTechnicalTermSourceFingerprintFor,
+  notesContentSourceFor,
+  notesKnownSourceTextFor,
+  notesRequiredSourceTextFor,
+  readContentTargetMetadata,
+  type ContentTargetCacheExpectation,
 } from "@yt2x/adapters-node";
 import { isLlmError } from "@yt2x/core";
 import { logger } from "../logger.js";
@@ -94,6 +105,7 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
   for (const videoDir of targets) {
     const stageT0 = performance.now();
     let progressKey = `notes.${path.basename(videoDir)}`;
+    let releaseContentLock: (() => Promise<void>) | undefined;
     try {
       const artifacts = await readVideoArtifacts(videoDir);
       progressKey = `notes.${artifacts.videoId}`;
@@ -106,10 +118,38 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
             : `https://www.youtube.com/watch?v=${encodeURIComponent(artifacts.videoId)}`,
       };
 
-      // Pre-check: if structured-notes.md already exists and !force, skip before LLM call.
-      if (flags.force !== true && (await isStepDone(videoDir, "notes"))) {
-        logger.info({ videoId: artifacts.videoId }, "structured-notes.md already exists, skipping");
-        continue;
+      releaseContentLock = await acquireContentTargetLock(videoDir, "notes");
+      const source = notesContentSourceFor({
+        metadata: artifacts.metadata,
+        chunksMd: artifacts.chunksMd,
+        timestampedCuesMd: artifacts.timestampedCuesMd,
+        screenshots: artifacts.screenshots,
+      });
+      const sourceFingerprint = contentSourceFingerprintFor(source);
+      const metadataPath = contentTargetMetadataPathFor(videoDir, "notes");
+      // 已知范围含 prompt 可见的 metadata，必需范围只有转录——两者不同，
+      // 所以 scope 是 "scoped"，且必须和 generator 用同一对 helper 计算。
+      const knownSourceText = notesKnownSourceTextFor(artifacts);
+      const requiredSourceText = notesRequiredSourceTextFor(artifacts);
+      const sourceTitle = artifacts.metadata.title ?? "";
+      const cacheExpectation: ContentTargetCacheExpectation = {
+        target: "notes",
+        sourceFingerprint,
+        requestedModel: llm.model,
+        promptVersion: CONTENT_PROMPT_VERSIONS.notes,
+        sourceText: requiredSourceText,
+        knownSourceText,
+        requiredSourceText,
+        sourceTitle,
+        technicalTermScope: "scoped",
+        requiredFiles: [path.join(videoDir, "structured-notes.md"), metadataPath],
+      };
+      if (flags.force !== true) {
+        const existing = await readContentTargetMetadata(metadataPath);
+        if (await isContentTargetMetadataFresh(existing, cacheExpectation)) {
+          logger.info({ videoId: artifacts.videoId }, "structured-notes.md cache hit, skipping provider");
+          continue;
+        }
       }
 
       await patchStepRunning(videoDir, identity, "notes").catch(() => {});
@@ -123,8 +163,25 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
         model: llm.model,
         artifacts,
       });
+      const cacheMetadata = createContentTargetMetadata({
+        target: "notes",
+        sourceFingerprint: result.sourceFingerprint,
+        requestedModel: result.requestedModel,
+        resolvedModel: result.resolvedModel,
+        promptVersion: result.promptVersion,
+        technicalTermProfileFingerprint: result.technicalTermProfileFingerprint,
+        technicalTermDiscovery: result.technicalTermDiscovery,
+        technicalTermKnownSourceFingerprint:
+          contentTechnicalTermSourceFingerprintFor(knownSourceText, sourceTitle),
+        technicalTermRequiredSourceFingerprint:
+          contentTechnicalTermSourceFingerprintFor(requiredSourceText, sourceTitle),
+        technicalTermScope: "scoped",
+      });
       const written = await writeStructuredNotes(videoDir, result.content, {
         force: flags.force === true,
+        lock: false,
+        cacheExpectation,
+        cacheMetadata,
       });
       if (written === null) {
         logger.info({ videoDir }, "structured-notes.md already exists, skipping");
@@ -140,6 +197,14 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
           durationMs,
           artifacts: ["structured-notes.md"],
           resultFile: path.basename(written),
+          contentMetadata: {
+            source: result.sourceFingerprint,
+            requestedModel: result.requestedModel,
+            resolvedModel: result.resolvedModel,
+            promptVersion: result.promptVersion,
+            profileFingerprint: result.technicalTermProfileFingerprint,
+            discoveryAudit: result.technicalTermDiscovery,
+          },
         },
       });
       if (result.usage !== undefined) {
@@ -150,7 +215,7 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
         {
           videoId: result.videoId,
           file: written,
-          model: result.model,
+          model: result.resolvedModel,
           finishReason: result.finishReason,
           durationMs,
           usage: result.usage,
@@ -186,6 +251,8 @@ export const executeNativeNotes = async (flags: NotesFlags): Promise<number> => 
         return 1;
       }
       progress?.record(progressKey, Math.round(performance.now() - stageT0));
+    } finally {
+      await releaseContentLock?.();
     }
   }
 

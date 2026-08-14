@@ -1,7 +1,176 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { LlmPort } from "@yt2x/core";
+import {
+  appendTechnicalTermRuleToSystemPrompt,
+  createTechnicalTermGuard,
+  hasHardTechnicalTermViolations,
+  type LlmPort,
+  type PreparedTechnicalTermValue,
+  type TechnicalTermGuard,
+} from "@yt2x/core";
+import {
+  createFileTechnicalTermDiscoveryCacheStore,
+  discoverTechnicalTerms,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+  technicalTermDiscoveryCacheDirFor,
+} from "../technical-terms/discovery.js";
 import type { PlatformFormatInput, PlatformFormatResult } from "./types.js";
+
+export type PlatformVisualPromptData = {
+  platform?: string;
+  title?: string;
+  model?: string;
+  technicalTermProfileFingerprint: string;
+  /** 新写入的 prompts.json 带有审计；旧文件读取时允许缺失。 */
+  technicalTermDiscovery?: ReturnType<typeof technicalTermDiscoveryAuditFor>;
+  coverPrompts: Array<{ label: string; prompt: string; size: string; filename: string; name: string }>;
+  illustrationPrompts: Array<{ index: number; text: string; prompt: string; filename: string; name: string }>;
+};
+
+type PlatformVisualPromptPatch = Partial<PlatformVisualPromptData>;
+
+const promptFileLocks = new Map<string, Promise<void>>();
+let promptTempCounter = 0;
+
+export const withPlatformVisualPromptFileLock = async <T>(
+  promptsPath: string,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  const key = path.resolve(promptsPath);
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = promptFileLocks.get(key);
+  promptFileLocks.set(key, current);
+  if (previous !== undefined) await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (promptFileLocks.get(key) === current) promptFileLocks.delete(key);
+  }
+};
+
+const readPromptObject = async (promptsPath: string): Promise<Record<string, unknown> | undefined> => {
+  try {
+    const parsed = JSON.parse(await readFile(promptsPath, "utf8")) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const writePromptObjectAtomically = async (promptsPath: string, value: Record<string, unknown>): Promise<void> => {
+  await mkdir(path.dirname(promptsPath), { recursive: true });
+  const tempPath = promptsPath + ".tmp-" + process.pid + "-" + promptTempCounter++;
+  await writeFile(tempPath, JSON.stringify(value, null, 2) + "\n", "utf8");
+  await rename(tempPath, promptsPath);
+};
+
+export const mergePlatformVisualPrompts = async (input: {
+  promptsPath: string;
+  patch: PlatformVisualPromptPatch;
+}): Promise<PlatformVisualPromptData> =>
+  withPlatformVisualPromptFileLock(input.promptsPath, async () => {
+    const current = await readPromptObject(input.promptsPath);
+    const nextFingerprint = input.patch.technicalTermProfileFingerprint;
+    if (typeof nextFingerprint !== "string") {
+      throw new Error("平台视觉提示缺少 technicalTermProfileFingerprint");
+    }
+    const currentFingerprint = current?.["technicalTermProfileFingerprint"];
+    const canReuseGeneratedFields = currentFingerprint === nextFingerprint;
+    const compatibleFields = {
+      ...(typeof current?.["platform"] === "string" ? { platform: current["platform"] } : {}),
+      ...(typeof current?.["title"] === "string" ? { title: current["title"] } : {}),
+      ...(canReuseGeneratedFields && typeof current?.["model"] === "string" ? { model: current["model"] } : {}),
+    };
+    const next = {
+      ...compatibleFields,
+      ...input.patch,
+      coverPrompts: input.patch.coverPrompts
+        ?? (canReuseGeneratedFields && Array.isArray(current?.["coverPrompts"])
+          ? current["coverPrompts"]
+          : []),
+      illustrationPrompts: input.patch.illustrationPrompts
+        ?? (canReuseGeneratedFields && Array.isArray(current?.["illustrationPrompts"])
+          ? current["illustrationPrompts"]
+          : []),
+    } as PlatformVisualPromptData;
+    delete (next as unknown as Record<string, unknown>)["prompts"];
+    await writePromptObjectAtomically(input.promptsPath, next as unknown as Record<string, unknown>);
+    return next;
+  });
+
+export const persistPlatformVisualPrompts = async (input: {
+  promptsPath: string;
+  value: PlatformVisualPromptData;
+}): Promise<void> => {
+  await mergePlatformVisualPrompts({ promptsPath: input.promptsPath, patch: input.value });
+};
+
+export type PlatformTechnicalTermContext = {
+  guard: TechnicalTermGuard;
+  prepared: PreparedTechnicalTermValue<{ title: string; body: string }>;
+};
+
+export const createPlatformTechnicalTermContext = async (input: {
+  llm: LlmPort;
+  llmModel: string;
+  title: string;
+  body: string;
+  technicalTermDiscoveryCacheDir?: string;
+}): Promise<PlatformTechnicalTermContext> => {
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.llmModel,
+    sourceText: input.body,
+    sourceTitle: input.title,
+    ...(input.technicalTermDiscoveryCacheDir === undefined
+      ? {}
+      : { cache: createFileTechnicalTermDiscoveryCacheStore(input.technicalTermDiscoveryCacheDir) }),
+  });
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, {
+    sourceText: input.body,
+    sourceTitle: input.title,
+  });
+  const guard = createTechnicalTermGuard({
+    sourceText: input.body,
+    sourceTitle: input.title,
+    discoveredTerms: discovery.accepted,
+    discovery: discoveryAudit,
+    artifact: "visual-prompt",
+  });
+  return { guard, prepared: guard.prepare({ title: input.title, body: input.body }) };
+};
+
+export const finalizePlatformVisualPrompts = async <T>(input: {
+  llm: LlmPort;
+  llmModel: string;
+  context: PlatformTechnicalTermContext;
+  value: T;
+  parseResponse: (content: string) => T;
+}): Promise<T> => {
+  let finalized = input.context.guard.finalize(input.value, input.context.prepared.restoration);
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    finalized = await repairTechnicalTermViolations({
+      llm: input.llm,
+      model: input.llmModel,
+      guard: input.context.guard,
+      currentValue: finalized.value,
+      restoration: input.context.prepared.restoration,
+      violations: finalized.violations,
+      parseResponse: input.parseResponse,
+    });
+  }
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    throw new Error(`平台视觉提示专业术语校验失败：${finalized.violations.map((item) => item.message).join("；")}`);
+  }
+  return finalized.value;
+};
 
 // ── HTML/URL helpers ──
 
@@ -719,6 +888,14 @@ export const orchestratePlatformPrompts = async (
 
   const sections = splitBodyIntoSections(body, input.platform);
   const files: string[] = [];
+  const termContext = await createPlatformTechnicalTermContext({
+    llm: input.llm,
+    llmModel: input.llmModel,
+    title,
+    body,
+    technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(outputDir),
+  });
+  const preparedArticle = termContext.prepared.value;
 
   // If prompts.json already exists AND has non-empty illustrationPrompts,
   // reuse cached prompts instead of calling the LLM again. An empty
@@ -730,8 +907,14 @@ export const orchestratePlatformPrompts = async (
   let hasCachedPrompts = false;
   try {
     const cachedRaw = await readFile(promptsPath, "utf8");
-    const cached = JSON.parse(cachedRaw) as { coverPrompts: typeof coverPrompts; illustrationPrompts: typeof illustrationPrompts };
-    if (Array.isArray(cached.coverPrompts) && Array.isArray(cached.illustrationPrompts)) {
+    const cached = JSON.parse(cachedRaw) as {
+      coverPrompts: typeof coverPrompts;
+      illustrationPrompts: typeof illustrationPrompts;
+      technicalTermProfileFingerprint?: string;
+    };
+    if (cached.technicalTermProfileFingerprint === termContext.prepared.profileFingerprint
+      && Array.isArray(cached.coverPrompts)
+      && Array.isArray(cached.illustrationPrompts)) {
       coverPrompts = cached.coverPrompts;
       illustrationPrompts = cached.illustrationPrompts;
       hasCachedPrompts = true;
@@ -743,15 +926,18 @@ export const orchestratePlatformPrompts = async (
   if (!hasCachedPrompts) {
   // generate cover prompts
   for (const coverSpec of spec.coverRatios) {
-    const slug = title.replace(/[^a-zA-Z0-9一-鿿]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).toLowerCase() || "cover";
+    // Keep technical terms in the human-facing `name` and `prompt` fields. File names
+    // use a compact slug so a contextual term such as Graph is not split out of
+    // `Graph Engineering` and mistaken for an invented standalone term by the guard.
+    const slug = title.replace(/\s+/gu, "").replace(/[^a-zA-Z0-9一-鿿]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).toLowerCase() || "cover";
     const coverFilename = `cover-${slug}.png`;
     const coverName = title.slice(0, 20) || "封面";
-    const systemPrompt = COVER_SYSTEM_PROMPT;
+    const systemPrompt = appendTechnicalTermRuleToSystemPrompt(COVER_SYSTEM_PROMPT, termContext.prepared.promptRule);
     const _userPrompt = [
       `Create a cover image prompt for ${coverSpec.label}.`,
       `${coverSpec.description}.`,
       ``,
-      `Article title: ${title}`,
+      `Article title: ${preparedArticle.title}`,
       `Platform: ${spec.label}`,
       ``,
       `The cover should capture the OVERALL thesis of the article as a single powerful visual metaphor.`,
@@ -764,13 +950,13 @@ export const orchestratePlatformPrompts = async (
         `Create a cover image prompt for ${coverSpec.label}.`,
         `${coverSpec.description}.`,
         ``,
-        `Article title: ${title}`,
+        `Article title: ${preparedArticle.title}`,
         `Platform: ${spec.label}`,
         ``,
         `The cover should capture the OVERALL thesis of the article as a single powerful visual metaphor.`,
         ``,
         `ARTICLE TEXT (for context):`,
-        body.slice(0, 3000),
+        preparedArticle.body.slice(0, 3000),
       ].join("\n");
 
       const coverResp = await input.llm.chat({
@@ -802,15 +988,15 @@ export const orchestratePlatformPrompts = async (
     const illUserPrompt = [
       `Read this complete article and create illustration prompts following the sketch-knowledge-kit visual system for ${spec.label}.`,
       ``,
-      `Article: ${title}`,
+      `Article: ${preparedArticle.title}`,
       `Required ratio: ${spec.illustrationRatio}`,
       ``,
       `FULL ARTICLE TEXT:`,
-      body,
+      preparedArticle.body,
     ].join("\n");
 
     const isXhsIll = input.platform === "xiaohongshu";
-    const illSystemPrompt = [
+    const illSystemPrompt = appendTechnicalTermRuleToSystemPrompt([
       isXhsIll
         ? `Xiaohongshu images are NOTE CARDS, not illustrations. Each 3:4 image is a self-contained knowledge card the reader can study — like a well-designed notebook page.`
         : `Create illustration prompts following sketch-knowledge-kit. Fill EVERY field below with exact Chinese labels. No generic descriptions.`,
@@ -841,7 +1027,7 @@ export const orchestratePlatformPrompts = async (
         : `Every prompt MUST end with: "Aspect ratio: ${spec.illustrationRatio}."`,
       `Return JSON array: [{"index": <1-based N>, "filename": "<slug>.png", "name": "<Chinese description>", "prompt": "<filled template above>"}].`,
       `Return ONLY JSON. No markdown.`,
-    ].join("\n");
+    ].join("\n"), termContext.prepared.promptRule);
 
     const resp = await input.llm.chat({
       model: input.llmModel,
@@ -887,18 +1073,32 @@ export const orchestratePlatformPrompts = async (
     if (cp.size) cp.prompt += ` Aspect ratio: ${cp.label} (${cp.size}).`;
   }
 
-  // save prompts.json (only if newly generated — cached prompts are already on disk)
-  if (!hasCachedPrompts) {
-    const promptsData = {
-      platform: input.platform,
-      title,
-      model: input.llmModel,
+  const guardedPrompts = await finalizePlatformVisualPrompts({
+    llm: input.llm,
+    llmModel: input.llmModel,
+    context: termContext,
+    value: {
+      technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
+      technicalTermDiscovery: termContext.guard.profile.discovery,
       coverPrompts,
       illustrationPrompts,
-    };
-    await writeFile(promptsPath, JSON.stringify(promptsData, null, 2), "utf8");
-    files.push(promptsPath);
-  }
+    },
+    parseResponse: (content) => JSON.parse(content) as PlatformVisualPromptData,
+  });
+  coverPrompts = guardedPrompts.coverPrompts;
+  illustrationPrompts = guardedPrompts.illustrationPrompts;
+
+  const promptsData = {
+    platform: input.platform,
+    title,
+    model: input.llmModel,
+    technicalTermProfileFingerprint: termContext.prepared.profileFingerprint,
+    technicalTermDiscovery: termContext.guard.profile.discovery,
+    coverPrompts,
+    illustrationPrompts,
+  };
+  await persistPlatformVisualPrompts({ promptsPath, value: promptsData });
+  files.push(promptsPath);
 
   // Build prompt lookup: section index → prompt text
   const promptMap = new Map<number, string>();

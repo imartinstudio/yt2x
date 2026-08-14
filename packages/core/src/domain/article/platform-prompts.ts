@@ -1,4 +1,4 @@
-import { stripHeavyMetadata } from "../notes/prompts.js";
+import { metadataPromptText } from "../notes/prompts.js";
 import {
   getPlatformArticleSpec,
   type PlatformArticleSpec,
@@ -9,6 +9,7 @@ import {
   SHARED_NO_VIDEO_AUTHOR,
   SHARED_TECHNICAL_TERMS,
 } from "../shared-rules.js";
+import { createTechnicalTermGuard, TECHNICAL_TERM_CATALOG } from "../technical-term-catalog.js";
 
 export type PlatformArticlePromptInput = {
   metadata: Record<string, unknown>;
@@ -19,19 +20,6 @@ export type PlatformArticlePromptInput = {
 export type PlatformArticlePromptOptions = {
   target: PlatformArticleTarget;
 };
-
-const PROTECTED_TITLE_TERMS = [
-  "Codex",
-  "Claude",
-  "Cluade",
-  "ChatGPT",
-  "GPT",
-  "OpenAI",
-  "Gemini",
-  "DeepSeek",
-  "Cursor",
-  "GitHub Copilot",
-] as const;
 
 const firstString = (...values: unknown[]): string | undefined => {
   for (const value of values) {
@@ -47,14 +35,10 @@ const firstMarkdownH1 = (markdown: string): string | undefined => {
 
 export const extractProtectedTitleTerms = (sourceTitle: string | undefined): string[] => {
   if (sourceTitle === undefined) return [];
-  const found: string[] = [];
-  for (const term of PROTECTED_TITLE_TERMS) {
-    const pattern = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-    if (pattern.test(sourceTitle) && !found.some((existing) => existing.toLowerCase() === term.toLowerCase())) {
-      found.push(term);
-    }
-  }
-  return found;
+  const active = new Set(createTechnicalTermGuard({ sourceText: sourceTitle }).profile.entries.map((term) => term.canonical));
+  return TECHNICAL_TERM_CATALOG
+    .filter((entry) => active.has(entry.canonical))
+    .map((entry) => entry.canonical);
 };
 
 export const getCanonicalTitleSeed = (input: PlatformArticlePromptInput): string | undefined =>
@@ -68,7 +52,7 @@ const buildSharedRules = (spec: PlatformArticleSpec): string => `通用约束：
 - ${SHARED_TECHNICAL_TERMS}
 - 每个二级标题前加 \`---\` 分割线（第一个二级标题除外）。
 - 多平台标题必须从同一个「统一主标题」派生。小红书标题是统一主标题的缩减版（≤20 字，2 个英文字母算 1 字），B站标题与统一主标题保持一致。任何平台标题都不得引入原文没有的产品名、品牌名或术语（如原文没提 V0 就不能加 V0）。
-- 如果原始标题、统一主标题或 metadata 中出现 Codex、Claude、ChatGPT、Gemini、DeepSeek、Cursor、GitHub Copilot 等特指名词，主标题必须保留对应名词，不能泛化成「AI 工具」「智能体」「编程助手」等宽泛说法。
+- 如果原始标题、统一主标题或 metadata 中出现产品名、人物名、方法名或其他特指名词，主标题必须保留对应名词，不能泛化成「AI 工具」「智能体」「编程助手」等宽泛说法。
 - 标题必须体现内容适用范围和局限性，避免让读者误以为文章讨论的是更宽泛的产品、平台或方法。
 - ${SHARED_NO_VIDEO_AUTHOR}
 - ${SHARED_JSON_OUTPUT}
@@ -156,7 +140,6 @@ export const buildPlatformArticleUserPrompt = (
   input: PlatformArticlePromptInput,
   options: PlatformArticlePromptOptions,
 ): string => {
-  const meta = stripHeavyMetadata(input.metadata);
   const canonicalTitle = getCanonicalTitleSeed(input);
   const protectedTerms = extractProtectedTitleTerms(
     [
@@ -169,7 +152,7 @@ export const buildPlatformArticleUserPrompt = (
   const sections: string[] = [];
   sections.push("## Video metadata (JSON)");
   sections.push("```json");
-  sections.push(JSON.stringify(meta, null, 2));
+  sections.push(metadataPromptText(input.metadata));
   sections.push("```");
   sections.push("");
   sections.push("## Unified title constraints");

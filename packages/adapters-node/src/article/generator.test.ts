@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AvailableVisual, ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
 import {
@@ -5,18 +8,24 @@ import {
   validateArticleTopicHashtags,
   validateArticleVisualPlan,
 } from "./generator.js";
+import { clearTechnicalTermDiscoveryCaches as clearDiscoveryCaches } from "../technical-terms/discovery.js";
 import type { StructuredNotesArtifacts } from "./file-store.js";
 
 const fakeArtifacts: StructuredNotesArtifacts = {
   videoDir: "/tmp/v",
   videoId: "vid",
-  structuredNotesMd: "# Notes\n\n- point",
+  structuredNotesMd: "# Notes\n\n- point\n\nCodex",
   metadata: { id: "vid", title: "Hello" },
 };
 
 const makeLlm = (
   respond: (req: ChatRequest) => ChatResponse | Promise<ChatResponse>,
-): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(respond(req))) });
+  discoveryResponse = "[]",
+): LlmPort => ({ chat: vi.fn((req) => Promise.resolve(
+  req.messages[0]?.content.includes("术语发现器")
+    ? { content: discoveryResponse, model: "m", finishReason: "stop" }
+    : respond(req),
+)) });
 
 const sampleVisuals: AvailableVisual[] = [
   {
@@ -29,6 +38,126 @@ const sampleVisuals: AvailableVisual[] = [
 ];
 
 describe("generateXArticleContent", () => {
+  it("recovers catalog terms in article markdown without demanding the discovered term", async () => {
+    const llm = makeLlm(
+      (req) => {
+        if (req.messages[0]?.content.includes("术语定向修复器")) {
+          const current = req.messages[1]?.content.match(/Current value:\n([\s\S]*?)\n\n只输出修复后的值/u)?.[1] ?? "";
+          return {
+            content: current.replace("潜在工作区路由", "Latent Workspace Routing"),
+            model: "m",
+            finishReason: "stop",
+          };
+        }
+        return {
+          content: "# 标题\n\n提示工程、上下文工程和图工程会连接知识图谱与代理图谱，潜在工作区路由也很重要。图片、图表和图文不应误报。\n\n#AI #Agent #Workflow",
+          model: "m",
+          finishReason: "stop",
+        };
+      },
+      JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+    );
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      videoId: "article-term-guard",
+      structuredNotesMd: "# Prompt Engineering\n\nPrompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph、Latent Workspace Routing",
+      metadata: { id: "article-term-guard", title: "Prompt Engineering" },
+    };
+
+    const result = await generateXArticleContent({ llm, model: "task3-article", artifacts });
+
+    expect(result.content).toContain("Prompt Engineering");
+    expect(result.content).toContain("Knowledge Graph");
+    expect(result.content).toContain("图片、图表和图文");
+    expect(result.content).not.toContain("提示工程、上下文工程和图工程");
+    expect(result.technicalTermProfileFingerprint).toMatch(/^sha256-[0-9a-f]{64}$/u);
+    // 发现词只保护不强制：不再为它跑修复回合
+    expect(result.content).toContain("潜在工作区路由");
+    expect(llm.chat).toHaveBeenCalledTimes(2);
+    expect(result.technicalTermDiscovery).toMatchObject({
+      promptVersion: expect.any(String),
+      sourceIdentity: expect.stringMatching(/^sha256-[0-9a-f]{64}$/u),
+      acceptedCandidates: expect.any(Array),
+      reviewCandidates: expect.any(Array),
+      warnings: expect.any(Array),
+    });
+  });
+
+  it("keeps a detailed-note term optional but still rejects its forbidden translation", async () => {
+    const artifacts: StructuredNotesArtifacts = {
+      ...fakeArtifacts,
+      structuredNotesMd: [
+        "# Graph Engineering",
+        "## Executive Summary",
+        "Graph Engineering is the main idea.",
+        "## Detailed Notes",
+        "Context Engineering is a detailed long-form section.",
+      ].join("\n"),
+      metadata: { id: "article-summary-scope", title: "Graph Engineering" },
+    };
+
+    const omittingLlm = makeLlm(() => ({
+      content: "# 标题\n\nGraph Engineering 摘要。\n\n#AI #Agent #Workflow",
+      model: "m",
+      finishReason: "stop",
+    }));
+    const result = await generateXArticleContent({ llm: omittingLlm, model: "m", artifacts });
+    expect(result.content).toContain("Graph Engineering");
+    expect(omittingLlm.chat).toHaveBeenCalledTimes(2);
+
+    const translatingLlm = makeLlm(() => ({
+      content: "# 标题\n\nGraph Engineering 摘要与上下文工程。\n\n#AI #Agent #Workflow",
+      model: "m",
+      finishReason: "stop",
+    }));
+    await expect(generateXArticleContent({ llm: translatingLlm, model: "m", artifacts })).rejects.toThrow(
+      "Context Engineering",
+    );
+    // discovery 已被上一轮缓存，这两次是正文生成 + 一次定向修复尝试
+    expect(translatingLlm.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the target-side persistent discovery cache after a cold in-memory restart", async () => {
+    const cacheDir = await mkdtemp(path.join(tmpdir(), "yt2x-article-term-cache-"));
+    try {
+      const artifacts: StructuredNotesArtifacts = {
+        ...fakeArtifacts,
+        videoId: "article-cold-cache",
+        structuredNotesMd: "# Latent Workspace Routing\n\nLatent Workspace Routing keeps agent state.",
+        metadata: { id: "article-cold-cache", title: "Latent Workspace Routing" },
+      };
+      const firstLlm = makeLlm(
+        () => ({ content: "# 标题\n\n正文\n\n#AI #Agent #Workflow", model: "m", finishReason: "stop" }),
+        JSON.stringify([{ sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" }]),
+      );
+      await generateXArticleContent({
+        llm: firstLlm,
+        model: "article-cache-model",
+        artifacts,
+        technicalTermDiscoveryCacheDir: cacheDir,
+      });
+      expect(firstLlm.chat).toHaveBeenCalledTimes(2);
+
+      clearDiscoveryCaches();
+      const secondLlm = makeLlm(
+        () => ({ content: "# 标题\n\n冷启动后正文\n\n#AI #Agent #Workflow", model: "m", finishReason: "stop" }),
+        "[]",
+      );
+      const result = await generateXArticleContent({
+        llm: secondLlm,
+        model: "article-cache-model",
+        artifacts,
+        technicalTermDiscoveryCacheDir: cacheDir,
+      });
+
+      expect(secondLlm.chat).toHaveBeenCalledTimes(1);
+      expect(result.technicalTermDiscovery.sourceIdentity).toMatch(/^sha256-[0-9a-f]{64}$/u);
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+      clearDiscoveryCaches();
+    }
+  });
+
   it("sends article system prompt and X user sections", async () => {
     const llm = makeLlm((req) => {
       expect(req.messages[0]!.content).toMatch(/X（Twitter）/);
@@ -98,7 +227,7 @@ describe("generateXArticleContent", () => {
     expect(r.content).toMatch(/^# \*\*为什么 Graph Engineering 会让 Claude\/Codex 效率提升十倍\*\*/);
   });
 
-  it("preserves Graph terminology throughout the article body", async () => {
+  it("preserves technical terms without rewriting natural graph wording", async () => {
     const llm = makeLlm(() => ({
       content: [
         "# 营销标题",
@@ -120,7 +249,7 @@ describe("generateXArticleContent", () => {
         "图工程需要把工作拆成可检查的步骤。",
         "截图、缩略图和图片应该保持原样。",
         "",
-        "#AI #Graph #工作流",
+        "#AI #Claude #工作流",
       ].join("\n"),
       model: "m",
       finishReason: "stop",
@@ -140,18 +269,17 @@ describe("generateXArticleContent", () => {
 
     const r = await generateXArticleContent({ llm, model: "m", artifacts });
 
-    expect(r.content).toContain("## Graph 的基本词汇");
+    expect(r.content).toContain("## 图的基本词汇");
     expect(r.content).toContain("## Knowledge Graph vs Agent Graph");
     expect(r.content).toContain("Prompt Engineering");
     expect(r.content).toContain("Context Engineering");
-    expect(r.content).toContain("什么时候值得用 Graph");
-    expect(r.content).toContain("现成 Graph");
-    expect(r.content).toContain("更大的 Graph");
-    expect(r.content).toContain("第一个 Graph");
+    expect(r.content).toContain("什么时候值得用图");
+    expect(r.content).toContain("现成图");
+    expect(r.content).toContain("更大的图");
+    expect(r.content).toContain("第一个图");
     expect(r.content).toContain("Graph Engineering 需要");
     expect(r.content).toContain("截图、缩略图和图片应该保持原样。");
-    expect(r.content).not.toContain("## 图的基本词汇");
-    expect(r.content).not.toContain("## 知识图谱 vs 代理图谱");
+    expect(r.content).not.toContain("## Graph 的基本词汇");
   });
 
   it("strips trailing source attribution from generated article markdown", async () => {
@@ -217,7 +345,7 @@ describe("generateXArticleContent", () => {
       }
       const repairPrompt = req.messages.at(-1)?.content ?? "";
       if (repairPrompt.includes("只返回一行")) {
-        return { content: "#GraphEngineering #Claude #Codex", model: "m", finishReason: "stop" };
+        return { content: "#GraphEngineering #Workflow #Codex", model: "m", finishReason: "stop" };
       }
       return { content: "# T\n\n修复后的正文仍然没有标签", model: "m", finishReason: "stop" };
     });
@@ -225,12 +353,12 @@ describe("generateXArticleContent", () => {
     const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
 
     expect(llm.chat).toHaveBeenCalledTimes(3);
-    expect(r.content).toBe("# **Notes**\n\n修复后的正文仍然没有标签\n\n#GraphEngineering #Claude #Codex");
+    expect(r.content).toBe("# **Notes**\n\n修复后的正文仍然没有标签\n\n#GraphEngineering #Workflow #Codex");
   });
 
   it("normalizes command-style topic hashtags into X-compatible tags", async () => {
     const llm = makeLlm(() => ({
-      content: "# T\n\nbody\n\n#/wayfinder #/research #to-spec #to-tickets",
+      content: "# T\n\nbody\n\n#/wayfinder #/research #to-spec #to-tickets #Codex",
       model: "m",
       finishReason: "stop",
     }));
@@ -238,7 +366,7 @@ describe("generateXArticleContent", () => {
     const r = await generateXArticleContent({ llm, model: "m", artifacts: fakeArtifacts });
 
     expect(llm.chat).toHaveBeenCalledTimes(1);
-    expect(r.content).toBe("# **Notes**\n\nbody\n\n#Wayfinder #Research #ToSpec #ToTickets");
+    expect(r.content).toBe("# **Notes**\n\nbody\n\n#Wayfinder #Research #ToSpec #ToTickets #Codex");
   });
 
   it("repairs screenshot refs placed between list items", async () => {

@@ -1,8 +1,17 @@
-import { mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { PlatformArticleTarget } from "@yt2x/core";
 import { isValidVideoId } from "../article/file-store.js";
 import type { GeneratedPlatformArticle } from "./generator.js";
+import {
+  contentTargetMetadataPathFor,
+  isContentTargetMetadataFresh,
+  readContentTargetMetadata,
+  writeContentTargetMetadata,
+  type ContentTargetCacheExpectation,
+  type ContentTargetMetadata,
+} from "../content-cache.js";
+import { atomicWriteUtf8, withContentTargetLock } from "../content-transaction.js";
 
 export type WritePlatformArticleResult = {
   articleDir: string;
@@ -18,13 +27,6 @@ const assertMissing = async (targetPath: string): Promise<boolean> => {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     return false;
   }
-};
-
-const atomicWriteUtf8 = async (targetPath: string, body: string): Promise<void> => {
-  await mkdir(path.dirname(targetPath), { recursive: true });
-  const tmp = targetPath + "." + String(process.pid) + "." + String(Date.now()) + ".tmp";
-  await writeFile(tmp, body, "utf8");
-  await rename(tmp, targetPath);
 };
 
 const tagLine = (tags: readonly string[]): string => tags.map((tag) => `#${tag.replace(/^#/, "")}`).join(" ");
@@ -115,7 +117,12 @@ export const writePlatformArticleBundle = async (
   articleOutDir: string,
   videoId: string,
   article: GeneratedPlatformArticle,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    cacheExpectation?: ContentTargetCacheExpectation;
+    cacheMetadata?: ContentTargetMetadata;
+    lock?: boolean;
+  } = {},
 ): Promise<WritePlatformArticleResult | null> => {
   if (!isValidVideoId(videoId)) {
     throw new Error(`Invalid videoId: "${videoId}". Expected alphanumeric, hyphens, and underscores only.`);
@@ -125,15 +132,36 @@ export const writePlatformArticleBundle = async (
   const { articleFile, metadataFile } = platformArticleFileNames(article.target);
   const articlePath = path.join(articleDir, articleFile);
   const metadataPath = path.join(articleDir, metadataFile);
+  const targetMetadataPath = contentTargetMetadataPathFor(articleDir, `platform-article-${article.target}`);
+
+  if (options.lock !== false) {
+    return withContentTargetLock(articleDir, `platform-article-${article.target}`, () => writePlatformArticleBundle(
+      articleOutDir,
+      videoId,
+      article,
+      { ...options, lock: false },
+    ));
+  }
 
   if (options.force !== true) {
-    const exists = (await assertMissing(articlePath)) || (await assertMissing(metadataPath));
-    if (exists) return null;
+    if (options.cacheExpectation !== undefined) {
+      const existing = await readContentTargetMetadata(targetMetadataPath);
+      if (await isContentTargetMetadataFresh(existing, {
+        ...options.cacheExpectation,
+        requiredFiles: [articlePath, metadataPath, targetMetadataPath],
+      })) return null;
+    } else {
+      const exists = (await assertMissing(articlePath)) || (await assertMissing(metadataPath));
+      if (exists) return null;
+    }
   }
 
   await mkdir(articleDir, { recursive: true });
   await atomicWriteUtf8(articlePath, renderPlatformArticleMarkdown(article));
   await atomicWriteUtf8(metadataPath, JSON.stringify(article, null, 2) + "\n");
+  if (options.cacheMetadata !== undefined) {
+    await writeContentTargetMetadata(targetMetadataPath, options.cacheMetadata);
+  }
 
   return { articleDir, articlePath, metadataPath };
 };

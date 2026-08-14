@@ -10,23 +10,17 @@
  * 从 `@yt2x/core` 导入。
  */
 
-/** 保留英文、整体不译的专有名词（技能名 / 产品名 / 品牌名）。 */
-export const PROTECTED_GLOSSARY_TERMS = [
-  "Grill Me",
-  "Grill with Docs",
-  "2PRD",
-  "Codex",
-  "Plan Mode",
-  "Agents",
-  "PRD",
-  "Air Coding Cohort",
-  "Shape Up",
-  "YouTube",
-  "Discord",
-] as const;
+import { TECHNICAL_TERM_CATALOG } from "../technical-term-catalog.js";
 
-/** 保留英文、整体不译的人名。 */
-export const PROTECTED_NAMES = ["Matt Pocock", "Ryan Singer", "Gary Tan", "G Stack"] as const;
+/** 兼容导出：由中央目录的 preserve 条目派生。 */
+export const PROTECTED_GLOSSARY_TERMS = TECHNICAL_TERM_CATALOG
+  .filter((entry) => entry.policy === "preserve" && !entry.categories.includes("person"))
+  .map((entry) => entry.canonical);
+
+/** 兼容导出：由中央目录的 person 分类派生。 */
+export const PROTECTED_NAMES = TECHNICAL_TERM_CATALOG
+  .filter((entry) => entry.policy === "preserve" && entry.categories.includes("person"))
+  .map((entry) => entry.canonical);
 
 export const PROTECTED_TERMS: readonly string[] = [...PROTECTED_GLOSSARY_TERMS, ...PROTECTED_NAMES];
 
@@ -127,14 +121,6 @@ export const findProtectedSpans = (
  * "交接"、"原型会议/环节"，没有观测到 grill / fidelity 那种全片译法打架的问题，因此
  * 没有加入这张表——写死一个已经稳定的译法收益很小，却会让提示词变长。
  */
-export const DUB_TERM_TRANSLATIONS: readonly { source: string; zh: string }[] = [
-  { source: "grilling session", zh: "追问环节" },
-  { source: "grilling sessions", zh: "追问环节" },
-  { source: "high fidelity", zh: "高保真" },
-  { source: "low fidelity", zh: "低保真" },
-  { source: "grillable", zh: "可追问" },
-  { source: "ungrillable", zh: "不可追问" },
-  { source: "grilling", zh: "追问" },
-  { source: "fidelity", zh: "保真度" },
-  { source: "grill", zh: "追问" },
-];
+export const DUB_TERM_TRANSLATIONS: readonly { source: string; zh: string }[] = TECHNICAL_TERM_CATALOG
+  .filter((entry) => entry.policy === "fixed-zh" && entry.preferredZh !== undefined)
+  .map((entry) => ({ source: entry.canonical, zh: entry.preferredZh! }));

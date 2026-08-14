@@ -5,11 +5,15 @@
  * 使用方式：每个 generator 的 system prompt 从 `${SHARED_BASE} + 特定规则` 组合。
  */
 
-/** 所有文章、帖子、介绍和 JSON 字段共用的术语保护规则。 */
-export const SHARED_TECHNICAL_TERMS = `专业术语保护（适用于所有文章、帖子、标题、摘要、介绍、标签、时间线、视觉说明和 JSON 字段）：
-- 源材料中的技术专有名词、方法名、框架名、模型名、产品名、命令、API 名、代码标识和可复制英文 prompt，必须按原文逐字保留，不得翻译、音译或本地化。尤其是 Prompt Engineering、Context Engineering、Graph Engineering、Knowledge Graph、Agent Graph；如果它们出现在源材料中，输出必须保留对应英文拼写。
-- 当「图」在源材料中表示 graph 概念时，必须写成 Graph，不得只写中文「图」。例如「图的基本词汇」写成「Graph 的基本词汇」、「什么时候值得用图」写成「什么时候值得用 Graph」、「三个可直接套用的现成图」写成「三个可直接套用的现成 Graph」、「更大的图不等于更好的产出」写成「更大的 Graph 不等于更好的产出」、「构建你的第一个图」写成「构建你的第一个 Graph」。
-- Knowledge Graph 和 Agent Graph 必须保持英文；例如「知识图谱 vs 代理图谱」应写成「Knowledge Graph vs Agent Graph」。可以追加中文解释，但不得用「提示工程」「上下文工程」「图工程」「知识图谱」「代理图谱」替换英文术语，也不得凭空加入源材料没有的术语。`;
+import { TECHNICAL_TERM_GENERAL_RULE } from "./technical-term-catalog.js";
+
+/** 所有文章、帖子、介绍和 JSON 字段共用的、由中央目录派生的术语保护规则。 */
+export const SHARED_TECHNICAL_TERMS = [
+  "专业术语保护（适用于所有文章、帖子、标题、摘要、介绍、标签、时间线、视觉说明和 JSON 字段）：",
+  `- ${TECHNICAL_TERM_GENERAL_RULE}`,
+  "- 目录中的 canonical 仅在源材料实际命中时激活；运行时会追加本次源材料的 active terms。",
+  "- 可以追加中文解释，但不能只用中文替换 preserve 术语；普通词不因与术语同形而改写。",
+].join("\n");
 
 /** 语言：全文统一使用简体中文（硬性要求，不可违反） */
 export const SHARED_LANG_ZH_CN = [

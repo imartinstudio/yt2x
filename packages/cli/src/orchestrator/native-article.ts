@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, stat } from "node:fs/promises";
+import { access, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
@@ -21,6 +21,22 @@ import {
   writeNativeVideoShortBundle,
   writePlatformArticleBundle,
   writeVisualSuggestions,
+  acquireContentTargetLock,
+  technicalTermDiscoveryCacheDirFor,
+  CONTENT_PROMPT_VERSIONS,
+  CONTENT_METADATA_SCHEMA_VERSION,
+  contentSourceFingerprintFor,
+  contentTechnicalTermSourceFingerprintFor,
+  knownSourceTextWithMetadata,
+  contentTargetMetadataPathFor,
+  createContentTargetMetadata,
+  isContentTargetMetadataFresh,
+  readContentTargetMetadata,
+  summarySourceTextFor,
+  structuredNotesContentSourceFor,
+  platformArticleContentSourceFor,
+  type ContentTargetCacheExpectation,
+  type ContentTargetMetadata,
 } from "@yt2x/adapters-node";
 import {
   checkArticleQuality,
@@ -64,6 +80,72 @@ const addUsage = (
   if (usage === undefined) return;
   totals.promptTokens += usage.promptTokens;
   totals.completionTokens += usage.completionTokens;
+};
+
+type ContentResultMetadata = {
+  model: string;
+  requestedModel?: string;
+  resolvedModel?: string;
+  sourceFingerprint?: string;
+  promptVersion?: string;
+  technicalTermProfileFingerprint?: string;
+  technicalTermDiscovery?: Parameters<typeof createContentTargetMetadata>[0]["technicalTermDiscovery"];
+};
+
+const contentMetadataForResult = (
+  target: string,
+  result: ContentResultMetadata,
+  sources: {
+    knownSourceText: string;
+    requiredSourceText: string;
+    sourceTitle: string;
+    scope: "full" | "scoped";
+  },
+): ContentTargetMetadata | undefined => {
+  if (result.sourceFingerprint === undefined
+    || result.promptVersion === undefined
+    || result.technicalTermProfileFingerprint === undefined
+    || result.technicalTermDiscovery === undefined) return undefined;
+  return createContentTargetMetadata({
+    target,
+    sourceFingerprint: result.sourceFingerprint,
+    requestedModel: result.requestedModel ?? result.model,
+    resolvedModel: result.resolvedModel ?? result.model,
+    promptVersion: result.promptVersion,
+    technicalTermProfileFingerprint: result.technicalTermProfileFingerprint,
+    technicalTermDiscovery: result.technicalTermDiscovery,
+    technicalTermKnownSourceFingerprint: contentTechnicalTermSourceFingerprintFor(
+      sources.knownSourceText,
+      sources.sourceTitle,
+    ),
+    technicalTermRequiredSourceFingerprint: contentTechnicalTermSourceFingerprintFor(
+      sources.requiredSourceText,
+      sources.sourceTitle,
+    ),
+    technicalTermScope: sources.scope,
+  });
+};
+
+const contentCacheHit = async (input: {
+  metadataPath: string;
+  expectation: Omit<ContentTargetCacheExpectation, "requiredFiles" | "sourceText" | "sourceTitle">;
+  sourceText: string;
+  knownSourceText?: string;
+  requiredSourceText?: string;
+  sourceTitle: string;
+  technicalTermScope?: "full" | "scoped";
+  requiredFiles: readonly string[];
+}): Promise<boolean> => {
+  const metadata = await readContentTargetMetadata(input.metadataPath);
+  return isContentTargetMetadataFresh(metadata, {
+    ...input.expectation,
+    sourceText: input.sourceText,
+    ...(input.knownSourceText === undefined ? {} : { knownSourceText: input.knownSourceText }),
+    ...(input.requiredSourceText === undefined ? {} : { requiredSourceText: input.requiredSourceText }),
+    sourceTitle: input.sourceTitle,
+    ...(input.technicalTermScope === undefined ? {} : { technicalTermScope: input.technicalTermScope }),
+    requiredFiles: input.requiredFiles,
+  });
 };
 
 /**
@@ -201,16 +283,26 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
 
   for (const videoDir of targets) {
     const stageT0 = performance.now();
+    let releaseContentLock: (() => Promise<void>) | undefined;
     try {
       const artifacts = await readStructuredNotesArtifacts(videoDir);
       progress?.setActive(`article · ${artifacts.videoId}`);
       const url = await readYoutubePageUrl(videoDir, artifacts.videoId);
       const identity = { videoId: artifacts.videoId, url };
+      const articleDir = path.join(articleOutDir, artifacts.videoId);
+      releaseContentLock = await acquireContentTargetLock(articleDir, "native-content");
       const t0 = Date.now();
       const writtenArtifacts: string[] = [];
       let articleDirForStatus: string | undefined;
       let resultFile: string | undefined;
       let sourceArticleMd: string | undefined;
+      // 已知范围要覆盖 prompt 里可见的 metadata；必需范围仍然只有 notes 正文。
+      const structuredKnownSourceText = knownSourceTextWithMetadata(
+        artifacts.metadata,
+        artifacts.structuredNotesMd,
+      );
+      const structuredRequiredSourceText = summarySourceTextFor(artifacts.structuredNotesMd);
+      const structuredSourceTitle = artifacts.metadata.title ?? "";
 
       // 读取 scene_manifest.json → available_visuals（所有格式共享）
       const sceneManifestPath = path.join(videoDir, "screenshots", "scene_manifest.json");
@@ -226,10 +318,28 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
 
       if (outputTargets.includes("article")) {
         const articlePath = path.join(articleOutDir, artifacts.videoId, "article.md");
-        let articleShouldSkip = false;
-        if (flags.force !== true) {
-          try { await stat(articlePath); articleShouldSkip = true; } catch { /* ENOENT → ok */ }
-        }
+        const runPath = path.join(articleDir, "run.json");
+        const articleSource = structuredNotesContentSourceFor({
+          metadata: artifacts.metadata,
+          structuredNotesMd: artifacts.structuredNotesMd,
+          availableVisuals,
+        });
+        const articleSourceFingerprint = contentSourceFingerprintFor(articleSource);
+        const articleShouldSkip = flags.force !== true && await contentCacheHit({
+          metadataPath: runPath,
+          expectation: {
+            target: "article",
+            sourceFingerprint: articleSourceFingerprint,
+            requestedModel: llm.model,
+            promptVersion: CONTENT_PROMPT_VERSIONS.article,
+          },
+          sourceText: structuredRequiredSourceText,
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          technicalTermScope: "scoped",
+          requiredFiles: [articlePath, runPath],
+        });
         if (articleShouldSkip) {
           logger.info({ videoId: artifacts.videoId }, "article already exists, skipping");
         } else {
@@ -244,6 +354,9 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           model: llm.model,
           artifacts,
           availableVisuals,
+          technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(
+            path.join(articleOutDir, artifacts.videoId),
+          ),
         });
 
         // 渲染图片：复制截图到文章 images/ 并替换路径
@@ -261,16 +374,49 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           artifacts.videoId,
           renderedContent,
           {
-            v: 1,
+            v: CONTENT_METADATA_SCHEMA_VERSION,
             platform: "x",
             videoId: artifacts.videoId,
-            model: result.model,
+            target: "article",
+            model: result.resolvedModel,
+            requestedModel: result.requestedModel,
+            resolvedModel: result.resolvedModel,
             finishReason: result.finishReason,
             generatedAt: new Date().toISOString(),
             durationMs: result.durationMs,
+            technicalTermProfileFingerprint: result.technicalTermProfileFingerprint,
+            technicalTermDiscovery: result.technicalTermDiscovery,
+            technicalTermKnownSourceFingerprint: contentTechnicalTermSourceFingerprintFor(
+              structuredKnownSourceText,
+              structuredSourceTitle,
+            ),
+            technicalTermRequiredSourceFingerprint: contentTechnicalTermSourceFingerprintFor(
+              structuredRequiredSourceText,
+              structuredSourceTitle,
+            ),
+            technicalTermScope: "scoped",
+            sourceFingerprint: result.sourceFingerprint,
+            promptVersion: result.promptVersion,
             ...(result.usage !== undefined ? { usage: result.usage } : {}),
           },
-          { force: flags.force === true, notesVideoDir: videoDir, sourceVideoUrl: url },
+          {
+            force: flags.force === true,
+            lock: false,
+            notesVideoDir: videoDir,
+            sourceVideoUrl: url,
+            cacheExpectation: {
+              target: "article",
+              sourceFingerprint: articleSourceFingerprint,
+              requestedModel: llm.model,
+              promptVersion: CONTENT_PROMPT_VERSIONS.article,
+              sourceText: structuredRequiredSourceText,
+              knownSourceText: structuredKnownSourceText,
+              requiredSourceText: structuredRequiredSourceText,
+              sourceTitle: structuredSourceTitle,
+              technicalTermScope: "scoped",
+              requiredFiles: [articlePath, runPath],
+            },
+          },
         );
         if (written === null) {
           logger.info({ videoId: artifacts.videoId }, "article already exists, skipping");
@@ -318,10 +464,27 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
 
       if (outputTargets.includes("x-thread")) {
         const threadPath = path.join(articleOutDir, artifacts.videoId, "x-format", "x-thread.md");
-        let xthreadShouldSkip = false;
-        if (flags.force !== true) {
-          try { await stat(threadPath); xthreadShouldSkip = true; } catch { /* ENOENT → ok */ }
-        }
+        const threadMetadataPath = contentTargetMetadataPathFor(articleDir, "x-thread");
+        const structuredSourceFingerprint = contentSourceFingerprintFor(structuredNotesContentSourceFor({
+          metadata: artifacts.metadata,
+          structuredNotesMd: artifacts.structuredNotesMd,
+          availableVisuals,
+        }));
+        const xthreadShouldSkip = flags.force !== true && await contentCacheHit({
+          metadataPath: threadMetadataPath,
+          expectation: {
+            target: "x-thread",
+            sourceFingerprint: structuredSourceFingerprint,
+            requestedModel: llm.model,
+            promptVersion: CONTENT_PROMPT_VERSIONS.xThread,
+          },
+          sourceText: structuredRequiredSourceText,
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          technicalTermScope: "scoped",
+          requiredFiles: [threadPath, path.join(articleDir, "x-format", "x-hooks.json"), threadMetadataPath],
+        });
         if (xthreadShouldSkip) {
           logger.info({ videoId: artifacts.videoId }, "x-thread already exists, skipping");
         } else {
@@ -330,12 +493,35 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           model: llm.model,
           artifacts,
           availableVisuals,
+          technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(articleDir),
+        });
+        const threadMetadata = contentMetadataForResult("x-thread", result, {
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          scope: "scoped",
         });
         const written = await writeNativeThreadBundle(
           articleOutDir,
           artifacts.videoId,
           result.thread,
-          { force: flags.force === true },
+          {
+            force: flags.force === true,
+            lock: false,
+            cacheExpectation: {
+              target: "x-thread",
+              sourceFingerprint: structuredSourceFingerprint,
+              requestedModel: llm.model,
+              promptVersion: CONTENT_PROMPT_VERSIONS.xThread,
+              sourceText: structuredRequiredSourceText,
+              knownSourceText: structuredKnownSourceText,
+              requiredSourceText: structuredRequiredSourceText,
+              sourceTitle: structuredSourceTitle,
+              technicalTermScope: "scoped",
+              requiredFiles: [threadPath, path.join(articleDir, "x-format", "x-hooks.json"), threadMetadataPath],
+            },
+            ...(threadMetadata === undefined ? {} : { cacheMetadata: threadMetadata }),
+          },
         );
         if (written === null) {
           logger.info({ videoId: artifacts.videoId }, "x-thread already exists, skipping");
@@ -366,10 +552,27 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
 
       if (outputTargets.includes("x-short")) {
         const shortPath = path.join(articleOutDir, artifacts.videoId, "x-format", "x-short.md");
-        let xshortShouldSkip = false;
-        if (flags.force !== true) {
-          try { await stat(shortPath); xshortShouldSkip = true; } catch { /* ENOENT → ok */ }
-        }
+        const shortMetadataPath = contentTargetMetadataPathFor(articleDir, "x-short");
+        const structuredSourceFingerprint = contentSourceFingerprintFor(structuredNotesContentSourceFor({
+          metadata: artifacts.metadata,
+          structuredNotesMd: artifacts.structuredNotesMd,
+          availableVisuals,
+        }));
+        const xshortShouldSkip = flags.force !== true && await contentCacheHit({
+          metadataPath: shortMetadataPath,
+          expectation: {
+            target: "x-short",
+            sourceFingerprint: structuredSourceFingerprint,
+            requestedModel: llm.model,
+            promptVersion: CONTENT_PROMPT_VERSIONS.xShort,
+          },
+          sourceText: structuredRequiredSourceText,
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          technicalTermScope: "scoped",
+          requiredFiles: [shortPath, shortMetadataPath],
+        });
         if (xshortShouldSkip) {
           logger.info({ videoId: artifacts.videoId }, "x-short already exists, skipping");
         } else {
@@ -378,12 +581,35 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           model: llm.model,
           artifacts,
           availableVisuals,
+          technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(articleDir),
+        });
+        const shortMetadata = contentMetadataForResult("x-short", result, {
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          scope: "scoped",
         });
         const written = await writeNativeShortBundle(
           articleOutDir,
           artifacts.videoId,
           result.shortPost,
-          { force: flags.force === true },
+          {
+            force: flags.force === true,
+            lock: false,
+            cacheExpectation: {
+              target: "x-short",
+              sourceFingerprint: structuredSourceFingerprint,
+              requestedModel: llm.model,
+              promptVersion: CONTENT_PROMPT_VERSIONS.xShort,
+              sourceText: structuredRequiredSourceText,
+              knownSourceText: structuredKnownSourceText,
+              requiredSourceText: structuredRequiredSourceText,
+              sourceTitle: structuredSourceTitle,
+              technicalTermScope: "scoped",
+              requiredFiles: [shortPath, shortMetadataPath],
+            },
+            ...(shortMetadata === undefined ? {} : { cacheMetadata: shortMetadata }),
+          },
         );
         if (written === null) {
           logger.info({ videoId: artifacts.videoId }, "x-short already exists, skipping");
@@ -413,10 +639,26 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
 
       if (outputTargets.includes("x-video-short")) {
         const videoShortPath = path.join(articleOutDir, artifacts.videoId, "x-format", "x-video-short.md");
-        let xvideoshortShouldSkip = false;
-        if (flags.force !== true) {
-          try { await stat(videoShortPath); xvideoshortShouldSkip = true; } catch { /* ENOENT → ok */ }
-        }
+        const videoShortMetadataPath = contentTargetMetadataPathFor(articleDir, "x-video-short");
+        const videoShortSourceFingerprint = contentSourceFingerprintFor(structuredNotesContentSourceFor({
+          metadata: artifacts.metadata,
+          structuredNotesMd: artifacts.structuredNotesMd,
+        }));
+        const xvideoshortShouldSkip = flags.force !== true && await contentCacheHit({
+          metadataPath: videoShortMetadataPath,
+          expectation: {
+            target: "x-video-short",
+            sourceFingerprint: videoShortSourceFingerprint,
+            requestedModel: llm.model,
+            promptVersion: CONTENT_PROMPT_VERSIONS.xVideoShort,
+          },
+          sourceText: structuredRequiredSourceText,
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          technicalTermScope: "scoped",
+          requiredFiles: [videoShortPath, videoShortMetadataPath],
+        });
         if (xvideoshortShouldSkip) {
           logger.info({ videoId: artifacts.videoId }, "x-video-short already exists, skipping");
         } else {
@@ -425,12 +667,35 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           model: llm.model,
           artifacts,
           availableVisuals: null,
+          technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(articleDir),
+        });
+        const videoShortMetadata = contentMetadataForResult("x-video-short", result, {
+          knownSourceText: structuredKnownSourceText,
+          requiredSourceText: structuredRequiredSourceText,
+          sourceTitle: structuredSourceTitle,
+          scope: "scoped",
         });
         const written = await writeNativeVideoShortBundle(
           articleOutDir,
           artifacts.videoId,
           result.videoShortPost,
-          { force: flags.force === true },
+          {
+            force: flags.force === true,
+            lock: false,
+            cacheExpectation: {
+              target: "x-video-short",
+              sourceFingerprint: videoShortSourceFingerprint,
+              requestedModel: llm.model,
+              promptVersion: CONTENT_PROMPT_VERSIONS.xVideoShort,
+              sourceText: structuredRequiredSourceText,
+              knownSourceText: structuredKnownSourceText,
+              requiredSourceText: structuredRequiredSourceText,
+              sourceTitle: structuredSourceTitle,
+              technicalTermScope: "scoped",
+              requiredFiles: [videoShortPath, videoShortMetadataPath],
+            },
+            ...(videoShortMetadata === undefined ? {} : { cacheMetadata: videoShortMetadata }),
+          },
         );
         if (written === null) {
           logger.info({ videoId: artifacts.videoId }, "x-video-short already exists, skipping");
@@ -459,14 +724,6 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           articleOutDir, artifacts.videoId,
           `${platformTarget}-format`, `${platformTarget}-article.md`,
         );
-        if (flags.force !== true) {
-          let platformExists = false;
-          try { await stat(platformArticlePath); platformExists = true; } catch { /* ENOENT: ok */ }
-          if (platformExists) {
-            logger.info({ videoId: artifacts.videoId, target: platformTarget }, "platform article already exists, skipping");
-            continue;
-          }
-        }
         const articlePath = path.join(articleOutDir, artifacts.videoId, "article.md");
         sourceArticleMd ??= await readFile(articlePath, "utf8").catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
@@ -477,6 +734,44 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
         });
         const timestampedCuesPath = path.join(videoDir, "timestamped-cues.md");
         const timestampedCuesMd = await readFile(timestampedCuesPath, "utf8").catch(() => undefined);
+        const platformSourceText = [artifacts.structuredNotesMd, sourceArticleMd, timestampedCuesMd ?? ""].join("\n");
+        const platformKnownSourceText = knownSourceTextWithMetadata(artifacts.metadata, platformSourceText);
+        const platformSourceFingerprint = contentSourceFingerprintFor(platformArticleContentSourceFor({
+          metadata: artifacts.metadata,
+          structuredNotesMd: artifacts.structuredNotesMd,
+          articleMd: sourceArticleMd,
+          timestampedCuesMd: timestampedCuesMd ?? "",
+          target: platformTarget,
+        }));
+        const platformMetadataPath = contentTargetMetadataPathFor(
+          articleDir,
+          `platform-article-${platformTarget}`,
+        );
+        if (flags.force !== true) {
+          const platformFresh = await contentCacheHit({
+            metadataPath: platformMetadataPath,
+            expectation: {
+              target: `platform-article-${platformTarget}`,
+              sourceFingerprint: platformSourceFingerprint,
+              requestedModel: llm.model,
+              promptVersion: CONTENT_PROMPT_VERSIONS.platformArticle,
+            },
+            sourceText: platformSourceText,
+            knownSourceText: platformKnownSourceText,
+            requiredSourceText: platformSourceText,
+            sourceTitle: artifacts.metadata.title ?? "",
+            technicalTermScope: "scoped",
+            requiredFiles: [
+              platformArticlePath,
+              path.join(articleDir, `${platformTarget}-format`, `${platformTarget}-metadata.json`),
+              platformMetadataPath,
+            ],
+          });
+          if (platformFresh) {
+            logger.info({ videoId: artifacts.videoId, target: platformTarget }, "platform article already exists, skipping");
+            continue;
+          }
+        }
         const result = await generatePlatformArticleContent({
           llm: llm.adapter,
           model: llm.model,
@@ -484,12 +779,35 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
           artifacts,
           articleMd: sourceArticleMd,
           ...(timestampedCuesMd !== undefined ? { timestampedCuesMd } : {}),
+          technicalTermDiscoveryCacheDir: technicalTermDiscoveryCacheDirFor(articleDir),
+        });
+        const platformMetadata = contentMetadataForResult(`platform-article-${platformTarget}`, result, {
+          knownSourceText: platformKnownSourceText,
+          requiredSourceText: platformSourceText,
+          sourceTitle: structuredSourceTitle,
+          scope: "scoped",
         });
         const written = await writePlatformArticleBundle(
           articleOutDir,
           artifacts.videoId,
           result.platformArticle,
-          { force: flags.force === true },
+          {
+            force: flags.force === true,
+            lock: false,
+            cacheExpectation: {
+              target: `platform-article-${platformTarget}`,
+              sourceFingerprint: platformSourceFingerprint,
+              requestedModel: llm.model,
+              promptVersion: CONTENT_PROMPT_VERSIONS.platformArticle,
+              sourceText: platformSourceText,
+              knownSourceText: platformKnownSourceText,
+              requiredSourceText: platformSourceText,
+              sourceTitle: artifacts.metadata.title ?? "",
+              technicalTermScope: "scoped",
+              requiredFiles: [],
+            },
+            ...(platformMetadata === undefined ? {} : { cacheMetadata: platformMetadata }),
+          },
         );
         if (written === null) {
           logger.info({ videoId: artifacts.videoId, target: platformTarget }, "platform article already exists, skipping");
@@ -557,7 +875,7 @@ export const executeNativeArticle = async (flags: ArticleFlags): Promise<number>
         break;
       }
     } finally {
-      // no-op: error handling above is self-contained
+      await releaseContentLock?.();
     }
   }
 

@@ -1,19 +1,32 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { Command } from "commander";
-import type { DeconstructManifest } from "@yt2x/core";
 import {
+  CONTENT_PROMPT_VERSIONS,
+  acquireContentTargetLock,
+  atomicWriteUtf8,
+  assertClipPublishReadiness,
+  contentTargetMetadataPathFor,
+  createContentTargetMetadata,
+  isContentTargetMetadataFresh,
+  readContentTargetMetadata,
+  replaceDirectoryAtomically,
+  writeContentTargetMetadata,
   readDeconstructArtifacts,
+  deconstructCacheIdentityFor,
   runDeconstruct,
   clipCandidates,
   writeDeconstructOutput,
   createLlmAdapter,
-  selectClips,
+  applyClipSelection,
   selectTopUniqueArticleSections,
   generateClipsPosts,
   writeSelectedPostFiles,
+  selectedClipPostCacheIdentityFor,
   writeReports,
-  assertClipPublishReadiness,
 } from "@yt2x/adapters-node";
+import type { DeconstructManifest } from "@yt2x/core";
 import { resolveLlmConfig, defaultCliLlmProvider } from "../config/env.js";
 import { logger } from "../logger.js";
 
@@ -39,10 +52,67 @@ export const runDeconstructCommand = async (
     return 1;
   }
 
-  logger.info({ videoId: artifacts.videoId, durationSec: artifacts.durationSec }, "Deconstruct: artifacts loaded");
+  const releaseContentLock = await acquireContentTargetLock(articleDir, "deconstruct");
+  try {
+    logger.info({ videoId: artifacts.videoId, durationSec: artifacts.durationSec }, "Deconstruct: artifacts loaded");
 
   // Step 2: Call LLM
   const llmConfig = resolveLlmConfig({ provider: defaultCliLlmProvider() });
+  const requestedModel = llmConfig.model ?? "";
+  const selectCount = selectCountOverride ?? 0;
+  const cacheIdentity = await deconstructCacheIdentityFor(artifacts, {
+    requestedModel,
+    selectCount,
+  });
+  const finalClipsDir = path.join(articleDir, "x-format", "clips");
+  const existingManifest = await readFile(path.join(finalClipsDir, "clips-manifest.json"), "utf8")
+    .then((raw) => JSON.parse(raw) as DeconstructManifest)
+    .catch(() => undefined);
+  if (existingManifest !== undefined) {
+    const articleTitle = artifacts.articleMd.match(/^#\s+(.+)$/m)?.[1] ?? artifacts.videoId;
+    const selectedClipPostIdentity = selectedClipPostCacheIdentityFor(articleTitle, existingManifest);
+    const candidateMetadataPath = contentTargetMetadataPathFor(finalClipsDir, "deconstruct-run");
+    const clipPostMetadataPath = contentTargetMetadataPathFor(finalClipsDir, "clip-post");
+    const expectedSourceText = selectedClipPostIdentity.sourceText;
+    const candidateMetadata = await readContentTargetMetadata(candidateMetadataPath);
+    const clipPostMetadata = await readContentTargetMetadata(clipPostMetadataPath);
+    const candidateFresh = await isContentTargetMetadataFresh(candidateMetadata, {
+      target: "deconstruct-run",
+      sourceFingerprint: cacheIdentity.sourceFingerprint,
+      requestedModel,
+      promptVersion: CONTENT_PROMPT_VERSIONS.deconstruct,
+      sourceText: cacheIdentity.candidateSourceText,
+      sourceTitle: cacheIdentity.sourceTitle,
+      requiredFiles: [
+        path.join(finalClipsDir, "clips-manifest.json"),
+        candidateMetadataPath,
+      ],
+    });
+    const clipPostFresh = await isContentTargetMetadataFresh(clipPostMetadata, {
+      target: "clip-post",
+      sourceFingerprint: selectedClipPostIdentity.sourceFingerprint,
+      requestedModel,
+      promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
+      sourceText: expectedSourceText,
+      sourceTitle: articleTitle,
+      requiredFiles: [
+        path.join(finalClipsDir, "clips-manifest.json"),
+        clipPostMetadataPath,
+      ],
+    });
+    if (candidateFresh && clipPostFresh) {
+      try {
+        const readiness = await assertClipPublishReadiness(articleDir);
+        logger.info({ postCount: readiness.publishOrder.length }, "Deconstruct: complete bundle cache hit, skipping providers");
+        return 0;
+      } catch (err: unknown) {
+        logger.warn(
+          { error: err instanceof Error ? err.message : String(err) },
+          "Deconstruct: cached bundle failed readiness; rebuilding",
+        );
+      }
+    }
+  }
   const llmCfg: Parameters<typeof createLlmAdapter>[0] = {
     provider: llmConfig.provider,
     apiKey: llmConfig.apiKey ?? "",
@@ -51,7 +121,7 @@ export const runDeconstructCommand = async (
   if (llmConfig.model !== undefined) llmCfg.defaultModel = llmConfig.model;
   const llm = createLlmAdapter(llmCfg);
 
-  logger.info({ provider: llmConfig.provider, model: llmConfig.model }, "Deconstruct: calling LLM");
+  logger.info({ provider: llmConfig.provider, model: llmConfig.model }, "Deconstruct: LLM configured; generating bundle");
 
   let result;
   try {
@@ -59,6 +129,8 @@ export const runDeconstructCommand = async (
       llm,
       model: llmConfig.model ?? "",
       articleDir,
+      artifacts,
+      cacheIdentity,
     });
     if (result.usage !== undefined) {
       logger.info({ usage: result.usage }, "Deconstruct: LLM usage (clip identification)");
@@ -108,6 +180,10 @@ export const runDeconstructCommand = async (
     }
   }
 
+  const stageRoot = path.join(articleDir, "x-format", `.deconstruct-stage-${process.pid}-${randomUUID()}`);
+  const stageClipsDir = path.join(stageRoot, "clips");
+  await mkdir(stageClipsDir, { recursive: true });
+  try {
   // Step 4: Write manifest — 先不裁剪视频，保存全部候选元数据
   const output = await writeDeconstructOutput(
     articleDir,
@@ -115,9 +191,16 @@ export const runDeconstructCommand = async (
     artifacts.videoId,
     artifacts.videoPath,
     artifacts.durationSec,
+    artifacts.articleMd,
+    {
+      persist: false,
+      cacheContract: "cli",
+      outputDir: stageClipsDir,
+      manifestArticlePath: path.relative(stageClipsDir, path.join(articleDir, "article.md")),
+    },
   );
 
-  logger.info({ manifestPath: output.manifestPath, clipCount: output.clippedCount }, "Deconstruct: manifest written");
+  logger.info({ manifestPath: output.manifestPath, clipCount: output.clippedCount }, "Deconstruct: manifest prepared");
 
   // Step 5: Generate posts for ALL candidates — 先生成文案，基于文案质量筛选
   logger.info({ model: llmConfig.model }, "Deconstruct: generating posts for all candidates");
@@ -134,6 +217,11 @@ export const runDeconstructCommand = async (
     llm: genLlm,
     model: llmConfig.model ?? "",
     articleDir,
+    manifest: output.manifest,
+    persist: false,
+    cacheContract: "cli",
+    outputDir: stageClipsDir,
+    lock: false,
   });
 
   if (genResult.usage !== undefined) {
@@ -141,8 +229,23 @@ export const runDeconstructCommand = async (
   }
   logger.info({ postCount: genResult.postCount }, "Deconstruct: posts generated for all candidates");
 
+  const writeStagedBundleMetadata = async (): Promise<void> => {
+    const terms = result.candidateTechnicalTerms;
+    await writeContentTargetMetadata(
+      contentTargetMetadataPathFor(stageClipsDir, "deconstruct-run"),
+      createContentTargetMetadata({
+        target: "deconstruct-run",
+        sourceFingerprint: terms.sourceFingerprint,
+        requestedModel: terms.requestedModel,
+        resolvedModel: terms.resolvedModel,
+        promptVersion: CONTENT_PROMPT_VERSIONS.deconstruct,
+        technicalTermProfileFingerprint: terms.profileFingerprint,
+        technicalTermDiscovery: terms.discoveryAudit,
+      }),
+    );
+  };
+
   // Step 6: Auto-select — 基于文案质量 + 综合评分筛选
-  const selectCount = selectCountOverride ?? 0;
   const uniqueSections = selectTopUniqueArticleSections(filtered.sections, filtered.sections.length);
   // --select N clamps to available unique article sections; no --select flag → take all unique article sections
   const effectiveSelect = selectCount > 0
@@ -161,30 +264,30 @@ export const runDeconstructCommand = async (
 
     logger.info({ keepIds }, "Deconstruct: marking selected clips");
 
-    await selectClips({
-      articleDir,
-      keep: keepIds,
-    });
+    const selectedManifest = applyClipSelection(genResult.manifest, keepIds).manifest;
 
     // Step 6b: Write .md files only for selected clips
-    const manifestPath = `${articleDir}/x-format/clips/clips-manifest.json`;
-    const manifestRaw = await readFile(manifestPath, "utf8");
-    const postManifest = JSON.parse(manifestRaw) as DeconstructManifest;
     const selectedPostPaths = await writeSelectedPostFiles(
-      postManifest,
+      selectedManifest,
       articleDir,
+      genResult.technicalTerms,
+      {
+        clipsDir: stageClipsDir,
+        metadataPath: contentTargetMetadataPathFor(stageClipsDir, "clip-post"),
+        lock: false,
+      },
     );
 
     logger.info({ mdCount: selectedPostPaths.length }, "Deconstruct: .md files written for selected clips");
 
     // Step 7: Clip ONLY selected video segments — 节省裁剪时间和磁盘空间
-    logger.info({ sourceVideo: artifacts.videoPath, outputDir: `${articleDir}/x-format/clips` }, "Deconstruct: clipping selected video segments only");
+    logger.info({ sourceVideo: artifacts.videoPath, outputDir: stageClipsDir }, "Deconstruct: clipping selected video segments only");
 
     const selectedSections = filtered.sections.filter((_, i) => keepIds.includes(String(i + 1)));
     const clipResults = await clipCandidates(
       artifacts.videoPath,
       selectedSections,
-      `${articleDir}/x-format/clips`,
+      stageClipsDir,
     );
 
     const successCount = clipResults.filter((r) => r.success).length;
@@ -198,7 +301,8 @@ export const runDeconstructCommand = async (
     }
 
     try {
-      const readiness = await assertClipPublishReadiness(articleDir);
+      await writeStagedBundleMetadata();
+      const readiness = await assertClipPublishReadiness(stageClipsDir);
       logger.info({ postCount: readiness.publishOrder.length }, "Deconstruct: clip publish readiness check passed");
     } catch (err: unknown) {
       logger.error(
@@ -207,6 +311,11 @@ export const runDeconstructCommand = async (
       );
       return 1;
     }
+
+    await replaceDirectoryAtomically(stageClipsDir, finalClipsDir);
+    // 提交后 finalClipsDir（稳定公开 root）已经通过硬链接铺回了这一代的全部交付物，
+    // 直接用它做展示路径——不带 generation UUID，用户能记住、能写进脚本。
+    const publishedPostPaths = selectedPostPaths.map((postPath) => path.join(finalClipsDir, path.basename(postPath)));
 
     // Generate reports (now with post text populated)
     await generateReports(articleDir, artifacts.articleMd);
@@ -222,8 +331,8 @@ export const runDeconstructCommand = async (
     console.log(`  视频: ${artifacts.videoId} (${Math.round(artifacts.durationSec / 60)} min)`);
     console.log(`  候选: ${filtered.sections.length} → 选中 ${selectLabel}`);
     console.log(`  文案: ${genResult.postCount} 篇 → 视频裁剪: ${successCount} 个`);
-    console.log(`  .md 文件: ${selectedPostPaths.length} 个`);
-    console.log(`  输出: ${output.manifestPath}`);
+    console.log(`  .md 文件: ${publishedPostPaths.length} 个`);
+    console.log(`  输出: ${finalClipsDir}/clips-manifest.json`);
     console.log("=".repeat(60));
     console.log("\n选中章节（按评分排序）：");
 
@@ -236,30 +345,39 @@ export const runDeconstructCommand = async (
     }
     console.log();
     console.log(`  选中文案 .md 文件：`);
-    for (const p of selectedPostPaths) {
+    for (const p of publishedPostPaths) {
       console.log(`    ${p}`);
     }
     console.log();
   } else {
     // No candidates found — nothing to select or clip
+    await atomicWriteUtf8(path.join(stageClipsDir, "clips-manifest.json"), JSON.stringify(genResult.manifest, null, 2) + "\n");
+    await writeStagedBundleMetadata();
+    await replaceDirectoryAtomically(stageClipsDir, finalClipsDir);
     await generateReports(articleDir, artifacts.articleMd);
 
     console.log("\n" + "=".repeat(60));
     console.log(`  ⚠️  未找到有效章节候选`);
     console.log(`  视频: ${artifacts.videoId} (${Math.round(artifacts.durationSec / 60)} min)`);
     console.log(`  可能原因：文章章节在视频中缺少对应画面，或时间码无法匹配`);
-    console.log(`  输出: ${output.manifestPath}`);
+    console.log(`  输出: ${finalClipsDir}/clips-manifest.json`);
     console.log("=".repeat(60));
     console.log();
   }
 
+  } finally {
+    await rm(stageRoot, { recursive: true, force: true });
+  }
   return 0;
+  } finally {
+    await releaseContentLock();
+  }
 };
 
 /** 从磁盘读取当前 manifest，生成两份审核报告 */
 const generateReports = async (articleDir: string, articleMd: string): Promise<void> => {
   try {
-    const manifestPath = `${articleDir}/x-format/clips/clips-manifest.json`;
+    const manifestPath = path.join(articleDir, "x-format", "clips", "clips-manifest.json");
     const manifest = JSON.parse(
       await import("node:fs/promises").then((m) => m.readFile(manifestPath, "utf8")),
     );

@@ -124,8 +124,7 @@ export const assertClipPublishReadiness = async (articleDirOrClipsDir: string): 
 
 const resolveClipsDir = async (articleDirOrClipsDir: string): Promise<string> => {
   const direct = path.resolve(articleDirOrClipsDir);
-  if (await exists(path.join(direct, "clips-manifest.json"))) return direct;
-  return path.join(direct, "x-format", "clips");
+  return path.basename(direct) === "clips" ? direct : path.join(direct, "x-format", "clips");
 };
 
 const validateSeries = (result: ClipPublishReadiness, selectedCount: number): void => {

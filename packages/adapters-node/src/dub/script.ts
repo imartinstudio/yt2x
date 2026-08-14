@@ -51,7 +51,11 @@ export type GenerateDubScriptResult = {
 export const generateDubScript = async (
   input: GenerateDubScriptInput,
 ): Promise<GenerateDubScriptResult> => {
-  const { lines: translated, warnings } = await translateUtterances({
+  const {
+    lines: translated,
+    warnings,
+    technicalTermProfileFingerprint,
+  } = await translateUtterances({
     llm: input.llm,
     model: input.model,
     utterances: input.utterances,
@@ -91,10 +95,11 @@ export const generateDubScript = async (
 
   return {
     script: {
-      version: 2,
+      version: 3,
       videoId: input.videoId,
       sourceWords: input.sourceWords,
       rewriteModel: input.model,
+      technicalTermProfileFingerprint,
       lines,
       droppedCount,
     },

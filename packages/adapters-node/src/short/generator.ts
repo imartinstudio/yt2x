@@ -1,14 +1,30 @@
 import { z } from "zod";
 import {
+  appendTechnicalTermRuleToSystemPrompt,
   buildShortUserPrompt,
+  createTechnicalTermGuard,
+  hasHardTechnicalTermViolations,
   SHORT_X_SYSTEM_PROMPT,
-  restoreProtectedTechnicalTermsInValue,
   type AvailableVisual,
+  type FinalizedTechnicalTermValue,
   type GeneratedShortPost,
   type LlmPort,
 } from "@yt2x/core";
 import type { StructuredNotesArtifacts } from "../article/file-store.js";
 import { parseJsonWithRepairs, salvageLooseJsonTextField } from "../llm/parse-json.js";
+import {
+  discoverTechnicalTerms,
+  createFileTechnicalTermDiscoveryCacheStore,
+  repairTechnicalTermViolations,
+  technicalTermDiscoveryAuditFor,
+} from "../technical-terms/discovery.js";
+import {
+  CONTENT_PROMPT_VERSIONS,
+  contentSourceFingerprintFor,
+  knownSourceTextWithMetadata,
+  summarySourceTextFor,
+  structuredNotesContentSourceFor,
+} from "../content-cache.js";
 
 export type GenerateXShortInput = {
   llm: LlmPort;
@@ -18,15 +34,22 @@ export type GenerateXShortInput = {
   artifacts: StructuredNotesArtifacts;
   availableVisuals?: AvailableVisual[] | null;
   signal?: AbortSignal;
+  technicalTermDiscoveryCacheDir?: string;
 };
 
 export type GenerateXShortResult = {
   shortPost: GeneratedShortPost;
   model: string;
+  requestedModel: string;
+  resolvedModel: string;
   finishReason: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens?: number };
   videoId: string;
   durationMs: number;
+  technicalTermProfileFingerprint: string;
+  technicalTermDiscovery: ReturnType<typeof technicalTermDiscoveryAuditFor>;
+  sourceFingerprint: string;
+  promptVersion: string;
 };
 
 const ShortVisualSchema = z.object({
@@ -95,20 +118,41 @@ export const parseGeneratedShortPostJson = (jsonText: string): GeneratedShortPos
 export const generateXShortContent = async (
   input: GenerateXShortInput,
 ): Promise<GenerateXShortResult> => {
-  const userPrompt = buildShortUserPrompt(
-    {
-      metadata: input.artifacts.metadata,
-      structuredNotesMd: input.artifacts.structuredNotesMd,
-      availableVisuals: input.availableVisuals ?? null,
-    },
-    { platform: "x" },
-  );
+  const sourceText = input.artifacts.structuredNotesMd;
+  const sourceTitle = input.artifacts.metadata.title ?? "";
+  const discovery = await discoverTechnicalTerms({
+    llm: input.llm,
+    model: input.model,
+    sourceText,
+    sourceTitle,
+    ...(input.technicalTermDiscoveryCacheDir === undefined ? {} : {
+      cache: createFileTechnicalTermDiscoveryCacheStore(input.technicalTermDiscoveryCacheDir),
+    }),
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+  });
+  const discoveryAudit = technicalTermDiscoveryAuditFor(discovery, { sourceText, sourceTitle });
+  // 已知范围要覆盖 prepare() 递给模型的全部材料：metadata 也在 prompt 里，
+  // 只在其中出现的词（作者名、频道名、简介里的产品名）不该被判成凭空造词。
+  const fullGuard = createTechnicalTermGuard({
+    sourceText: knownSourceTextWithMetadata(input.artifacts.metadata, sourceText),
+    sourceTitle,
+    discoveredTerms: discovery.accepted,
+    discovery: discoveryAudit,
+  });
+  const guard = fullGuard.scope(summarySourceTextFor(sourceText), sourceTitle);
+  const prepared = guard.prepare({
+    metadata: input.artifacts.metadata,
+    structuredNotesMd: input.artifacts.structuredNotesMd,
+    availableVisuals: input.availableVisuals ?? null,
+  });
+  const userPrompt = buildShortUserPrompt(prepared.value, { platform: "x" });
+  const systemPrompt = appendTechnicalTermRuleToSystemPrompt(SHORT_X_SYSTEM_PROMPT, prepared.promptRule);
 
   const t0 = Date.now();
   const resp = await input.llm.chat({
     model: input.model,
     messages: [
-      { role: "system", content: SHORT_X_SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
     temperature: input.temperature ?? 0.55,
@@ -125,28 +169,61 @@ export const generateXShortContent = async (
   } catch {
     // Keep original if import/processing fails
   }
-  shortPost = restoreProtectedTechnicalTermsInValue(
-    shortPost,
-    input.artifacts.structuredNotesMd,
-    input.artifacts.metadata.title,
-  );
-
-  // 验证 visual 只引用 available_visuals 中存在的截图
+  // Remove invalid visual references before the one and only term repair/final validation.
   if (shortPost.visual !== undefined) {
     const availVisuals = input.availableVisuals ?? [];
     const validIds = new Set(availVisuals.map((v) => v.visual_id));
-    if (!validIds.has(shortPost.visual.visual_id)) {
-      // 静默去除无效 visual 引用（LLM 幻觉常见，不中断流程）
-      delete shortPost.visual;
-    }
+    if (!validIds.has(shortPost.visual.visual_id)) delete shortPost.visual;
+  }
+  const schemaResult = GeneratedShortPostSchema.safeParse(shortPost);
+  if (!schemaResult.success) {
+    throw new Error(`Short post-process result does not match expected schema: ${schemaResult.error.message}`);
+  }
+  shortPost = {
+    text: schemaResult.data.text,
+    angle: schemaResult.data.angle,
+    risk: schemaResult.data.risk,
+    ...(schemaResult.data.visual === undefined ? {} : { visual: schemaResult.data.visual }),
+  };
+
+  let finalized: FinalizedTechnicalTermValue<GeneratedShortPost> = guard.finalize(shortPost, prepared.restoration);
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    finalized = await repairTechnicalTermViolations({
+      llm: input.llm,
+      model: input.model,
+      guard,
+      currentValue: finalized.value,
+      restoration: prepared.restoration,
+      violations: finalized.violations,
+      parseResponse: parseGeneratedShortPostJson,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    });
+  }
+  if (hasHardTechnicalTermViolations(finalized.violations)) {
+    throw new Error(`Technical term validation failed: ${finalized.violations.map((item) => item.message).join("; ")}`);
+  }
+  shortPost = finalized.value;
+  const finalSchemaResult = GeneratedShortPostSchema.safeParse(shortPost);
+  if (!finalSchemaResult.success) {
+    throw new Error(`Short final post-process result does not match expected schema: ${finalSchemaResult.error.message}`);
   }
 
   const result: GenerateXShortResult = {
     shortPost,
     model: resp.model,
+    requestedModel: input.model,
+    resolvedModel: resp.model,
     finishReason: resp.finishReason,
     videoId: input.artifacts.videoId,
     durationMs: Date.now() - t0,
+    technicalTermProfileFingerprint: prepared.profileFingerprint,
+    technicalTermDiscovery: discoveryAudit,
+    sourceFingerprint: contentSourceFingerprintFor(structuredNotesContentSourceFor({
+      metadata: input.artifacts.metadata,
+      structuredNotesMd: input.artifacts.structuredNotesMd,
+      availableVisuals: input.availableVisuals,
+    })),
+    promptVersion: CONTENT_PROMPT_VERSIONS.xShort,
   };
   if (resp.usage !== undefined) result.usage = resp.usage;
   return result;

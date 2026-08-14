@@ -94,13 +94,8 @@ describe("buildArticleUserPrompt", () => {
 
   it("requires English technical terms to remain verbatim", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/必须按原文逐字保留/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Prompt Engineering/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Context Engineering/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Graph Engineering/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Graph 的基本词汇/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Knowledge Graph/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/Agent Graph/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/第一个 Graph/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/运行时会追加本次源材料的 active terms/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).not.toMatch(/中央目录当前覆盖/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/不得翻译、音译或本地化/);
   });
 
@@ -134,7 +129,7 @@ describe("buildArticleUserPrompt", () => {
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/标题与导语一致性检查/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/最高优先级原则/);
     expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/可被读者预测/);
-    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/2GB 显存跑 AI Agent/);
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/2GB 显存跑本地工具/);
   });
 
   it("anchors the generated title to the original video title", () => {

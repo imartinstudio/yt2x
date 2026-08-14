@@ -5,6 +5,7 @@ import type * as AdaptersNode from "@yt2x/adapters-node";
 import {
   DEFAULT_STRETCH_MAX_OCCUPANCY,
   PREFERRED_RATE_MIN,
+  createTechnicalTermGuard,
   dubTranslateCharBudget,
 } from "@yt2x/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -336,10 +337,11 @@ describe("executeNativeDub time range", () => {
     });
     generateDubScriptMock.mockResolvedValue({
       script: {
-        version: 2,
+        version: 3,
         videoId: "abc12345678",
         sourceWords: "video/full.local.en.words.json",
         rewriteModel: "test-model",
+        technicalTermProfileFingerprint: "fnv1a-test-profile",
         lines: [
           {
             index: 1,
@@ -442,10 +444,11 @@ describe("executeNativeDub time range", () => {
     });
     generateDubScriptMock.mockResolvedValue({
       script: {
-        version: 2,
+        version: 3,
         videoId: "abc12345678",
         sourceWords: "video/full.local.en.words.json",
         rewriteModel: "test-model",
+        technicalTermProfileFingerprint: "fnv1a-test-profile",
         droppedCount: 0,
         lines: [
           {
@@ -558,10 +561,11 @@ describe("executeNativeDub time range", () => {
     });
     generateDubScriptMock.mockResolvedValue({
       script: {
-        version: 2,
+        version: 3,
         videoId: "abc12345678",
         sourceWords: "video/full.local.en.words.json",
         rewriteModel: "test-model",
+        technicalTermProfileFingerprint: "fnv1a-test-profile",
         droppedCount: 0,
         lines: [
           {
@@ -652,10 +656,11 @@ describe("executeNativeDub time range", () => {
     });
     generateDubScriptMock.mockResolvedValue({
       script: {
-        version: 2,
+        version: 3,
         videoId: "abc12345678",
         sourceWords: "video/full.local.en.words.json",
         rewriteModel: "test-model",
+        technicalTermProfileFingerprint: "fnv1a-test-profile",
         droppedCount: 0,
         lines: [
           {
@@ -740,7 +745,7 @@ describe("executeNativeDub time range", () => {
     expect(demucsCall.outDir).not.toBe(fullRunDemucsDir);
   });
 
-  it("ignores a stale version-1 (pre-PR3) dub-script.json full-run cache instead of reusing it", async () => {
+  it("ignores a stale legacy version-1 dub-script.json full-run cache instead of reusing it", async () => {
     guardMock.mockResolvedValue({
       hasBurnedSubtitles: false,
       hasChineseBurnedSubtitles: false,
@@ -748,10 +753,11 @@ describe("executeNativeDub time range", () => {
     });
     generateDubScriptMock.mockResolvedValue({
       script: {
-        version: 2,
+        version: 3,
         videoId: "abc12345678",
         sourceWords: "video/full.local.en.words.json",
         rewriteModel: "fresh-model",
+        technicalTermProfileFingerprint: "fnv1a-fresh-profile",
         lines: [
           {
             index: 1,
@@ -832,10 +838,11 @@ describe("executeNativeDub time range", () => {
     });
     generateDubScriptMock.mockResolvedValue({
       script: {
-        version: 2,
+        version: 3,
         videoId: "abc12345678",
         sourceWords: "video/full.local.en.words.json",
         rewriteModel: "fresh-model",
+        technicalTermProfileFingerprint: "fnv1a-fresh-profile",
         lines: [
           {
             index: 1,
@@ -897,15 +904,18 @@ describe("executeNativeDub time range", () => {
       ]),
       "utf8",
     );
-    // Pre-PR3 stale script (rejected by version-gate) sitting alongside a dub-timing.json
+    // Version-2 stale script (rejected by the current version gate) sitting alongside a
+    // dub-timing.json
     // whose shape has never changed and therefore passes DubTimingReportSchema untouched.
     await writeFile(
       path.join(dubDir, "dub-script.json"),
       JSON.stringify({
-        version: 1,
+        version: 2,
         videoId,
-        sourceSubtitle: "video/full.zh.srt",
+        sourceWords: "video/full.local.en.words.json",
         rewriteModel: "stale-cached",
+        technicalTermProfileFingerprint: "fnv1a-stale-profile",
+        droppedCount: 0,
         lines: [
           {
             index: 1,
@@ -963,6 +973,84 @@ describe("executeNativeDub time range", () => {
     const synthArgs = synthesizeDubLinesMock.mock.calls[0]?.[0] as { script: { lines: Array<{ text: string }> } };
     expect(synthArgs.script.lines[0]?.text).toBe("新链路生成的句子");
   });
+
+  it("regenerates a version-3 cache when the current technical-term profile fingerprint differs", async () => {
+    guardMock.mockResolvedValue({
+      hasBurnedSubtitles: false,
+      hasChineseBurnedSubtitles: false,
+      shouldSkipBurn: false,
+    });
+    const currentProfileFingerprint = createTechnicalTermGuard({
+      sourceText: "Prompt Engineering.",
+    }).profile.profileFingerprint;
+    generateDubScriptMock.mockResolvedValue({
+      script: {
+        version: 3,
+        videoId: "abc12345678",
+        sourceWords: "video/full.local.en.words.json",
+        rewriteModel: "fresh-model",
+        technicalTermProfileFingerprint: currentProfileFingerprint,
+        lines: [
+          {
+            index: 1,
+            startMs: 1_000,
+            endMs: 2_000,
+            targetDurationMs: 1_000,
+            text: "Prompt Engineering 重新生成",
+            sourceText: "Prompt Engineering.",
+            cueIndices: [1],
+          },
+        ],
+        droppedCount: 0,
+      },
+      warnings: [],
+      translatedCount: 1,
+      droppedCount: 0,
+    });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "yt2x-native-dub-profile-cache-"));
+    const outRoot = path.join(root, "downloads");
+    const articleRoot = path.join(root, "articles");
+    const videoId = "abc12345678";
+    const dubDir = path.join(articleRoot, videoId, "dub");
+    await mkdir(path.join(outRoot, videoId, "video"), { recursive: true });
+    await mkdir(dubDir, { recursive: true });
+    await writeFile(
+      path.join(outRoot, videoId, "video", "full.local.en.words.json"),
+      JSON.stringify([
+        { word: "Prompt", start: 1, end: 1.3 },
+        { word: "Engineering.", start: 1.3, end: 2 },
+      ]),
+      "utf8",
+    );
+    await writeFile(
+      path.join(dubDir, "dub-script.json"),
+      JSON.stringify({
+        version: 3,
+        videoId,
+        sourceWords: "video/full.local.en.words.json",
+        rewriteModel: "old-model",
+        technicalTermProfileFingerprint: "fnv1a-old-profile",
+        lines: [],
+        droppedCount: 1,
+      }),
+      "utf8",
+    );
+
+    const code = await executeNativeDub({
+      videoId,
+      outDir: outRoot,
+      articleOutDir: articleRoot,
+      scriptOnly: true,
+    });
+
+    expect(code).toBe(0);
+    expect(generateDubScriptMock).toHaveBeenCalledOnce();
+    const persisted = JSON.parse(await readFile(path.join(dubDir, "dub-script.json"), "utf8")) as {
+      technicalTermProfileFingerprint: string;
+    };
+    expect(persisted.technicalTermProfileFingerprint).toBe(currentProfileFingerprint);
+  });
 });
 
 describe("executeNativeDub --original-voice-volume", () => {
@@ -974,10 +1062,11 @@ describe("executeNativeDub --original-voice-volume", () => {
     });
     generateDubScriptMock.mockResolvedValue({
       script: {
-        version: 2,
+        version: 3,
         videoId: "abc12345678",
         sourceWords: "video/full.local.en.words.json",
         rewriteModel: "test-model",
+        technicalTermProfileFingerprint: "fnv1a-test-profile",
         droppedCount: 0,
         lines: [
           {
@@ -1104,10 +1193,11 @@ describe("executeNativeDub demucs python path", () => {
     });
     generateDubScriptMock.mockResolvedValue({
       script: {
-        version: 2,
+        version: 3,
         videoId: "abc12345678",
         sourceWords: "video/full.local.en.words.json",
         rewriteModel: "test-model",
+        technicalTermProfileFingerprint: "fnv1a-test-profile",
         droppedCount: 0,
         lines: [
           {

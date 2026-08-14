@@ -19,6 +19,7 @@ import {
   evaluateDubBilingualGate,
   extractDubSourceWindow,
   generateDubScript,
+  getCachedTechnicalTermDiscovery,
   guardDubSourceAgainstHardSubtitles,
   isDemucsError,
   isDubHardSubtitleError,
@@ -47,6 +48,7 @@ import {
   DEFAULT_STRETCH_MAX_OCCUPANCY,
   PREFERRED_RATE_MIN,
   buildNegotiateInputs,
+  createTechnicalTermGuard,
   evaluateDubGate,
   filterUtterancesByTimeRange,
   formatReverseEnSrt,
@@ -414,6 +416,29 @@ const timingMatchesScript = (timing: DubTimingReport, script: DubScript): boolea
   });
 };
 
+/**
+ * Derive the profile expected for a cache read from the current transcript and catalog. A
+ * completed discovery result may be reused from the current process, but this helper never
+ * invokes discovery itself: cache validation must not add a provider call before translation.
+ */
+const expectedDubTechnicalTermProfileFingerprint = async (input: {
+  wordsPath: string;
+  flags: DubFlags;
+  model: string;
+}): Promise<string> => {
+  const words = await readDubWords(input.wordsPath);
+  const utterances = segmentUtterances(words, segmentOptionsFrom(input.flags));
+  const sourceText = utterances.map((utterance) => utterance.text).join("\n");
+  const discovery = getCachedTechnicalTermDiscovery({
+    model: input.model,
+    sourceText,
+  });
+  return createTechnicalTermGuard({
+    sourceText,
+    ...(discovery === undefined ? {} : { discoveredTerms: discovery.accepted }),
+  }).profile.profileFingerprint;
+};
+
 export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
   if (flags.videoId === undefined || flags.videoId.trim().length === 0) {
     printCliErrorBlock({
@@ -653,6 +678,13 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
     // ── 2. 配音稿（可复用） ──
     // 时间窗冒烟不得复用/覆盖全片缓存，否则 --start-ms/--end-ms 会被静默忽略。
     const reuseFullRunArtifacts = flags.force !== true && !hasTimeRange;
+    const expectedProfileFingerprint = reuseFullRunArtifacts
+      ? await expectedDubTechnicalTermProfileFingerprint({
+          wordsPath,
+          flags,
+          model: llm.model,
+        })
+      : undefined;
     let script = reuseFullRunArtifacts
       ? await readDubScript(dubDir).catch((err: unknown) => {
           // 缺文件是正常的首次运行；版本不匹配/校验失败则是需要说明的缓存拒绝，
@@ -667,6 +699,22 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
           return undefined;
         })
       : undefined;
+    if (
+      script !== undefined &&
+      script.version === 3 &&
+      expectedProfileFingerprint !== undefined &&
+      script.technicalTermProfileFingerprint !== expectedProfileFingerprint
+    ) {
+      logger.warn(
+        {
+          videoId,
+          cachedProfileFingerprint: script.technicalTermProfileFingerprint,
+          expectedProfileFingerprint,
+        },
+        "dub: ignoring cached dub-script.json — technical-term profile fingerprint mismatch, regenerating",
+      );
+      script = undefined;
+    }
     // script 是否真的来自磁盘缓存（而非本次重新生成）——决定 dub-timing.json 和逐句音频
     // 能不能复用。旧 dub-timing.json 的 schema 从未随 PR3 变过，单靠版本号/结构校验挡不住
     // 「script 被拒后重新生成、timing 却还是旧链路产物」这种组合：timing 按 index 与新

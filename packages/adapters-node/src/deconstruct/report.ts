@@ -1,6 +1,6 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { DeconstructManifest } from "@yt2x/core";
+import { atomicWriteUtf8 } from "../content-transaction.js";
 
 /** 将秒数格式化为 MM:SS 或 H:MM:SS */
 const fmtTime = (sec: number): string => {
@@ -335,6 +335,14 @@ export type WriteReportsResult = {
   reviewPath: string;
 };
 
+/**
+ * 写进当前 active generation（而不是绕过指针直写 root），再把 generation 的内容
+ * 铺回公开 root，让报告和它描述的 manifest/post 文件始终来自同一代产物——回滚到
+ * previous generation 时报告不会错配到另一份 manifest。
+ *
+ * 调用方必须已经持有对应文章的 `deconstruct` content target 锁（deconstruct CLI
+ * 命令在整个流程外层持有这把锁，这里不重复获取，避免和外层锁重入死锁）。
+ */
 export const writeReports = async (
   articleDir: string,
   manifest: DeconstructManifest,
@@ -343,11 +351,11 @@ export const writeReports = async (
   const clipsDir = path.join(articleDir, "x-format", "clips");
   const title = articleTitle ?? manifest.source.title;
 
-  const decompositionPath = path.join(clipsDir, "DECOMPOSITION.md");
-  await writeFile(decompositionPath, generateDecompositionReport(manifest, title), "utf8");
+  await atomicWriteUtf8(path.join(clipsDir, "DECOMPOSITION.md"), generateDecompositionReport(manifest, title));
+  await atomicWriteUtf8(path.join(clipsDir, "PROFESSIONAL-REVIEW.md"), generateProfessionalReview(manifest, title));
 
-  const reviewPath = path.join(clipsDir, "PROFESSIONAL-REVIEW.md");
-  await writeFile(reviewPath, generateProfessionalReview(manifest, title), "utf8");
-
-  return { decompositionPath, reviewPath };
+  return {
+    decompositionPath: path.join(clipsDir, "DECOMPOSITION.md"),
+    reviewPath: path.join(clipsDir, "PROFESSIONAL-REVIEW.md"),
+  };
 };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createTechnicalTermGuard,
   restoreProtectedTechnicalTermsInContent,
   restoreProtectedTechnicalTermsInValue,
 } from "./technical-terms.js";
@@ -14,6 +15,15 @@ const sourceNotes = [
 ].join("\n");
 
 describe("technical term restoration", () => {
+  it("keeps the current restoration wrapper compatible with the central guard", () => {
+    const guard = createTechnicalTermGuard({ sourceText: sourceNotes });
+    const prepared = guard.prepare("图工程和知识图谱");
+
+    expect(guard.finalize("图工程和知识图谱", prepared.restoration).value).toBe(
+      "Graph Engineering 和 Knowledge Graph",
+    );
+  });
+
   it("restores source technical terms in plain content while preserving ordinary image words", () => {
     const content = [
       "图工程需要把工作拆开。",
@@ -27,7 +37,7 @@ describe("technical term restoration", () => {
       [
         "Graph Engineering 需要把工作拆开。",
         "Knowledge Graph vs Agent Graph。",
-        "Graph 的基本词汇。",
+        "图的基本词汇。",
         "截图、缩略图和图片不能被改写。",
         "Prompt Engineering 和 Context Engineering 必须保留原名。",
       ].join("\n"),
@@ -48,5 +58,11 @@ describe("technical term restoration", () => {
       tags: ["Graph Engineering", "工作流"],
       nested: { hook: "Context Engineering 与 Prompt Engineering" },
     });
+  });
+
+  it("keeps 图文 image wording Chinese when Graph protection is active", () => {
+    expect(restoreProtectedTechnicalTermsInContent("图文说明和图的基本词汇", "Graph is useful.")).toBe(
+      "图文说明和 Graph 的基本词汇",
+    );
   });
 });

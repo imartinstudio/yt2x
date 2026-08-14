@@ -15,6 +15,8 @@ export type WriteDeconstructOutput = {
   clipsDir: string;
   /** manifest 文件路径 */
   manifestPath: string;
+  /** 已完成源字段持久化的 manifest；调用方可先在内存中继续校验/选择。 */
+  manifest: DeconstructManifest;
   /** 裁剪成功的条目数 */
   clippedCount: number;
 };
@@ -25,8 +27,18 @@ export const writeDeconstructOutput = async (
   videoId: string,
   videoPath: string,
   durationSec: number,
+  articleMd = "",
+  options: {
+    persist?: boolean;
+    outputDir?: string;
+    manifestArticlePath?: string;
+    cacheContract?: "cli";
+  } = {},
 ): Promise<WriteDeconstructOutput> => {
-  const clipsDir = path.join(articleDir, "x-format", "clips");
+  if (options.persist === false && options.cacheContract !== "cli") {
+    throw new Error("persist:false deconstruct preparation requires the CLI cache contract.");
+  }
+  const clipsDir = options.outputDir ?? path.join(articleDir, "x-format", "clips");
   await mkdir(clipsDir, { recursive: true });
 
   // Build manifest entries
@@ -45,13 +57,22 @@ export const writeDeconstructOutput = async (
     video: candidateVideoFilename(c),
     scores: c.scores,
     articleSection: c.article_section,
+    sourceContext: {
+      title: c.title,
+      summary: c.summary,
+      keyQuote: c.key_quote,
+      videoScript: c.video_script,
+      articleSection: c.article_section,
+      articleBody: extractArticleSection(articleMd, c.article_section),
+    },
   }));
 
   const manifest: DeconstructManifest = {
     v: 1,
     source: {
       videoId,
-      articlePath: path.relative(clipsDir, path.join(articleDir, "article.md")),
+      articlePath: options.manifestArticlePath
+        ?? path.relative(clipsDir, path.join(articleDir, "article.md")),
       durationSec,
     },
     generatedAt: new Date().toISOString(),
@@ -60,15 +81,36 @@ export const writeDeconstructOutput = async (
   };
 
   const manifestPath = path.join(clipsDir, "clips-manifest.json");
-  await writeFile(
-    manifestPath,
-    JSON.stringify(manifest, null, 2) + "\n",
-    "utf8",
-  );
+  if (options.persist !== false) {
+    await writeFile(
+      manifestPath,
+      JSON.stringify(manifest, null, 2) + "\n",
+      "utf8",
+    );
+  }
 
   return {
     clipsDir,
     manifestPath,
+    manifest,
     clippedCount: clips.length,
   };
+};
+
+const extractArticleSection = (articleMd: string, sectionTitle: string): string => {
+  const target = sectionTitle.trim();
+  if (!target) return "";
+  const lines = articleMd.split("\n");
+  const headingIndex = lines.findIndex((line) => {
+    const match = line.match(/^(#{1,6})\s+(.+)$/u);
+    return match !== null && match[2]!.replaceAll("**", "").trim() === target;
+  });
+  if (headingIndex < 0) return "";
+  const level = lines[headingIndex]!.match(/^#+/u)![0].length;
+  const nextHeadingOffset = lines.slice(headingIndex + 1).findIndex((line) => {
+    const match = line.match(/^(#{1,6})\s+/u);
+    return match !== null && match[1]!.length <= level;
+  });
+  const end = nextHeadingOffset < 0 ? lines.length : headingIndex + 1 + nextHeadingOffset;
+  return lines.slice(headingIndex, end).join("\n");
 };

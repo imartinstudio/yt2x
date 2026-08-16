@@ -37,6 +37,71 @@ const allOf = (indices: number[]): Record<number, string> =>
   Object.fromEntries(indices.map((i) => [i, `译文${i}`]));
 
 describe("translateUtterances", () => {
+  it("keeps tightening until over-budget lines actually fit", async () => {
+    // The tighten pass ran ONCE and accepted any shorter rewrite, not one that
+    // fits. On a real 8-minute dub that left 49 of 81 lines over budget after
+    // "tightened 52/75", and over-budget is what blows the timing gate:
+    // 38 of those 49 overflowed their slot, against 1 of the 32 lines that fit.
+    // (r = 0.880 between budget overshoot and slot overflow.)
+    const utterances = [utt(1, 4000, "a fairly long english source line to translate")];
+    const budgets: number[] = [];
+    let round = 0;
+    const llm: LlmPort = {
+      chat: async (req) => {
+        const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
+        const user = req.messages.find((m) => m.role === "user")?.content ?? "[]";
+        const items = JSON.parse(user) as { index: number; maxChars: number }[];
+        budgets.push(items[0]!.maxChars);
+        round += 1;
+        // Shrink gradually: one rewrite is not enough to land inside the budget.
+        const lengths = [60, 40, 14];
+        const chars = lengths[Math.min(round - 1, lengths.length - 1)]!;
+        return {
+          content: JSON.stringify([{ index: 1, text: "字".repeat(chars) }]),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+
+    const result = await translateUtterances({ llm, model: "m", utterances });
+    const budget = budgets[0]!;
+    const line = result.lines.find((l) => l.index === 1)!;
+    expect(line.text.length).toBeLessThanOrEqual(budget);
+    // Every tighten round must restate the same budget it is trying to hit.
+    expect(new Set(budgets)).toEqual(new Set([budget]));
+  });
+
+  it("stops re-asking once a round produces nothing shorter", async () => {
+    // Each round costs a provider call. If the model cannot do better there is
+    // nothing to gain from asking again.
+    const utterances = [utt(1, 4000, "another long english source line here")];
+    let tightenCalls = 0;
+    const llm: LlmPort = {
+      chat: async (req) => {
+        const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
+        if (system.includes("exceeded its character budget")) tightenCalls += 1;
+        // Always the same over-budget length: no round can improve on it.
+        return {
+          content: JSON.stringify([{ index: 1, text: "字".repeat(50) }]),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+
+    const result = await translateUtterances({ llm, model: "m", utterances });
+    // One fruitless round, then stop — not MAX_TIGHTEN_ROUNDS of them.
+    expect(tightenCalls).toBe(1);
+    expect(result.warnings.some((w) => w.includes("still over their character budget"))).toBe(true);
+  });
+
   it("discovers the complete transcript once and preserves catalog plus discovered terms", async () => {
     const source =
       "Graph Engineering connects the Knowledge Graph and Agent Graph through Latent Workspace Routing.";

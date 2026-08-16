@@ -38,6 +38,17 @@ import {
 const BATCH_SIZE = 20;
 
 /**
+ * 收紧回合上限。
+ *
+ * 一轮不够：模型很少一次就把一条超预算 2-3 倍的行压进预算，而超预算是配音
+ * 时长门禁失败的直接来源（超预算行 78% 溢出时间槽，预算内行只有 3%）。
+ * 封顶是因为每轮一次 provider 调用，且压缩过度自身也有代价——gate 的
+ * info-loss 就是看这个；把「装得下」和「别压过头」这两条都交给有界重试，
+ * 而不是无限逼近。
+ */
+const MAX_TIGHTEN_ROUNDS = 3;
+
+/**
  * 低于该占用比就打回重写（相对于该行自己的时长预算）。
  *
  * 60% 而非门禁的 advisory 阈值（0.7）：这里是翻译阶段主动补救的触发线，门禁是
@@ -313,15 +324,22 @@ export const translateUtterances = async (
     warnings.push(`no translation for index ${stillMissing.map((u) => u.index).join(", ")}`);
   }
 
-  // 收紧：超预算的行拿英文原文重译一版，而不是把已有译文砍短
+  // 收紧：超预算的行拿英文原文重译一版，而不是把已有译文砍短。
+  //
+  // 循环，不是一轮。以前只跑一次、且「只要更短就收下」——一条超预算 3.7 倍的行
+  // 返回 3.0 倍也算收紧成功。真实全片的结果是 `tightened 52/75`，收工时仍有
+  // 49/81 行超预算，而超预算正是门禁爆掉的原因：那 49 行里 38 行合成时长超出
+  // 时间槽，而预算内的 32 行只有 1 行超。两者相关系数 0.880。
   const rate = input.rate ?? DEFAULT_SPEECH_RATE;
   const budgetOf = (u: Utterance): number => dubTranslateCharBudget(u.endMs - u.startMs, rate);
-  const overBudget = input.utterances.filter((u) => {
+  const stillOverBudget = (): Utterance[] => input.utterances.filter((u) => {
     const text = translated.get(u.index);
     return text !== undefined && text.length > budgetOf(u);
   });
 
-  if (overBudget.length > 0) {
+  for (let attempt = 0; attempt < MAX_TIGHTEN_ROUNDS; attempt += 1) {
+    const overBudget = stillOverBudget();
+    if (overBudget.length === 0) break;
     try {
       const resp = await input.llm.chat({
         model: input.model,
@@ -365,11 +383,25 @@ export const translateUtterances = async (
           tightened += 1;
         }
       }
-      warnings.push(`tightened ${tightened}/${overBudget.length} over-budget lines`);
+      warnings.push(
+        `tighten round ${attempt + 1}: tightened ${tightened}/${overBudget.length} over-budget lines`,
+      );
+      // 一轮下来一条都没变短就不必再要一次：模型已经交不出更短的版本，
+      // 继续只会重复花钱。
+      if (tightened === 0) break;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       warnings.push(`tighten pass failed: ${message}`);
+      break;
     }
+  }
+
+  const unfitted = stillOverBudget();
+  if (unfitted.length > 0) {
+    warnings.push(
+      `${unfitted.length} line(s) still over their character budget after `
+      + `${MAX_TIGHTEN_ROUNDS} tighten round(s): index ${unfitted.map((u) => u.index).join(", ")}`,
+    );
   }
 
   // 反向：远低于预算的行拿英文原文重译一版，把省下的空间用来把内容说完整。

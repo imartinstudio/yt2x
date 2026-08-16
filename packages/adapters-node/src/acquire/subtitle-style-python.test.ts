@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
@@ -27,6 +27,44 @@ const evalJson = async (expression: string): Promise<unknown> => {
   ]);
   return JSON.parse(stdout.trim());
 };
+
+const STYLE_MODULE_PATH = path.join(
+  process.cwd(),
+  "packages",
+  "adapters-node",
+  "src",
+  "acquire",
+  "subtitle_style.py",
+);
+
+/**
+ * Does this host have a real CJK face for the Chinese row?
+ *
+ * The Chinese face is ~17MB of CJK outlines and deliberately NOT vendored (see
+ * NOTICE) — it is discovered on the host. CI runners have none, so `find_font`
+ * falls back to Pillow's built-in default and the single-language renderer
+ * raises "No usable CJK font found" by design. Tests that need real glyph
+ * metrics are therefore skipped there rather than asserting host state, which
+ * is the rule docs/BILINGUAL-SUBTITLE-BURN-TASK.md already sets out:
+ * 单测不依赖真实字体文件.
+ */
+const HAS_CJK_FONT = ((): boolean => {
+  try {
+    const out = execFileSync("python3", [
+      "-c",
+      [
+        "import importlib.util",
+        `spec = importlib.util.spec_from_file_location("subtitle_style", ${JSON.stringify(STYLE_MODULE_PATH)})`,
+        "mod = importlib.util.module_from_spec(spec)",
+        "spec.loader.exec_module(mod)",
+        "print(mod.find_font(mod.ZH_FONT_CANDIDATES, 30)[1])",
+      ].join("; "),
+    ]).toString().trim();
+    return out !== "Pillow default";
+  } catch {
+    return false;
+  }
+})();
 
 describe("subtitle_style.py: the two renderers agree on Chinese", () => {
   const acquireDir = path.dirname(scriptPath);
@@ -101,7 +139,7 @@ print(json.dumps([worst, changed]))
     return JSON.parse(stdout.trim()) as [number, number];
   };
 
-  it("renders a one-line cue identically in both paths", async () => {
+  it.skipIf(!HAS_CJK_FONT)("renders a one-line cue identically in both paths", async () => {
     const [worst, changed] = await glyphDiff(
       "我用 AI 做了整个解释器视频，全部手工。",
       "I made this entire AI explainer by hand",
@@ -110,7 +148,7 @@ print(json.dumps([worst, changed]))
     expect(changed).toBe(0);
   });
 
-  it("renders a wrapped cue identically in both paths", async () => {
+  it.skipIf(!HAS_CJK_FONT)("renders a wrapped cue identically in both paths", async () => {
     // Wrapping is where the two used to diverge hardest: this renderer wrapped
     // on the ink bounding box while the other wrapped on advance width, so the
     // same sentence could break at a different character.
@@ -196,7 +234,7 @@ describe("subtitle_style.py: fonts", () => {
     );
   });
 
-  it("resolves the Chinese chain to a weight-900 face on this host", async () => {
+  it.skipIf(!HAS_CJK_FONT)("resolves the Chinese chain to a weight-900 face on this host", async () => {
     const family = (await evalJson("mod.find_font(mod.ZH_FONT_CANDIDATES, 30)[1]")) as string;
     expect(family).toMatch(/Black|Heavy/);
   });

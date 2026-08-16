@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -31,6 +31,44 @@ const evalJson = async (expression: string, preamble = ""): Promise<unknown> => 
   return JSON.parse(stdout.trim());
 };
 
+const STYLE_MODULE_PATH = path.join(
+  process.cwd(),
+  "packages",
+  "adapters-node",
+  "src",
+  "acquire",
+  "subtitle_style.py",
+);
+
+/**
+ * Does this host have a real CJK face for the Chinese row?
+ *
+ * The Chinese face is ~17MB of CJK outlines and deliberately NOT vendored (see
+ * NOTICE) — it is discovered on the host. CI runners have none, so `find_font`
+ * falls back to Pillow's built-in default and the single-language renderer
+ * raises "No usable CJK font found" by design. Tests that need real glyph
+ * metrics are therefore skipped there rather than asserting host state, which
+ * is the rule docs/BILINGUAL-SUBTITLE-BURN-TASK.md already sets out:
+ * 单测不依赖真实字体文件.
+ */
+const HAS_CJK_FONT = ((): boolean => {
+  try {
+    const out = execFileSync("python3", [
+      "-c",
+      [
+        "import importlib.util",
+        `spec = importlib.util.spec_from_file_location("subtitle_style", ${JSON.stringify(STYLE_MODULE_PATH)})`,
+        "mod = importlib.util.module_from_spec(spec)",
+        "spec.loader.exec_module(mod)",
+        "print(mod.find_font(mod.ZH_FONT_CANDIDATES, 30)[1])",
+      ].join("; "),
+    ]).toString().trim();
+    return out !== "Pillow default";
+  } catch {
+    return false;
+  }
+})();
+
 describe("render-subtitles.py: shared visual contract", () => {
   it("takes its look from subtitle_style rather than its own constants", async () => {
     const renderer = await readFile(scriptPath, "utf8");
@@ -47,7 +85,7 @@ describe("render-subtitles.py: shared visual contract", () => {
     expect(renderer).not.toContain("LINE_SPACING_RATIO");
   });
 
-  it("resolves the same weight-900 Chinese face as the bilingual renderer", async () => {
+  it.skipIf(!HAS_CJK_FONT)("resolves the same weight-900 Chinese face as the bilingual renderer", async () => {
     const family = (await evalJson("mod._load_font_named(72)[1]")) as string;
     expect(family).toMatch(/Black|Heavy/);
   });
@@ -114,7 +152,7 @@ describe("render-subtitles.py: rendering", () => {
   const ONE_LINE = "我用 AI 做了整个视频";
   const TWO_LINE = "这不是 AI 生成的画面 全部手工完成 逐帧调整过时间轴和排版 还反复校对了术语";
 
-  it("renders white glyphs on a fully transparent canvas — no background box", async () => {
+  it.skipIf(!HAS_CJK_FONT)("renders white glyphs on a fully transparent canvas — no background box", async () => {
     const [width, cornerAlpha, maxAlpha, whitePixels] = (await evalJson(
       [
         "[imgs[0].width, imgs[0].getpixel((0, 0))[3], max(px[3] for px in imgs[0].getdata()),",
@@ -130,7 +168,7 @@ describe("render-subtitles.py: rendering", () => {
     expect(whitePixels).toBeGreaterThan(1000);
   });
 
-  it("gives every cue in a video identical PNG dimensions", async () => {
+  it.skipIf(!HAS_CJK_FONT)("gives every cue in a video identical PNG dimensions", async () => {
     // ffmpeg's image2 input reconfigures its filter graph when a frame changes
     // size, which disturbs the whole overlay chain. The renderer used to emit a
     // different height per cue, so that happened at nearly every cue boundary.
@@ -139,7 +177,7 @@ describe("render-subtitles.py: rendering", () => {
     ).resolves.toHaveLength(1);
   });
 
-  it("puts every cue's last baseline on the same line", async () => {
+  it.skipIf(!HAS_CJK_FONT)("puts every cue's last baseline on the same line", async () => {
     // The overlay pins each PNG's BOTTOM edge to the frame, so a cue that wraps
     // (and therefore picks a smaller type size) must still land its final line
     // where its neighbours land theirs — otherwise captions bob between cues.
@@ -156,7 +194,7 @@ describe("render-subtitles.py: rendering", () => {
     expect(Math.max(...lastInkRows) - Math.min(...lastInkRows)).toBeLessThanOrEqual(1);
   });
 
-  it("grows a wrapped cue upward, not downward", async () => {
+  it.skipIf(!HAS_CJK_FONT)("grows a wrapped cue upward, not downward", async () => {
     const [oneLineTop, twoLineTop] = (await evalJson(
       [
         "[min((y for y in range(i.height)",
@@ -168,7 +206,7 @@ describe("render-subtitles.py: rendering", () => {
     expect(twoLineTop).toBeLessThan(oneLineTop!);
   });
 
-  it("scales with resolution instead of pinning type to absolute px", async () => {
+  it.skipIf(!HAS_CJK_FONT)("scales with resolution instead of pinning type to absolute px", async () => {
     // The old renderer kept its px range at every resolution while the wrap
     // width scaled with the frame, so 1080p captions came out relatively
     // smaller and wrapped differently.
@@ -178,7 +216,7 @@ describe("render-subtitles.py: rendering", () => {
     expect(at1080).toBe(45);
   });
 
-  it("keeps every cue at the same size, wrapping the long one", async () => {
+  it.skipIf(!HAS_CJK_FONT)("keeps every cue at the same size, wrapping the long one", async () => {
     const sizes = (await evalJson(
       "[l.size for l in layouts]",
       setup([ONE_LINE, TWO_LINE, "短句"]),
@@ -186,13 +224,13 @@ describe("render-subtitles.py: rendering", () => {
     expect(new Set(sizes).size).toBe(1);
   });
 
-  it("wraps a long cue rather than overflowing the safe area", async () => {
+  it.skipIf(!HAS_CJK_FONT)("wraps a long cue rather than overflowing the safe area", async () => {
     await expect(evalJson("len(layouts[0].lines)", setup([ONE_LINE]))).resolves.toBe(1);
     const wrapped = (await evalJson("len(layouts[0].lines)", setup([TWO_LINE]))) as number;
     expect(wrapped).toBeGreaterThan(1);
   });
 
-  it("spaces wrapped lines on the shared pitch, not its own ratio", async () => {
+  it.skipIf(!HAS_CJK_FONT)("spaces wrapped lines on the shared pitch, not its own ratio", async () => {
     // 1.65em, the same value the bilingual renderer uses; this row used to add
     // 0.55em on top of the face's line height for a 2.00em pitch.
     const [size, lineHeight, gap] = (await evalJson(

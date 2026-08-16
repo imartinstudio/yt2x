@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
 import { clearTechnicalTermDiscoveryCaches } from "../technical-terms/discovery.js";
-import { mergePlatformVisualPrompts, orchestratePlatformPrompts, previewExistingArticleImages } from "./prompt-orchestrator.js";
+import { mergePlatformVisualPrompts, orchestratePlatformPrompts, parsePlatformVisualPromptData, previewExistingArticleImages } from "./prompt-orchestrator.js";
 
 let tmpRoot: string;
 
@@ -519,5 +519,43 @@ describe("orchestratePlatformPrompts technical terms", () => {
     expect(serialized).not.toContain("图工程");
     expect(serialized).not.toContain("知识图谱");
     expect(serialized).not.toContain("代理图谱");
+  });
+});
+
+describe("parsePlatformVisualPromptData", () => {
+  const valid = {
+    technicalTermProfileFingerprint: "fp",
+    coverPrompts: [{ label: "3:4", prompt: "p", size: "900x1200", filename: "c.png", name: "cover" }],
+    illustrationPrompts: [{ index: 1, text: "t", prompt: "p", filename: "i.png", name: "illu" }],
+  };
+
+  it("returns the payload when the shape matches", () => {
+    expect(parsePlatformVisualPromptData(JSON.stringify(valid))).toEqual(valid);
+  });
+
+  it("throws instead of casting a mismatched shape into the declared type", () => {
+    // This was `JSON.parse(content) as PlatformVisualPromptData` — a cast, with
+    // nothing checking it. Correctness rested entirely on
+    // sameTechnicalTermOuterShape two call frames away in another module;
+    // relax that and the missing fields become real bugs here.
+    expect(() => parsePlatformVisualPromptData(JSON.stringify({ oops: 1 })))
+      .toThrow(/shape/iu);
+  });
+
+  it("throws on invalid JSON rather than returning undefined", () => {
+    expect(() => parsePlatformVisualPromptData("not json")).toThrow(/JSON/iu);
+  });
+
+  it("says what it refused, so a shape mismatch is not mistaken for a failed repair", () => {
+    // repairTechnicalTermViolations swallows any throw and keeps the original
+    // value, so without a message the two outcomes are indistinguishable in the
+    // logs — the ambiguity that made the other defects here expensive to find.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(() => parsePlatformVisualPromptData(JSON.stringify({ oops: 1 }))).toThrow();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("coverPrompts"));
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

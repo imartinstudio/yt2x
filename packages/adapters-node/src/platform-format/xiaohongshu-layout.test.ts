@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
-import { formatXiaohongshuLayout } from "./xiaohongshu-layout.js";
+import {
+  parseXiaohongshuSectionPrompts, formatXiaohongshuLayout } from "./xiaohongshu-layout.js";
 
 let tmpRoot: string;
 
@@ -159,5 +160,24 @@ describe("formatXiaohongshuLayout technical terms", () => {
     await formatXiaohongshuLayout({ articleDir: tmpRoot, videoId: "no-llm-stale", articleMd });
 
     await expect(readFile(path.join(formatDir, "prompts.json"), "utf8")).resolves.toBe(staleJson);
+  });
+});
+
+describe("parseXiaohongshuSectionPrompts", () => {
+  it("returns the prompts when the shape matches", () => {
+    expect(parseXiaohongshuSectionPrompts(JSON.stringify({ prompts: ["a", "b"] })))
+      .toEqual({ prompts: ["a", "b"] });
+  });
+
+  it("throws instead of casting a mismatched shape", () => {
+    // Was `JSON.parse(content) as { prompts: string[] }`. The caller then does
+    // `sectionPrompts.splice(0, len, ...guarded.prompts)` — spreading a missing
+    // field would throw a TypeError far from the cause.
+    expect(() => parseXiaohongshuSectionPrompts(JSON.stringify({ nope: 1 }))).toThrow(/shape/iu);
+    expect(() => parseXiaohongshuSectionPrompts(JSON.stringify({ prompts: [1, 2] }))).toThrow(/shape/iu);
+  });
+
+  it("throws on invalid JSON", () => {
+    expect(() => parseXiaohongshuSectionPrompts("nope")).toThrow(/JSON/iu);
   });
 });

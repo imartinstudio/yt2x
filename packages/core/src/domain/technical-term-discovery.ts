@@ -185,6 +185,30 @@ export const recognizeDeterministicTechnicalTerms = (
   };
 };
 
+/**
+ * The candidate array, whether the model returned it bare or wrapped.
+ *
+ * The discovery call sets `jsonMode`, which for OpenAI-compatible providers is
+ * `response_format: { type: "json_object" }` — a mode that entitles the
+ * provider to wrap the array in an object even though the prompt asks for a
+ * bare array. DeepSeek does exactly that once the payload gets large: a short
+ * probe returns `[...]`, a real ~10k-char transcript returns `{"terms":[...]}`.
+ * Insisting on a bare array therefore disabled discovery precisely on
+ * full-length material, and silently — the caller treats a malformed response
+ * as "no unknown terms", so the translator lost the guard that keeps product
+ * names verbatim.
+ *
+ * A single array-valued property is unambiguous, so it is unwrapped. Two or
+ * more would be a guess about which one holds the candidates, so those stay
+ * malformed rather than risk silently reading the wrong list.
+ */
+const candidateArrayFrom = (parsed: unknown): readonly unknown[] | undefined => {
+  if (Array.isArray(parsed)) return parsed;
+  if (!isRecord(parsed)) return undefined;
+  const arrays = Object.values(parsed).filter(Array.isArray);
+  return arrays.length === 1 ? (arrays[0] as readonly unknown[]) : undefined;
+};
+
 export const parseTechnicalTermDiscoveryResponse = ({
   sourceText,
   response,
@@ -199,7 +223,8 @@ export const parseTechnicalTermDiscoveryResponse = ({
       warnings: [warning("malformed-response", "术语发现响应不是合法 JSON。")],
     };
   }
-  if (!Array.isArray(parsed)) {
+  const rawCandidates = candidateArrayFrom(parsed);
+  if (rawCandidates === undefined) {
     return {
       accepted: [],
       reviewCandidates: [],
@@ -209,7 +234,7 @@ export const parseTechnicalTermDiscoveryResponse = ({
 
   const warnings: TechnicalTermDiscoveryWarning[] = [];
   const candidates = new Map<string, DiscoveredTechnicalTerm>();
-  for (const raw of parsed) {
+  for (const raw of rawCandidates) {
     if (!isRecord(raw)
       || typeof raw.sourceText !== "string"
       || !CONFIDENCES.includes(raw.confidence as typeof CONFIDENCES[number])

@@ -37,6 +37,35 @@ const allOf = (indices: number[]): Record<number, string> =>
   Object.fromEntries(indices.map((i) => [i, `译文${i}`]));
 
 describe("translateUtterances", () => {
+  it("keeps a line when the model answers a single-item batch with a bare object", async () => {
+    // Reproduced against the provider: with exactly one item in the batch the
+    // model returns {"index":N,"text":"..."} rather than a one-element array,
+    // deterministically — jsonMode is response_format json_object, so an object
+    // is the natural answer. parseResponse demanded an array and returned []
+    // silently, and the repair pass re-sent the same single item and failed the
+    // same way. A correctly translated line became droppedCount 1, which is a
+    // hard dub gate failure. Triggered whenever utteranceCount % BATCH_SIZE == 1.
+    const utterances = [utt(1, 4000, "the closing line of the video")];
+    const llm: LlmPort = {
+      chat: async (req) => {
+        const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+        if (system.includes("严格的源级专业术语发现器")) {
+          return { content: "[]", model: req.model, finishReason: "stop" as const };
+        }
+        return {
+          content: JSON.stringify({ index: 1, text: "咱们下次见。" }),
+          model: req.model,
+          finishReason: "stop" as const,
+        };
+      },
+    };
+
+    const result = await translateUtterances({ llm, model: "m", utterances });
+    expect(result.lines.map((l) => l.index)).toEqual([1]);
+    expect(result.lines[0]!.text).toBe("咱们下次见。");
+    expect(result.warnings.some((w) => w.includes("no translation for index"))).toBe(false);
+  });
+
   it("keeps tightening until over-budget lines actually fit", async () => {
     // The tighten pass ran ONCE and accepted any shorter rewrite, not one that
     // fits. On a real 8-minute dub that left 49 of 81 lines over budget after

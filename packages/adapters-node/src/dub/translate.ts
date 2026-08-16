@@ -131,6 +131,14 @@ const scopeDubTechnicalTermGuard = (
   discovery: guard.profile.discovery,
 });
 
+/** One translated line as the model reports it: `{ index, text }`. */
+const isTranslatedLineShape = (value: unknown): boolean =>
+  typeof value === "object"
+  && value !== null
+  && !Array.isArray(value)
+  && typeof (value as Record<string, unknown>).index === "number"
+  && typeof (value as Record<string, unknown>).text === "string";
+
 const parseResponse = (content: string): ParsedLine[] => {
   let parsed: unknown;
   try {
@@ -138,6 +146,15 @@ const parseResponse = (content: string): ParsedLine[] => {
   } catch {
     parsed = salvagePartialJsonArray(content);
   }
+  // A batch of exactly one item comes back as the object itself, not wrapped in
+  // a one-element array: `jsonMode` is response_format json_object, so with a
+  // single line the model has no reason to add brackets — and measured against
+  // the provider, it deterministically does not. Demanding an array here threw
+  // away a correct translation and left it unrecoverable, because the repair
+  // pass re-sent that same single item and hit the identical shape. Fires
+  // whenever utteranceCount % BATCH_SIZE == 1, or any time exactly one line
+  // needs repairing.
+  if (!Array.isArray(parsed) && isTranslatedLineShape(parsed)) parsed = [parsed];
   if (!Array.isArray(parsed)) parsed = salvagePartialJsonArray(content);
   if (!Array.isArray(parsed)) return [];
 

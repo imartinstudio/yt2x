@@ -8,6 +8,7 @@ import {
 } from "./prompt-orchestrator.js";
 import { technicalTermDiscoveryCacheDirFor } from "../technical-terms/discovery.js";
 import type { PlatformFormatInput, PlatformFormatResult, XiaohongshuMetadata } from "./types.js";
+import { z } from "zod";
 
 const METADATA_FILE = "xiaohongshu-format/xiaohongshu-metadata.json";
 const OUTPUT_DIR = "xiaohongshu-format";
@@ -201,6 +202,35 @@ const extractArticleImages = (markdown: string): string[] => {
   return images;
 };
 
+/**
+ * Parse the term-repair reply for xiaohongshu section prompts.
+ *
+ * Was `JSON.parse(content) as { prompts: string[] }`. The caller immediately
+ * does `sectionPrompts.splice(0, sectionPrompts.length, ...guarded.prompts)`, so
+ * a missing field would surface as a spread TypeError well away from its cause.
+ * Validate here and say what was refused — matching every other LLM-response
+ * parser in the repo.
+ */
+export const parseXiaohongshuSectionPrompts = (content: string): { prompts: string[] } => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`xiaohongshu prompt repair reply is not valid JSON: ${message}`);
+    throw new Error(`xiaohongshu prompt repair reply is not valid JSON: ${message}`, { cause: err });
+  }
+  const result = z.object({ prompts: z.array(z.string()) }).safeParse(parsed);
+  if (!result.success) {
+    const detail = result.error.issues
+      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .join("; ");
+    console.warn(`xiaohongshu prompt repair reply has the wrong shape — ${detail}`);
+    throw new Error(`xiaohongshu prompt repair reply has the wrong shape — ${detail}`);
+  }
+  return result.data;
+};
+
 export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promise<PlatformFormatResult> => {
   const articleDir = path.resolve(input.articleDir);
   const outputDir = path.join(articleDir, OUTPUT_DIR);
@@ -295,7 +325,7 @@ export const formatXiaohongshuLayout = async (input: PlatformFormatInput): Promi
       llmModel: input.llmModel!,
       context: termContext,
       value: { prompts: sectionPrompts },
-      parseResponse: (content) => JSON.parse(content) as { prompts: string[] },
+      parseResponse: parseXiaohongshuSectionPrompts,
     });
     sectionPrompts.splice(0, sectionPrompts.length, ...guarded.prompts);
   } else if (hasCachedPrompts) {

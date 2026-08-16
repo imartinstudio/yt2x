@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 import {
   appendTechnicalTermRuleToSystemPrompt,
   createTechnicalTermGuard,
@@ -27,6 +28,20 @@ export type PlatformVisualPromptData = {
   coverPrompts: Array<{ label: string; prompt: string; size: string; filename: string; name: string }>;
   illustrationPrompts: Array<{ index: number; text: string; prompt: string; filename: string; name: string }>;
 };
+
+const PlatformVisualPromptDataSchema = z.object({
+  platform: z.string().optional(),
+  title: z.string().optional(),
+  model: z.string().optional(),
+  technicalTermProfileFingerprint: z.string(),
+  technicalTermDiscovery: z.unknown().optional(),
+  coverPrompts: z.array(z.object({
+    label: z.string(), prompt: z.string(), size: z.string(), filename: z.string(), name: z.string(),
+  })),
+  illustrationPrompts: z.array(z.object({
+    index: z.number(), text: z.string(), prompt: z.string(), filename: z.string(), name: z.string(),
+  })),
+});
 
 type PlatformVisualPromptPatch = Partial<PlatformVisualPromptData>;
 
@@ -145,6 +160,42 @@ export const createPlatformTechnicalTermContext = async (input: {
     artifact: "visual-prompt",
   });
   return { guard, prepared: guard.prepare({ title: input.title, body: input.body }) };
+};
+
+/**
+ * Parse the term-repair reply for platform visual prompts.
+ *
+ * Was `JSON.parse(content) as PlatformVisualPromptData` — a cast, with nothing
+ * verifying it. Every sibling parser in this repo validates:
+ * `parseGeneratedVideoShortPostJson` and `parseGeneratedShortPostJson` both run
+ * a zod schema and throw a message naming the mismatch.
+ *
+ * The cast was not actually reachable as a data bug, because
+ * `repairTechnicalTermViolations` rejects anything failing
+ * `sameTechnicalTermOuterShape` and keeps the original value. But that makes
+ * correctness depend on a guard two call frames away in another module, and it
+ * makes a shape mismatch indistinguishable from a repair the model could not
+ * perform — both surface as "violations retained". The warning is what separates
+ * them; the throw then lets the existing guard do what it already did.
+ */
+export const parsePlatformVisualPromptData = (content: string): PlatformVisualPromptData => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`platform visual prompt repair reply is not valid JSON: ${message}`);
+    throw new Error(`platform visual prompt repair reply is not valid JSON: ${message}`, { cause: err });
+  }
+  const result = PlatformVisualPromptDataSchema.safeParse(parsed);
+  if (!result.success) {
+    const detail = result.error.issues
+      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .join("; ");
+    console.warn(`platform visual prompt repair reply has the wrong shape — ${detail}`);
+    throw new Error(`platform visual prompt repair reply has the wrong shape — ${detail}`);
+  }
+  return result.data as PlatformVisualPromptData;
 };
 
 export const finalizePlatformVisualPrompts = async <T>(input: {
@@ -1083,7 +1134,7 @@ export const orchestratePlatformPrompts = async (
       coverPrompts,
       illustrationPrompts,
     },
-    parseResponse: (content) => JSON.parse(content) as PlatformVisualPromptData,
+    parseResponse: parsePlatformVisualPromptData,
   });
   coverPrompts = guardedPrompts.coverPrompts;
   illustrationPrompts = guardedPrompts.illustrationPrompts;

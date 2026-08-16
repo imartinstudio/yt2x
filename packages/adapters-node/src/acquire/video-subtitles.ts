@@ -144,7 +144,11 @@ export const parseSubtitleBlocks = (raw: string): RawCue[] => {
   for (const rawLine of raw.split(/\r?\n/u)) {
     const line = rawLine.trim();
     if (line.length === 0) {
-      flush();
+      // A blank line ends a cue only once that cue has text. YouTube caption
+      // downloads sometimes put a blank line right after the timing line, and
+      // flushing there dropped the cue outright — losing its text AND its slice
+      // of the timeline, which pushed every later cue's content out of sync.
+      if (currentLines.length > 0) flush();
       continue;
     }
     if (line.toUpperCase() === "WEBVTT" || line.toUpperCase() === "VTT") {
@@ -223,6 +227,62 @@ const hasLineOverlap = (linesA: readonly string[], linesB: readonly string[]): b
  */
 const mergeLineOverlap = (linesA: readonly string[], linesB: readonly string[]): string[] => {
   return [...linesA, ...linesB.slice(1)];
+};
+
+/**
+ * Collapse YouTube's rolling two-line captions to one phrase per cue.
+ *
+ * The rolling format re-shows the previous line above the newly-spoken one:
+ *   A(0.16-1.67): "line 1"
+ *   B(1.67-1.68): "line 1"                    ← 10ms filler
+ *   C(1.68-3.59): "line 1" / "line 2"         ← line 2 is what is spoken here
+ *
+ * Only the LAST line of each cue is new; the rest is context already spoken.
+ * Treating the whole cue as freshly-spoken content makes the repeated line
+ * consume the front of the cue's span, pushing the genuinely-new text to the
+ * tail — which delays every phrase by roughly one line of speech. On a real
+ * 5-minute video that measured as a sustained ~1.9s lag, up to 5.7s.
+ *
+ * `cleanupSrt` does not solve this: it merges an overlapping PAIR into one cue
+ * but its output cues still share a line with their neighbours.
+ *
+ * Non-rolling files must pass through untouched — manual captions and Whisper
+ * output carry legitimate multi-line cues, and keeping only their last line
+ * would delete content. So the transform fires only when most adjacent pairs
+ * actually overlap.
+ */
+export const collapseRollingCaptions = (srtContent: string): string => {
+  const cues = parseSubtitleBlocks(srtContent);
+  if (cues.length < 2) return srtContent;
+
+  let overlaps = 0;
+  for (let i = 1; i < cues.length; i++) {
+    if (hasLineOverlap(cues[i - 1]!.text, cues[i]!.text)) overlaps++;
+  }
+  if (overlaps * 2 < cues.length - 1) return srtContent;
+
+  const collapsed: RawCue[] = [];
+  let previousLine = "";
+  for (const cue of cues) {
+    const newLine = cue.text[cue.text.length - 1]?.trim() ?? "";
+    if (newLine.length === 0) continue;
+    if (newLine.toLowerCase() === previousLine.toLowerCase()) {
+      // A filler cue that shows nothing new. Extend the phrase already emitted
+      // rather than dropping the span, so the timeline stays contiguous.
+      const last = collapsed[collapsed.length - 1];
+      if (last !== undefined) last.end = cue.end;
+      continue;
+    }
+    collapsed.push({
+      index: collapsed.length + 1,
+      start: cue.start,
+      end: cue.end,
+      text: [newLine],
+    });
+    previousLine = newLine;
+  }
+
+  return collapsed.length > 0 ? serializeSrtBlocks(collapsed) : srtContent;
 };
 
 /**
@@ -584,12 +644,20 @@ export const prepareSourceSubtitle = async (
     throw new Error(`unsupported subtitle file extension: ${ext}`);
   }
 
-  // Clean up Whisper fragmentation: merge duplicate cues, consolidate short durations
   const rawSrt = await readFile(dest, "utf8");
-  const cleanedSrt = cleanupSrt(rawSrt);
+
+  // Validate BEFORE normalizing. The hallucination guard looks for a long run of
+  // identical cues, and `collapseRollingCaptions` folds exactly such a run into
+  // a single cue — running it first would hide the very thing being checked.
   if (method === "local_transcription") {
-    assertNoRepeatedTranscriptionCues(cleanedSrt);
+    assertNoRepeatedTranscriptionCues(rawSrt);
   }
+
+  // Collapse YouTube rolling captions FIRST — cleanupSrt merges an overlapping
+  // pair but leaves its output cues still sharing a line with their neighbours,
+  // so the duplication (and the lag it causes) survives it.
+  // Then clean up Whisper fragmentation: merge duplicate cues, consolidate short durations.
+  const cleanedSrt = cleanupSrt(collapseRollingCaptions(rawSrt));
   await writeFile(dest, cleanedSrt, "utf8");
 
   const completed: SubtitleManifest = {
@@ -799,6 +867,18 @@ const atomicWrite = async (filePath: string, content: string): Promise<void> => 
   await rename(temporaryPath, filePath);
 };
 
+/**
+ * Normalize a source subtitle before it feeds the semantic projection.
+ *
+ * This path reads the downloaded caption file READ-ONLY (see DATA-CONTRACTS),
+ * so it never went through `prepareSourceSubtitle` and therefore never got any
+ * normalization at all. Raw YouTube rolling captions reached the projection
+ * with every phrase duplicated onto the following cue, which is what made the
+ * delivered subtitles run ~2s behind the audio.
+ */
+const normalizeBilingualSource = (raw: string, isSrt: boolean): string =>
+  collapseRollingCaptions(isSrt ? raw : convertSubtitleTextToSrt(raw));
+
 const findReadOnlyBilingualSource = async (
   videoDir: string,
   subtitle: VideoSubtitleOptions,
@@ -806,9 +886,10 @@ const findReadOnlyBilingualSource = async (
   if (subtitle.source === "file" && subtitle.file !== undefined) {
     const raw = await readFile(subtitle.file, "utf8");
     return {
-      content: path.extname(subtitle.file).toLowerCase() === ".srt"
-        ? raw
-        : convertSubtitleTextToSrt(raw),
+      content: normalizeBilingualSource(
+        raw,
+        path.extname(subtitle.file).toLowerCase() === ".srt",
+      ),
       path: subtitle.file,
     };
   }
@@ -830,7 +911,7 @@ const findReadOnlyBilingualSource = async (
       const sourcePath = path.join(directory, match);
       const raw = await readFile(sourcePath, "utf8");
       return {
-        content: match.toLowerCase().endsWith(".srt") ? raw : convertSubtitleTextToSrt(raw),
+        content: normalizeBilingualSource(raw, match.toLowerCase().endsWith(".srt")),
         path: sourcePath,
       };
     }

@@ -22,7 +22,9 @@
   },
   "files": [
     "dist",
-    "src/**/*.py"
+    "src/**/*.py",
+    "src/acquire/fonts/*.ttf",
+    "src/acquire/fonts/*LICENSE*"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

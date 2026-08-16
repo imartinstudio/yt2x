@@ -24,6 +24,7 @@ export { resolvePythonWithDemucs } from "./resolve-python.js";
 export {
   runSubtitlePipeline,
   prepareSourceSubtitle,
+  collapseRollingCaptions,
   detectSubtitleLanguage,
   transcribeLocal,
   resolveSourceVideo,

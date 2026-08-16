@@ -373,6 +373,7 @@ pnpm run ci:full
 - [docs/USAGE.md](./docs/USAGE.md)：完整用法、环境变量和目录约定。
 - [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)：monorepo 分层与数据流。
 - [docs/DATA-CONTRACTS.md](./docs/DATA-CONTRACTS.md)：磁盘产物与 `process-status.json` 契约。
+- [docs/SUBTITLE-VISUAL-CONTRACT.md](./docs/SUBTITLE-VISUAL-CONTRACT.md)：烧录字幕的视觉契约，单语与双语共用。
 - [docs/AGENT-PROMPTS.md](./docs/AGENT-PROMPTS.md)：多 Agent 协作提示词。
 - [docs/ROADMAP.md](./docs/ROADMAP.md)：当前路线图和发布前清单。
 - [docs/REFACTOR-STATUS.md](./docs/REFACTOR-STATUS.md)：当前进度。

@@ -1,6 +1,7 @@
 import { metadataPromptText } from "../notes/prompts.js";
 import type { ArticlePromptInput, ArticlePromptOptions } from "./types.js";
 import { SHARED_LANG_ZH_CN, SHARED_NO_VIDEO_AUTHOR, SHARED_TECHNICAL_TERMS } from "../shared-rules.js";
+import { ARTICLE_LEAD_MAX_CHARS } from "../quality/rules.js";
 
 /**
  * X 平台长文：从 structured-notes 做观点重构（非逐段摘要）。
@@ -80,6 +81,8 @@ AI 工具类标题特别规则：
 导语 Hook 增强规则：
 
 导语唯一目标：让读者读完第一段后，无法不继续往下看。
+
+导语长度上限：${ARTICLE_LEAD_MAX_CHARS} 字（不含 Markdown 标记）。超出会被质量检查拦为 lead-too-long；写不下就砍背景、留判断，不要靠删标点凑数。
 
 如何达成：
 - 第一句揭示认知差异（不是「我以为」，而是具体事实与常识的反差）

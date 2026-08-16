@@ -7,6 +7,63 @@ import {
   defineTechnicalTermCatalog,
 } from "./technical-term-catalog.js";
 
+describe("placeholder tokens are unique per term, not per position", () => {
+  const sourceText =
+    "I don't get the hype of using Obsidian. It's a collection of markdown files. "
+    + "You can work in ChatGBT and take it to Claude, or use any AI platform.";
+  const guard = () =>
+    createTechnicalTermGuard({
+      sourceText,
+      discoveredTerms: [
+        { sourceText: "Obsidian", confidence: "high", category: "product" },
+        { sourceText: "markdown files", confidence: "high", category: "domain" },
+        { sourceText: "AI platform", confidence: "high", category: "ai" },
+        { sourceText: "ChatGBT", confidence: "high", category: "ai" },
+      ],
+    });
+
+  const tokenFor = (term: string): string => {
+    const prepared = guard().prepare(term);
+    const placeholder = prepared.restoration.placeholders[0];
+    expect(placeholder, `no placeholder produced for ${term}`).toBeDefined();
+    return placeholder!.token;
+  };
+
+  it("never gives two different terms the same token", () => {
+    // The regression: the index was `restoration.placeholders.length`, restarting
+    // at 0 for every prepare() call. dub/translate.ts prepares each utterance
+    // separately and then sends 20 of them in ONE request, so a single prompt
+    // carried YT2X_TERM_0 meaning Obsidian, markdown files, AI platform AND
+    // ChatGBT at once. The model cannot tell those apart, and restoring by token
+    // then writes one product's name into another's slot — observed as Obsidian
+    // dropping from 16 source lines to 11 while NotebookLM rose from 2 to 13.
+    const tokens = ["Obsidian", "markdown files", "AI platform", "ChatGBT"].map(tokenFor);
+    expect(new Set(tokens).size).toBe(tokens.length);
+  });
+
+  it("gives one term the same token across separate prepare() calls", () => {
+    // Batched requests only stay coherent if a term reads identically in every
+    // line it appears in.
+    expect(tokenFor("Obsidian")).toBe(tokenFor("Obsidian"));
+  });
+
+  it("still round-trips through finalize", () => {
+    const g = guard();
+    const prepared = g.prepare("Obsidian beats any AI platform");
+    expect(String(prepared.value)).not.toContain("Obsidian");
+    expect(g.finalize(prepared.value, prepared.restoration).value).toBe(
+      "Obsidian beats any AI platform",
+    );
+  });
+
+  it("reuses one token when a term repeats inside a single value", () => {
+    const prepared = guard().prepare("Obsidian and Obsidian again");
+    const tokens = [...String(prepared.value).matchAll(/\uE000[^\uE001]+\uE001/gu)].map((m) => m[0]);
+    expect(tokens).toHaveLength(2);
+    expect(new Set(tokens).size).toBe(1);
+  });
+});
+
 describe("technical term catalog", () => {
   it("protects source terms through an immutable guard", () => {
     const guard = createTechnicalTermGuard({

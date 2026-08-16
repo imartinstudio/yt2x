@@ -46,6 +46,8 @@ This map is intentionally short. Use it to route changes before reading code.
 - `docs/USAGE.md`: user-facing commands and examples.
 - `docs/DATA-CONTRACTS.md`: artifact naming and filesystem contracts.
 - `docs/ARCHITECTURE.md`: package responsibilities and data flow.
+- `docs/SUBTITLE-VISUAL-CONTRACT.md`: how burned subtitles look, both delivery
+  paths. Supersedes the visual half of `docs/BILINGUAL-SUBTITLE-BURN-TASK.md`.
 - `docs/adr/`: accepted decisions.
 - `docs/*-TASK.md`: task-specific design docs; read only for that task.
 

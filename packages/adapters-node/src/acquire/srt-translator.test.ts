@@ -26,6 +26,29 @@ Goodbye now
 `;
 
 describe("translateSrt", () => {
+  it("keeps a block when the model answers a single-item batch with a bare object", async () => {
+    // Same shape hazard as dub/translate.ts (fixed in de06c8b): jsonMode is
+    // response_format json_object, so a batch of exactly one block comes back as
+    // the object itself rather than a one-element array. The parser demanded an
+    // array and salvagePartialJsonArray bails without a `[`, so a correct
+    // translation was thrown away. Reachable here two ways: blocks.length % 30
+    // == 1, and — more often — a repair pass with exactly one missing block.
+    const oneBlockSrt = `1
+00:00:01,000 --> 00:00:03,500
+Hello world
+`;
+    const llm = mockLlm(JSON.stringify({ index: 1, text: "你好世界" }));
+    const { srt, warnings } = await translateSrt(oneBlockSrt, {
+      llm,
+      model: "m",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+    });
+
+    expect(parseSubtitleBlocks(srt)[0]!.text.join(" ")).toBe("你好世界");
+    expect(warnings.some((w) => w.includes("not a JSON array"))).toBe(false);
+  });
+
   const technicalTermSrt = `1
 00:00:01,000 --> 00:00:03,500
 Graph Engineering connects Knowledge Graph and Agent Graph.

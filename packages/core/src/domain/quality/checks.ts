@@ -371,16 +371,37 @@ export const checkArticleQuality = (
 };
 
 /** 计算 Short post text 中的 list item 数量。 */
+/**
+ * A list marker followed by its content on the SAME line — the shape
+ * `short/prompts.ts` actually mandates (`1 内容`, no dot, no bracket) and also
+ * allows as `① 内容` / `1️⃣ 内容`.
+ *
+ * The index is capped at two digits and must be followed by real content, so
+ * ordinary prose that opens with a figure ("2024 年这套流程…", "50 个来源的上限…")
+ * is not miscounted as a list item. A year or a quantity is exactly the kind of
+ * line that would otherwise inflate the count and make the check meaningless in
+ * the other direction.
+ */
+const SAME_LINE_LIST_ITEM = /^\s*(?:\d{1,2}|[①②③④⑤⑥⑦⑧⑨⑩]|[0-9]️⃣)[ \t]+\S/u;
+/** Markdown markers, and the lone-marker-on-its-own-line variant. */
+const MARKDOWN_LIST_ITEM = /^\s*(?:\d+\.|[-*+])\s+/u;
+const LONE_LIST_MARKER = /^\s*(?:\d+|[①②③④⑤⑥⑦⑧⑨⑩]|[0-9]️⃣)\s*$/u;
+
 const collectShortListItems = (text: string): string[] => {
   const lines = text.split(/\r?\n/);
   const items: string[] = [];
   for (let idx = 0; idx < lines.length; idx += 1) {
     const line = lines[idx] ?? "";
-    if (/^\s*(?:\d+\.|[-*+])\s+/.test(line)) {
-      items.push(line);
+    if (MARKDOWN_LIST_ITEM.test(line) || SAME_LINE_LIST_ITEM.test(line)) {
+      // "标题：" 结构要求冒号后换行，所以正文在下一行——把它并进来，
+      // 否则可执行要点/风险提醒的关键字匹配只能看到标题。
+      const continuation = line.trim().endsWith("：") || line.trim().endsWith(":")
+        ? lines[idx + 1]?.trim() ?? ""
+        : "";
+      items.push(continuation === "" ? line : `${line.trim()} ${continuation}`);
       continue;
     }
-    if (/^\s*(?:\d+|[①②③④⑤⑥⑦⑧⑨⑩]|[0-9]️⃣)\s*$/.test(line)) {
+    if (LONE_LIST_MARKER.test(line)) {
       const next = lines.slice(idx + 1).find((candidate) => candidate.trim().length > 0);
       if (next !== undefined) {
         items.push(`${line.trim()} ${next.trim()}`);

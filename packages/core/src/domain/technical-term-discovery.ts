@@ -185,6 +185,36 @@ export const recognizeDeterministicTechnicalTerms = (
   };
 };
 
+/**
+ * The candidate list, in whichever shape the model returned it.
+ *
+ * The discovery call sets `jsonMode`, which for OpenAI-compatible providers is
+ * `response_format: { type: "json_object" }`. That mode is built for objects,
+ * so demanding a bare top-level array fought it — and the model resolved the
+ * contradiction in two different ways, both of which used to be discarded:
+ *
+ *   - wrapping the list, `{"terms": [...]}` — seen once the payload is large;
+ *   - collapsing to a single bare candidate object — observed 3/3 against a
+ *     real 10k-char transcript, i.e. the common case for full-length material.
+ *
+ * Either way the caller treated the response as malformed and carried on as if
+ * no unknown terms existed, silently dropping the guard that keeps product
+ * names verbatim. The prompt now names the `terms` wrapper so the shapes agree
+ * by construction; this stays tolerant of the rest for older providers.
+ *
+ * A single array-valued property is unambiguous, so it is unwrapped. Two or
+ * more would be a guess about which one holds the candidates, so those stay
+ * malformed rather than risk silently reading the wrong list.
+ */
+const candidateArrayFrom = (parsed: unknown): readonly unknown[] | undefined => {
+  if (Array.isArray(parsed)) return parsed;
+  if (!isRecord(parsed)) return undefined;
+  const arrays = Object.values(parsed).filter(Array.isArray);
+  if (arrays.length === 1) return arrays[0] as readonly unknown[];
+  if (arrays.length === 0 && isDiscoveryCandidate(parsed)) return [parsed];
+  return undefined;
+};
+
 export const parseTechnicalTermDiscoveryResponse = ({
   sourceText,
   response,
@@ -199,7 +229,8 @@ export const parseTechnicalTermDiscoveryResponse = ({
       warnings: [warning("malformed-response", "术语发现响应不是合法 JSON。")],
     };
   }
-  if (!Array.isArray(parsed)) {
+  const rawCandidates = candidateArrayFrom(parsed);
+  if (rawCandidates === undefined) {
     return {
       accepted: [],
       reviewCandidates: [],
@@ -209,7 +240,7 @@ export const parseTechnicalTermDiscoveryResponse = ({
 
   const warnings: TechnicalTermDiscoveryWarning[] = [];
   const candidates = new Map<string, DiscoveredTechnicalTerm>();
-  for (const raw of parsed) {
+  for (const raw of rawCandidates) {
     if (!isRecord(raw)
       || typeof raw.sourceText !== "string"
       || !CONFIDENCES.includes(raw.confidence as typeof CONFIDENCES[number])
@@ -297,7 +328,10 @@ export const buildTechnicalTermDiscoveryPrompt = (
 ): string => [
   `Prompt version: ${TECHNICAL_TERM_DISCOVERY_PROMPT_VERSION}.`,
   "从源材料中发现 AI、AI coding、AI agent 相关的专业术语。",
-  "只返回 JSON 数组，每项包含 sourceText、confidence（high/medium/low）和 category（ai/ai-coding/ai-agent/product/person/domain）。",
+  // 请求设了 response_format: json_object，该模式面向对象；再要求顶层数组会自相矛盾，
+  // 模型实测会退化成包裹对象或单个候选对象。直接把 wrapper 形状写进 prompt。
+  '只返回一个 JSON 对象，形如 {"terms": [...]}；terms 是数组，每项包含 sourceText、confidence（high/medium/low）和 category（ai/ai-coding/ai-agent/product/person/domain）。',
+  "terms 必须列出源材料中出现的全部术语，不要只返回一条。",
   "sourceText 必须是从源材料逐字复制的、连续且 exact 的 source span；不要翻译、改写、归一化大小写或凭空创造术语。",
   "只把明确的专业术语作为候选，不要把普通动词、泛化名词或完整句子列入结果。",
   sourceTitle.trim() === "" ? `Source text:\n${sourceText}` : `Source title:\n${sourceTitle}\n\nSource text:\n${sourceText}`,

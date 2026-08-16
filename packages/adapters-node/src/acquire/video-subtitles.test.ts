@@ -20,6 +20,7 @@ vi.mock("./resolve-python.js", () => ({
 
 import {
   cleanupSrt,
+  collapseRollingCaptions,
   convertSubtitleTextToSrt,
   detectSubtitleLanguage,
   parseSubtitleBlocks,
@@ -1644,6 +1645,101 @@ Add a screenshot and a flow chart.
     });
 
     await expect(readFile(path.join(root, "video", "full.zh.srt"), "utf8")).resolves.toContain("你好");
+  });
+});
+
+describe("parseSubtitleBlocks: malformed blocks", () => {
+  it("keeps a cue whose text is separated from its timing by a blank line", () => {
+    // YouTube auto-caption downloads sometimes put a blank line right after the
+    // timing line. Flushing on every blank line dropped such a cue entirely —
+    // silently losing both its text and its slice of the timeline, which shifted
+    // every downstream cue later.
+    const srt = `1
+00:00:00,160 --> 00:00:01,670
+
+So, I'm going to quickly break down
+
+2
+00:00:01,680 --> 00:00:03,590
+how to do these scroll animations
+`;
+    const cues = parseSubtitleBlocks(srt);
+    expect(cues).toHaveLength(2);
+    expect(cues[0]!.start).toBe("00:00:00,160");
+    expect(cues[0]!.text.join(" ")).toBe("So, I'm going to quickly break down");
+  });
+});
+
+describe("collapseRollingCaptions", () => {
+  /**
+   * YouTube's rolling two-line format: each cue re-shows the previous line on
+   * top and the newly-spoken line underneath, with 10ms filler cues between.
+   */
+  const rolling = `1
+00:00:00,160 --> 00:00:01,670
+So, I'm going to quickly break down
+
+2
+00:00:01,670 --> 00:00:01,680
+So, I'm going to quickly break down
+
+3
+00:00:01,680 --> 00:00:03,590
+So, I'm going to quickly break down
+how to do these scroll animations
+
+4
+00:00:03,590 --> 00:00:03,600
+how to do these scroll animations
+
+5
+00:00:03,600 --> 00:00:05,190
+how to do these scroll animations
+as easy as possible
+`;
+
+  it("keeps each phrase once, timed to when it was actually spoken", () => {
+    // This is the whole bug: the repeated top line used to be treated as content
+    // spoken during its cue's span, so it ate the front of the span and pushed
+    // the genuinely-new bottom line to the tail — a sustained ~2s lag.
+    const cues = parseSubtitleBlocks(collapseRollingCaptions(rolling));
+    expect(cues.map((c) => c.text.join(" "))).toEqual([
+      "So, I'm going to quickly break down",
+      "how to do these scroll animations",
+      "as easy as possible",
+    ]);
+    expect(cues[0]!.start).toBe("00:00:00,160");
+    expect(cues[1]!.start).toBe("00:00:01,680");
+    expect(cues[2]!.start).toBe("00:00:03,600");
+  });
+
+  it("leaves a non-rolling subtitle file untouched", () => {
+    // Manual captions and Whisper output legitimately carry multi-line cues with
+    // no overlap. Collapsing those to their last line would destroy content, so
+    // the transform must only fire when the file is actually rolling.
+    const manual = `1
+00:00:01,000 --> 00:00:04,000
+A two-line manual caption
+that continues here
+
+2
+00:00:04,000 --> 00:00:07,000
+And a second unrelated cue
+with its own second line
+`;
+    expect(collapseRollingCaptions(manual)).toBe(manual);
+  });
+
+  it("leaves a single-line-per-cue file untouched", () => {
+    const plain = `1
+00:00:01,000 --> 00:00:02,000
+First line
+
+2
+00:00:02,000 --> 00:00:03,000
+Second line
+`;
+    expect(collapseRollingCaptions(plain)).toBe(plain);
   });
 });
 

@@ -24,6 +24,14 @@ type TextBlock = { index: number; text: string };
 
 const BATCH_SIZE = 30;
 
+/** One translated block as the model reports it: `{ index, text }`. */
+const isTranslatedBlockShape = (value: unknown): boolean =>
+  typeof value === "object"
+  && value !== null
+  && !Array.isArray(value)
+  && typeof (value as Record<string, unknown>).index === "number"
+  && typeof (value as Record<string, unknown>).text === "string";
+
 const isSimplifiedChineseTarget = (targetLang: string): boolean =>
   /^zh(?:[-_](?:CN|Hans|SG))?$/iu.test(targetLang);
 
@@ -131,6 +139,17 @@ const translateBatch = async (
     parsed = parseJsonWithRepairs(content);
   } catch {
     parsed = null;
+  }
+
+  // A batch of exactly one block comes back as the object itself, not wrapped in
+  // a one-element array: `jsonMode` is response_format json_object, so with a
+  // single item the model has no reason to add brackets — measured against the
+  // provider, it deterministically does not. Rejecting that shape discarded a
+  // correct translation and shipped `[未翻译] …` into the subtitle instead.
+  // Reachable when blocks.length % BATCH_SIZE == 1, and more often through a
+  // repair pass carrying exactly one missing block.
+  if (!Array.isArray(parsed) && isTranslatedBlockShape(parsed)) {
+    parsed = [parsed];
   }
 
   if (!Array.isArray(parsed)) {

@@ -5,7 +5,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { ProcessRunner, ProcessResult, ProcessSpec } from "../process/index.js";
-import { prepareYoutubeVideo } from "./prepare-youtube-video.js";
+import { prepareYoutubeVideo, subtitlePipelineHasWork } from "./prepare-youtube-video.js";
+import * as videoSubtitles from "./video-subtitles.js";
+import type * as VideoSubtitlesModule from "./video-subtitles.js";
+
+// Only runSubtitlePipeline is stubbed — the rest of the module (notably
+// prepareSourceSubtitle) stays real so the other integration tests are unaffected.
+vi.mock("./video-subtitles.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof VideoSubtitlesModule>();
+  return { ...actual, runSubtitlePipeline: vi.fn().mockResolvedValue({ warnings: [] }) };
+});
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -134,7 +143,84 @@ const createMockRunner = (opts: {
   };
 };
 
+describe("subtitlePipelineHasWork", () => {
+  /**
+   * The bilingual `--deliver` tiers deliberately set subtitleZh to "off" so the
+   * single-language burn never runs alongside the bilingual one (delivery.ts
+   * documents that double-burn bug). Their real intent rides on
+   * subtitleBilingual, so a gate that reads only the zh mode makes
+   * `--urls --deliver bilingual-burned` produce NOTHING and still report success.
+   */
+  it("runs when only the bilingual mode is set — the bilingual --deliver tiers", () => {
+    expect(subtitlePipelineHasWork("off", "burned")).toBe(true);
+    expect(subtitlePipelineHasWork("off", "srt")).toBe(true);
+    expect(subtitlePipelineHasWork("off", "ass")).toBe(true);
+    expect(subtitlePipelineHasWork("off", "all")).toBe(true);
+  });
+
+  it("runs when only the Chinese mode is set", () => {
+    expect(subtitlePipelineHasWork("srt", "off")).toBe(true);
+    expect(subtitlePipelineHasWork("burned", "off")).toBe(true);
+  });
+
+  it("stays off when neither mode asks for anything", () => {
+    expect(subtitlePipelineHasWork("off", "off")).toBe(false);
+    expect(subtitlePipelineHasWork(undefined, undefined)).toBe(false);
+    expect(subtitlePipelineHasWork("off", undefined)).toBe(false);
+    expect(subtitlePipelineHasWork(undefined, "off")).toBe(false);
+  });
+});
+
 describe("prepareYoutubeVideo (integration, mocked yt-dlp)", () => {
+  it("runs the subtitle pipeline when ONLY the bilingual mode is set", async () => {
+    // The regression this pins: `--urls --deliver bilingual-burned` sets
+    // subtitleZh "off" by design and carries its intent in subtitleBilingual.
+    // Gating on the zh mode alone skipped the stage and still reported success,
+    // so the run produced no subtitles at all. Asserting the predicate in
+    // isolation is not enough — it would stay green if the call site stopped
+    // consulting it, which is exactly the shape of the original bug.
+    vi.mocked(videoSubtitles.runSubtitlePipeline).mockClear();
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-bi-"));
+
+    await prepareYoutubeVideo({
+      url: "https://www.youtube.com/watch?v=testVideo12",
+      outDir,
+      maxWords: 900,
+      keyframes: 0,
+      sceneThreshold: 0.35,
+      sceneMinGap: 12,
+      videoSubtitles: { mode: "off", sourceLang: "en", targetLang: "zh-CN", source: "auto" },
+      subtitleBilingual: "burned",
+      runner: createMockRunner({}),
+      timeoutMs: 60_000,
+    });
+
+    expect(videoSubtitles.runSubtitlePipeline).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(videoSubtitles.runSubtitlePipeline).mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ subtitleBilingual: "burned" }),
+    );
+  });
+
+  it("leaves the subtitle pipeline alone when both modes are off", async () => {
+    vi.mocked(videoSubtitles.runSubtitlePipeline).mockClear();
+    const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-nosub-"));
+
+    await prepareYoutubeVideo({
+      url: "https://www.youtube.com/watch?v=testVideo12",
+      outDir,
+      maxWords: 900,
+      keyframes: 0,
+      sceneThreshold: 0.35,
+      sceneMinGap: 12,
+      videoSubtitles: { mode: "off", sourceLang: "en", targetLang: "zh-CN", source: "auto" },
+      subtitleBilingual: "off",
+      runner: createMockRunner({}),
+      timeoutMs: 60_000,
+    });
+
+    expect(videoSubtitles.runSubtitlePipeline).not.toHaveBeenCalled();
+  });
+
   it("writes metadata, chunks.md, and timestamped-cues.md", async () => {
     const outDir = await mkdtemp(path.join(os.tmpdir(), "yt2x-prep-"));
     const runner = createMockRunner({});

@@ -4,184 +4,85 @@
 Input: bilingual SRT file (Chinese line 1, English line 2 per cue)
 Output: PNG frames in a directory + manifest.json
 
-Style: BaoCut-inspired white bilingual subtitles. Simplified Chinese is bold
-and outlined on top; the English source is smaller below it.
+Style: white bilingual subtitles. Simplified Chinese is Heavy-weight and
+hairline-outlined on top; the English source is smaller below it.
 """
 
 import json
 import math
 import re
 import sys
-import unicodedata
 from functools import lru_cache
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-# ── Style, expressed in BaoCut's own units ──
-# BaoCut states outline as a 0-100 percentage and shadow distance/blur as 0-1
-# fractions, both relative to the font size — so its "描边 8" and "距离 0.08"
-# are the same 8%, just on different scales. Keeping them as fractions here
-# means every derived pixel value scales with the font (and therefore with the
-# video resolution) automatically, instead of needing its own scaled constant.
-_BASE_ZH_FONT_SIZE = 30
+# The shared visual contract lives next to this script. It has to be added to
+# the import path explicitly: this file is run as `python3 <path>` and is also
+# loaded by tests via importlib.spec_from_file_location, and neither reliably
+# puts its own directory on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from subtitle_style import (  # noqa: E402
+    EN_CJK_FONT_CANDIDATES,
+    EN_FILL,
+    EN_FONT_CANDIDATES,
+    EN_HIGHLIGHT_FILL,
+    EN_HIGHLIGHT_RE,
+    EN_OUTLINE_PX,
+    EN_TRACKING_EM,
+    MAX_WIDTH_FRAC,
+    OUTLINE_COLOR,
+    ZH_FILL,
+    ZH_FONT_CANDIDATES,
+    ZH_FONT_SIZE_BASE,
+    ZH_OUTLINE_PX,
+    ZH_TRACKING_EM,
+    ShadowStyle,
+    draw_outlined_runs,
+    en_shadow,
+    find_font,
+    line_gap,
+    resolution_scale,
+    zh_caption_text,
+    zh_shadow,
+    zh_weight_warning,
+)
+
+# ── Layout ──
+# The English row's size is this renderer's own concern; the Chinese row takes
+# ZH_FONT_SIZE_BASE from the shared contract, because single-language delivery
+# is the same Chinese row with the English one removed.
 _BASE_EN_FONT_SIZE = 16
-# Deliberately NOT a BaoCut-style fraction: at 8% the outline scaled to 2-4px
-# across our resolutions and read as too heavy. A hairline outline is a fixed
-# visual weight regardless of font size, so it stays a constant pixel count.
-ZH_OUTLINE_PX = 1          # was: ZH_OUTLINE_FRAC = 0.08 (BaoCut 描边 8)
-EN_OUTLINE_PX = 0          # BaoCut 描边 无
-SHADOW_ANGLE_DEG = 45        # BaoCut 阴影角度 45°
-
-# Chinese follows BaoCut's shadow spec directly (距离 0.08 / 模糊 0.1) at a
-# much lower opacity than its nominal 100%: the row's legibility on any
-# background comes from its outline, so the shadow only has to hint at depth.
-ZH_SHADOW_DISTANCE_FRAC = 0.08
-ZH_SHADOW_BLUR_FRAC = 0.10
-ZH_SHADOW_OPACITY = 0.28
-
-# English follows the same BaoCut spec, lighter again than Chinese in relative
-# terms. NOTE: with 描边 无 the shadow is the only thing separating white
-# glyphs from the picture, so on a near-white background this row has very
-# little contrast by construction — a displaced shadow darkens one side only.
-# Raising the opacity to cover that case is what produced the "too heavy"
-# look, so it stays light here; a near-white scene needs a thin edge instead.
-EN_SHADOW_DISTANCE_FRAC = 0.08
-EN_SHADOW_BLUR_FRAC = 0.10
-EN_SHADOW_OPACITY = 0.42
-
-ZH_FILL = (255, 255, 255, 255)
-EN_FILL = (255, 255, 255, 255)  # pure white
-OUTLINE_COLOR = (0, 0, 0, 255)  # pure black
-SHADOW_RGB = (64, 64, 64)  # #404040
-MAX_WIDTH_FRAC = 0.80
 
 # Runtime values — set by main() after parsing video dimensions
 VIDEO_WIDTH = 1280
 VIDEO_HEIGHT = 720
 EN_FONT_SIZE = _BASE_EN_FONT_SIZE
-ZH_FONT_SIZE = _BASE_ZH_FONT_SIZE
-
-
-def shadow_offset_px(font_size: int, distance_frac: float) -> tuple[int, int]:
-    """Shadow displacement decomposed from BaoCut's distance + angle. 45° puts
-    it down-right, the conventional direction for a caption drop shadow; a
-    distance of 0 yields a centred halo instead."""
-    distance = font_size * distance_frac
-    rad = math.radians(SHADOW_ANGLE_DEG)
-    return round(distance * math.cos(rad)), round(distance * math.sin(rad))
-
-
-def shadow_rgba(opacity: float) -> tuple[int, int, int, int]:
-    return (*SHADOW_RGB, round(255 * opacity))
-
-
-def shadow_blur_px(font_size: int, blur_frac: float) -> float:
-    """Gaussian blur radius. BaoCut's 模糊 is a real blur, not the stamped
-    offset trail this renderer used to fake it with."""
-    return font_size * blur_frac
-
-
-# Lexend Deca is the requested face for BOTH rows, but it carries no CJK
-# glyphs (Chinese renders as .notdef tofu), so it can only be the head of a
-# fallback chain: Latin/digits in Lexend Deca, CJK in a Chinese face. The app
-# bundle is checked first since that is where Lexend Deca actually ships —
-# it is not installed system-wide.
-LATIN_FONT_CANDIDATES = [
-    ("/Applications/BaoCut.app/Contents/Resources/fonts/LexendDeca.ttf", 0, "Lexend Deca"),
-    (str(Path.home() / "Library/Fonts/LexendDeca.ttf"), 0, "Lexend Deca"),
-    ("/Library/Fonts/LexendDeca.ttf", 0, "Lexend Deca"),
-    ("/System/Library/Fonts/PingFang.ttc", 2, "PingFang SC"),
-    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3, "Hiragino Sans GB"),
-]
-
-# Face index picks the bold weight:
-#   PingFang.ttc: 0=Regular, 1=Medium, 2=Semibold
-#   Hiragino Sans GB.ttc: 0=W3, 3=W6(bold)
-CJK_FONT_CANDIDATES = [
-    ("/System/Library/Fonts/PingFang.ttc", 2, "PingFang SC"),
-    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3, "Hiragino Sans GB"),
-    ("/System/Library/Fonts/STHeiti Medium.ttc", 0, "STHeiti"),
-    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0, "Arial Unicode"),
-]
-
-def clean_subtitle_text(text: str) -> str:
-    """Remove punctuation from Chinese text: in-sentence marks become a single
-    space, trailing marks are dropped, and decimal points between digits
-    (e.g. 4.5, v0.1) are kept."""
-    collapsed = " ".join(text.replace("\n", " ").split())
-    n = len(collapsed)
-    out = []
-    for i, ch in enumerate(collapsed):
-        if unicodedata.category(ch).startswith("P"):
-            is_decimal = (
-                ch == "."
-                and 0 < i < n - 1
-                and collapsed[i - 1].isdigit()
-                and collapsed[i + 1].isdigit()
-            )
-            out.append(ch if is_decimal else " ")
-        else:
-            out.append(ch)
-    return " ".join("".join(out).split())
-
-
-_CJK_CLASS = r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"
-_CJK_THEN_LATIN = re.compile(f"({_CJK_CLASS})([A-Za-z0-9])")
-_LATIN_THEN_CJK = re.compile(f"([A-Za-z0-9])({_CJK_CLASS})")
-
-
-def space_cjk_latin(text: str) -> str:
-    """Insert a space at every CJK↔Latin boundary, the standard CJK
-    typesetting convention: "我的Grill Me和..." reads as
-    "我的 Grill Me 和...". Without it the embedded product names run straight
-    into the surrounding Chinese with no visual separation."""
-    spaced = _CJK_THEN_LATIN.sub(r"\1 \2", text)
-    spaced = _LATIN_THEN_CJK.sub(r"\1 \2", spaced)
-    return spaced
-
-
-def find_font(
-    candidates: list[tuple[str, int, str]], size: int
-) -> tuple[ImageFont.FreeTypeFont, str]:
-    """Load the first available candidate, requesting its Bold named instance
-    when the file is a variable font (Lexend Deca ships as one, so 'style
-    \u52a0\u7c97' means selecting that instance rather than faking weight)."""
-    for path, face_index, family_name in candidates:
-        if Path(path).exists():
-            try:
-                font = ImageFont.truetype(path, size, index=face_index)
-            except Exception:
-                continue
-            try:
-                if b"Bold" in font.get_variation_names():
-                    font.set_variation_by_name("Bold")
-            except Exception:
-                pass  # static face \u2014 its index already selects the weight
-            return font, family_name
-    return ImageFont.load_default(), "Pillow default"
-
-
-class ShadowStyle:
-    """One row's resolved shadow: pixel offset, blur radius and RGBA."""
-
-    def __init__(self, font_size: int, distance_frac: float, blur_frac: float, opacity: float):
-        self.dx, self.dy = shadow_offset_px(font_size, distance_frac)
-        self.blur = shadow_blur_px(font_size, blur_frac)
-        self.color = shadow_rgba(opacity)
-
-    def vertical_pad(self) -> int:
-        return self.dy + math.ceil(self.blur) * 2
+ZH_FONT_SIZE = ZH_FONT_SIZE_BASE
 
 
 class FontSet:
-    """Latin + CJK face pair standing in for one font-fallback chain, since
-    Pillow resolves no fallbacks itself: each draw call uses exactly the font
-    it is handed, so mixed-script text has to be split into runs."""
+    """Latin + CJK face pair standing in for one row's font-fallback chain,
+    since Pillow resolves no fallbacks itself: each draw call uses exactly the
+    font it is handed, so mixed-script text has to be split into runs.
 
-    def __init__(self, size: int):
+    The pair is per row, not global: Chinese wants one Heavy face across both
+    scripts so a product name inside a Chinese caption keeps that row's
+    weight, while English wants Inter for Latin and a lighter CJK face."""
+
+    def __init__(
+        self,
+        size: int,
+        latin_candidates: list[tuple[str, int, str, "str | None"]],
+        cjk_candidates: list[tuple[str, int, str, "str | None"]],
+        tracking_em: float,
+    ):
         self.size = size
-        self.latin, self.latin_name = find_font(LATIN_FONT_CANDIDATES, size)
-        self.cjk, self.cjk_name = find_font(CJK_FONT_CANDIDATES, size)
+        self.latin, self.latin_name = find_font(latin_candidates, size)
+        self.cjk, self.cjk_name = find_font(cjk_candidates, size)
+        # Tracking stays a float: rounding it per character would accumulate a
+        # visible drift across a long line and break centring.
+        self.tracking = size * tracking_em
 
     def font_for(self, kind: str) -> ImageFont.FreeTypeFont:
         return self.latin if kind == "latin" else self.cjk
@@ -194,8 +95,13 @@ class FontSet:
 
 
 @lru_cache(maxsize=None)
-def font_set(size: int) -> FontSet:
-    return FontSet(size)
+def zh_font_set(size: int) -> FontSet:
+    return FontSet(size, ZH_FONT_CANDIDATES, ZH_FONT_CANDIDATES, ZH_TRACKING_EM)
+
+
+@lru_cache(maxsize=None)
+def en_font_set(size: int) -> FontSet:
+    return FontSet(size, EN_FONT_CANDIDATES, EN_CJK_FONT_CANDIDATES, EN_TRACKING_EM)
 
 
 # Tokenizer: a Latin/number word (with inner . ' - kept, e.g. 4.5, v0.1,
@@ -227,10 +133,62 @@ def font_runs(text: str) -> list[tuple[str, str]]:
     return [("".join(parts), kind) for parts, kind in zip(runs, kinds)]
 
 
+def styled_runs(
+    text: str,
+    fill: tuple[int, int, int, int],
+    highlight_re: re.Pattern[str] | None,
+    highlight_fill: tuple[int, int, int, int] | None,
+) -> list[tuple[str, str, tuple[int, int, int, int]]]:
+    """font_runs() subdivided again wherever the accent colour changes, giving
+    (run_text, face_kind, fill) triples.
+
+    Colour is resolved per character before splitting so a highlight that
+    straddles a face boundary still lands on exactly the matched characters.
+    Rows with no accent (Chinese, and every shadow layer) pass highlight_re
+    None and get font_runs() back unchanged."""
+    if highlight_re is None or highlight_fill is None:
+        return [(run, kind, fill) for run, kind in font_runs(text)]
+
+    fills = [fill] * len(text)
+    for match in highlight_re.finditer(text):
+        for i in range(*match.span()):
+            fills[i] = highlight_fill
+
+    out: list[tuple[str, str, tuple[int, int, int, int]]] = []
+    pos = 0
+    for run, kind in font_runs(text):
+        start, pos = pos, pos + len(run)
+        seg_start = start
+        for i in range(start + 1, pos + 1):
+            if i == pos or fills[i] != fills[seg_start]:
+                out.append((text[seg_start:i], kind, fills[seg_start]))
+                seg_start = i
+    return out
+
+
+def _run_advance(
+    run: str, font: ImageFont.FreeTypeFont, draw: ImageDraw.ImageDraw, tracking: float
+) -> float:
+    """Advance width of one single-face run. Untracked runs are measured whole
+    so intra-run kerning is preserved; a tracked run is measured glyph by
+    glyph because that is also how it gets drawn."""
+    if tracking <= 0:
+        return draw.textlength(run, font=font)
+    return sum(draw.textlength(ch, font=font) + tracking for ch in run)
+
+
 def _line_width(text: str, fs: FontSet, draw: ImageDraw.ImageDraw) -> int:
-    """Advance width of mixed-script text, summed per font run (each run is
-    measured whole so intra-run kerning is preserved)."""
-    return round(sum(draw.textlength(run, font=fs.font_for(kind)) for run, kind in font_runs(text)))
+    """Advance width of mixed-script text, summed per font run."""
+    total = sum(
+        _run_advance(run, fs.font_for(kind), draw, fs.tracking) for run, kind in font_runs(text)
+    )
+    # Letter-spacing follows every glyph, including the last one. That trailing
+    # gap is real advance but not ink, so it is dropped here: the measured
+    # width is what centring is derived from, and keeping it would push every
+    # line half a tracking step left of centre.
+    if fs.tracking > 0 and text:
+        total -= fs.tracking
+    return round(total)
 
 
 def wrap_text(
@@ -303,7 +261,7 @@ def parse_srt(srt_path: str) -> list[dict]:
 
         text_lines = lines[2:]
         # First line = Chinese (top), rest = English (bottom)
-        zh_text = space_cjk_latin(clean_subtitle_text(text_lines[0])) if text_lines else ""
+        zh_text = zh_caption_text(text_lines[0]) if text_lines else ""
         en_text = " ".join(text_lines[1:]).strip() if len(text_lines) > 1 else ""
 
         cues.append(
@@ -327,25 +285,34 @@ def draw_mixed_line(
     fill: tuple[int, int, int, int],
     outline_width: int,
     outline_color: tuple[int, int, int, int] = OUTLINE_COLOR,
+    highlight_re: re.Pattern[str] | None = None,
+    highlight_fill: tuple[int, int, int, int] | None = None,
 ):
     """Draw one line of possibly mixed-script text on a shared baseline,
-    switching faces per run (Latin in Lexend Deca, CJK in the Chinese face).
-    Anchored "ls" (left-baseline) so the two faces' differing ascents cannot
-    make their glyphs sit at different heights."""
+    switching faces per run (Latin in this row's Latin face, CJK in its
+    Chinese face) and colours per accent span. Anchored "ls" (left-baseline)
+    so the two faces' differing ascents cannot make their glyphs sit at
+    different heights.
+
+    Outlining and the two-pass draw order come from the shared contract's
+    draw_outlined_runs(), so this row's hairline is geometrically the same one
+    the single-language renderer draws.
+    """
+    tracking = fs.tracking
+
+    # A tracked row has to advance glyph by glyph to insert the spacing, which
+    # gives up kerning inside the run; untracked rows still draw the run whole
+    # and keep theirs. Either way the advance matches exactly what
+    # _run_advance() measured, so centring stays correct.
+    placed: list[tuple[float, str, ImageFont.FreeTypeFont, tuple[int, int, int, int]]] = []
     cursor = float(x)
-    for run, kind in font_runs(text):
+    for run, kind, run_fill in styled_runs(text, fill, highlight_re, highlight_fill):
         font = fs.font_for(kind)
-        if outline_width > 0:
-            for dx in range(-outline_width, outline_width + 1):
-                for dy in range(-outline_width, outline_width + 1):
-                    if dx == 0 and dy == 0:
-                        continue
-                    draw.text(
-                        (cursor + dx, baseline_y + dy), run,
-                        font=font, fill=outline_color, anchor="ls",
-                    )
-        draw.text((cursor, baseline_y), run, font=font, fill=fill, anchor="ls")
-        cursor += draw.textlength(run, font=font)
+        for piece in (list(run) if tracking > 0 else [run]):
+            placed.append((cursor, piece, font, run_fill))
+            cursor += draw.textlength(piece, font=font) + tracking
+
+    draw_outlined_runs(draw, placed, baseline_y, outline_width, outline_color)
 
 
 def measure_lines(
@@ -363,8 +330,8 @@ def measure_lines(
     just because their particular characters happen to have no descender.
     """
     ascent, descent = fs.metrics()
-    gap = max(2, outline_width * 2)
     line_h = ascent + descent
+    gap = line_gap(fs.size, line_h, outline_width)
     max_w = 0
     baselines = []
     for i, line_text in enumerate(text_lines):
@@ -424,6 +391,8 @@ def render_text_row(
     row_h: int,
     align_bottom: bool,
     out_path: Path,
+    highlight_re: re.Pattern[str] | None = None,
+    highlight_fill: tuple[int, int, int, int] | None = None,
 ) -> tuple[int, int]:
     """Render one language's text horizontally centered on a FIXED-SIZE
     canvas: the full video width by this layer's constant row height.
@@ -436,9 +405,11 @@ def render_text_row(
     rather than depending on `overlay=(W-w)/2` re-deriving it from a
     per-frame image width.
 
-    The drop shadow is drawn on its own layer, offset per BaoCut's
-    distance/angle and then Gaussian-blurred by its blur radius, so "模糊" is
-    a real blur instead of the stamped offset trail that used to fake it.
+    The drop shadow is drawn on its own layer, offset per the row's
+    distance/angle and then Gaussian-blurred by its blur radius, so the blur
+    is real instead of the stamped offset trail that used to fake it. It is
+    drawn without the accent colour: a highlighted word casts the same shadow
+    as the rest of the line, not a coloured one.
 
     `align_bottom` pins content to the bottom of its row (used for the
     Chinese row, so its last line stays a constant distance above the English
@@ -446,7 +417,7 @@ def render_text_row(
     pinned to the top (used for English, directly under Chinese)."""
     temp_draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     ascent, descent = fs.metrics()
-    gap = max(2, outline_width * 2)
+    gap = line_gap(fs.size, ascent + descent, outline_width)
     content_h = len(lines) * (ascent + descent) + max(0, len(lines) - 1) * gap
     blur = shadow.blur
     pad_top = outline_width + math.ceil(blur)
@@ -468,7 +439,10 @@ def render_text_row(
     text_layer = Image.new("RGBA", (VIDEO_WIDTH, row_h), (0, 0, 0, 0))
     text_draw = ImageDraw.Draw(text_layer)
     for line_text, base, lx in zip(lines, baselines, line_x):
-        draw_mixed_line(text_draw, line_text, lx, y0 + base, fs, fill, outline_width)
+        draw_mixed_line(
+            text_draw, line_text, lx, y0 + base, fs, fill, outline_width,
+            highlight_re=highlight_re, highlight_fill=highlight_fill,
+        )
 
     img = Image.alpha_composite(shadow_layer, text_layer)
     img.save(out_path)
@@ -523,19 +497,15 @@ def main():
     # producing over-long unwrapped lines. Baseline is 720p (height 720).
     VIDEO_WIDTH = video_w
     VIDEO_HEIGHT = video_h
-    scale = VIDEO_HEIGHT / 720
-    ZH_FONT_SIZE = round(_BASE_ZH_FONT_SIZE * scale)
+    scale = resolution_scale(VIDEO_HEIGHT)
+    ZH_FONT_SIZE = round(ZH_FONT_SIZE_BASE * scale)
     EN_FONT_SIZE = round(_BASE_EN_FONT_SIZE * scale)
-    zh_fs = font_set(ZH_FONT_SIZE)
-    en_fs = font_set(EN_FONT_SIZE)
+    zh_fs = zh_font_set(ZH_FONT_SIZE)
+    en_fs = en_font_set(EN_FONT_SIZE)
     zh_outline = ZH_OUTLINE_PX
     en_outline = EN_OUTLINE_PX
-    zh_shadow = ShadowStyle(
-        ZH_FONT_SIZE, ZH_SHADOW_DISTANCE_FRAC, ZH_SHADOW_BLUR_FRAC, ZH_SHADOW_OPACITY
-    )
-    en_shadow = ShadowStyle(
-        EN_FONT_SIZE, EN_SHADOW_DISTANCE_FRAC, EN_SHADOW_BLUR_FRAC, EN_SHADOW_OPACITY
-    )
+    zh_sh = zh_shadow(VIDEO_HEIGHT)
+    en_sh = en_shadow(EN_FONT_SIZE)
     cues = parse_srt(measure_path or srt_path)
     if not cues:
         print("ERROR: no cues found in SRT", file=sys.stderr)
@@ -576,15 +546,24 @@ def main():
     print(f"Video: {VIDEO_WIDTH}x{VIDEO_HEIGHT}", file=sys.stderr)
     print(
         f"ZH font: {zh_fs.latin_name} (latin) + {zh_fs.cjk_name} (cjk) "
-        f"{ZH_FONT_SIZE}px outline={zh_outline}px",
+        f"{ZH_FONT_SIZE}px outline={zh_outline}px tracking={zh_fs.tracking:.2f}px",
         file=sys.stderr,
     )
     print(
         f"EN font: {en_fs.latin_name} (latin) + {en_fs.cjk_name} (cjk) "
-        f"{EN_FONT_SIZE}px outline={en_outline}px",
+        f"{EN_FONT_SIZE}px outline={en_outline}px tracking={en_fs.tracking:.2f}px",
         file=sys.stderr,
     )
-    for label, sh in (("zh", zh_shadow), ("en", en_shadow)):
+    zh_warning = zh_weight_warning(zh_fs.cjk_name)
+    if zh_warning:
+        print(f"WARNING: {zh_warning}", file=sys.stderr)
+    if en_fs.latin_name != "Inter Bold":
+        print(
+            f"WARNING: vendored Inter Bold not loadable; English row fell "
+            f"back to {en_fs.latin_name}.",
+            file=sys.stderr,
+        )
+    for label, sh in (("zh", zh_sh), ("en", en_sh)):
         print(
             f"Shadow[{label}]: offset=({sh.dx},{sh.dy}) blur={sh.blur:.2f} alpha={sh.color[3]}",
             file=sys.stderr,
@@ -599,10 +578,10 @@ def main():
     zh_runs = group_zh_runs(cues)
 
     zh_layouts = [
-        measure_text_block(run["zh_text"], zh_fs, zh_outline, zh_shadow) for run in zh_runs
+        measure_text_block(run["zh_text"], zh_fs, zh_outline, zh_sh) for run in zh_runs
     ]
     en_layouts = [
-        measure_text_block(cue["en_text"], en_fs, en_outline, en_shadow) for cue in cues
+        measure_text_block(cue["en_text"], en_fs, en_outline, en_sh) for cue in cues
     ]
     zh_row_h = max((h for _, _, h in zh_layouts), default=0) or 1
     en_row_h = max((h for _, _, h in en_layouts), default=0) or 1
@@ -614,7 +593,7 @@ def main():
     for i, (run, (lines, baselines, _)) in enumerate(zip(zh_runs, zh_layouts)):
         filename = f"zh_{i:04d}.png"
         w, h = render_text_row(
-            lines, baselines, zh_fs, zh_outline, ZH_FILL, zh_shadow, zh_row_h,
+            lines, baselines, zh_fs, zh_outline, ZH_FILL, zh_sh, zh_row_h,
             True, out_dir / filename,
         )
         zh_entries.append({
@@ -630,8 +609,9 @@ def main():
     for cue, (lines, baselines, _) in zip(cues, en_layouts):
         filename = f"en_{cue['index']:04d}.png"
         w, h = render_text_row(
-            lines, baselines, en_fs, en_outline, EN_FILL, en_shadow, en_row_h,
+            lines, baselines, en_fs, en_outline, EN_FILL, en_sh, en_row_h,
             False, out_dir / filename,
+            highlight_re=EN_HIGHLIGHT_RE, highlight_fill=EN_HIGHLIGHT_FILL,
         )
         en_entries.append({
             "index": cue["index"], "filename": filename,

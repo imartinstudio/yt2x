@@ -1,45 +1,57 @@
 #!/usr/bin/env python3
 """Render SRT subtitle cues as transparent PNG images for ffmpeg overlay.
 
-Style: dark rounded background, white bold text. No stroke, no shadow.
+Style: white Heavy-weight Chinese, hairline-outlined over a soft drop shadow —
+the same visual contract as the Chinese row of `render-bilingual-subtitles.py`,
+imported from `subtitle_style` so the two cannot drift apart. There is no
+subtitle background box: the outline and shadow carry legibility instead.
+
 Balanced 2-line CJK wrapping with semantic break points.
 """
 
 import json
+import math
 import re
 import sys
-import unicodedata
 from functools import lru_cache
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+# The shared visual contract lives next to this script. It has to be added to
+# the import path explicitly: this file is run as `python3 <path>` and is also
+# loaded by tests via importlib.spec_from_file_location, and neither reliably
+# puts its own directory on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from subtitle_style import (  # noqa: E402
+    MAX_WIDTH_FRAC,
+    OUTLINE_COLOR,
+    ZH_FILL,
+    ZH_FONT_CANDIDATES,
+    ZH_FONT_SIZE_BASE,
+    ZH_OUTLINE_PX,
+    draw_outlined_runs,
+    find_font,
+    line_gap,
+    resolution_scale,
+    zh_caption_text,
+    zh_shadow,
+    zh_weight_warning,
+)
 
 VIDEO_WIDTH = 1280
 VIDEO_HEIGHT = 720
 
-# Bold CJK font candidates (path, face index), aligned with the bilingual
-# renderer: PingFang.ttc index 2 = Semibold, Hiragino Sans GB index 3 = W6.
-FONT_CANDIDATES = [
-    ("/System/Library/Fonts/PingFang.ttc", 2),
-    ("/System/Library/Fonts/Hiragino Sans GB.ttc", 3),
-    ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
-    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
-]
-# Chinese font auto-scales per cue between MIN and MAX (absolute px) to keep
-# each cue on one line when possible (matches the bilingual renderer).
-ZH_MIN_FONT_SIZE = 52
-ZH_MAX_FONT_SIZE = 72
-
-LINE_SPACING_RATIO = 0.55  # 行距 / 字体大小
-BG_PAD_X_RATIO = 0.8       # 水平内边距 / 字体大小
-BG_PAD_Y_RATIO = 0.45      # 垂直内边距 / 字体大小
-BG_RADIUS_RATIO = 0.35     # 圆角 / 字体大小
-
-TEXT_COLOR = (255, 255, 255, 255)
-BG_COLOR = (0, 0, 0, 170)
-
-# Width: 75%–85% of video
-WIDTH_FRAC_DEFAULT = 0.80
-WIDTH_FRAC_MAX = 0.85
+# One fixed size, from the shared contract — single-language delivery is the
+# bilingual Chinese row with the English row removed, not a larger variant.
+#
+# This renderer used to run its own 52-72px adaptive search, picking the
+# largest size that kept each cue on one line. Two things were wrong with that:
+# the captions did not match the bilingual row, and shrinking type to dodge a
+# wrap meant the size changed from cue to cue. Cues now arrive from
+# `projectSemanticBilingualSubtitles` already split to the 16/14/20 CJK budget,
+# so a well-formed cue fits one line at this size, and anything longer wraps.
+ZH_FONT_SIZE = ZH_FONT_SIZE_BASE
 
 
 def parse_srt(srt_path: str) -> list[dict]:
@@ -79,19 +91,45 @@ def parse_srt(srt_path: str) -> list[dict]:
     return cues
 
 
-def _text_width(text: str, font: ImageFont.FreeTypeFont, draw: ImageDraw.Draw) -> float:
-    bbox = draw.textbbox((0, 0), text, font=font)
-    return bbox[2] - bbox[0]
+def _text_width(text: str, font: ImageFont.FreeTypeFont, draw: ImageDraw.Draw) -> int:
+    """Advance width, rounded — the same measure the bilingual renderer wraps
+    and centres on. It used to be the ink bounding box, which is narrower by
+    the glyphs' side bearings and so broke lines at a different character than
+    the bilingual row would for the same text."""
+    return round(draw.textlength(text, font=font))
 
 
-def _line_params(font_size: int):
-    """Return (line_spacing, bg_pad_x, bg_pad_y, bg_radius) for a font size."""
-    return (
-        int(font_size * LINE_SPACING_RATIO),
-        int(font_size * BG_PAD_X_RATIO),
-        int(font_size * BG_PAD_Y_RATIO),
-        int(font_size * BG_RADIUS_RATIO),
-    )
+def _centred_x(text: str, font: ImageFont.FreeTypeFont, draw: ImageDraw.Draw) -> int:
+    """Left edge that centres `text` in the frame.
+
+    Deliberately not Pillow's "ms" (middle-baseline) anchor: that centres on
+    the exact float advance, while the bilingual renderer floors
+    `(width - advance) / 2` to an int. The two land a pixel apart on some
+    lines, which is visible when the same cue is rendered by both paths.
+    """
+    return (VIDEO_WIDTH - _text_width(text, font, draw)) // 2
+
+
+def _line_spacing(font: ImageFont.FreeTypeFont, font_size: int) -> int:
+    """Pillow's `spacing`: the gap between lines on top of the face's own line
+    height, taken from the shared pitch so wrapped captions look the same here
+    as in the bilingual renderer."""
+    ascent, descent = font.getmetrics()
+    return line_gap(font_size, ascent + descent, ZH_OUTLINE_PX)
+
+
+def _canvas_padding(shadow) -> tuple[int, int]:
+    """Vertical room the outline and drop shadow need, as (top, bottom).
+
+    Both are constants for a given resolution — the outline is a fixed hairline
+    and the shadow is absolute 720p px — so the text baseline sits the same
+    distance above the PNG's bottom edge in every cue. That matters because
+    `burn-subtitles.ts` overlays each PNG at `H-h-margin`, pinning its BOTTOM
+    edge to the frame: a padding that varied with type size (as the old
+    background box's did) moved the captions up and down between cues.
+    """
+    blur_room = math.ceil(shadow.blur)
+    return ZH_OUTLINE_PX + blur_room, ZH_OUTLINE_PX + shadow.vertical_pad()
 
 
 # Tokenizer: a Latin/number word (with inner . ' - kept, e.g. 4.5, v0.1,
@@ -136,174 +174,182 @@ def _wrap_cjk(
 
 
 @lru_cache(maxsize=None)
-def _load_font(font_size: int) -> ImageFont.FreeTypeFont | None:
-    """Load the bold CJK font at the given size. Returns None if unavailable."""
-    for fp, idx in FONT_CANDIDATES:
-        if not Path(fp).exists():
-            continue
-        try:
-            return ImageFont.truetype(fp, font_size, index=idx)
-        except (OSError, TypeError):
-            continue
-    return None
+def _load_font_named(font_size: int) -> tuple[ImageFont.FreeTypeFont, str]:
+    """Resolve the shared Chinese face at the given size, with its family name.
 
-
-def _normalize_text(text: str) -> str:
-    """Normalize subtitle text for re-wrapping.
-
-    Source SRT files often contain pre-wrapped line breaks (~15-20 chars/line
-    from Whisper/YouTube). These narrow breaks are artifacts of the original
-    transcription, not semantic breaks. Join all text and let our wrapper
-    determine the optimal line breaks at the target width (~30 CJK chars/line).
-
-    Also removes spaces between CJK characters (artifacts of Whisper wrapping)
-    while preserving spaces around Latin/English words.
-
-    Punctuation is stripped: marks inside a sentence become spaces (a visual
-    pause) and trailing marks are dropped, so no punctuation is ever rendered.
+    One face covers both scripts here: Source Han Sans / Noto Sans SC carries
+    Latin glyphs too, so a product name inside a Chinese caption keeps this
+    row's Heavy weight and needs no per-run face switching.
     """
-    # Replace newlines with spaces, then collapse
-    collapsed = " ".join(text.replace("\n", " ").split())
-    # Remove spaces between two CJK characters: "一。 如果" → "一。如果"
-    result = []
-    for i, ch in enumerate(collapsed):
-        if ch == " " and i > 0 and i < len(collapsed) - 1:
-            prev_ok = _is_cjk(collapsed[i - 1])
-            next_ok = _is_cjk(collapsed[i + 1])
-            # Keep space only if one side is non-CJK (Latin/num)
-            if not (prev_ok and next_ok):
-                result.append(ch)
-            # else: drop the space between two CJK characters
-        else:
-            result.append(ch)
-
-    # Drop punctuation: in-sentence marks become a single space and trailing
-    # marks disappear. Decimal points between digits (e.g. 4.5, v0.1) are kept.
-    chars = "".join(result)
-    n = len(chars)
-    out = []
-    for i, ch in enumerate(chars):
-        if unicodedata.category(ch).startswith("P"):
-            is_decimal = (
-                ch == "."
-                and 0 < i < n - 1
-                and chars[i - 1].isdigit()
-                and chars[i + 1].isdigit()
-            )
-            out.append(ch if is_decimal else " ")
-        else:
-            out.append(ch)
-    return " ".join("".join(out).split())
+    return find_font(ZH_FONT_CANDIDATES, font_size)
 
 
-def _is_cjk(ch: str) -> bool:
-    """Check if a character is CJK (Chinese/Japanese/Korean) or CJK punctuation."""
-    cp = ord(ch)
-    return (
-        0x4E00 <= cp <= 0x9FFF  # CJK Unified
-        or 0x3400 <= cp <= 0x4DBF  # CJK Extension A
-        or 0x3000 <= cp <= 0x303F  # CJK punctuation (。、， etc.)
-        or 0xFF00 <= cp <= 0xFFEF  # Fullwidth forms
-        or 0x2000 <= cp <= 0x206F  # General punctuation
-    )
+def _load_font(font_size: int) -> ImageFont.FreeTypeFont | None:
+    """The face alone, or None when no real CJK face was found (Pillow's
+    built-in default cannot render Chinese, so it counts as unavailable)."""
+    font, family = _load_font_named(font_size)
+    return None if family == "Pillow default" else font
 
 
-def _fits_all(lines: list[str], font: ImageFont.FreeTypeFont, dd: ImageDraw.ImageDraw, width: int) -> bool:
-    return all(_text_width(ln, font, dd) <= width for ln in lines)
+class CueLayout:
+    """One cue's resolved type: its wrapped lines, the size chosen for them, and
+    the baseline grid they sit on.
+
+    Vertical metrics come from the face (ascent/descent/pitch), never from
+    per-line ink bounds, so a line never shifts just because its particular
+    characters happen to have no descender — the same rule the bilingual
+    renderer follows.
+    """
+
+    def __init__(self, lines: list[str], size: int, ascent: int, descent: int, gap: int):
+        self.lines = lines
+        self.size = size
+        self.ascent = ascent
+        self.descent = descent
+        self.gap = gap
+
+    @property
+    def line_height(self) -> int:
+        return self.ascent + self.descent
+
+    @property
+    def above_last_baseline(self) -> int:
+        """Height needed above the LAST baseline: this cue's earlier lines plus
+        the ascender of the top one.
+
+        Layout is anchored to the last baseline rather than to the block's top
+        or its ink bottom, because that is the line the eye tracks between
+        cues. Anchoring on the descender bottom instead would drop a cue that
+        wrapped (and so picked a smaller size, and so has a shallower descent)
+        a few pixels below its neighbours.
+        """
+        n = len(self.lines)
+        return self.ascent + max(0, n - 1) * (self.line_height + self.gap)
 
 
-def render_subtitle(text: str, _font: ImageFont.FreeTypeFont) -> Image.Image:
-    """Render white text on a dark rounded background. No stroke, no shadow.
+def layout_subtitle(text: str) -> CueLayout:
+    """Break one cue into lines at the contract's fixed type size, and measure.
 
-    Single-line strategy: pick the largest font in [ZH_MIN, ZH_MAX] (absolute
-    px) that fits the cue on one line. Only cues too long even at ZH_MIN wrap
-    onto extra lines (without splitting words). Text is always centered.
+    A cue that does not fit the safe area WRAPS; it never shrinks to stay on one
+    line. Long sentences are already cut into cues upstream by
+    `projectSemanticBilingualSubtitles` (16 CJK triggers a split, 14 is the
+    per-part target, 20 is the hard ceiling, 2 lines max), and that split
+    reallocates timing across the pieces — something a renderer cannot do. Its
+    job here is only to lay out what it is handed.
 
     Single-language only — this renderer has no notion of a Chinese/English
     pair. Dubbed bilingual delivery burns through `render-bilingual-subtitles.py`
     / `burn-bilingual-subtitles.ts` instead (see docs/DUB-TASK.md「统一交付」);
     this module only ever sees `full.zh.srt`, one language per cue.
     """
-    dummy = Image.new("RGBA", (1, 1))
-    dd = ImageDraw.Draw(dummy)
+    dd = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
 
-    base_lines = [_normalize_text(text)]
-
-    frac = WIDTH_FRAC_MAX
-
-    def avail_width(size: int) -> int:
-        return int(VIDEO_WIDTH * frac) - int(size * BG_PAD_X_RATIO) * 2
-
-    # Pick the largest size in [ZH_MIN, ZH_MAX] at which every base line fits
-    # on its own single line.
-    size = ZH_MAX_FONT_SIZE
-    font = _load_font(size)
+    font = _load_font(ZH_FONT_SIZE)
     if font is None:
         raise RuntimeError("No usable CJK font found")
 
-    if not _fits_all(base_lines, font, dd, avail_width(size)):
-        size = ZH_MIN_FONT_SIZE
-        for candidate in range(ZH_MAX_FONT_SIZE, ZH_MIN_FONT_SIZE - 1, -1):
-            f = _load_font(candidate)
-            if _fits_all(base_lines, f, dd, avail_width(candidate)):
-                size = candidate
-                break
-        font = _load_font(size)
+    # The wrap limit no longer depends on type size: with the background box
+    # gone there is no box padding to subtract, so it is simply the shared
+    # horizontal safe area.
+    avail = int(VIDEO_WIDTH * MAX_WIDTH_FRAC)
 
-    # Each base line stands on its own; only a line that still doesn't fit at
-    # the chosen size gets wrapped onto extra lines (word-safe, rare).
-    lines: list[str] = []
-    for base_line in base_lines:
-        if not base_line:
-            continue
-        if _text_width(base_line, font, dd) <= avail_width(size):
-            lines.append(base_line)
-        else:
-            wrapped = [ln.strip() for ln in _wrap_cjk(base_line, font, dd, avail_width(size)) if ln.strip()]
-            lines.extend(wrapped if wrapped else [base_line])
-    if not lines:
+    base_line = zh_caption_text(text)
+    if not base_line:
         lines = [""]
+    elif _text_width(base_line, font, dd) <= avail:
+        lines = [base_line]
+    else:
+        lines = [ln.strip() for ln in _wrap_cjk(base_line, font, dd, avail) if ln.strip()]
+        if not lines:
+            lines = [base_line]
 
-    wrapped_text = "\n".join(lines)
-    ls, bg_pad_x, bg_pad_y, bg_radius = _line_params(size)
+    ascent, descent = font.getmetrics()
+    return CueLayout(lines, ZH_FONT_SIZE, ascent, descent, _line_spacing(font, ZH_FONT_SIZE))
 
-    # Measure
-    bbox = dd.multiline_textbbox((0, 0), wrapped_text, font=font, spacing=ls, align="center")
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-    # Clamp width: if text is very short, bg is centered at text width
-    bg_w = max(tw + bg_pad_x * 2, 0)
-    bg_h = th + bg_pad_y * 2
+def _baseline_from_bottom(shadow) -> int:
+    """Distance from the row's bottom edge up to the LAST baseline.
 
-    # Canvas
-    img = Image.new("RGBA", (VIDEO_WIDTH, bg_h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+    Constant for a resolution: the descender plus the outline and shadow room
+    below it, so every cue's last baseline lands on the same line.
+    """
+    _, pad_bottom = _canvas_padding(shadow)
+    font = _load_font(ZH_FONT_SIZE)
+    descent = font.getmetrics()[1] if font is not None else 0
+    return pad_bottom + descent
 
-    # Dark rounded background (centered)
-    bg_x = (VIDEO_WIDTH - bg_w) // 2
-    draw.rounded_rectangle(
-        (bg_x, 0, bg_x + bg_w, bg_h),
-        radius=bg_radius,
-        fill=BG_COLOR,
-    )
 
-    # White text (centered)
-    tx = (VIDEO_WIDTH - tw) // 2
-    ty = bg_pad_y
-    draw.multiline_text(
-        (tx, ty),
-        wrapped_text,
-        font=font,
-        fill=TEXT_COLOR,
-        spacing=ls,
-        align="center",
-    )
+def row_height(layouts: list[CueLayout], shadow) -> int:
+    """One constant canvas height for every cue in the video.
 
-    return img
+    Every PNG in the sequence must have identical dimensions. ffmpeg's image2
+    input reconfigures its filter graph when a frame changes size, and that
+    momentarily disturbs the whole overlay chain — it is exactly why the
+    bilingual renderer was restructured onto fixed-size rows. This renderer
+    used to emit a different height per cue (the box grew with type size and
+    line count), so the sequence changed size at almost every cue boundary.
+    """
+    pad_top, _ = _canvas_padding(shadow)
+    tallest = max((layout.above_last_baseline for layout in layouts), default=0)
+    return (pad_top + tallest + _baseline_from_bottom(shadow)) or 1
+
+
+def render_subtitle(layout: CueLayout, row_h: int) -> Image.Image:
+    """Render one cue onto a fixed-size transparent canvas: full video width by
+    the constant row height. No background box.
+
+    Content is pinned to the BOTTOM of the row, because `burn-subtitles.ts`
+    overlays the PNG at `H-h-margin` — its bottom edge against the frame. A cue
+    that wraps to two lines therefore grows upward, leaving its last baseline
+    exactly where a one-line cue's sits.
+    """
+    font = _load_font(layout.size)
+    if font is None:
+        raise RuntimeError("No usable CJK font found")
+
+    shadow = zh_shadow(VIDEO_HEIGHT)
+
+    # Baselines are laid out upward from the row's BOTTOM, so the last one
+    # lands on the same line whatever the cue's type size or line count.
+    last_baseline = row_h - _baseline_from_bottom(shadow)
+    pitch = layout.line_height + layout.gap
+    baselines = [
+        last_baseline - (len(layout.lines) - 1 - i) * pitch for i in range(len(layout.lines))
+    ]
+
+    def stamp(target: Image.Image, dx: int, dy: int, fill, outline_color) -> None:
+        draw = ImageDraw.Draw(target)
+        for line, baseline in zip(layout.lines, baselines):
+            # Outlining comes from the shared primitive, so this row's hairline
+            # is geometrically identical to the bilingual Chinese row's —
+            # Pillow's own stroke_width strokes the true contour and lands a
+            # pixel or two away from that 3x3 dilation.
+            draw_outlined_runs(
+                draw,
+                [(_centred_x(line, font, draw) + dx, line, font, fill)],
+                baseline + dy,
+                ZH_OUTLINE_PX,
+                outline_color,
+            )
+
+    # The shadow gets its own layer so its blur is a real Gaussian rather than
+    # a stamped offset trail, and its silhouette — outline included — is drawn
+    # entirely in the shadow colour: stroking it in opaque black instead would
+    # make the "shadow" an opaque slab as thick as the outline, whatever alpha
+    # it was given.
+    shadow_layer = Image.new("RGBA", (VIDEO_WIDTH, row_h), (0, 0, 0, 0))
+    stamp(shadow_layer, shadow.dx, shadow.dy, shadow.color, shadow.color)
+    if shadow.blur > 0:
+        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=shadow.blur))
+
+    text_layer = Image.new("RGBA", (VIDEO_WIDTH, row_h), (0, 0, 0, 0))
+    stamp(text_layer, 0, 0, ZH_FILL, OUTLINE_COLOR)
+
+    return Image.alpha_composite(shadow_layer, text_layer)
 
 
 def main():
-    global VIDEO_WIDTH, VIDEO_HEIGHT
+    global VIDEO_WIDTH, VIDEO_HEIGHT, ZH_FONT_SIZE
 
     args = sys.argv[1:]
     srt_path: str | None = None
@@ -335,9 +381,12 @@ def main():
         )
         sys.exit(1)
 
-    # Font auto-scales per cue in [ZH_MIN, ZH_MAX] (absolute px) in render.
     VIDEO_WIDTH = video_w
     VIDEO_HEIGHT = video_h
+
+    # Stated at 720p; scale it so captions keep the same relative size (and the
+    # same wrapping density) at any resolution, exactly as the bilingual row does.
+    ZH_FONT_SIZE = round(ZH_FONT_SIZE_BASE * resolution_scale(VIDEO_HEIGHT))
 
     out_dir = Path(out_dir_arg)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -347,14 +396,36 @@ def main():
         print("Error: no cues found in SRT file", file=sys.stderr)
         sys.exit(1)
 
-    main_font = _load_font(ZH_MAX_FONT_SIZE)
-    if main_font is None:
+    _, family = _load_font_named(ZH_FONT_SIZE)
+    if family == "Pillow default":
         print("Error: no usable CJK font found", file=sys.stderr)
         sys.exit(1)
 
+    shadow = zh_shadow(VIDEO_HEIGHT)
+    print(f"Video: {VIDEO_WIDTH}x{VIDEO_HEIGHT}", file=sys.stderr)
+    print(
+        f"ZH font: {family} {ZH_FONT_SIZE}px "
+        f"outline={ZH_OUTLINE_PX}px",
+        file=sys.stderr,
+    )
+    print(
+        f"Shadow[zh]: offset=({shadow.dx},{shadow.dy}) "
+        f"blur={shadow.blur:.2f} alpha={shadow.color[3]}",
+        file=sys.stderr,
+    )
+    zh_warning = zh_weight_warning(family)
+    if zh_warning:
+        print(f"WARNING: {zh_warning}", file=sys.stderr)
+
+    # Pass 1 lays out every cue so the sequence can pick ONE canvas height;
+    # pass 2 renders each cue onto that fixed-size canvas.
+    layouts = [layout_subtitle(cue["text"]) for cue in cues]
+    row_h = row_height(layouts, shadow)
+    print(f"Row: {VIDEO_WIDTH}x{row_h} (constant for all cues)", file=sys.stderr)
+
     manifest = []
-    for i, cue in enumerate(cues):
-        img = render_subtitle(cue["text"], main_font)
+    for i, (cue, layout) in enumerate(zip(cues, layouts)):
+        img = render_subtitle(layout, row_h)
         fname = f"sub_{i:04d}.png"
         img.save(out_dir / fname, "PNG")
         manifest.append({

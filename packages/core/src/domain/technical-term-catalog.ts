@@ -512,6 +512,22 @@ const isTechnicalChineseGraphContext = (text: string, offset: number): boolean =
 const isActiveGraphMatch = (match: TermMatch, text: string): boolean =>
   match.entry.canonical !== "Graph" || isTechnicalGraphContext(text, match.start, match.end);
 
+const resolveDiscoveredPolicy = (
+  category: TechnicalTermCategory,
+  sourceText?: string,
+): TechnicalTermPolicy => {
+  if (category === "product" || category === "person") {
+    return "preserve";
+  }
+  if (category === "domain") {
+    return "contextual-preserve";
+  }
+  if (sourceText && /^[A-Z0-9]{2,5}$/.test(sourceText.trim())) {
+    return "preserve";
+  }
+  return "contextual-preserve";
+};
+
 const overlaps = (a: TermMatch, b: TermMatch): boolean => a.start < b.end && b.start < a.end;
 
 const findProfileMatches = (
@@ -529,9 +545,10 @@ const findProfileMatches = (
     .map((candidate) => {
       const actualSourceText = findActualSourceText(sourceText, candidate.sourceText)
         ?? findActualSourceText(sourceTitle, candidate.sourceText);
+      const policy = resolveDiscoveredPolicy(candidate.category, actualSourceText ?? candidate.sourceText);
       return actualSourceText === undefined
         ? undefined
-        : entry(actualSourceText, [candidate.category], "preserve");
+        : entry(actualSourceText, [candidate.category], policy);
     })
     .filter((candidate): candidate is TechnicalTermEntry => candidate !== undefined);
   const allEntries = [...catalogEntries, ...discoveredEntries];

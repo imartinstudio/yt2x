@@ -116,6 +116,9 @@ const articleHasExecutableAsset = (content: string): boolean => {
 };
 
 /** 解析 Article 第一段（导语）：在 H1 之后、第一个 H2 / 空行之前的连续非空行。 */
+/** 独占一行的 Markdown 图片，例如 `![封面](images/cover.webp)`。 */
+const LEADING_IMAGE_RE = /^!\[[^\]]*\]\([^)]*\)$/u;
+
 const extractArticleLead = (content: string): string | null => {
   const lines = content.split(/\r?\n/);
   let i = 0;
@@ -129,6 +132,16 @@ const extractArticleLead = (content: string): string | null => {
   while (i < lines.length && lines[i]!.trim() === "") i += 1;
   if (i >= lines.length) return null;
 
+  // 跳过标题与导语之间的封面图。质量检查跑在封面插入之前，所以管线里看到的是
+  // 真导语；但拿成品 article.md 复跑就只量到 `![封面](...)`——25 个可见字符，
+  // 永远通过。除了让报告无法在产物上复现，它还让这条检查离「静默永不触发」
+  // 只差一次重排：封面插入一旦挪到检查之前，lead-too-long 就消失了。
+  while (i < lines.length && LEADING_IMAGE_RE.test(lines[i]!.trim())) {
+    i += 1;
+    while (i < lines.length && lines[i]!.trim() === "") i += 1;
+  }
+  if (i >= lines.length) return null;
+
   const buf: string[] = [];
   while (i < lines.length) {
     const line = lines[i]!;
@@ -139,6 +152,30 @@ const extractArticleLead = (content: string): string | null => {
   }
   if (buf.length === 0) return null;
   return buf.join("\n").trim();
+};
+
+/**
+ * The article lead when it is over the limit, otherwise null.
+ *
+ * Exported so a repair pass can act on exactly what `checkArticleQuality`
+ * measures. Re-deriving the lead at the call site is how the two drift apart —
+ * the same mistake the subtitle renderers made with their style constants.
+ */
+export const findOverlongArticleLead = (
+  content: string,
+): { lead: string; length: number; limit: number; start: number; end: number } | null => {
+  const lead = extractArticleLead(content);
+  if (lead === null) return null;
+  const length = visibleCharLength(lead);
+  if (length <= ARTICLE_LEAD_MAX_CHARS) return null;
+  // Report the exact span, not just the text. A caller that has to re-find the
+  // lead by string match breaks the moment extraction trims or re-joins
+  // whitespace — observed as a repair pass reporting "lead text not found in
+  // article" on its second round after its own first-round rewrite.
+  const start = content.indexOf(lead);
+  return start < 0
+    ? { lead, length, limit: ARTICLE_LEAD_MAX_CHARS, start: -1, end: -1 }
+    : { lead, length, limit: ARTICLE_LEAD_MAX_CHARS, start, end: start + lead.length };
 };
 
 const ARTICLE_TITLE_LINE_RE = /^#\s+\*\*.+\*\*\s*$/;

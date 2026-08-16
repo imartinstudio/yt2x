@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   checkArticleQuality,
+  findOverlongArticleLead,
   checkShortQuality,
   checkThreadQuality,
   formatQualityIssues,
@@ -155,6 +156,104 @@ const GOOD_SHORT: GeneratedShortPost = {
   angle: "practical",
   risk: "medium",
 };
+
+describe("findOverlongArticleLead", () => {
+  const SHORT = "一句短导语。";
+  const LONG =
+    "批评者说这只是一堆 Markdown 文件加一个花哨的阅读器，从根上看他们没错，"
+    + "但正是这个「对」让它成了最被低估的 AI 工作区：你的提示词、工作流、研究、"
+    + "上下文全部可以打包带走，接入任何平台，而不是被某一家锁死。这不是笔记工具的"
+    + "胜利，是数据所有权的胜利。";
+
+  it("returns the lead and its length only when it exceeds the limit", () => {
+    expect(findOverlongArticleLead(`# **标题**\n\n${SHORT}\n\n## 小节\n\n正文。\n`)).toBeNull();
+    const over = findOverlongArticleLead(`# **标题**\n\n${LONG}\n\n## 小节\n\n正文。\n`);
+    expect(over).not.toBeNull();
+    expect(over!.lead).toBe(LONG);
+    expect(over!.limit).toBe(ARTICLE_LEAD_MAX_CHARS);
+    expect(over!.length).toBeGreaterThan(ARTICLE_LEAD_MAX_CHARS);
+  });
+
+  it("agrees with checkArticleQuality, so a repair cannot chase a different number", () => {
+    // The repair loop and the check must measure the same thing — the whole
+    // point of exporting this rather than re-deriving the lead at the call site.
+    const md = `# **标题**\n\n${LONG}\n\n## 小节\n\n正文。\n`;
+    const reported = checkArticleQuality(md)
+      .find((i) => i.code === "article.lead-too-long")!.message.match(/(\d+)\s*字/)![1];
+    expect(String(findOverlongArticleLead(md)!.length)).toBe(reported);
+  });
+
+  it("reports a span a caller can splice, not just the text", () => {
+    // A repair that re-finds the lead by string match dies on any whitespace
+    // difference between the extracted text and the source — observed live as
+    // "lead text not found in article" on the second tighten round, after the
+    // first round had already rewritten it. The span removes the guesswork.
+    const md = `# **标题**\n\n${LONG}\n\n## 小节\n\n正文。\n`;
+    const found = findOverlongArticleLead(md)!;
+    expect(md.slice(found.start, found.end)).toBe(found.lead);
+    const spliced = md.slice(0, found.start) + "短导语。" + md.slice(found.end);
+    expect(findOverlongArticleLead(spliced)).toBeNull();
+    expect(spliced).toContain("## 小节");
+  });
+
+  it("sees past a cover image, like the check does", () => {
+    const md = `# **标题**\n\n![封面](images/cover.webp)\n\n${LONG}\n\n## 小节\n\n正文。\n`;
+    expect(findOverlongArticleLead(md)!.lead).toBe(LONG);
+  });
+});
+
+describe("article lead extraction", () => {
+  // 刻意超过 ARTICLE_LEAD_MAX_CHARS，这样 lead-too-long 才是这两个用例的信号。
+  const LEAD =
+    "批评者说这只是一堆 Markdown 文件加一个花哨的阅读器，从根上看他们没错，"
+    + "但正是这个「对」让它成了最被低估的 AI 工作区：你的提示词、工作流、研究、"
+    + "上下文全部可以打包带走，接入任何平台，而不是被某一家锁死。这不是笔记工具的"
+    + "胜利，是数据所有权的胜利。";
+
+  it("skips a cover image between the title and the lead", () => {
+    // The quality check runs at generation time, before the cover image is
+    // inserted, so the pipeline sees the real lead. Re-running it on the
+    // delivered article.md measured `![封面](...)` instead — 25 visible chars,
+    // which always passes. That makes the report irreproducible on the artifact
+    // AND leaves the check one refactor away from silently never firing, if
+    // image insertion ever moves ahead of it.
+    const withCover = `# **标题**
+
+![封面](images/cover.webp)
+
+${LEAD}
+
+## 小节
+
+正文。
+`;
+    const withoutCover = `# **标题**
+
+${LEAD}
+
+## 小节
+
+正文。
+`;
+
+    const codeOf = (md: string): string[] => checkArticleQuality(md).map((i) => i.code);
+    expect(codeOf(withCover)).toContain("article.lead-too-long");
+    // And it must agree with the same article measured before the image existed.
+    expect(codeOf(withCover)).toEqual(codeOf(withoutCover));
+  });
+
+  it("still reports a missing lead when the image is all there is", () => {
+    const imageOnly = `# **标题**
+
+![封面](images/cover.webp)
+
+## 小节
+
+正文。
+`;
+    expect(checkArticleQuality(imageOnly).map((i) => i.code)).toContain("article.lead-missing");
+  });
+});
 
 describe("article lead length contract", () => {
   it("states the checker's limit in the prompt the writer actually reads", () => {

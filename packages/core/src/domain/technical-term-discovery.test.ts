@@ -64,6 +64,35 @@ describe("technical term discovery parser", () => {
     }
   });
 
+  it("accepts a lone candidate object, the shape json_object mode actually degrades to", () => {
+    // Observed 3/3 against the real dub input: asked for a top-level array under
+    // response_format json_object, DeepSeek answers with ONE bare candidate
+    // object for a 10k-char transcript. Rejecting it discarded the only term the
+    // model did find and, worse, disabled the guard entirely for that run.
+    expect(
+      parseTechnicalTermDiscoveryResponse({
+        sourceText: "We built Latent Workspace Routing for agents.",
+        response: JSON.stringify({
+          sourceText: "Latent Workspace Routing",
+          confidence: "high",
+          category: "ai-agent",
+        }),
+      }).accepted,
+    ).toEqual([
+      { sourceText: "Latent Workspace Routing", confidence: "high", category: "ai-agent" },
+    ]);
+  });
+
+  it("asks for the wrapped object shape json_object mode is built for", () => {
+    // The prompt used to demand a bare JSON array while the request set
+    // json_object — a contradiction the model resolved by returning either a
+    // wrapper or a single object, both of which were then thrown away. Naming
+    // the wrapper key in the prompt is what stops the two fighting.
+    const prompt = buildTechnicalTermDiscoveryPrompt("A source about Graph Engineering.");
+    expect(prompt).toContain("terms");
+    expect(prompt).toMatch(/\{\s*"terms"/u);
+  });
+
   it("still rejects an object that carries no candidate array", () => {
     expect(
       parseTechnicalTermDiscoveryResponse({

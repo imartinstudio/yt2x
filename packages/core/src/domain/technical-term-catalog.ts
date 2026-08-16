@@ -155,6 +155,27 @@ const GRAPH_MIXED_TECHNICAL_CONTEXT_RE =
   /(?:\bgraph\b[\s\S]{0,28}(?:能|可以|用于|表示|连接|包含|节点|边|检索|推理|依赖|不是|并非)|(?:构建|创建|使用|技术|概念|数据库|算法|节点|边|检索|推理|依赖|工作流|系统|模型|结构)[\s\S]{0,28}\bgraph\b)/iu;
 const GRAPH_CHINESE_TECHNICAL_CONTEXT_RE =
   /(?:图的基本词汇|第[一二三四五六七八九十\d]+个图|现成的图|值得用图|更大的图|图(?:是|能|可以|用于|表示|连接|包含|节点|边|数据库|算法|结构|工作流|检索|推理))/u;
+/**
+ * The masking token for one canonical term.
+ *
+ * Derived from the term, NOT from its position in the current prepare() call.
+ * The index used to be `restoration.placeholders.length`, which restarts at 0
+ * on every call — and `dub/translate.ts` prepares each utterance separately
+ * before sending twenty of them in ONE request. A single prompt therefore
+ * carried `YT2X_TERM_0` standing for Obsidian, markdown files, AI platform and
+ * ChatGBT simultaneously. Nothing downstream could tell them apart, so
+ * restoring by token wrote one product's name into another's slot: on a real
+ * run Obsidian fell from 16 source lines to 11 in the output while NotebookLM
+ * rose from 2 to 13.
+ *
+ * Hashing the canonical makes the token unique per term and identical for that
+ * term everywhere, so batching is safe however callers choose to prepare. It
+ * stays opaque on purpose — a token that spelled the term out invites the model
+ * to translate the very text the guard exists to preserve.
+ */
+const placeholderTokenFor = (canonical: string): string =>
+  `\uE000YT2X_TERM_${sha256Hex(canonical).slice(0, 12)}\uE001`;
+
 const PRIVATE_PLACEHOLDER_RE = /\uE000YT2X_TERM_[^\uE001]+\uE001/u;
 const FIELD_BOUNDARY = "\uE002YT2X_FIELD_BOUNDARY\uE003";
 const HAN_CHAR_RE = /\p{Script=Han}/u;
@@ -850,8 +871,11 @@ export const createTechnicalTermGuard = ({
       if (matchedTerm?.canonical === "Graph" && !isTechnicalGraphContext(fullText, offset, offset + match.length)) {
         return match;
       }
-      const token = `\uE000YT2X_TERM_${restoration.placeholders.length}\uE001`;
-      restoration.placeholders.push({ token, canonical: matchedTerm?.canonical ?? match });
+      const canonical = matchedTerm?.canonical ?? match;
+      const token = placeholderTokenFor(canonical);
+      if (!restoration.placeholders.some((existing) => existing.token === token)) {
+        restoration.placeholders.push({ token, canonical });
+      }
       return token;
     });
   };

@@ -44,6 +44,11 @@ export const PREFERRED_RATE_MAX = 1.15;
  * 试听时曾担心放慢会把漂移推到片尾变成冻结画面，实测没有发生：两版片尾冻结都是
  * 1.4 秒。协商计划预估 0.85 会产生 2234ms 的 extendMs，重新合成后实测只有 932ms——
  * 预估用的是按字数估的时长，实测才是引擎真正念出来的长度，这类数字不能拿预估下结论。
+ *
+ * 上面那句「实测没有发生」只对那一个样本成立。UuX4zk9jTAg（80 话语单元）上确实发生了：
+ * 37 行 stretch 把 extendMs 顶到 15.6s，是封顶 8.0s 的两倍，且每个句间空隙都被压到
+ * 150ms 下限。原因见 `decideLine` 内的 stretchTargetMs——放慢会吃掉 drift 唯一的还款
+ * 机会。加上「空余先还债」后同片 extendMs 归 0。见 issue #167。
  */
 export const PREFERRED_RATE_MIN = 0.85;
 
@@ -186,6 +191,8 @@ const decideLine = (input: {
   rateMin: number;
   stretchMinUnderrunMs: number;
   stretchMaxOccupancy: number;
+  /** 进入本行时已累积的漂移，本行的空余要先拿来还它。 */
+  driftMs: number;
 }): DubNegotiateLinePlan => {
   const {
     line,
@@ -196,15 +203,24 @@ const decideLine = (input: {
     rateMin,
     stretchMinUnderrunMs,
     stretchMaxOccupancy,
+    driftMs,
   } = input;
   const rate = requiredRate(line.naturalMs, fitTargetMs);
 
   // 富余方向：合成音明显短于目标区间时反向放慢填充，减少句尾死寂。
   // rateMin >= 1 表示引擎自报的 rateRange 下限不允许放慢，直接放弃，落回 keep。
-  const underrunMs = fitTargetMs - line.naturalMs;
-  const occupancy = fitTargetMs > 0 ? line.naturalMs / fitTargetMs : 1;
+  //
+  // 但空余先还债：drift 唯一的下降途径是短行的负 overflow（drift = max(0, drift + overflow)），
+  // 放慢填满本槽就等于把这次还款花在静音上，漂移被推到片尾 extendMs，而 extendMs 有封顶。
+  // 扣掉 driftMs 后再判断，drift 为 0 时与不扣完全一致。
+  const stretchTargetMs = fitTargetMs - driftMs;
+  const underrunMs = stretchTargetMs - line.naturalMs;
+  const occupancy = stretchTargetMs > 0 ? line.naturalMs / stretchTargetMs : 1;
   if (rateMin < 1 && underrunMs > stretchMinUnderrunMs && occupancy < stretchMaxOccupancy) {
-    const stretchRate = Math.min(1, Math.max(rateMin, rate));
+    const stretchRate = Math.min(
+      1,
+      Math.max(rateMin, requiredRate(line.naturalMs, stretchTargetMs)),
+    );
     const plannedDurationMs = Math.max(1, Math.round(line.naturalMs / stretchRate));
     return {
       index: line.index,
@@ -305,6 +321,7 @@ const planOnce = (input: {
       rateMin: input.rateMin,
       stretchMinUnderrunMs: input.stretchMinUnderrunMs,
       stretchMaxOccupancy: input.stretchMaxOccupancy,
+      driftMs: drift,
     });
 
     lines.push(plan);

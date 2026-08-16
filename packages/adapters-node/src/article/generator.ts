@@ -1,4 +1,6 @@
 import {
+  buildArticleLeadTightenPrompt,
+  findOverlongArticleLead,
   ARTICLE_X_SYSTEM_PROMPT,
   appendTechnicalTermRuleToSystemPrompt,
   buildArticleUserPrompt,
@@ -256,6 +258,129 @@ export const validateArticleVisualPlan = (
 /**
  * 调用 LLM 生成 X 长文 `article.md` 正文（不落盘）。
  */
+/**
+ * Rewrite the lead when it overruns ARTICLE_LEAD_MAX_CHARS.
+ *
+ * The limit lived only in the checker, which merely logged `lead-too-long`
+ * after the article was already on disk. Stating it in the prompt (b79ed52) was
+ * necessary but not sufficient — the model overshot anyway, 152 chars against
+ * 120 on the run that prompted this. Nothing corrected it, so the warning fired
+ * on delivery and stayed.
+ *
+ * One attempt, not a loop: the lead is a single paragraph and the measurements
+ * say the limit is reachable — two of three real articles already satisfy it —
+ * so this is correcting an occasional overshoot, not fighting a systematic one.
+ * If the rewrite still does not fit, or drops a protected term, the original
+ * stands and the checker's warning is left to report it. A worse lead that fits
+ * is not an improvement.
+ */
+const MAX_LEAD_TIGHTEN_ROUNDS = 3;
+
+/**
+ * Rewrite the lead when it overruns ARTICLE_LEAD_MAX_CHARS.
+ *
+ * The limit lived only in the checker, which merely logged `lead-too-long` after
+ * the article was already on disk. Stating it in the prompt (b79ed52) was
+ * necessary but not sufficient — the model overshot anyway, 152-168 chars against
+ * 120 — and nothing corrected it.
+ *
+ * Bounded loop rather than one attempt, and it accepts progress rather than
+ * demanding a hit. A single attempt on real material compressed 165 -> 127,
+ * which an all-or-nothing rule then threw away in favour of the 165-char
+ * original — strictly the worse artifact. Feeding the shortened lead back in
+ * gets the rest of the way.
+ *
+ * The opposite failure is just as real: the dub's tighten pass accepted anything
+ * merely shorter and so never converged (see MAX_TIGHTEN_ROUNDS in
+ * dub/translate.ts). So each round must be strictly shorter than the last, the
+ * loop stops as soon as it fits, and it gives up when a round stops improving —
+ * every extra round is a provider call.
+ *
+ * A rewrite that drops a protected term is rejected outright: a long lead is a
+ * warning, a mangled product name is wrong.
+ */
+const tightenOverlongLead = async (
+  content: string,
+  finalize: (value: string) => Promise<FinalizedTechnicalTermValue<string>>,
+  input: GenerateXArticleInput,
+): Promise<string> => {
+  let current = content;
+
+  for (let attempt = 0; attempt < MAX_LEAD_TIGHTEN_ROUNDS; attempt += 1) {
+    const overlong = findOverlongArticleLead(current);
+    if (overlong === null) return current;
+
+    const decline = (reason: string): string => {
+      console.warn(
+        `article lead tighten stopped after round ${attempt + 1} (${reason}); `
+        + `shipping a ${overlong.length}-char lead against a ${overlong.limit} limit`,
+      );
+      return current;
+    };
+
+    let rewritten: string;
+    try {
+      const resp = await input.llm.chat({
+        model: input.model,
+        messages: [
+          { role: "system", content: buildArticleLeadTightenPrompt(overlong.length, overlong.limit) },
+          { role: "user", content: overlong.lead },
+        ],
+        temperature: 0.3,
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+      rewritten = stripCodeFenceWrapper(resp.content.trim()).trim();
+    } catch (err: unknown) {
+      return decline(err instanceof Error ? err.message : String(err));
+    }
+
+    if (rewritten === "") return decline("empty rewrite");
+    if (rewritten.includes("\n\n")) return decline("rewrite returned more than one paragraph");
+    if (overlong.start < 0) return decline("lead span not locatable in article");
+    const candidate = current.slice(0, overlong.start) + rewritten + current.slice(overlong.end);
+    // One measure, taken from core, for both questions — "did it get shorter"
+    // and "does it fit now". Re-deriving the length here is how a repair ends up
+    // chasing a different number than the check it is trying to satisfy.
+    const candidateOverlong = findOverlongArticleLead(candidate);
+    if (candidateOverlong !== null && candidateOverlong.length >= overlong.length) {
+      // Don't take it, but do ask again. The dub's tighten pass stops on a
+      // fruitless round because one round there spans 20+ lines, so "nothing
+      // improved" really is a plateau. Here a round is a single paragraph and a
+      // single sample — observed declining at 137 chars against a 120 limit,
+      // close enough that another draw is worth one call.
+      console.warn(
+        `article lead tighten round ${attempt + 1} was not shorter `
+        + `(${candidateOverlong.length} chars); retrying`,
+      );
+      continue;
+    }
+
+    const finalized = await finalize(candidate);
+    if (finalized.value.includes(rewritten) === false) {
+      return decline("term guard rejected the rewrite");
+    }
+    current = finalized.value;
+
+    const remaining = findOverlongArticleLead(current);
+    if (remaining === null) {
+      console.warn(
+        `article lead tightened from ${overlong.length} chars to within the `
+        + `${overlong.limit} limit in ${attempt + 1} round(s)`,
+      );
+      return current;
+    }
+  }
+
+  const left = findOverlongArticleLead(current);
+  if (left !== null) {
+    console.warn(
+      `article lead still ${left.length} chars after ${MAX_LEAD_TIGHTEN_ROUNDS} tighten round(s); `
+      + `shipping it and letting the quality report say so`,
+    );
+  }
+  return current;
+};
+
 export const generateXArticleContent = async (
   input: GenerateXArticleInput,
 ): Promise<GenerateXArticleResult> => {
@@ -411,6 +536,7 @@ export const generateXArticleContent = async (
     return finalized;
   };
   content = (await finalize(content)).value;
+  content = await tightenOverlongLead(content, finalize, input);
   validateArticleTopicHashtags(content);
   visualPlan = validateArticleVisualPlan(content, input.availableVisuals);
 

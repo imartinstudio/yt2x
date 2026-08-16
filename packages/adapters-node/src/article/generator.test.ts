@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { findOverlongArticleLead } from "@yt2x/core";
 import type { AvailableVisual, ChatRequest, ChatResponse, LlmPort } from "@yt2x/core";
 import {
   generateXArticleContent,
@@ -38,6 +39,104 @@ const sampleVisuals: AvailableVisual[] = [
 ];
 
 describe("generateXArticleContent", () => {
+  describe("overlong lead", () => {
+    /** A lead of exactly `chars` visible characters — no hand-counted fixtures. */
+    const leadOf = (chars: number): string => {
+      const visible = (t: string): number => t.replace(/[ \t\n]/gu, "").length;
+      let out = "批评者说这只是一堆 Markdown 文件加花哨的阅读器，他们没错，";
+      while (visible(out) < chars) out += "上下文可以整体带走，";
+      return out.slice(0, out.length - (visible(out) - chars));
+    };
+    const LONG_LEAD = leadOf(170);
+    const MID_LEAD = leadOf(135);
+    const SHORT_LEAD = leadOf(80);
+    const article = (lead: string): string =>
+      `# **标题**\n\n${lead}\n\n## 小节\n\n- 第一步\n- 第二步\n- 第三步\n\n#AI #Agent #Workflow`;
+
+    const runWith = async (leadReply: string): Promise<string> => {
+      const llm = makeLlm((req) => {
+        const system = req.messages[0]?.content ?? "";
+        if (system.includes("你在压缩一篇中文科技文章的导语")) {
+          return { content: leadReply, model: "m", finishReason: "stop" };
+        }
+        return { content: article(LONG_LEAD), model: "m", finishReason: "stop" };
+      });
+      const out = await generateXArticleContent({
+        llm, model: "m", artifacts: fakeArtifacts, availableVisuals: [],
+      });
+      return out.content;
+    };
+
+    it("rewrites a lead that overruns the limit", async () => {
+      // The limit lived only in the checker, which logged after the file was
+      // written. Stating it in the prompt was not enough — the model overshot
+      // anyway (152 against 120 on the run that prompted this).
+      const content = await runWith(SHORT_LEAD);
+      expect(content).toContain(SHORT_LEAD);
+      expect(content).not.toContain(LONG_LEAD);
+      expect(findOverlongArticleLead(content)).toBeNull();
+    });
+
+    it("keeps going when one round shortens but does not reach the limit", async () => {
+      // Observed on real material: one round took 165 chars to 127. An
+      // all-or-nothing rule rejected that and shipped the 165-char original —
+      // strictly the worse artifact. Progress has to be kept and fed back in.
+      const replies = [MID_LEAD, SHORT_LEAD];
+      let round = 0;
+      const llm = makeLlm((req) => {
+        const system = req.messages[0]?.content ?? "";
+        if (system.includes("你在压缩一篇中文科技文章的导语")) {
+          const reply = replies[Math.min(round, replies.length - 1)]!;
+          round += 1;
+          return { content: reply, model: "m", finishReason: "stop" };
+        }
+        return { content: article(LONG_LEAD), model: "m", finishReason: "stop" };
+      });
+      const out = await generateXArticleContent({
+        llm, model: "m", artifacts: fakeArtifacts, availableVisuals: [],
+      });
+      expect(round).toBeGreaterThan(1);
+      expect(findOverlongArticleLead(out.content)).toBeNull();
+      expect(out.content).toContain(SHORT_LEAD);
+    });
+
+    it("retries a round that produced nothing shorter, up to the cap", async () => {
+      // Unlike the dub pass, a round here is one paragraph and one sample, so a
+      // single non-improving draw is weak evidence of a plateau. It is not
+      // accepted, but it is worth another ask — bounded, since each is a call.
+      let round = 0;
+      const llm = makeLlm((req) => {
+        const system = req.messages[0]?.content ?? "";
+        if (system.includes("你在压缩一篇中文科技文章的导语")) {
+          round += 1;
+          return { content: `${LONG_LEAD}再加一句让它更长。`, model: "m", finishReason: "stop" };
+        }
+        return { content: article(LONG_LEAD), model: "m", finishReason: "stop" };
+      });
+      const out = await generateXArticleContent({
+        llm, model: "m", artifacts: fakeArtifacts, availableVisuals: [],
+      });
+      expect(round).toBe(3);
+      expect(out.content).toContain(LONG_LEAD);
+    });
+
+    it("keeps the original when the rewrite comes back empty", async () => {
+      expect(await runWith("   ")).toContain(LONG_LEAD);
+    });
+
+    it("does not call the tighten prompt when the lead already fits", async () => {
+      const systems: string[] = [];
+      const llm = makeLlm((req) => {
+        systems.push(req.messages[0]?.content ?? "");
+        return { content: article(SHORT_LEAD), model: "m", finishReason: "stop" };
+      });
+      await generateXArticleContent({
+        llm, model: "m", artifacts: fakeArtifacts, availableVisuals: [],
+      });
+      expect(systems.some((x) => x.includes("你在压缩一篇中文科技文章的导语"))).toBe(false);
+    });
+  });
+
   it("recovers catalog terms in article markdown without demanding the discovered term", async () => {
     const llm = makeLlm(
       (req) => {

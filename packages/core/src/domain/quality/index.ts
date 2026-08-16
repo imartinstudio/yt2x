@@ -31,6 +31,7 @@ export {
 
 export {
   checkArticleQuality,
+  findOverlongArticleLead,
   checkShortQuality,
   checkThreadQuality,
   formatQualityIssues,

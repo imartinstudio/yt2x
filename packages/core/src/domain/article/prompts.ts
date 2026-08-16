@@ -204,3 +204,23 @@ export const buildArticleUserPrompt = (
   sections.push(input.structuredNotesMd.trim());
   return sections.join("\n");
 };
+
+/**
+ * 导语过长时的定向重写 prompt。
+ *
+ * 只重写导语，不重生成整篇：为一段而重跑全文既贵又会把其余内容一起搅动。
+ * 也明确禁止靠切换文风来省字数——那正是 4b 条禁止的「压缩不得改变语域」，
+ * 在导语这种最吃语感的段落上尤其致命。
+ */
+export const buildArticleLeadTightenPrompt = (
+  currentLength: number,
+  maxChars: number,
+): string => [
+  "你在压缩一篇中文科技文章的导语。上一版导语过长。",
+  `当前 ${currentLength} 个可见字符，上限 ${maxChars} 个（不含 Markdown 标记与空白）。`,
+  "只输出重写后的导语段落本身：不要标题、不要小节、不要解释、不要 Markdown 代码围栏。",
+  "保留导语原有的判断和冲突感；砍背景、砍铺垫、砍重复，不要砍掉结论。",
+  "禁止为了省字数切换文风：不要文言虚词，不要省掉的/了/是/在，不要电报式名词堆叠。",
+  "保留所有产品名、命令、API 名与专有名词的原文写法。",
+].join("\n");
+

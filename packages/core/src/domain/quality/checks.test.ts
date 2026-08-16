@@ -9,6 +9,8 @@ import {
   ABSTRACT_FRAMEWORK_FIXTURE,
   HIGH_TRUST_FIXTURE,
 } from "./fixtures.js";
+import { ARTICLE_X_SYSTEM_PROMPT } from "../article/prompts.js";
+import { ARTICLE_LEAD_MAX_CHARS } from "./rules.js";
 import type { GeneratedShortPost } from "../short/types.js";
 import type { GeneratedThread } from "../thread/types.js";
 
@@ -154,6 +156,17 @@ const GOOD_SHORT: GeneratedShortPost = {
   risk: "medium",
 };
 
+describe("article lead length contract", () => {
+  it("states the checker's limit in the prompt the writer actually reads", () => {
+    // The prompt gave rich guidance on what the lead must DO but never said how
+    // long it may be, so the writer had no way to satisfy a limit that lived
+    // only in the checker — every article risked article.lead-too-long. Sharing
+    // the constant is what keeps the two from disagreeing.
+    expect(ARTICLE_X_SYSTEM_PROMPT).toContain(String(ARTICLE_LEAD_MAX_CHARS));
+    expect(ARTICLE_X_SYSTEM_PROMPT).toMatch(/导语[^\n]*(?:不超过|上限|最多)/u);
+  });
+});
+
 describe("checkShortQuality", () => {
   it("returns no critical issues for a well-formed short", () => {
     const issues = checkShortQuality(GOOD_SHORT, {
@@ -199,6 +212,55 @@ describe("checkShortQuality", () => {
     expect(codes).not.toContain("short.list-out-of-range");
     expect(codes).not.toContain("short.no-executable-item");
     expect(codes).not.toContain("short.missing-risk-reminder");
+  });
+
+  it("accepts the plain numbered format the short prompt actually mandates", () => {
+    // short/prompts.ts requires: 纯数字序号 `1`、`2`、`3`（不加点、不加括号）,
+    // 内容紧跟在同一行, and explicitly forbids putting the marker on its own
+    // line. The collector only recognised `1.`/`-` markers (which the prompt
+    // bans) and lone-marker lines (also banned), so every compliant short post
+    // counted 0 items — firing both list-out-of-range and, because the
+    // executable-item check walks the same list, no-executable-item.
+    const post: GeneratedShortPost = {
+      text: `说 Obsidian 只是花哨的编辑器？你没看到真正的用法。
+
+把整个笔记库变成随身携带的 AI 工作区。
+
+1 人类与机器分离：
+Human 放 inbox 与 projects，Machine 放 prompts 与 templates。
+2 用 front matter 喂上下文：
+在笔记开头写 status、project、tags 三个属性。
+3 建一个 Agents.md：
+放在 vault 根目录，说明 workflows 与 skills 的位置。
+4 可执行 prompt：
+帮我把现有笔记按 Human / Machine 规则分类一次
+5 风险提醒：
+接入前先确认 Human 目录写入权限，并整库备份，操作不可逆。
+
+下一步：新建两个文件夹，写一个最简单的 Agents.md。`,
+      angle: "practical",
+      risk: "medium",
+    };
+    const codes = checkShortQuality(post, {
+      sourceText: HIGH_TRUST_FIXTURE.structuredNotesMd,
+    }).map((i) => i.code);
+    expect(codes).not.toContain("short.list-out-of-range");
+    expect(codes).not.toContain("short.no-executable-item");
+    expect(codes).not.toContain("short.missing-risk-reminder");
+  });
+
+  it("does not mistake a sentence opening with a number for a list item", () => {
+    // The same-line rule must not swallow ordinary prose that happens to start
+    // with a figure, or the count becomes meaningless in the other direction.
+    const post: GeneratedShortPost = {
+      text: `**判断：** 工具用错了。
+
+2024 年这套流程已经不适用了。
+50 个来源的上限是平台限制，不是工具限制。`,
+      angle: "practical",
+      risk: "low",
+    };
+    expect(checkShortQuality(post).map((i) => i.code)).toContain("short.list-out-of-range");
   });
 
   it("flags list count out of range", () => {

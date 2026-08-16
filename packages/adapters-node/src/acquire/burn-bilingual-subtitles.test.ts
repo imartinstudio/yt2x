@@ -157,57 +157,119 @@ describe("burnBilingualSubtitles", () => {
     ]);
   });
 
-  it("keeps the approved BaoCut-inspired 720p style contract in the renderer", async () => {
+  it("keeps the approved 720p style contract in the shared visual module", async () => {
+    // The LOOK is shared with the single-language renderer so the two cannot
+    // drift apart; this asserts the contract file itself. Type size and row
+    // stacking stay per-renderer and are asserted below.
+    const style = await readFile(
+      path.join(process.cwd(), "packages/adapters-node/src/acquire/subtitle_style.py"),
+      "utf8",
+    );
+
+    // Outline is a fixed hairline pixel count, not a font-size fraction: an
+    // 8%-of-font-size outline scaled to 2-4px across our resolutions and read
+    // as too heavy. It is also what keeps a white glyph alive on a near-white
+    // scene now that neither renderer draws a background box.
+    expect(style).toContain("ZH_OUTLINE_PX = 1");
+    // English carried no outline until a burn test over bright UI footage
+    // showed it was the first thing to become unreadable.
+    expect(style).toContain("EN_OUTLINE_PX = 1");
+    expect(style).toContain("MAX_WIDTH_FRAC = 0.80");
+    expect(style).toContain("BASELINE_VIDEO_HEIGHT = 720");
+
+    // Chinese shadow is the design spec's CSS `0 4px 20px rgba(0,0,0,.5)`,
+    // stated as absolute 720p px rather than a font fraction — the
+    // single-language renderer changes type size per cue, so a font-relative
+    // shadow would change weight between captions.
+    expect(style).toContain("ZH_SHADOW_CSS_OFFSET_PX = (0, 4)");
+    expect(style).toContain("ZH_SHADOW_CSS_BLUR_PX = 20");
+    expect(style).toContain("ZH_SHADOW_OPACITY = 0.50");
+    expect(style).toContain("ZH_SHADOW_RGB = (0, 0, 0)");
+    // CSS blur is 2-sigma, Pillow's GaussianBlur radius IS sigma.
+    expect(style).toContain("(ZH_SHADOW_CSS_BLUR_PX / 2) * scale");
+
+    // English keeps the earlier font-relative shadow: the spec sets its face,
+    // colour and tracking but says nothing about shadow, and with no outline
+    // this row has nothing else separating white glyphs from the picture.
+    expect(style).toContain("EN_SHADOW_ANGLE_DEG = 45");
+    expect(style).toContain("EN_SHADOW_DISTANCE_FRAC = 0.08");
+    expect(style).toContain("EN_SHADOW_BLUR_FRAC = 0.10");
+    expect(style).toContain("EN_SHADOW_OPACITY = 0.42");
+    expect(style).toContain("EN_SHADOW_RGB = (64, 64, 64)");
+
+    // Chinese is Source Han Sans / Noto Sans SC at weight 900 ("Black"),
+    // discovered on the host because the CJK outlines are far too big to
+    // vendor; English is the vendored Inter Bold, so its repo copy is
+    // authoritative.
+    expect(style).toContain("NotoSansSC-Variable.ttf");
+    expect(style).toContain('"Noto Sans SC Black", "Black"');
+    expect(style).toContain("SourceHanSansSC-Heavy.otf");
+    expect(style).toContain('"Inter-Bold.ttf"');
+    expect(style).toContain('"PingFang SC"');
+    expect(style).toContain('"Hiragino Sans GB"');
+    expect(style).toContain('"STHeiti"');
+
+    // Colours: both rows white, with the English row accenting the standalone
+    // word "AI" in #FFD928.
+    expect(style).toContain("ZH_FILL = (255, 255, 255, 255)");
+    expect(style).toContain("EN_FILL = (255, 255, 255, 255)");
+    expect(style).toContain("EN_HIGHLIGHT_FILL = (255, 217, 40, 255)");
+    expect(style).toContain('EN_HIGHLIGHT_RE = re.compile(r"\\bAI\\b")');
+
+    // Letter-spacing is English-only: CJK glyphs already sit on a fixed
+    // advance, so extra tracking there just loosens the word shapes.
+    expect(style).toContain("ZH_TRACKING_EM = 0.0");
+    expect(style).toContain("EN_TRACKING_EM = 0.02");
+
+    // One line pitch for every row, applied to that row's own size. The two
+    // renderers used to disagree (~1.50em here vs 2.00em single-language).
+    expect(style).toContain("LINE_PITCH_EM = 1.65");
+
     const renderer = await readFile(
       path.join(process.cwd(), "packages/adapters-node/src/acquire/render-bilingual-subtitles.py"),
       "utf8",
     );
 
-    // Style is mostly held in BaoCut's own units — shadow distance/blur as
-    // its 0-1 fractions (per row, since English's shadow has to work harder
-    // with no outline to lean on) and the shadow angle in degrees. Outline
-    // width is the deliberate exception: BaoCut's 8%-of-font-size fraction
-    // scaled to 2-4px across our resolutions and read as too heavy, so it's
-    // a fixed hairline pixel count instead of a resolution-scaled fraction.
-    expect(renderer).toContain("_BASE_ZH_FONT_SIZE = 30");
+    // The Chinese row's size is shared, because single-language delivery is
+    // this same row with the English one removed. English has no counterpart
+    // to match, so its size stays local to this renderer.
+    expect(style).toContain("ZH_FONT_SIZE_BASE = 30");
+    expect(renderer).toContain("from subtitle_style import");
+    expect(renderer).toContain("ZH_FONT_SIZE_BASE");
     expect(renderer).toContain("_BASE_EN_FONT_SIZE = 16");
-    expect(renderer).toContain("ZH_OUTLINE_PX = 1");
-    expect(renderer).toContain("EN_OUTLINE_PX = 0");
-    expect(renderer).toContain("ZH_SHADOW_DISTANCE_FRAC = 0.08");
-    expect(renderer).toContain("ZH_SHADOW_BLUR_FRAC = 0.10");
-    expect(renderer).toContain("EN_SHADOW_DISTANCE_FRAC = 0.08");
-    expect(renderer).toContain("EN_SHADOW_BLUR_FRAC = 0.10");
-    expect(renderer).toContain("SHADOW_ANGLE_DEG = 45");
-    expect(renderer).toContain("MAX_WIDTH_FRAC = 0.80");
-
-    // Lexend Deca is the requested face for both rows but has no CJK glyphs,
-    // so it can only head a fallback chain — hence a Latin/CJK FontSet pair
-    // and per-run face switching, not one font per row.
-    expect(renderer).toContain("LexendDeca.ttf");
-    expect(renderer).toContain('"PingFang SC"');
-    expect(renderer).toContain('"Hiragino Sans GB"');
-    expect(renderer).toContain('"STHeiti"');
     expect(renderer).toContain("class FontSet:");
     expect(renderer).toContain("def font_runs(");
+    expect(renderer).toContain("def styled_runs(");
     expect(renderer).toContain("def draw_mixed_line(");
-    expect(renderer).toContain('anchor="ls"');
+    // Left-baseline anchoring lives with the shared draw primitive: the two
+    // faces' differing ascents must not make their glyphs sit at different
+    // heights on a shared baseline.
+    expect(style).toContain('anchor: str = "ls"');
 
     // The shadow is a real Gaussian blur on its own layer, not a stamped
     // offset trail, and its silhouette is drawn entirely in the shadow colour
     // (drawing the outline pass in opaque black made the "shadow" an opaque
     // slab as thick as the outline no matter what alpha it was given).
-    expect(renderer).toContain("SHADOW_RGB = (64, 64, 64)");
     expect(renderer).toContain("ImageFilter.GaussianBlur");
     expect(renderer).toContain("outline_color=shadow.color");
 
-    // Opacity is per row: the Chinese outline carries legibility so its
-    // shadow is only a depth hint, while English has no outline.
-    expect(renderer).toContain("ZH_SHADOW_OPACITY = 0.28");
-    expect(renderer).toContain("EN_SHADOW_OPACITY = 0.42");
+    // Outlining is a shared primitive: a 3x3 dilation, NOT Pillow's
+    // stroke_width. The two are a pixel or two apart at the same nominal
+    // width, so both renderers have to use the same one or their Chinese rows
+    // stop matching.
+    expect(style).toContain("def draw_outlined_runs(");
+    expect(renderer).toContain("draw_outlined_runs(draw, placed, baseline_y");
+    expect(renderer).not.toContain("stroke_width");
+
+    // Chinese caption text treatment is shared too, or the two renderers draw
+    // different strings from the same SRT.
+    expect(style).toContain("def zh_caption_text(");
+    expect(renderer).toContain("zh_caption_text(");
 
     // CJK/Latin word spacing, so embedded product names don't run into the
-    // surrounding Chinese.
-    expect(renderer).toContain("def space_cjk_latin(");
+    // surrounding Chinese. Shared, like the rest of the text treatment.
+    expect(style).toContain("def space_cjk_latin(");
+    expect(style).toContain("def clean_subtitle_text(");
 
     // ZH and EN render as independent layers of FIXED-SIZE, full-width
     // canvases with the text pre-centered. Constant frame dimensions are what

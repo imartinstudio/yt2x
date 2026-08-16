@@ -1,6 +1,26 @@
 # Bilingual subtitle burn task
 
-版本归属：**v0.3**
+版本归属：**v0.3** — **已归档，视觉部分作废**
+
+> ## ⚠️ 这份文档的样式规格已不再生效
+>
+> 视觉契约现在是 **[`docs/SUBTITLE-VISUAL-CONTRACT.md`](./SUBTITLE-VISUAL-CONTRACT.md)**，
+> 机器可读事实来源是 `packages/adapters-node/src/acquire/subtitle_style.py`。
+>
+> 本文以下内容里凡涉及**外观**的都已作废，具体差异：
+>
+> | 本文写的                | 实际契约                                   |
+> | ----------------------- | ------------------------------------------ |
+> | 中文亮黄 `#FFF400`      | 中文白色 `#FFFFFF`，英文行的 `AI` 才是黄色 |
+> | 英文可斜体              | 不用斜体                                   |
+> | 中文描边 3px / 英文 2px | 中英均为 1px 发丝描边                      |
+> | 字体 PingFang / Arial   | 思源黑体 Heavy 900 / Inter Bold            |
+> | ASS 作为烧录格式        | PNG overlay（`render-*-subtitles.py`）     |
+> | 未定义行距、字距        | 行距 1.65em；英文字距 0.02em               |
+>
+> 仍然有效的是**非视觉**部分：产物契约（`full.bilingual.srt` 等文件布局）、
+> manifest 版本策略、CLI 参数设计、字幕合并与时间轴对齐规则、`--force` 语义。
+> 这些内容保留在下面供参考，实现状态以代码为准。
 
 ## 背景
 

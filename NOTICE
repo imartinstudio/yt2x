@@ -30,6 +30,20 @@ package managers, and their license terms should be reviewed separately.
 No third-party source code is intentionally vendored into this repository
 unless it is explicitly accompanied by its own license or notice file.
 
+Vendored fonts
+--------------
+packages/adapters-node/src/acquire/fonts/Inter-Bold.ttf is part of the
+Inter typeface, Copyright (c) 2016 The Inter Project Authors
+(https://github.com/rsms/inter), licensed under the SIL Open Font License,
+Version 1.1. The full license text is distributed alongside the font as
+packages/adapters-node/src/acquire/fonts/Inter-LICENSE.txt. Inter is not
+relicensed by yt2x and remains subject to the OFL.
+
+The Chinese subtitle face (Source Han Sans / Noto Sans SC, also under the
+SIL Open Font License) is NOT vendored here because of its size; the
+renderer discovers it on the host and falls back to a system CJK face when
+it is absent.
+
 Trademarks
 ----------
 YouTube is a trademark of Google LLC. X and Twitter are trademarks of X Corp.

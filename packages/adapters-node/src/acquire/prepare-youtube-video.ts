@@ -118,6 +118,23 @@ const removeOrphanVideoDir = async (dir: string): Promise<void> => {
   }
 };
 
+/**
+ * Does the subtitle pipeline have anything to do?
+ *
+ * Deliberately checks BOTH modes. The bilingual `--deliver` tiers set
+ * `subtitleZh: "off"` on purpose — that is how `delivery.ts` keeps the
+ * single-language burn from running alongside the bilingual one — and carry
+ * their real intent in `subtitleBilingual`. Gating on the Chinese mode alone
+ * therefore made `--urls --deliver bilingual-srt|bilingual-burned` skip the
+ * whole stage and still report success, delivering no subtitles at all. The
+ * `--video-id` path was unaffected because it triggers the stage separately
+ * (see the executeNativeSubtitle call in native-video.ts).
+ */
+export const subtitlePipelineHasWork = (
+  zhMode: string | undefined,
+  bilingualMode: string | undefined,
+): boolean => (zhMode ?? "off") !== "off" || (bilingualMode ?? "off") !== "off";
+
 export const prepareYoutubeVideo = async (
   opts: PrepareYoutubeVideoOptions,
 ): Promise<PrepareYoutubeVideoResult> => {
@@ -201,6 +218,7 @@ export const prepareYoutubeVideo = async (
   }
 
   const subtitleMode = opts.videoSubtitles?.mode ?? "off";
+  const wantsSubtitleWork = subtitlePipelineHasWork(subtitleMode, opts.subtitleBilingual);
   if (opts.videoClip?.videoOnly === true && subtitleMode === "off") {
     const required = ["metadata.json", "video/clip-manifest.json"] as const;
     const missing: string[] = [];
@@ -267,7 +285,7 @@ export const prepareYoutubeVideo = async (
     result.warnings.push(`subtitle download failed: ${message}`);
   }
 
-  if (subtitleMode !== "off" && opts.videoSubtitles !== undefined) {
+  if (wantsSubtitleWork && opts.videoSubtitles !== undefined) {
     try {
       await timedStep(opts, "subtitle-zh", timingsMs, async () => {
         const { warnings } = await runSubtitlePipeline({

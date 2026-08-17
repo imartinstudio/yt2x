@@ -30,6 +30,57 @@ const line = (
   naturalMs,
 });
 
+describe("planDubNegotiation: stretch must not spend drift repayment", () => {
+  /**
+   * A line that badly overruns, then a roomy line that could pay the debt back.
+   * The roomy line's slack is the only way accumulated drift ever comes down:
+   * `drift = max(0, drift + overflow)`, and a short line's negative overflow is
+   * the repayment. Stretching it to fill its own slot spends that repayment on
+   * silence instead.
+   *
+   * Measured on a real 8-minute dub: 37 stretched lines consumed 28.7s, every one
+   * of them while the timeline was already ≥0.5s behind, against an extendMs of
+   * 15.6s and a hard cap of 8s. The video had 84.7s of total slack against 62.4s
+   * of overflow — it fits; the slack was just being burned.
+   */
+  const overrunThenRoom: NegotiateLineInput[] = [
+    line(1, 0, 4000, 12000),
+    line(2, 4000, 12000, 2000),
+  ];
+
+  const plan = (lines: NegotiateLineInput[]) =>
+    planDubNegotiation({
+      lines,
+      rateRange,
+      maxExtendMs: 8000,
+      minInterSentencePauseMs: DEFAULT_MIN_INTER_SENTENCE_PAUSE_MS,
+      stretchMinUnderrunMs: DEFAULT_STRETCH_MIN_UNDERRUN_MS,
+      stretchMaxOccupancy: DEFAULT_STRETCH_MAX_OCCUPANCY,
+    });
+
+  it("leaves a roomy line at natural rate while the timeline is behind", () => {
+    const result = plan(overrunThenRoom);
+    const second = result.lines.find((l) => l.index === 2)!;
+    expect(second.action).not.toBe("stretch");
+  });
+
+  it("pays the drift down instead of carrying it to the end freeze", () => {
+    // 12s of speech in a 4s slot leaves 8s of debt; the next line has 6s spare.
+    // Repaying leaves ~2s at the tail rather than the full 8s.
+    expect(plan(overrunThenRoom).extendMs).toBeLessThan(4000);
+  });
+
+  it("still stretches when nothing is owed", () => {
+    // The feature exists to cut dead air (a listening test took total silence
+    // 67.7s -> 40.0s); suppressing it unconditionally would undo that.
+    const onSchedule: NegotiateLineInput[] = [
+      line(1, 0, 4000, 3900),
+      line(2, 4000, 12000, 2000),
+    ];
+    expect(plan(onSchedule).lines.find((l) => l.index === 2)!.action).toBe("stretch");
+  });
+});
+
 describe("requiredRate", () => {
   it("is natural / target", () => {
     expect(requiredRate(1200, 1000)).toBeCloseTo(1.2);

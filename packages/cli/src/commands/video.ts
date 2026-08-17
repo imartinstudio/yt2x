@@ -18,7 +18,11 @@ export const registerVideoCommand = (program: Command): void => {
     .option("--article-out-dir <path>", "Article/burned-video output root directory")
     .requiredOption(
       "--deliver <tier>",
-      "What to produce: none|zh-srt|zh-burned|bilingual-srt|bilingual-burned|dubbed",
+      "What to produce: none|zh-srt|zh-burned|bilingual-srt|bilingual-burned|dubbed. " +
+        "A ladder, not orthogonal switches — each tier includes the ones below it and burns " +
+        "exactly once. dubbed already delivers bilingual burned-in subtitles, so pairing it " +
+        "with a separate bilingual-burned run only re-encodes the same video. " +
+        "See CONTEXT.md「交付物」.",
     )
     .option(
       "--from <channel>",

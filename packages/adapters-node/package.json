@@ -55,7 +55,7 @@
   "dependencies": {
     "@yt2x/core": "workspace:*",
     "execa": "^10.0.1",
-    "open": "^11.0.0",
+    "open": "^11.0.1",
     "opencc-js": "^1.4.1",
     "pino": "^10.3.1",
     "playwright": "^1.62.1",

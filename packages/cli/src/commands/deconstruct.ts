@@ -33,6 +33,7 @@ import { logger } from "../logger.js";
 export const runDeconstructCommand = async (
   videoId: string,
   selectCountOverride?: number,
+  llmModel?: string,
 ): Promise<number> => {
   const { defaultMonorepoRoot } = await import("../config/monorepo-root.js");
   const monorepoRoot = defaultMonorepoRoot();
@@ -57,11 +58,18 @@ export const runDeconstructCommand = async (
     logger.info({ videoId: artifacts.videoId, durationSec: artifacts.durationSec }, "Deconstruct: artifacts loaded");
 
   // Step 2: Call LLM
-  const llmConfig = resolveLlmConfig({ provider: defaultCliLlmProvider() });
-  const requestedModel = llmConfig.model ?? "";
+  // Identification stays on the default model (flash is more complete per-section).
+  // --llm-model only overrides clip-post generation, which is where term gates often fail.
+  const identifyConfig = resolveLlmConfig({ provider: defaultCliLlmProvider() });
+  const postConfig = resolveLlmConfig({
+    provider: defaultCliLlmProvider(),
+    ...(llmModel !== undefined && llmModel.length > 0 ? { model: llmModel } : {}),
+  });
+  const identifyModel = identifyConfig.model ?? "";
+  const postModel = postConfig.model ?? "";
   const selectCount = selectCountOverride ?? 0;
   const cacheIdentity = await deconstructCacheIdentityFor(artifacts, {
-    requestedModel,
+    requestedModel: identifyModel,
     selectCount,
   });
   const finalClipsDir = path.join(articleDir, "x-format", "clips");
@@ -79,7 +87,7 @@ export const runDeconstructCommand = async (
     const candidateFresh = await isContentTargetMetadataFresh(candidateMetadata, {
       target: "deconstruct-run",
       sourceFingerprint: cacheIdentity.sourceFingerprint,
-      requestedModel,
+      requestedModel: identifyModel,
       promptVersion: CONTENT_PROMPT_VERSIONS.deconstruct,
       sourceText: cacheIdentity.candidateSourceText,
       sourceTitle: cacheIdentity.sourceTitle,
@@ -91,7 +99,7 @@ export const runDeconstructCommand = async (
     const clipPostFresh = await isContentTargetMetadataFresh(clipPostMetadata, {
       target: "clip-post",
       sourceFingerprint: selectedClipPostIdentity.sourceFingerprint,
-      requestedModel,
+      requestedModel: postModel,
       promptVersion: CONTENT_PROMPT_VERSIONS.clipPost,
       sourceText: expectedSourceText,
       sourceTitle: articleTitle,
@@ -114,20 +122,20 @@ export const runDeconstructCommand = async (
     }
   }
   const llmCfg: Parameters<typeof createLlmAdapter>[0] = {
-    provider: llmConfig.provider,
-    apiKey: llmConfig.apiKey ?? "",
-    baseUrl: llmConfig.baseUrl ?? "",
+    provider: identifyConfig.provider,
+    apiKey: identifyConfig.apiKey ?? "",
+    baseUrl: identifyConfig.baseUrl ?? "",
   };
-  if (llmConfig.model !== undefined) llmCfg.defaultModel = llmConfig.model;
+  if (identifyConfig.model !== undefined) llmCfg.defaultModel = identifyConfig.model;
   const llm = createLlmAdapter(llmCfg);
 
-  logger.info({ provider: llmConfig.provider, model: llmConfig.model }, "Deconstruct: LLM configured; generating bundle");
+  logger.info({ provider: identifyConfig.provider, model: identifyConfig.model, postModel }, "Deconstruct: LLM configured; generating bundle");
 
   let result;
   try {
     result = await runDeconstruct({
       llm,
-      model: llmConfig.model ?? "",
+      model: identifyModel,
       articleDir,
       artifacts,
       cacheIdentity,
@@ -142,13 +150,14 @@ export const runDeconstructCommand = async (
   }
 
   // Step 3: Split oversized sections + filter + validate
-  const { filterValidSections, validateClipEndings, splitOversizedSections } = await import("@yt2x/adapters-node");
+  const { filterValidSections, validateClipEndings, splitOversizedSections, snapClipEndingsToSentence } = await import("@yt2x/adapters-node");
   const split = splitOversizedSections(result.candidates, artifacts.srtContent);
   const splitCount = split.sections.length - result.candidates.sections.length;
   if (splitCount > 0) {
     logger.info({ splitCount, totalAfterSplit: split.sections.length }, "Deconstruct: split oversized sections into sub-sections");
   }
   const filtered = filterValidSections(split);
+  snapClipEndingsToSentence(filtered.sections, artifacts.srtContent);
   const skipped = split.sections.filter((s) => s.skip_reason != null).length;
   const invalid = split.sections.length - filtered.sections.length - skipped;
 
@@ -203,19 +212,19 @@ export const runDeconstructCommand = async (
   logger.info({ manifestPath: output.manifestPath, clipCount: output.clippedCount }, "Deconstruct: manifest prepared");
 
   // Step 5: Generate posts for ALL candidates — 先生成文案，基于文案质量筛选
-  logger.info({ model: llmConfig.model }, "Deconstruct: generating posts for all candidates");
+  logger.info({ model: postModel }, "Deconstruct: generating posts for all candidates");
 
   const genLlmCfg: Parameters<typeof createLlmAdapter>[0] = {
-    provider: llmConfig.provider,
-    apiKey: llmConfig.apiKey ?? "",
-    baseUrl: llmConfig.baseUrl ?? "",
+    provider: postConfig.provider,
+    apiKey: postConfig.apiKey ?? "",
+    baseUrl: postConfig.baseUrl ?? "",
   };
-  if (llmConfig.model !== undefined) genLlmCfg.defaultModel = llmConfig.model;
+  if (postConfig.model !== undefined) genLlmCfg.defaultModel = postConfig.model;
   const genLlm = createLlmAdapter(genLlmCfg);
 
-  const genResult = await generateClipsPosts({
+  let genResult = await generateClipsPosts({
     llm: genLlm,
-    model: llmConfig.model ?? "",
+    model: postModel,
     articleDir,
     manifest: output.manifest,
     persist: false,
@@ -264,19 +273,46 @@ export const runDeconstructCommand = async (
 
     logger.info({ keepIds }, "Deconstruct: marking selected clips");
 
-    const selectedManifest = applyClipSelection(genResult.manifest, keepIds).manifest;
-
-    // Step 6b: Write .md files only for selected clips
-    const selectedPostPaths = await writeSelectedPostFiles(
-      selectedManifest,
-      articleDir,
-      genResult.technicalTerms,
-      {
-        clipsDir: stageClipsDir,
-        metadataPath: contentTargetMetadataPathFor(stageClipsDir, "clip-post"),
-        lock: false,
-      },
-    );
+    const maxPostAttempts = 2;
+    let selectedPostPaths: string[] = [];
+    let selectedManifest = applyClipSelection(genResult.manifest, keepIds).manifest;
+    for (let attempt = 1; attempt <= maxPostAttempts; attempt++) {
+      selectedManifest = applyClipSelection(genResult.manifest, keepIds).manifest;
+      try {
+        selectedPostPaths = await writeSelectedPostFiles(
+          selectedManifest,
+          articleDir,
+          genResult.technicalTerms,
+          {
+            clipsDir: stageClipsDir,
+            metadataPath: contentTargetMetadataPathFor(stageClipsDir, "clip-post"),
+            lock: false,
+            llm: genLlm,
+            model: postModel,
+          },
+        );
+        break;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (attempt === maxPostAttempts || !msg.includes("Technical term validation failed")) {
+          throw err;
+        }
+        logger.warn({ attempt, error: msg }, "Deconstruct: post term gate failed; regenerating posts");
+        genResult = await generateClipsPosts({
+          llm: genLlm,
+          model: postModel,
+          articleDir,
+          manifest: output.manifest,
+          persist: false,
+          cacheContract: "cli",
+          outputDir: stageClipsDir,
+          lock: false,
+        });
+        if (genResult.usage !== undefined) {
+          logger.info({ usage: genResult.usage, attempt: attempt + 1 }, "Deconstruct: LLM usage (post generation)");
+        }
+      }
+    }
 
     logger.info({ mdCount: selectedPostPaths.length }, "Deconstruct: .md files written for selected clips");
 
@@ -406,8 +442,9 @@ export const registerDeconstructCommand = (program: Command): void => {
       "--select <n>",
       "Auto-select top N candidates by score and generate posts (skips manual selection step)",
     )
-    .action(async (videoId: string, options: { select?: string }) => {
+    .option("--llm-model <name>", "Override LLM model for clip-post generation")
+    .action(async (videoId: string, options: { select?: string; llmModel?: string }) => {
       const selectN = options.select ? parseInt(options.select, 10) : undefined;
-      process.exitCode = await runDeconstructCommand(videoId, selectN);
+      process.exitCode = await runDeconstructCommand(videoId, selectN, options.llmModel);
     });
 };

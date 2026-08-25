@@ -326,7 +326,7 @@ pnpm yt2x video \
 按需协商时长，最后统一烧录双语硬字幕。完整参数见 `pnpm yt2x dub --help`。
 
 成片音轨是三路混音：中文配音（音量 1.0）、背景音（0.7）、以及压低垫在下面的原声（默认
-0.2）——保留原声是为了让观众仍能隐约听见讲者本人的语气与情绪，不是把原声整条替换掉。
+0.1）——保留原声是为了让观众仍能隐约听见讲者本人的语气与情绪，不是把原声整条替换掉。
 不同素材适合不同的垫底强度（访谈类可能想调高，纯讲解类可能想调低甚至关掉），用
 `--original-voice-volume <value>` 覆盖默认值：
 
@@ -338,7 +338,7 @@ pnpm yt2x dub --video-id <videoId> --original-voice-volume 0.4
 pnpm yt2x dub --video-id <videoId> --original-voice-volume 0
 ```
 
-不传 `--original-voice-volume` 时行为与此前完全一致（垫底音量 0.2）。
+不传 `--original-voice-volume` 时使用默认垫底音量 0.1。
 
 `--preferred-rate-min <n>` 覆盖本次协商的反向放慢地板，**默认 `0.85`**——即允许把语速放慢到
 原速的 85% 去填充较长的句间空档。这个值是试听 `0.85` 与 `0.95` 两版成片后定下的：`0.95` 留下

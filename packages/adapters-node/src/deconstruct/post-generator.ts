@@ -343,7 +343,11 @@ export const generateClipsPosts = async (
   // Only write .md files for selected clips
   const postPaths = input.persist === false
     ? []
-    : await writeSelectedPostFiles(manifest, input.articleDir, finalTechnicalTerms, { lock: false });
+    : await writeSelectedPostFiles(manifest, input.articleDir, finalTechnicalTerms, {
+      lock: false,
+      llm: input.llm,
+      model: input.model,
+    });
 
   const result: GeneratePostsRunnerResult = {
     postCount: total,
@@ -372,6 +376,8 @@ export const writeSelectedPostFiles = async (
     clipsDir?: string;
     metadataPath?: string;
     lock?: boolean;
+    llm?: LlmPort;
+    model?: string;
   } = {},
 ): Promise<string[]> => {
   if (options.lock !== false) {
@@ -422,20 +428,28 @@ export const writeSelectedPostFiles = async (
 
   // 每个选中片段单独派生 source scope，避免片段 A 的术语被片段 B 的正文
   // “至少出现一次”而掩盖。此处只在内存中组装和校验，之后才接触旧文件。
-  const finalizedTexts = assembledTexts.map((text, index) => {
+  const finalizedTexts: string[] = [];
+  for (let index = 0; index < assembledTexts.length; index++) {
+    const text = assembledTexts[index]!;
     const clip = selected[index]!;
-    if (!clip.text) return "";
-    const clipSourceText = [
-      sourceTextForSelectedClip(clip, technicalTerms),
-      CLIP_POST_CALL_TO_ACTION,
-    ].join("\n");
-    const clipGuard = createTechnicalTermGuard({
+    if (!clip.text) {
+      finalizedTexts.push("");
+      continue;
+    }
+    // CTA 只写进系列最后一篇，源校验范围必须和 assembledTexts 一致，
+    // 否则 CTA 里的术语（如 Agents）会要求每一篇都复述一遍。
+    // 必须携带只看标题/章节；keyQuote 里的词留在 finalGuard 里只做「用了不许译坏」。
+    const clipSourceText = index === selected.length - 1
+      ? [
+        clipRequiredSourceText(clip, technicalTerms),
+        CLIP_POST_CALL_TO_ACTION,
+      ].join("\n")
+      : clipRequiredSourceText(clip, technicalTerms);
+    // 必须携带只看这一段；系列标题/其他片段里的词只允许出现，不要求复述。
+    // 否则「Claude Code」这种标题产品名会在讲 OpenRouter 的短帖里被判成凭空造词。
+    const clipGuard = finalGuard.scopeUnit({
       sourceText: clipSourceText,
-      // 片段帖是这一段素材的 1:1 呈现而不是摘要，所以按 unit 作用域校验：
-      // 源片段里的发现词必须落进帖子，不能像长文那样"允许不复述"。
-      sourceUnitId: clip.id,
-      discoveredTerms: technicalTerms.discoveredTerms,
-      ...(technicalTerms.discoveryAudit === undefined ? {} : { discovery: technicalTerms.discoveryAudit }),
+      unitId: clip.id,
     });
     const selectedSourceCanonicals = new Set(clipGuard.profile.occurrences.map((item) => item.canonical));
     const rejectingCanonicals = new Set(clipGuard.profile.entries
@@ -447,24 +461,61 @@ export const writeSelectedPostFiles = async (
         && selectedSourceCanonicals.has(violation.canonical)
         && rejectingCanonicals.has(violation.canonical),
     );
-    if (hasHardTechnicalTermViolations(sourceTranslationViolations)) {
+    if (hasHardTechnicalTermViolations(sourceTranslationViolations) && (options.llm === undefined || options.model === undefined)) {
       throw new Error(`Technical term validation failed: ${sourceTranslationViolations.map((item) => item.message).join("; ")}`);
     }
-    const finalized = clipGuard.finalize([text], restoration);
-    const normalized = normalizeControlledYoutubeUrl(finalized.value[0] ?? "", youtubeUrl);
-    const finalViolations = finalized.violations.filter((violation) =>
+    let workingText = text;
+    let finalized = clipGuard.finalize([workingText], restoration);
+    let normalized = normalizeControlledYoutubeUrl(finalized.value[0] ?? "", youtubeUrl);
+    let finalViolations = finalized.violations.filter((violation) =>
       !isControlledYoutubeUrlViolation(violation, finalized.value, youtubeUrl),
     );
-    const blockingViolations = clipGuard.validate([normalized]).filter((violation) =>
+    let blockingViolations = clipGuard.validate([normalized]).filter((violation) =>
       !isControlledYoutubeUrlViolation(violation, [normalized], youtubeUrl),
     );
+    const hardViolations = () => [...sourceTranslationViolations, ...finalViolations, ...blockingViolations]
+      .filter((violation, i, all) => all.findIndex((item) => item.message === violation.message) === i);
+    if (
+      (hasHardTechnicalTermViolations(sourceTranslationViolations)
+        || hasHardTechnicalTermViolations(finalViolations)
+        || hasHardTechnicalTermViolations(blockingViolations))
+      && options.llm !== undefined
+      && options.model !== undefined
+    ) {
+      const repaired = await repairTechnicalTermViolations({
+        llm: options.llm,
+        model: options.model,
+        guard: clipGuard,
+        currentValue: workingText,
+        restoration,
+        violations: hardViolations(),
+        parseResponse: (content) => content.trim(),
+      });
+      workingText = repaired.value;
+      finalized = { value: [workingText], violations: repaired.violations };
+      normalized = normalizeControlledYoutubeUrl(workingText, youtubeUrl);
+      finalViolations = repaired.violations.filter((violation) =>
+        !isControlledYoutubeUrlViolation(violation, [workingText], youtubeUrl),
+      );
+      blockingViolations = clipGuard.validate([normalized]).filter((violation) =>
+        !isControlledYoutubeUrlViolation(violation, [normalized], youtubeUrl),
+      );
+    }
+    const remainingTranslationViolations = clipGuard.validate([normalized]).filter((violation) =>
+      violation.code === "forbidden-translation"
+        && violation.canonical !== undefined
+        && selectedSourceCanonicals.has(violation.canonical)
+        && rejectingCanonicals.has(violation.canonical),
+    );
     if (hasHardTechnicalTermViolations(finalViolations)
-      || hasHardTechnicalTermViolations(blockingViolations)) {
-      const violations = [...finalViolations, ...blockingViolations];
+      || hasHardTechnicalTermViolations(blockingViolations)
+      || hasHardTechnicalTermViolations(remainingTranslationViolations)) {
+      const violations = [...remainingTranslationViolations, ...finalViolations, ...blockingViolations]
+        .filter((violation, i, all) => all.findIndex((item) => item.message === violation.message) === i);
       throw new Error(`Technical term validation failed: ${violations.map((item) => item.message).join("; ")}`);
     }
-    return normalized;
-  });
+    finalizedTexts.push(normalized);
+  }
 
   const nextManifest = JSON.parse(JSON.stringify(manifest)) as DeconstructManifest;
   nextManifest.generatedAt = new Date().toISOString();
@@ -618,6 +669,17 @@ const sourceTextForSelectedClip = (
     ?? [clip.title, clip.articleSection ?? ""].join("\n");
 };
 
+/** 片段帖必须携带的术语源：标题和章节。keyQuote 太密，短帖无法按出现次数 1:1 复述。 */
+const clipRequiredSourceText = (
+  clip: DeconstructManifest["clips"][number],
+  technicalTerms: ClipPostTechnicalTerms,
+): string => {
+  if (clip.sourceContext !== undefined) {
+    return [clip.sourceContext.title, clip.sourceContext.articleSection].filter(Boolean).join("\n");
+  }
+  return sourceTextForSelectedClip(clip, technicalTerms);
+};
+
 /**
  * 没有 in-memory `technicalTerms`（即从磁盘 manifest 重建身份，如 CLI 缓存命中检查）
  * 时使用的候选源文本回退。必须和 `sourceTextForSelectedClip` 在 `clip.sourceContext`
@@ -658,11 +720,9 @@ const sourceContextText = (
   sourceContext: NonNullable<DeconstructManifest["clips"][number]["sourceContext"]>,
 ): string => [
   sourceContext.title,
-  sourceContext.summary,
-  sourceContext.keyQuote,
-  sourceContext.videoScript,
   sourceContext.articleSection,
-  sourceContext.articleBody,
+  sourceContext.keyQuote,
+  // summary / videoScript / articleBody 会复述整节术语，短帖无法 1:1 复现。
 ].filter(Boolean).join("\n");
 
 export const selectedClipPostCacheIdentityFor = (

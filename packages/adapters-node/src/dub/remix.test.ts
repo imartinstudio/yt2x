@@ -113,15 +113,15 @@ describe("mixVoiceAndBgmFilterComplex", () => {
 
   it("lays the original voice under the dub at a fraction of its volume", () => {
     // 需求是「压低原声垫在下面」，不是整条替换——观众仍要能听见讲者本人的语气
-    const filter = mixVoiceAndBgmFilterComplex(125.0, 0.2);
-    expect(filter).toMatch(/\[2:a\].*volume=0\.2/);
+    const filter = mixVoiceAndBgmFilterComplex(125.0);
+    expect(filter).toMatch(/\[2:a\].*volume=0\.1/);
     expect(filter).toMatch(/\[0:a\].*volume=1/);
     expect(filter).toMatch(/amix=inputs=3:duration=first/);
   });
 
   it("keeps normalize=0 so adding the third input does not duck the dub", () => {
     // amix 默认按输入路数归一化，多接一路原声会把中文配音一起压低，等于白改
-    expect(mixVoiceAndBgmFilterComplex(125.0, 0.2)).toMatch(/normalize=0/);
+    expect(mixVoiceAndBgmFilterComplex(125.0)).toMatch(/normalize=0/);
   });
 
   it("falls back to a two-input mix when the original voice is turned off", () => {

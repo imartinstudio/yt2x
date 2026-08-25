@@ -53,7 +53,7 @@ export const registerDubCommand = (program: Command): void => {
       .option("--end-ms <ms>", "Exclusive end of the dub time window in source timeline ms")
       .option(
         "--original-voice-volume <value>",
-        "Original speaker's voice volume under the Chinese dub, relative to the dub's 1.0 (default 0.2); " +
+        "Original speaker's voice volume under the Chinese dub, relative to the dub's 1.0 (default 0.1); " +
           "0 drops the original voice entirely and falls back to a two-input mix",
       )
       .option(

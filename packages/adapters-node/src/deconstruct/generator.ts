@@ -422,7 +422,6 @@ export const parseDeconstructLlmOutput = (raw: string): DeconstructLlmOutput => 
 export const filterValidSections = (
   output: DeconstructLlmOutput,
 ): DeconstructLlmOutput => {
-  const MAX_CLIP_DURATION_SEC = 180; // hard limit: no clip may exceed 3 minutes
   const valid = output.sections.filter((s) => {
     // Skip sections the LLM explicitly marked as having no video content
     if (s.skip_reason != null) return false;
@@ -566,6 +565,9 @@ export const secondsToTimecode = (sec: number): string => {
 /** 句子结束标点 */
 const SENTENCE_ENDS = /[。？！.?!\n]$/;
 
+/** hard limit: no clip may exceed 3 minutes */
+const MAX_CLIP_DURATION_SEC = 180;
+
 /** SRT 条目结构 */
 type SrtEntry = { index: number; startSec: number; endSec: number; text: string };
 
@@ -702,4 +704,43 @@ export const validateClipEndings = (
   }
 
   return warnings;
+};
+
+/**
+ * 把结束时间对齐到下一条带句末标点的字幕。宁可留长，不可剪短。
+ * 延长后仍须 ≤ 180 秒；找不到合法句末则保持原时间。
+ */
+export const snapClipEndingsToSentence = (
+  sections: SectionCandidate[],
+  srtContent: string,
+): void => {
+  const srt = parseSrt(srtContent);
+  if (srt.length === 0) return;
+
+  for (const section of sections) {
+    const endSec = section.timecodes.endSec;
+    const coveringEntry = srt.find(
+      (e) => e.startSec <= endSec && e.endSec >= endSec,
+    );
+    if (coveringEntry === undefined) continue;
+
+    const gap = coveringEntry.endSec - endSec;
+    const lastText = coveringEntry.text.trim();
+    const needsSnap = gap > 1.5 || !SENTENCE_ENDS.test(lastText.slice(-1));
+    if (!needsSnap) continue;
+
+    const sentenceEnd = srt.find((e) =>
+      e.endSec + 0.05 >= coveringEntry.endSec
+      && SENTENCE_ENDS.test(e.text.trim().slice(-1)),
+    );
+    if (sentenceEnd === undefined) continue;
+
+    const snappedEnd = sentenceEnd.endSec;
+    const duration = snappedEnd - section.timecodes.startSec;
+    if (duration <= 0 || duration > MAX_CLIP_DURATION_SEC || snappedEnd <= endSec) continue;
+
+    section.timecodes.endSec = snappedEnd;
+    section.timecodes.end = secondsToSrtTimecode(snappedEnd);
+    section.timecodes.durationSec = duration;
+  }
 };

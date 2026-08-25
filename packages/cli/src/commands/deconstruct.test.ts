@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   filterValidSections: vi.fn(),
   validateClipEndings: vi.fn(),
   splitOversizedSections: vi.fn(),
+  snapClipEndingsToSentence: vi.fn(),
 }));
 
 vi.mock("@yt2x/adapters-node", () => mocks);

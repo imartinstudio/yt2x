@@ -780,9 +780,7 @@ describe("generateClipsPosts", () => {
   });
 
   it.each([
-    ["summary", "Knowledge Graph", "知识图谱能提高检索质量。", "输出使用了 知识图谱，应保留 Knowledge Graph"],
     ["key_quote", "Graph", "图能表达节点关系。", "输出使用了 图，应保留 Graph"],
-    ["video_script", "Agent Graph", "代理图谱展示了调用链。", "输出使用了 代理图谱，应保留 Agent Graph"],
   ])("activates a selected term persisted only in %s", async (field, term, generatedText, expectedError) => {
     const articleDir = await mkdtemp(path.join(tmpdir(), `yt2x-clips-persisted-${field}-`));
     try {
@@ -825,6 +823,184 @@ describe("generateClipsPosts", () => {
         articleTitle: "可靠检索",
         discoveredTerms: [],
       })).rejects.toThrow(expectedError);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["summary", "Knowledge Graph", "这种结构能提高检索质量。"],
+    ["video_script", "Agent Graph", "画面在讲解调用链。"],
+  ])("does not require a term persisted only in %s", async (field, term, generatedText) => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), `yt2x-clips-ignored-${field}-`));
+    try {
+      const selectedCandidate = {
+        id: "section-1",
+        title: "可靠检索",
+        summary: field === "summary" ? `${term} 负责检索。` : "普通摘要。",
+        article_section: "可靠检索",
+        angle: "tutorial" as const,
+        risk: "low" as const,
+        timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+        scores: {
+          counter_intuitiveness: 3,
+          shareability: 3,
+          practical_value: 4,
+          visual_appeal: 2,
+          composite: 3,
+        },
+        key_quote: "普通引语。",
+        video_script: field === "video_script" ? `画面展示 ${term}。` : "普通画面。",
+      };
+      const output = await writeDeconstructOutput(
+        articleDir,
+        [selectedCandidate],
+        `ignored-${field}`,
+        path.join(articleDir, "full.mp4"),
+        60,
+        "# 可靠检索\n\n## 可靠检索\n\n普通正文。",
+      );
+      const manifest = JSON.parse(await readFile(output.manifestPath, "utf8")) as DeconstructManifest;
+      manifest.clips[0]!.selected = true;
+      manifest.clips[0]!.text = generatedText;
+      const guard = createTechnicalTermGuard({
+        sourceText: `${term}\nAgents`,
+      });
+
+      const paths = await writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "可靠检索",
+        discoveredTerms: [],
+      });
+      expect(paths).toHaveLength(1);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not require a term persisted only in key_quote", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-ignored-key-quote-"));
+    try {
+      const selectedCandidate = {
+        id: "section-1",
+        title: "成本对比",
+        summary: "普通摘要。",
+        article_section: "成本对比",
+        angle: "tutorial" as const,
+        risk: "low" as const,
+        timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+        scores: {
+          counter_intuitiveness: 3,
+          shareability: 3,
+          practical_value: 4,
+          visual_appeal: 2,
+          composite: 3,
+        },
+        key_quote: "Anthropic 官方订阅很贵，Claude Code 也能省。Claude Code 再省一截。",
+        video_script: "普通画面。",
+      };
+      const output = await writeDeconstructOutput(
+        articleDir,
+        [selectedCandidate],
+        "ignored-key-quote",
+        path.join(articleDir, "full.mp4"),
+        60,
+        "# 成本对比\n\n## 成本对比\n\n普通正文。",
+      );
+      const manifest = JSON.parse(await readFile(output.manifestPath, "utf8")) as DeconstructManifest;
+      manifest.clips[0]!.selected = true;
+      manifest.clips[0]!.text = "订阅太贵，本地跑能省下九成。";
+      const guard = createTechnicalTermGuard({
+        sourceText: "Anthropic\nClaude Code\nAgents",
+        sourceTitle: "成本对比",
+      });
+
+      const paths = await writeSelectedPostFiles(manifest, articleDir, {
+        guard,
+        restoration: { placeholders: [] },
+        articleTitle: "成本对比",
+        discoveredTerms: [],
+      });
+      expect(paths).toHaveLength(1);
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows a series-title term in a clip post that does not mention it in the clip source", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-series-title-term-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "series-title-term", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-08-24T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "openrouter",
+          title: "OpenRouter 即插即用",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: true,
+          text: "OpenRouter 接上就能用，Claude 成本立刻下来。",
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-openrouter.mp4",
+        }],
+      };
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+      const articleTitle = "免费使用 Claude Code 的完整指南（2026）";
+      const paths = await writeSelectedPostFiles(manifest, articleDir, {
+        guard: createTechnicalTermGuard({ sourceText: "OpenRouter", sourceTitle: articleTitle }),
+        restoration: { placeholders: [] },
+        articleTitle,
+        discoveredTerms: [],
+        sourceTextByClipId: { "clip-1": "OpenRouter 即插即用" },
+      });
+      expect(paths).toHaveLength(1);
+      expect(await readFile(paths[0]!, "utf8")).toContain("Claude");
+    } finally {
+      await rm(articleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still rejects a catalog term that is absent from both the clip and the series title", async () => {
+    const articleDir = await mkdtemp(path.join(tmpdir(), "yt2x-clips-invented-series-"));
+    try {
+      const clipsDir = path.join(articleDir, "x-format", "clips");
+      await mkdir(clipsDir, { recursive: true });
+      const manifest: DeconstructManifest = {
+        v: 1,
+        source: { videoId: "invented-series", articlePath: "../article.md", durationSec: 60 },
+        generatedAt: "2026-08-24T00:00:00.000Z",
+        candidateCount: 1,
+        total: 1,
+        clips: [{
+          id: "clip-1",
+          slug: "openrouter",
+          title: "OpenRouter 即插即用",
+          type: "insight",
+          angle: "tutorial",
+          risk: "low",
+          selected: true,
+          text: "OpenRouter 接上就能用，DeepSeek 也能白嫖。",
+          timecodes: { start: "00:00:01", end: "00:01:01", startSec: 1, endSec: 61, durationSec: 60 },
+          video: "clip-1-openrouter.mp4",
+        }],
+      };
+      await writeFile(path.join(clipsDir, "clips-manifest.json"), JSON.stringify(manifest), "utf8");
+      const articleTitle = "免费使用 Claude Code 的完整指南（2026）";
+      await expect(writeSelectedPostFiles(manifest, articleDir, {
+        guard: createTechnicalTermGuard({ sourceText: "OpenRouter", sourceTitle: articleTitle }),
+        restoration: { placeholders: [] },
+        articleTitle,
+        discoveredTerms: [],
+        sourceTextByClipId: { "clip-1": "OpenRouter 即插即用" },
+      })).rejects.toThrow("输出凭空加入了源材料未命中的术语 DeepSeek");
     } finally {
       await rm(articleDir, { recursive: true, force: true });
     }

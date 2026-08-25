@@ -115,7 +115,7 @@ export type DubFlags = NativeLlmCliFlags & {
   /** 只处理源片 [startMs, endMs) 时间窗；不裁文件进 downloads。 */
   startMs?: string;
   endMs?: string;
-  /** 原声垫底音量，相对中文配音 1.0（默认 0.2）；0 退回两路混音，不引入静音输入。 */
+  /** 原声垫底音量，相对中文配音 1.0（默认 0.1）；0 退回两路混音，不引入静音输入。 */
   originalVoiceVolume?: string;
   /** 反事实试听：覆盖协商阶段的语速下限；不传则使用当前默认值。 */
   preferredRateMin?: string;
@@ -476,8 +476,8 @@ export const executeNativeDub = async (flags: DubFlags): Promise<number> => {
       command: "dub",
       subject: videoId,
       reason: err instanceof Error ? err.message : String(err),
-      hints: ["Use --original-voice-volume with a non-negative number, e.g. 0.2, 0.35, or 0 to drop the original voice."],
-      retryCommand: `pnpm yt2x dub --video-id ${videoId} --original-voice-volume 0.2`,
+      hints: ["Use --original-voice-volume with a non-negative number, e.g. 0.1, 0.35, or 0 to drop the original voice."],
+      retryCommand: `pnpm yt2x dub --video-id ${videoId} --original-voice-volume 0.1`,
     });
     return EXIT_INPUT_MISSING;
   }

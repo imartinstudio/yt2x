@@ -95,10 +95,10 @@ export const computeDubbedOutputDurationMs = (input: {
  * 原声（Demucs 分离出的 vocals 轨）在成片里保留的音量。
  *
  * 不是「替换原声」而是「压低垫在下面」：观众仍能隐约听见讲者本人的语气与情绪，
- * 像同传/纪录片旁白，而不是完全译制片。0.2 是相对中文配音（1.0）的比例——再高
+ * 像同传/纪录片旁白，而不是完全译制片。0.1 是相对中文配音（1.0）的比例——再高
  * 两个人声会互相干扰、中文听不清。
  */
-export const DEFAULT_ORIGINAL_VOICE_VOLUME = 0.2;
+export const DEFAULT_ORIGINAL_VOICE_VOLUME = 0.1;
 
 /**
  * 三路混音：中文配音 + BGM + 压低的原声。
